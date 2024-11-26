@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["./src", "postcss.config.js"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  }
+}

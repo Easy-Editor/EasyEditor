@@ -1,5 +1,5 @@
 {
-  "name": "@easyeditor",
+  "name": "easy-editor",
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -15,7 +15,7 @@
     "publish": "pnpm run build && pnpm run types && pnpm run release:only",
     "bump": "changeset add",
     "release:only": "changeset publish",
-    "example:dashboard": "turbo dev --filter ./examples/dashboard"
+    "example": "turbo dev --filter ./demo"
   },
   "devDependencies": {
     "@babel/cli": "^7.25.9",

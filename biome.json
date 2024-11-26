@@ -18,7 +18,8 @@
       "suspicious": {
         "noExplicitAny": "off",
         "noImplicitAnyLet": "error",
-        "noAssignInExpressions": "off"
+        "noAssignInExpressions": "off",
+        "noArrayIndexKey": "off"
       },
       "complexity": {
         "noForEach": "off",
