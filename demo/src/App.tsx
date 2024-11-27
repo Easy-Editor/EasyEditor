@@ -7,9 +7,7 @@ import { router } from './router'
 const App = () => {
   return (
     <ThemeProvider defaultTheme='system' storageKey='easy-editor-theme'>
-      <div className='relative p-4'>
-        <RouterProvider router={router} />
-      </div>
+      <RouterProvider router={router} />
     </ThemeProvider>
   )
 }

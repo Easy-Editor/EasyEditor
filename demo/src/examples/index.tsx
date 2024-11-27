@@ -1,12 +1,13 @@
+import { SiteHeader } from '@/components/site-header'
 import { Outlet } from 'react-router-dom'
 
 function Examples() {
   return (
-    <div>
-      <section>
-        <div className='overflow-hidden rounded-[0.5rem] border bg-background shadow'>
-          <Outlet />
-        </div>
+    <div className='flex flex-col'>
+      <SiteHeader className='flex-1' />
+
+      <section className='flex flex-1'>
+        <Outlet />
       </section>
     </div>
   )

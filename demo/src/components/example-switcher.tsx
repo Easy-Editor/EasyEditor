@@ -1,4 +1,4 @@
-import { ChevronsUpDown, LayoutDashboard, Plus } from 'lucide-react'
+import { ChevronsUpDown, LayoutDashboard } from 'lucide-react'
 import * as React from 'react'
 
 import {
@@ -6,8 +6,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from '@/components/ui/sidebar'
@@ -29,10 +27,7 @@ export function ExampleSwitcher() {
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <SidebarMenuButton
-              size='lg'
-              className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
-            >
+            <SidebarMenuButton size='lg' className='md:h-8 md:p-0'>
               <div className='flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground'>
                 <currentExample.logo className='size-4' />
               </div>
@@ -48,23 +43,15 @@ export function ExampleSwitcher() {
             side={isMobile ? 'bottom' : 'right'}
             sideOffset={4}
           >
-            <DropdownMenuLabel className='text-xs text-muted-foreground'>Teams</DropdownMenuLabel>
+            <DropdownMenuLabel className='text-xs text-muted-foreground'>案例</DropdownMenuLabel>
             {examples.map((example, index) => (
               <DropdownMenuItem key={example.name} onClick={() => setCurrentExample(example)} className='gap-2 p-2'>
                 <div className='flex size-6 items-center justify-center rounded-sm border'>
                   <example.logo className='size-4 shrink-0' />
                 </div>
                 {example.name}
-                <DropdownMenuShortcut>⌘{index + 1}</DropdownMenuShortcut>
               </DropdownMenuItem>
             ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className='gap-2 p-2'>
-              <div className='flex size-6 items-center justify-center rounded-md border bg-background'>
-                <Plus className='size-4' />
-              </div>
-              <div className='font-medium text-muted-foreground'>Add team</div>
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

@@ -15,7 +15,7 @@
     "publish": "pnpm run build && pnpm run types && pnpm run release:only",
     "bump": "changeset add",
     "release:only": "changeset publish",
-    "example": "turbo dev --filter ./demo"
+    "demo": "turbo dev --filter ./demo"
   },
   "devDependencies": {
     "@babel/cli": "^7.25.9",

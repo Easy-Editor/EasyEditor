@@ -1,7 +1,6 @@
 import { ArchiveX, File, Inbox, Send, Trash2 } from 'lucide-react'
 import * as React from 'react'
 
-import { ExampleSwitcher } from '@/components/example-switcher'
 import { Label } from '@/components/ui/label'
 import {
   Sidebar,
@@ -148,14 +147,11 @@ export function DashboardSidebar({ ...props }: React.ComponentProps<typeof Sideb
   const { setOpen } = useSidebar()
 
   return (
-    <Sidebar collapsible='icon' className='overflow-hidden [&>[data-sidebar=sidebar]]:flex-row' {...props}>
+    <Sidebar collapsible='icon' className='flex-1 overflow-hidden' {...props}>
       {/* This is the first sidebar */}
       {/* We disable collapsible and adjust width to icon. */}
       {/* This will make the sidebar appear as icons. */}
       <Sidebar collapsible='none' className='!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r'>
-        <SidebarHeader>
-          <ExampleSwitcher />
-        </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
             <SidebarGroupContent className='px-1.5 md:px-0'>
@@ -189,7 +185,10 @@ export function DashboardSidebar({ ...props }: React.ComponentProps<typeof Sideb
 
       {/* This is the second sidebar */}
       {/* We disable collapsible and let it fill remaining space */}
-      <Sidebar collapsible='none' className='hidden flex-1 md:flex'>
+      <Sidebar
+        collapsible='none'
+        className='hidden absolute w-[calc(var(--sidebar-width)_-_var(--sidebar-width-icon)_-_1px)] left-[calc(var(--sidebar-width-icon)_+_1px)] z-50'
+      >
         <SidebarHeader className='gap-3.5 border-b p-4'>
           <div className='flex w-full items-center justify-between'>
             <div className='text-base font-medium text-foreground'>{activeItem.title}</div>
