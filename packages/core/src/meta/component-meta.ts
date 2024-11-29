@@ -91,7 +91,7 @@ export class ComponentMeta {
       }
     }
 
-    this.emitter.emit('metadata_change')
+    this.emitter.emit(COMPONENT_META_EVENT.CHANGE)
   }
 
   refreshMetadata() {

@@ -23,12 +23,13 @@ export interface Logger {
   warn: (...args: Parameters<(typeof console)['warn']>) => void
 }
 
-/**
- * 日志
- * @param title 日志标题
- */
 export const createLogger = (title: string) => ({
   log: (...args: Parameters<(typeof console)['log']>) => print('log', title, args),
   error: (...args: Parameters<(typeof console)['error']>) => print('error', title, args),
   warn: (...args: Parameters<(typeof console)['warn']>) => print('warn', title, args),
 })
+
+/**
+ * internal global logger
+ */
+export const logger = createLogger('Core')

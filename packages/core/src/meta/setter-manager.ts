@@ -1,7 +1,7 @@
 import type { Component } from './meta'
 
 import { action } from 'mobx'
-import { createLogger } from '../utils'
+import { logger } from '../utils'
 
 /** for setter component props */
 export interface SetterProps<T = unknown> {
@@ -22,8 +22,6 @@ interface RegisterSetterOption {
 }
 
 export class SetterManager {
-  private logger = createLogger('Setters')
-
   private _settersMap = new Map<
     string,
     Setter & {
@@ -38,7 +36,7 @@ export class SetterManager {
   @action
   registerSetter(type: string, setter: Component | Setter, option?: RegisterSetterOption) {
     if (this._settersMap.has(type) && !option?.overwrite) {
-      this.logger.error(`SetterManager register error! The setter (${setter.name}) has already been registered!`)
+      logger.error(`SetterManager register error! The setter (${setter.name}) has already been registered!`)
       return
     }
 
@@ -49,9 +47,9 @@ export class SetterManager {
     this._settersMap.set(type, { type, ...newSetter })
   }
 
-  registerSettersMap = (maps: Record<string, Setter>) => {
-    Object.keys(maps).forEach(type => {
-      this.registerSetter(type, maps[type])
+  buildSettersMap = (setters: Record<string, Setter>) => {
+    Object.keys(setters).forEach(type => {
+      this.registerSetter(type, setters[type])
     })
   }
 

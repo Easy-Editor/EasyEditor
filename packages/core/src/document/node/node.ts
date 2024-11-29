@@ -194,13 +194,11 @@ export class Node {
   }
 
   private initProps(props: PropsSchema) {
-    // return this.document.designer.transformProps(props, this, IPublicEnumTransformStage.Init);
-    return props
+    return this.document.designer.transformProps(props, this, TRANSFORM_STAGE.INIT)
   }
 
   private upgradeProps(props: PropsSchema) {
-    // return this.document.designer.transformProps(props, this, IPublicEnumTransformStage.Upgrade);
-    return props
+    return this.document.designer.transformProps(props, this, TRANSFORM_STAGE.UPGRADE)
   }
 
   private initialChildren(children: NodeSchema | NodeSchema[] | undefined): NodeSchema[] {
@@ -617,8 +615,8 @@ export class Node {
 
     const schema: NodeSchema = {
       ...baseSchema,
-      props,
-      ...extras,
+      props: props ? this.document.designer.transformProps(props, this, stage) : undefined,
+      ...(extras ? this.document.designer.transformProps(extras, this, stage) : {}),
     }
 
     if (this.isParental() && this.children && this.children.size > 0) {

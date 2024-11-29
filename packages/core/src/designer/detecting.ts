@@ -26,6 +26,7 @@ export class Detecting {
     }
   }
 
+  // TODO
   @observable.ref accessor xRayMode = false
 
   @observable.ref private accessor _current: Node | null = null
@@ -46,6 +47,7 @@ export class Detecting {
     }
   }
 
+  @action
   release(node: Node | null) {
     if (this._current === node) {
       this._current = null
@@ -53,6 +55,7 @@ export class Detecting {
     }
   }
 
+  @action
   leave(document: Document | undefined) {
     if (this.current && this.current.document === document) {
       this._current = null

@@ -1,7 +1,9 @@
 import {
+  DESIGNER_EVENT,
   type Designer,
   type DragNodeDataObject,
   type DragNodeObject,
+  type DropLocation,
   isDragNodeDataObject,
   isDragNodeObject,
 } from '../designer'
@@ -114,6 +116,21 @@ export class Document {
 
   readonly designer: Designer
 
+  @observable.ref private accessor _dropLocation: DropLocation | null = null
+
+  set dropLocation(loc: DropLocation | null) {
+    this._dropLocation = loc
+    this.designer.postEvent(DESIGNER_EVENT.DOCUMENT_DROP_LOCATION_CHANGE, { document: this, location: loc })
+  }
+
+  get dropLocation() {
+    return this._dropLocation
+  }
+
+  get schema(): DocumentSchema {
+    return this.export(TRANSFORM_STAGE.SERIALIZE)
+  }
+
   constructor(project: Project, schema?: DocumentSchema) {
     this.emitter = createEventBus('Document')
     this.id = schema?.id ?? uniqueId('doc')
@@ -198,7 +215,7 @@ export class Document {
   }
 
   @action
-  createNode(schema: NodeSchema) {
+  createNode(schema: NodeSchema, checkId = true) {
     if (schema?.id && this.hasNode(schema.id)) {
       schema.id = undefined
     }
@@ -210,7 +227,7 @@ export class Document {
         if (node.parent) {
           node.internalSetParent(null, false)
         }
-        node.import(schema, true)
+        node.import(schema, checkId)
       } else if (node) {
         node = null
       }

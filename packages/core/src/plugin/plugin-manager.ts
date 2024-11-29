@@ -1,6 +1,6 @@
 import type { PluginContextOptions } from './plugin-context'
 
-import { createLogger } from '../utils'
+import { logger } from '../utils'
 import { PluginRuntime } from './plugin'
 import { PluginContext } from './plugin-context'
 import sequencify from './sequencify'
@@ -53,8 +53,6 @@ export interface PluginContextApiAssembler {
 }
 
 export class PluginManager {
-  private logger = createLogger('PluginManager')
-
   private plugins: PluginRuntime[] = []
 
   pluginsMap: Map<string, PluginRuntime> = new Map()
@@ -91,7 +89,7 @@ export class PluginManager {
 
     const { pluginName, meta = {} } = pluginModel
     if (!pluginName) {
-      this.logger.error('pluginConfigCreator.pluginName required', pluginModel)
+      logger.error('pluginConfigCreator.pluginName required', pluginModel)
       return
     }
     const ctx = this.getPluginContext({ pluginName, meta })
@@ -101,7 +99,7 @@ export class PluginManager {
     if (this.pluginsMap.has(pluginName)) {
       if (allowOverride) {
         const originalPlugin = this.pluginsMap.get(pluginName)
-        this.logger.log(
+        logger.log(
           'plugin override, originalPlugin with name ',
           pluginName,
           ' will be destroyed, config:',
@@ -120,7 +118,7 @@ export class PluginManager {
     }
     this.plugins.push(plugin)
     this.pluginsMap.set(pluginName, plugin)
-    this.logger.log(`plugin registered with pluginName: ${pluginName}, config: `, config, 'meta:', meta)
+    logger.log(`plugin registered with pluginName: ${pluginName}, config: `, config, 'meta:', meta)
   }
 
   /**
@@ -171,17 +169,17 @@ export class PluginManager {
     // check plugin dependency
     const { missingTasks, sequence } = sequencify(pluginObj, pluginNames)
     if (missingTasks.length) {
-      this.logger.error('plugin dependency missing', missingTasks)
+      logger.error('plugin dependency missing', missingTasks)
       return
     }
-    this.logger.log('load plugin sequence:', sequence)
+    logger.log('load plugin sequence:', sequence)
 
     for (const pluginName of sequence) {
       try {
         await this.pluginsMap.get(pluginName)!.init()
       } catch (e) {
-        this.logger.error(`Failed to init plugin:${pluginName}, it maybe affect those plugins which depend on this.`)
-        this.logger.error(e)
+        logger.error(`Failed to init plugin:${pluginName}, it maybe affect those plugins which depend on this.`)
+        logger.error(e)
       }
     }
   }
@@ -200,7 +198,7 @@ export class PluginManager {
   }
 
   setDisabled(pluginName: string, flag = true) {
-    this.logger.warn(`plugin:${pluginName} has been set disable:${flag}`)
+    logger.warn(`plugin:${pluginName} has been set disable:${flag}`)
     this.pluginsMap.get(pluginName)?.setDisabled(flag)
   }
 

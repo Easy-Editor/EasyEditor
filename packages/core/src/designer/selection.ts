@@ -96,6 +96,7 @@ export class Selection {
     return this._selected.indexOf(id) > -1
   }
 
+  @action
   remove(id: string) {
     const i = this._selected.indexOf(id)
     if (i > -1) {

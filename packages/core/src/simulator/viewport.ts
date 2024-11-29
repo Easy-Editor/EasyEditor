@@ -5,7 +5,7 @@ export type AutoFit = '100%'
 export const AutoFit: AutoFit = '100%'
 
 export default class Viewport {
-  @observable.ref private accessor rect?: DOMRect
+  @observable.ref private accessor rect: DOMRect
 
   private _bounds?: DOMRect
 
@@ -107,52 +107,6 @@ export default class Viewport {
   set contentWidth(val: number | AutoFit) {
     this._contentWidth = val
   }
-
-  // TODO: 需要 scroll ???
-  // @observable.ref private _scrollX = 0
-
-  // @observable.ref private _scrollY = 0
-
-  // get scrollX() {
-  //   return this._scrollX
-  // }
-
-  // get scrollY() {
-  //   return this._scrollY
-  // }
-
-  // private _scrollTarget?: ScrollTarget
-
-  // get scrollTarget(): ScrollTarget | undefined {
-  //   return this._scrollTarget
-  // }
-
-  // @observable private _scrolling = false
-
-  // get scrolling(): boolean {
-  //   return this._scrolling
-  // }
-
-  // setScrollTarget(target: Window) {
-  //   const scrollTarget = new ScrollTarget(target)
-  //   this._scrollX = scrollTarget.left
-  //   this._scrollY = scrollTarget.top
-
-  //   let scrollTimer: any
-  //   target.addEventListener('scroll', () => {
-  //     this._scrollX = scrollTarget.left
-  //     this._scrollY = scrollTarget.top
-  //     this._scrolling = true
-  //     if (scrollTimer) {
-  //       clearTimeout(scrollTimer)
-  //     }
-  //     scrollTimer = setTimeout(() => {
-  //       this._scrolling = false
-  //     }, 80)
-  //   })
-  //   target.addEventListener('resize', () => this.touch())
-  //   this._scrollTarget = scrollTarget
-  // }
 
   toGlobalPoint(point: Point): Point {
     if (!this.viewportElement) {

@@ -9,6 +9,12 @@ import { observable } from 'mobx'
 import { isSimulator } from '../simulator'
 import { createEventBus } from '../utils'
 
+export enum DRAGON_EVENT {
+  DRAGSTART = 'dragstart',
+  DRAG = 'drag',
+  DRAGEND = 'dragend',
+}
+
 export enum DragObjectType {
   Node = 'node',
   NodeData = 'nodedata',
@@ -211,7 +217,7 @@ export class Dragon {
       } else {
         designer.clearLocation()
       }
-      this.emitter.emit('drag', locateEvent)
+      this.emitter.emit(DRAGON_EVENT.DRAG, locateEvent)
     }
 
     // drag start
@@ -229,7 +235,7 @@ export class Dragon {
         })
       }
 
-      this.emitter.emit('dragstart', locateEvent)
+      this.emitter.emit(DRAGON_EVENT.DRAGSTART, locateEvent)
     }
 
     // drag move
@@ -279,8 +285,7 @@ export class Dragon {
         this._dragging = false
         try {
           // TODO: copy
-          this.emitter.emit('dragend', { dragObject, copy: false })
-          // this.emitter.emit('dragend', { ...this.designer._dropLocation?.event })
+          this.emitter.emit(DRAGON_EVENT.DRAGEND, { dragObject, copy: false })
         } catch (ex) {
           exception = ex
         }
@@ -351,7 +356,7 @@ export class Dragon {
     }
 
     const sourceSensor = getSourceSensor(dragObject)
-    // /* istanbul ignore next */
+
     const chooseSensor = (e: LocateEvent) => {
       // this.sensors will change on dragstart
       const sensors: Sensor[] = this.sensors.concat(masterSensors as Sensor[])
@@ -398,7 +403,6 @@ export class Dragon {
     }
 
     handleEvents(doc => {
-      /* istanbul ignore next */
       if (isBoostFromDragAPI) {
         doc.addEventListener('dragover', move, true)
         // dragexit
@@ -435,41 +439,41 @@ export class Dragon {
   /**
    * 添加投放感应区
    */
-  addSensor(sensor: any) {
+  addSensor(sensor: Sensor) {
     this.sensors.push(sensor)
   }
 
   /**
    * 移除投放感应
    */
-  removeSensor(sensor: any) {
+  removeSensor(sensor: Sensor) {
     const i = this.sensors.indexOf(sensor)
     if (i > -1) {
       this.sensors.splice(i, 1)
     }
   }
 
-  onDragstart(func: (e: LocateEvent) => any) {
-    this.emitter.on('dragstart', func)
+  onDragstart(func: (e: LocateEvent) => void) {
+    this.emitter.on(DRAGON_EVENT.DRAGSTART, func)
 
     return () => {
-      this.emitter.off('dragstart', func)
+      this.emitter.off(DRAGON_EVENT.DRAGSTART, func)
     }
   }
 
-  onDrag(func: (e: LocateEvent) => any) {
-    this.emitter.on('drag', func)
+  onDrag(func: (e: LocateEvent) => void) {
+    this.emitter.on(DRAGON_EVENT.DRAG, func)
 
     return () => {
-      this.emitter.off('drag', func)
+      this.emitter.off(DRAGON_EVENT.DRAG, func)
     }
   }
 
-  onDragend(func: (x: { dragObject: DragObject; copy: boolean }) => any) {
-    this.emitter.on('dragend', func)
+  onDragend(func: (x: { dragObject: DragObject; copy: boolean }) => void) {
+    this.emitter.on(DRAGON_EVENT.DRAGEND, func)
 
     return () => {
-      this.emitter.off('dragend', func)
+      this.emitter.off(DRAGON_EVENT.DRAGEND, func)
     }
   }
 }
@@ -491,7 +495,4 @@ const makeEventsHandler = (boostEvent: MouseEvent | DragEvent, sensors: Simulato
   return (handle: (sdoc: globalThis.Document) => void) => {
     docs.forEach(doc => handle(doc))
   }
-  // return (handle: (doc: globalThis.Document) => void) => {
-  //   handle(sourceDoc)
-  // }
 }

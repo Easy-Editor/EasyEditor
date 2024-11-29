@@ -4,7 +4,7 @@ import type { DocumentSchema } from '../document'
 import { action, computed, observable } from 'mobx'
 import { DOCUMENT_EVENT, Document } from '../document'
 import type { Simulator } from '../simulator'
-import { createEventBus, createLogger } from '../utils'
+import { createEventBus, logger } from '../utils'
 
 export interface ProjectSchema {
   version: string
@@ -27,7 +27,6 @@ export enum PROJECT_EVENT {
 }
 
 export class Project {
-  private logger = createLogger('Project')
   private emitter = createEventBus('Project')
 
   private data: ProjectSchema = defaultSchema
@@ -88,7 +87,7 @@ export class Project {
 
     if (autoOpen) {
       if (this.documents.length < 1) {
-        return this.logger.warn('no document found, skip auto open')
+        return logger.warn('no document found, skip auto open')
       }
 
       if (typeof autoOpen === 'string') {
@@ -139,12 +138,12 @@ export class Project {
     }
 
     if (!document) {
-      return this.logger.warn('document not found', idOrDoc)
+      return logger.warn('document not found', idOrDoc)
     }
 
     const index = this.documents.indexOf(document)
     if (index < 0) {
-      return this.logger.warn('document not found', idOrDoc)
+      return logger.warn('document not found', idOrDoc)
     }
 
     document.remove()
@@ -157,7 +156,7 @@ export class Project {
    */
   open(idOrDoc?: string | Document | DocumentSchema) {
     if (!idOrDoc) {
-      this.logger.warn('no doc param found, will create a new document')
+      logger.warn('no doc param found, will create a new document')
       return this.createDocument().open()
     }
 

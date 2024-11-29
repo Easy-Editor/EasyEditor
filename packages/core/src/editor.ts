@@ -32,7 +32,7 @@ export interface LifeCyclesConfig {
   destroy?: (editor: Editor) => any
 }
 
-export enum EditorEvent {
+export enum EDITOR_EVENT {
   BEFORE_INIT = 'editor:beforeInit',
   AFTER_INIT = 'editor:afterInit',
   DESTROY = 'editor:destroy',
@@ -129,7 +129,7 @@ export class Editor {
     this.config = config || {}
     const { lifeCycles, plugins, setters, components, componentMetas } = this.config
 
-    this.eventBus.emit(EditorEvent.BEFORE_INIT)
+    this.eventBus.emit(EDITOR_EVENT.BEFORE_INIT)
 
     const setterManager = new SetterManager()
     const componentMetaManager = new ComponentMetaManager(this)
@@ -164,13 +164,13 @@ export class Editor {
       pluginManager.registerPlugins(plugins)
     }
     if (setters) {
-      setterManager.registerSettersMap(setters)
+      setterManager.buildSettersMap(setters)
     }
     if (components) {
-      simulator.setComponents(components)
+      simulator.buildComponentMap(components)
     }
     if (componentMetas) {
-      componentMetaManager.createComponentMetaMap(componentMetas)
+      componentMetaManager.buildComponentMetasMap(componentMetas)
     }
 
     try {
@@ -180,7 +180,7 @@ export class Editor {
       console.error(err)
     }
 
-    this.eventBus.emit(EditorEvent.AFTER_INIT)
+    this.eventBus.emit(EDITOR_EVENT.AFTER_INIT)
   }
 
   destroy() {
@@ -195,7 +195,7 @@ export class Editor {
       console.warn(err)
     }
 
-    this.eventBus.emit(EditorEvent.DESTROY)
+    this.eventBus.emit(EDITOR_EVENT.DESTROY)
   }
 
   /**
@@ -247,26 +247,26 @@ export class Editor {
   }
 
   onBeforeInit(listener: (editor: Editor) => void) {
-    this.eventBus.on(EditorEvent.BEFORE_INIT, listener)
+    this.eventBus.on(EDITOR_EVENT.BEFORE_INIT, listener)
 
     return () => {
-      this.eventBus.off(EditorEvent.BEFORE_INIT, listener)
+      this.eventBus.off(EDITOR_EVENT.BEFORE_INIT, listener)
     }
   }
 
   onAfterInit(listener: (editor: Editor) => void) {
-    this.eventBus.on(EditorEvent.AFTER_INIT, listener)
+    this.eventBus.on(EDITOR_EVENT.AFTER_INIT, listener)
 
     return () => {
-      this.eventBus.off(EditorEvent.AFTER_INIT, listener)
+      this.eventBus.off(EDITOR_EVENT.AFTER_INIT, listener)
     }
   }
 
   onDestroy(listener: (editor: Editor) => void) {
-    this.eventBus.on(EditorEvent.DESTROY, listener)
+    this.eventBus.on(EDITOR_EVENT.DESTROY, listener)
 
     return () => {
-      this.eventBus.off(EditorEvent.DESTROY, listener)
+      this.eventBus.off(EDITOR_EVENT.DESTROY, listener)
     }
   }
 }

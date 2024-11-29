@@ -30,10 +30,9 @@ export interface LocationChildrenDetail {
   type: LocationDetailType.Children
   index?: number | null
 
-  /**
-   * is valid location
-   */
+  /** is valid location */
   valid?: boolean
+
   edge?: DOMRect
   near?: {
     node: INode
@@ -93,27 +92,27 @@ export interface LocateEvent {
   sensor?: Sensor
 }
 
-export function isLocationData(obj: any): obj is LocationData {
+export const isLocationData = (obj: any): obj is LocationData => {
   return obj && obj.target && obj.detail
 }
 
-export function isLocationChildrenDetail(obj: any): obj is LocationChildrenDetail {
+export const isLocationChildrenDetail = (obj: any): obj is LocationChildrenDetail => {
   return obj && obj.type === LocationDetailType.Children
 }
 
-export function isText(elem: any): elem is Text {
+export const isText = (elem: any): elem is Text => {
   return elem.nodeType === Node.TEXT_NODE
 }
 
-export function isElementNode(node: any): node is Element {
+export const isElementNode = (node: any): node is Element => {
   return node.nodeType === Node.ELEMENT_NODE
 }
 
-export function isDocumentNode(elem: any): elem is Document {
+export const isDocumentNode = (elem: any): elem is Document => {
   return elem.nodeType === Node.DOCUMENT_NODE
 }
 
-export function getWindow(elem: Element | Document): Window {
+export const getWindow = (elem: Element | Document): Window => {
   return (isDocumentNode(elem) ? elem : elem.ownerDocument!).defaultView!
 }
 

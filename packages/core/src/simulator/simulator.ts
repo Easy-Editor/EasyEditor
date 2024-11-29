@@ -1,21 +1,21 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
-import type {
-  CanvasPoint,
-  Designer,
-  LocateEvent,
-  LocationChildrenDetail,
-  LocationData,
-  NodeInstance,
-  Rect,
-} from '../designer'
+import type { Designer, LocateEvent, LocationChildrenDetail, LocationData, NodeInstance } from '../designer'
 import type { Node } from '../document'
 import type { Component, ComponentInstance, Snippet } from '../meta'
 import type { Project } from '../project'
 import type { SimulatorRenderer } from './simulator-render'
 
 import { action, autorun, computed, observable, reaction } from 'mobx'
-import { DragObjectType, LocationDetailType, clipboard, isDragAnyObject, isLocationData, isShaken } from '../designer'
-import { getClosestClickableNode } from '../document'
+import {
+  DESIGNER_EVENT,
+  DragObjectType,
+  LocationDetailType,
+  clipboard,
+  isDragAnyObject,
+  isLocationData,
+  isShaken,
+} from '../designer'
+import { getClosestClickableNode, getClosestNode } from '../document'
 import { createEventBus } from '../utils'
 import Viewport from './viewport'
 
@@ -117,7 +117,10 @@ export class Simulator {
   }
 
   set(key: string, value: any) {
-    this._props[key] = value
+    this._props = {
+      ...this._props,
+      [key]: value,
+    }
   }
 
   get(key: string): any {
@@ -189,12 +192,10 @@ export class Simulator {
     clipboard.injectCopyPaster(this._contentDocument!)
   }
 
-  // TODO
   setupDragAndClick() {
     const { designer } = this
     const doc = this.contentDocument!
 
-    // TODO: 是否修改为 dragstart 事件
     doc.addEventListener(
       'mousedown',
       (downEvent: MouseEvent) => {
@@ -216,9 +217,15 @@ export class Simulator {
         if (!node) {
           return
         }
+
+        // 触发 onMouseDownHook 钩子
+        const onMouseDownHook = node.componentMeta.advanced.callbacks?.onMouseDownHook
+        if (onMouseDownHook) {
+          onMouseDownHook(downEvent, node)
+        }
         // stop response document focus event
         // TODO: ?? 阻止了 linkSnippet 事件 - mousedown 事件
-        downEvent.stopPropagation()
+        // downEvent.stopPropagation()
         // TODO: ?? 阻止了 linkSnippet 事件 - dragstart 事件
         // downEvent.preventDefault()
         const isLeftButton = downEvent.which === 1 || downEvent.button === 0
@@ -235,9 +242,8 @@ export class Simulator {
               }
 
               // dirty code should refector
-              const editor = this.designer?.editor
               const selected = node?.componentMeta?.componentName || ''
-              editor?.eventBus.emit('designer.builtinSimulator.select', {
+              this.designer.postEvent(DESIGNER_EVENT.SIMULATOR_SELECT, {
                 selected,
               })
             }
@@ -315,17 +321,10 @@ export class Simulator {
       },
       true,
     )
-
-    // this.disableDetecting = () => {
-    //   detecting.leave(this.project.currentDocument);
-    //   doc.removeEventListener('mouseover', hover, true);
-    //   doc.removeEventListener('mouseleave', leave, false);
-    //   this.disableDetecting = undefined;
-    // };
   }
 
   @action
-  setComponents(components: Record<string, Component>) {
+  buildComponentMap(components: Record<string, Component>) {
     this._components = components
   }
 
@@ -454,11 +453,21 @@ export class Simulator {
       const onMoveHook = node?.componentMeta?.advanced?.callbacks?.onMoveHook
       const canMove = onMoveHook && typeof onMoveHook === 'function' ? onMoveHook(node) : true
 
-      const parentNode = node?.parent
-      const onChildMoveHook = parentNode?.componentMeta?.advanced?.callbacks?.onChildMoveHook
+      let parentContainerNode: Node | null = null
+      let parentNode = node?.parent
+
+      while (parentNode) {
+        if (parentNode.isContainer()) {
+          parentContainerNode = parentNode
+          break
+        }
+        parentNode = parentNode.parent
+      }
+
+      const onChildMoveHook = parentContainerNode?.componentMeta?.advanced?.callbacks?.onChildMoveHook
       const childrenCanMove =
-        onChildMoveHook && parentNode && typeof onChildMoveHook === 'function'
-          ? onChildMoveHook(node, parentNode)
+        onChildMoveHook && parentContainerNode && typeof onChildMoveHook === 'function'
+          ? onChildMoveHook(node, parentContainerNode)
           : true
 
       return canMove && childrenCanMove
@@ -475,6 +484,12 @@ export class Simulator {
     }
     const dropContainer = this.getDropContainer(e)
     if (!dropContainer) {
+      return null
+    }
+    const lockedNode = dropContainer?.container
+      ? getClosestNode(dropContainer.container, node => node.isLocked())
+      : null
+    if (lockedNode) {
       return null
     }
 
@@ -505,7 +520,7 @@ export class Simulator {
       event: e,
     }
 
-    if (e.dragObject && e.dragObject.nodes && e.dragObject.nodes.length) {
+    if (e.dragObject && e.dragObject.nodes && e.dragObject.nodes.length && document.rootNode) {
       return this.designer.createLocation({
         target: document.rootNode!,
         detail,
@@ -558,20 +573,20 @@ export class Simulator {
       return null
     }
 
-    let instance: any
+    let instance: ComponentInstance | null | undefined = null
     if (nodeInstance) {
       if (nodeInstance.node === container) {
         instance = nodeInstance.instance
       } else {
-        instance = this.getClosestNodeInstance(nodeInstance.instance as any, container?.id)?.instance
+        instance = this.getClosestNodeInstance(nodeInstance.instance, container?.id)?.instance
       }
     } else {
       instance = container && this.getComponentInstances(container!)
     }
 
     let dropContainer: DropContainer = {
-      container: container as any,
-      instance,
+      container: container!,
+      instance: instance!,
     }
 
     let res: any
@@ -591,7 +606,7 @@ export class Simulator {
           instance = this.getClosestNodeInstance(dropContainer.instance, container.id)?.instance
           dropContainer = {
             container,
-            instance,
+            instance: instance!,
           }
         } else {
           return null
@@ -621,26 +636,4 @@ export class Simulator {
 
 export const isSimulator = (obj: any): obj is Simulator => {
   return obj && obj.isSimulator
-}
-
-const isPointInRect = (point: CanvasPoint, rect: Rect) => {
-  return (
-    point.canvasY >= rect.top &&
-    point.canvasY <= rect.bottom &&
-    point.canvasX >= rect.left &&
-    point.canvasX <= rect.right
-  )
-}
-
-const distanceToRect = (point: CanvasPoint, rect: Rect) => {
-  let minX = Math.min(Math.abs(point.canvasX - rect.left), Math.abs(point.canvasX - rect.right))
-  let minY = Math.min(Math.abs(point.canvasY - rect.top), Math.abs(point.canvasY - rect.bottom))
-  if (point.canvasX >= rect.left && point.canvasX <= rect.right) {
-    minX = 0
-  }
-  if (point.canvasY >= rect.top && point.canvasY <= rect.bottom) {
-    minY = 0
-  }
-
-  return Math.sqrt(minX ** 2 + minY ** 2)
 }

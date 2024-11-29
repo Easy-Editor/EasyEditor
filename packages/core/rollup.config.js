@@ -13,6 +13,14 @@ const plugins = [
     babelrc: false,
     babelHelpers: 'bundled',
     presets: ['@babel/preset-typescript'],
+    plugins: [
+      [
+        '@babel/plugin-proposal-decorators',
+        {
+          version: '2023-05',
+        },
+      ],
+    ],
   }),
   cleanup({
     comments: ['some', /PURE/],

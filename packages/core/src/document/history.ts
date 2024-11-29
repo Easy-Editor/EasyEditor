@@ -1,7 +1,7 @@
 import type { Document, DocumentSchema } from './document'
 
 import { reaction, untracked } from 'mobx'
-import { createEventBus, createLogger } from '../utils'
+import { createEventBus, logger } from '../utils'
 
 export interface Serialization<K = DocumentSchema, T = string> {
   serialize(data: K): T
@@ -14,7 +14,6 @@ export enum HISTORY_EVENT {
 }
 
 export class History<T = DocumentSchema> {
-  logger = createLogger('History')
   emitter = createEventBus('History')
 
   /** current record */
@@ -133,7 +132,7 @@ export class History<T = DocumentSchema> {
       this.redoer(this.serialization.unserialize(hotData))
       this.emitter.emit(HISTORY_EVENT.CURSOR_CHANGE, hotData)
     } catch (e) {
-      this.logger.error('History', e)
+      logger.error('History', e)
     }
 
     this.wakeup()
