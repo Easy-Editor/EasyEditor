@@ -11,6 +11,7 @@
     "@easy-editor/core": "workspace:*",
     "@easy-editor/plugin-dashboard": "workspace:*",
     "@easy-editor/react-renderer": "workspace:*",
+    "@radix-ui/react-collapsible": "^1.1.1",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-dropdown-menu": "^2.1.2",
     "@radix-ui/react-label": "^2.1.0",

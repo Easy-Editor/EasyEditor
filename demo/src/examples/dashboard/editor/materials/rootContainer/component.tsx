@@ -7,7 +7,7 @@ interface RootContainerProps {
 
 const RootContainer = (props: RootContainerProps, ref: Ref<HTMLDivElement>) => {
   return (
-    <div ref={ref} className='w-full h-full' style={{ backgroundColor: props?.backgroundColor }}>
+    <div ref={ref} className='w-full h-full rounded-lg bg-sidebar' style={{ backgroundColor: props?.backgroundColor }}>
       {props?.children}
     </div>
   )

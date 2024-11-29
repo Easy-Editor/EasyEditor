@@ -1,10 +1,8 @@
 export const defaultDocumentSchema = {
   name: '未命名',
   rootNode: {
+    title: '根容器',
     componentName: 'RootContainer',
-    props: {
-      backgroundColor: '#ffffff',
-    },
     $: {
       dashboard: {
         position: {
@@ -15,6 +13,7 @@ export const defaultDocumentSchema = {
     },
     children: [
       {
+        title: '按钮',
         componentName: 'Button',
         props: {
           type: 'primary',
