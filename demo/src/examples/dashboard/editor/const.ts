@@ -1,8 +1,12 @@
-export const defaultDocumentSchema = {
+import type { DocumentSchema } from '@easy-editor/core'
+
+export const defaultDocumentSchema: DocumentSchema = {
   name: '未命名',
   rootNode: {
-    title: '根容器',
     componentName: 'RootContainer',
+    props: {
+      backgroundColor: '#18181B',
+    },
     $: {
       dashboard: {
         position: {
@@ -13,7 +17,6 @@ export const defaultDocumentSchema = {
     },
     children: [
       {
-        title: '按钮',
         componentName: 'Button',
         props: {
           type: 'primary',

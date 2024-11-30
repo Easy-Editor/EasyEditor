@@ -1,4 +1,4 @@
-import { ChevronRight, Component, Container, Folder, ListTree, X } from 'lucide-react'
+import { ChevronRight, Component, Container, ListTree, X } from 'lucide-react'
 import * as React from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -126,7 +126,7 @@ const ComponentSidebar = observer(() => {
   const snippets = designer.componentMetaManager.getComponentSnippets()
 
   return (
-    <div className='border-r flex flex-col'>
+    <div className='flex flex-col'>
       <div className='flex-1 overflow-y-auto p-4'>
         <div className='space-y-2'>
           {snippets.map(snippet => (
@@ -149,7 +149,7 @@ const OutlineSidebar = observer(() => {
             <SidebarMenuButton>
               <ChevronRight className='transition-transform' />
               <Container />
-              {docSchema?.rootNode?.title}
+              {docSchema?.rootNode?.componentName}
             </SidebarMenuButton>
           </CollapsibleTrigger>
           <CollapsibleContent>
@@ -167,7 +167,7 @@ const OutlineSidebar = observer(() => {
 
 const OutlineTree = observer(({ item }: { item: NodeSchema }) => {
   if (!item.children?.length) {
-    return <SidebarMenuButton className='data-[active=true]:bg-transparent'>{item.title}</SidebarMenuButton>
+    return <SidebarMenuButton className='data-[active=true]:bg-transparent'>{item.componentName}</SidebarMenuButton>
   }
 
   return (
@@ -176,8 +176,7 @@ const OutlineTree = observer(({ item }: { item: NodeSchema }) => {
         <CollapsibleTrigger asChild>
           <SidebarMenuButton>
             <ChevronRight className='transition-transform' />
-            <Folder />
-            {item.title}
+            {item.componentName}
           </SidebarMenuButton>
         </CollapsibleTrigger>
         <CollapsibleContent>
