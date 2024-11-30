@@ -1,5 +1,5 @@
 import type { Designer } from '../designer'
-import type { ComponentMetadata, Configure, FieldConfig } from './meta'
+import type { ComponentMetadata } from './meta'
 
 import { createEventBus } from '../utils'
 
@@ -26,15 +26,14 @@ export class ComponentMeta {
 
   private _descriptor?: string
 
-  get descriptor(): string | undefined {
+  get descriptor() {
     return this._descriptor
   }
 
   private _metadata?: ComponentMetadata
 
-  get configure(): FieldConfig[] {
-    const config = this._metadata?.configure
-    return Array.isArray(config) ? config : config?.props || []
+  get configure() {
+    return this._metadata?.configure?.props || []
   }
 
   private _title?: string
@@ -47,17 +46,8 @@ export class ComponentMeta {
     return this._metadata?.icon
   }
 
-  get isOnlyFieldConfig() {
-    const config = this._metadata?.configure
-    return Array.isArray(config)
-  }
-
   get advanced() {
-    if (this.isOnlyFieldConfig) {
-      return {}
-    }
-
-    return (this._metadata!.configure as Configure)?.advanced || {}
+    return this._metadata?.configure?.advanced || {}
   }
 
   get snippets() {
@@ -81,14 +71,12 @@ export class ComponentMeta {
       this._title = title
     }
 
-    if (!this.isOnlyFieldConfig) {
-      const { component } = configure as Configure
-      if (component) {
-        this._isContainer = !!component.isContainer
-        this._descriptor = component.descriptor
-      } else {
-        this._isContainer = false
-      }
+    const { component } = configure
+    if (component) {
+      this._isContainer = !!component.isContainer
+      this._descriptor = component.descriptor
+    } else {
+      this._isContainer = false
     }
 
     this.emitter.emit(COMPONENT_META_EVENT.CHANGE)

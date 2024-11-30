@@ -9,6 +9,8 @@ export enum DETECTING_EVENT {
 }
 
 export class Detecting {
+  private emitter = createEventBus('Detecting')
+
   @observable.ref private accessor _enable = true
 
   /**
@@ -26,12 +28,7 @@ export class Detecting {
     }
   }
 
-  // TODO
-  @observable.ref accessor xRayMode = false
-
   @observable.ref private accessor _current: Node | null = null
-
-  private emitter = createEventBus('Detecting')
 
   get current() {
     return this._current

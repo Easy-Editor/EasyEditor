@@ -26,7 +26,7 @@ export const editor = createEasyEditor({
       console.log('destroy')
     },
   },
-  plugins: [DashboardPlugin, ...plugins],
+  plugins: [DashboardPlugin(), ...plugins],
   setters: formatMapFromESModule<Setter>(setterMap),
   components: formatMapFromESModule<Component>(componentMap),
   componentMetas: formatMapFromESModule<ComponentMetadata>(componentMetaMap),

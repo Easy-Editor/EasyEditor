@@ -27,22 +27,8 @@ export interface DropContainer {
 export type DesignMode = 'design' | 'preview' | 'live'
 
 export interface SimulatorProps {
-  // 从 documentModel 上获取
-  // suspended?: boolean;
   designMode?: DesignMode
-  // device?: 'mobile' | 'iphone' | string;
-  // deviceClassName?: string;
-  // environment?: Asset;
-  // // @TODO 补充类型
-  // /** @property 请求处理器配置 */
-  // requestHandlersMap?: any;
-  // extraEnvironment?: Asset;
-  // library?: LibraryItem[];
-  // utilsMetadata?: UtilsMetadata;
-  // simulatorUrl?: Asset;
-  // theme?: Asset;
-  // componentsAsset?: Asset;
-  // eslint-disable-next-line @typescript-eslint/member-ordering
+
   [key: string]: any
 }
 
@@ -61,7 +47,8 @@ export class Simulator {
 
   autoRender = true
 
-  @computed get designMode(): DesignMode {
+  @computed
+  get designMode(): DesignMode {
     return this.get('designMode') || 'design'
   }
 
@@ -84,7 +71,8 @@ export class Simulator {
   /**
    * material to component map
    */
-  @computed get components() {
+  @computed
+  get components() {
     return this._components
   }
 
@@ -98,7 +86,6 @@ export class Simulator {
     return this._sensorAvailable
   }
 
-  // TODO
   private _renderer?: SimulatorRenderer
 
   get renderer() {
@@ -112,10 +99,12 @@ export class Simulator {
     this.project = designer.project
   }
 
+  @action
   setProps(props: SimulatorProps) {
     this._props = props
   }
 
+  @action
   set(key: string, value: any) {
     this._props = {
       ...this._props,
@@ -142,6 +131,7 @@ export class Simulator {
     return autorun(effect, options)
   }
 
+  @action
   purge() {
     this._components = {}
     this._renderer = undefined
@@ -157,6 +147,7 @@ export class Simulator {
   /**
    * mount the viewport element
    */
+  @action
   mountViewport(viewport: HTMLElement) {
     this._iframe = viewport
     this._contentDocument = viewport.ownerDocument
@@ -182,7 +173,7 @@ export class Simulator {
   linkSnippet(ref: HTMLElement, snippet: Snippet) {
     return this.designer.dragon.from(ref, () => ({
       type: DragObjectType.NodeData,
-      data: snippet,
+      data: snippet.schema,
     }))
   }
 
@@ -328,6 +319,7 @@ export class Simulator {
     this._components = components
   }
 
+  @action
   setInstance(docId: string, id: string, instance: ComponentInstance | null) {
     if (!Object.prototype.hasOwnProperty.call(this.instancesMap, docId)) {
       this.instancesMap[docId] = new Map()
@@ -467,7 +459,7 @@ export class Simulator {
       const onChildMoveHook = parentContainerNode?.componentMeta?.advanced?.callbacks?.onChildMoveHook
       const childrenCanMove =
         onChildMoveHook && parentContainerNode && typeof onChildMoveHook === 'function'
-          ? onChildMoveHook(node, parentContainerNode)
+          ? onChildMoveHook(node!, parentContainerNode)
           : true
 
       return canMove && childrenCanMove
@@ -621,7 +613,8 @@ export class Simulator {
     const document = this.project.currentDocument!
     const { rootNode } = document
     if (container.isRoot() || container.contains(rootNode!)) {
-      return document.checkNesting(rootNode!, dragObject as any)
+      // return document.checkNesting(rootNode!, dragObject as any)
+      return true
     }
 
     const meta = (container as Node).componentMeta
@@ -630,7 +623,8 @@ export class Simulator {
       return false
     }
 
-    return document.checkNesting(container, dragObject as any)
+    // return document.checkNesting(container, dragObject as any)
+    return true
   }
 }
 

@@ -24,6 +24,7 @@ export class Selection {
     return this._selected
   }
 
+  @action
   select(id: string) {
     if (this._selected.length === 1 && this._selected.indexOf(id) > -1) {
       // avoid cause reaction
@@ -40,6 +41,7 @@ export class Selection {
     this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
   }
 
+  @action
   selectAll(ids: string[]) {
     const selectIds: string[] = []
 
@@ -55,6 +57,7 @@ export class Selection {
     this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
   }
 
+  @action
   clear() {
     if (this._selected.length < 1) {
       return
@@ -67,6 +70,7 @@ export class Selection {
   /**
    * tidy selected ids(remove invalid ids)
    */
+  @action
   tidy() {
     const l = this._selected.length
     let i = l
@@ -133,7 +137,7 @@ export class Selection {
     const nodes = []
     for (const id of this._selected) {
       const node = this.currentDocument.getNode(id)
-      // 排除根节点
+      // exclude root node
       if (!node || (!includeRoot && node.contains(this.currentDocument.rootNode!))) {
         continue
       }

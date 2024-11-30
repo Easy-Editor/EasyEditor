@@ -1,10 +1,10 @@
-import { DESIGNER_EVENT, DragObjectType, type DropLocation, type Plugin } from '@easy-editor/core'
+import { DESIGNER_EVENT, DragObjectType, type DropLocation, type PluginCreator } from '@easy-editor/core'
 
-const DashboardPlugin: Plugin = ctx => {
+const DashboardPlugin: PluginCreator = () => {
   return {
     name: 'DashboardPlugin',
     deps: [],
-    init() {
+    init(ctx) {
       const { designer, logger, simulator } = ctx
       const startOffsetNodes: { [key: string]: { x: number; y: number } } = {}
       const startOffsetNodeData = { x: 0, y: 0 }
@@ -68,7 +68,5 @@ const DashboardPlugin: Plugin = ctx => {
     },
   }
 }
-
-DashboardPlugin.pluginName = 'DashboardPlugin'
 
 export default DashboardPlugin

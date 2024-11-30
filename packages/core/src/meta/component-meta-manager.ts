@@ -11,10 +11,16 @@ export class ComponentMetaManager {
   private _lostComponentMetasMap = new Map<string, ComponentMeta>()
 
   get designer() {
-    return this.editor.get('designer') as Designer
+    return this.editor.get<Designer>('designer')!
   }
 
   constructor(readonly editor: Editor) {}
+
+  buildComponentMetasMap = (metas: Record<string, ComponentMetadata>) => {
+    for (const meta of Object.values(metas)) {
+      this.createComponentMeta(meta)
+    }
+  }
 
   @action
   createComponentMeta(data: ComponentMetadata) {
@@ -43,12 +49,6 @@ export class ComponentMetaManager {
     return meta
   }
 
-  buildComponentMetasMap = (metas: Record<string, ComponentMetadata>) => {
-    for (const meta of Object.values(metas)) {
-      this.createComponentMeta(meta)
-    }
-  }
-
   getComponentMeta(componentName: string, generateMetadata?: () => ComponentMetadata | null): ComponentMeta {
     if (this._componentMetasMap.has(componentName)) {
       return this._componentMetasMap.get(componentName)!
@@ -72,7 +72,8 @@ export class ComponentMetaManager {
     return Array.from(this._componentMetasMap.values()).flatMap(meta => meta.snippets)
   }
 
-  @computed get componentMetasMap() {
+  @computed
+  get componentMetasMap() {
     const maps: Record<string, ComponentMetadata> = {}
     this._componentMetasMap.forEach((config, key) => {
       const metaData = config.getMetadata()
@@ -81,15 +82,8 @@ export class ComponentMetaManager {
     return maps
   }
 
-  isComponentMeta(obj: any) {
-    return isComponentMeta(obj)
-  }
-
-  getComponentMetasMap() {
-    return this._componentMetasMap
-  }
-
-  @computed get componentsMap(): { [key: string]: Component } {
+  @computed
+  get componentsMap(): { [key: string]: Component } {
     const maps: any = {}
     this._componentMetasMap.forEach((config, key) => {
       const metaData = config.getMetadata()
@@ -105,5 +99,13 @@ export class ComponentMetaManager {
       }
     })
     return maps
+  }
+
+  getComponentMetasMap() {
+    return this._componentMetasMap
+  }
+
+  isComponentMeta(obj: any) {
+    return isComponentMeta(obj)
   }
 }

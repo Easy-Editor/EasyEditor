@@ -1,7 +1,7 @@
-import type { Node } from '../node/node'
+import type { Node, NodeSchema } from '../node/node'
 import type { Props } from './props'
 
-import { action, computed, isObservableArray, observable, runInAction, set, untracked } from 'mobx'
+import { action, computed, isObservableArray, observable, set, untracked } from 'mobx'
 import { DESIGNER_EVENT } from '../../designer'
 import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
@@ -29,6 +29,8 @@ export type PropKey = string | number
 
 export type PropValue = CompositeValue
 
+export type PropsMap = CompositeObject<NodeSchema | NodeSchema[]>
+
 export type CompositeValue = JSONValue | CompositeArray | CompositeObject
 
 export type CompositeArray = CompositeValue[]
@@ -54,19 +56,20 @@ export class Prop {
 
   readonly owner: Node
 
+  getNode() {
+    return this.owner
+  }
+
   readonly props: Props
 
   getProps() {
     return this.props
   }
 
-  getNode() {
-    return this.owner
-  }
-
   @observable.ref private accessor _value: PropValue | UNSET = UNSET
 
-  @computed get value(): unknown | UNSET {
+  @computed
+  get value(): unknown | UNSET {
     return this.export(TRANSFORM_STAGE.SERIALIZE)
   }
 
@@ -74,15 +77,6 @@ export class Prop {
 
   get type() {
     return this._type
-  }
-
-  @action
-  unset() {
-    this._type = 'unset'
-  }
-
-  isUnset() {
-    return this._type === 'unset'
   }
 
   /** use for list or map type */
@@ -99,6 +93,7 @@ export class Prop {
   /**
    * Construct the items and maps for the prop value
    */
+  @computed
   private get items() {
     if (this._items) {
       return this._items
@@ -108,7 +103,8 @@ export class Prop {
     return this._items
   }
 
-  @computed private get maps(): Map<PropKey, Prop> | null {
+  @computed
+  private get maps(): Map<PropKey, Prop> | null {
     if (!this.items) {
       return null
     }
@@ -151,54 +147,52 @@ export class Prop {
    */
   @action
   initItems() {
-    runInAction(() => {
-      let items: Prop[] | null = null
+    let items: Prop[] | null = null
 
-      if (this._type === 'list') {
-        const maps = new Map<string, Prop>()
-        const data = this._value as Array<PropValue>
+    if (this._type === 'list') {
+      const maps = new Map<string, Prop>()
+      const data = this._value as Array<PropValue>
 
-        for (let i = 0; i < data.length; i++) {
-          const item = data[i]
-          let prop: Prop
-          items = items || []
-          if (this._maps?.has(i.toString())) {
-            prop = this._maps.get(i.toString())!
-            prop.setValue(item)
-          } else {
-            prop = new Prop(this, i.toString(), item)
-          }
-
-          maps.set(i.toString(), prop)
-          items.push(prop)
-        }
-        this._maps = maps
-      } else if (this._type === 'map') {
-        const maps = new Map<string, Prop>()
-        const data = this._value as Record<string, PropValue>
-        const keys = Object.keys(data)
-
-        for (const key of keys) {
-          let prop: Prop
-          if (this._maps?.has(key)) {
-            prop = this._maps.get(key)!
-            prop.setValue(data[key])
-          } else {
-            prop = new Prop(this, key, data[key])
-          }
-          items = items || []
-          items.push(prop)
-          maps.set(key, prop)
+      for (let i = 0; i < data.length; i++) {
+        const item = data[i]
+        let prop: Prop
+        items = items || []
+        if (this._maps?.has(i.toString())) {
+          prop = this._maps.get(i.toString())!
+          prop.setValue(item)
+        } else {
+          prop = new Prop(this, i.toString(), item)
         }
 
-        this._maps = maps
-      } else {
-        items = null
-        this._maps = null
+        maps.set(i.toString(), prop)
+        items.push(prop)
+      }
+      this._maps = maps
+    } else if (this._type === 'map') {
+      const maps = new Map<string, Prop>()
+      const data = this._value as Record<string, PropValue>
+      const keys = Object.keys(data)
+
+      for (const key of keys) {
+        let prop: Prop
+        if (this._maps?.has(key)) {
+          prop = this._maps.get(key)!
+          prop.setValue(data[key])
+        } else {
+          prop = new Prop(this, key, data[key])
+        }
+        items = items || []
+        items.push(prop)
+        maps.set(key, prop)
       }
 
-      this._items = items
-    })
+      this._maps = maps
+    } else {
+      items = null
+      this._maps = null
+    }
+
+    this._items = items
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): PropValue {
@@ -209,15 +203,15 @@ export class Prop {
     }
 
     if (type === 'literal') {
-      return this._value as any
+      return this._value as CompositeValue
     }
 
     if (type === 'map') {
       if (!this._items) {
-        return this._value as any
+        return this._value as CompositeValue
       }
 
-      let maps: any = undefined
+      let maps: CompositeObject | undefined = undefined
       for (let i = 0; i < this.items!.length; i++) {
         const prop = this.items![i]
         if (!prop.isUnset()) {
@@ -233,20 +227,13 @@ export class Prop {
 
     if (type === 'list') {
       if (!this._items) {
-        return this._value as any
+        return this._value as CompositeValue
       }
 
       return this.items!.map(prop => {
         return prop.export(stage)
       }) as CompositeArray
     }
-  }
-
-  getAsString(): string {
-    if (this.type === 'literal') {
-      return this._value ? String(this._value) : ''
-    }
-    return ''
   }
 
   /**
@@ -297,6 +284,15 @@ export class Prop {
     this._maps = null
   }
 
+  @action
+  unset() {
+    this._type = 'unset'
+  }
+
+  isUnset() {
+    return this._type === 'unset'
+  }
+
   /**
    * set value, val should be JSON Object
    */
@@ -335,6 +331,13 @@ export class Prop {
 
   getValue() {
     return this.value
+  }
+
+  getAsString(): string {
+    if (this.type === 'literal') {
+      return this._value ? String(this._value) : ''
+    }
+    return ''
   }
 
   get(path: string, createIfNone = true): Prop | null {

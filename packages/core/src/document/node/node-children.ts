@@ -15,11 +15,11 @@ export class NodeChildren {
 
   readonly owner: Node
 
-  @observable.shallow accessor children: Node[] = []
-
   getNode() {
     return this.owner
   }
+
+  @observable.shallow accessor children: Node[] = []
 
   @computed
   get size(): number {
@@ -39,6 +39,7 @@ export class NodeChildren {
     this.children = (Array.isArray(data) ? data : []).map(child => {
       return this.owner.document.createNode(child)
     })
+    this.internalInitParent()
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE) {
@@ -48,6 +49,7 @@ export class NodeChildren {
     })
   }
 
+  @action
   import(data?: NodeSchema | NodeSchema[], checkId = false) {
     data = (data ? (Array.isArray(data) ? data : [data]) : []).filter(d => !!d)
 
@@ -74,6 +76,7 @@ export class NodeChildren {
     this.emitter.emit(NODE_CHILDREN_EVENT.CHANGE)
   }
 
+  @action
   remove(purge = true, useMutator = true) {
     this.children.forEach(child => {
       child.remove(purge, useMutator)
@@ -83,6 +86,7 @@ export class NodeChildren {
 
   private purged = false
 
+  @action
   purge() {
     if (this.purged) {
       return
@@ -100,7 +104,7 @@ export class NodeChildren {
   }
 
   @action
-  private internalUnlinkChild(node: Node) {
+  internalUnlinkChild(node: Node) {
     const i = this.children.indexOf(node)
     if (i < 0) {
       return false
@@ -122,6 +126,7 @@ export class NodeChildren {
     return this.internalDelete(node)
   }
 
+  @action
   internalDelete(node: Node, purge = false, useMutator = true): boolean {
     if (node.isParentalNode) {
       node.children?.remove(purge, useMutator)
@@ -221,6 +226,7 @@ export class NodeChildren {
     designer.postEvent(NODE_EVENT.ADD, { node })
   }
 
+  @action
   mergeChildren(
     remover: (node: Node, idx: number) => boolean,
     adder: (children: Node[]) => NodeSchema[] | null,

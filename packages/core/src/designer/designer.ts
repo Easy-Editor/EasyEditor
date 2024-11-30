@@ -23,10 +23,6 @@ export interface DesignerProps {
   editor: Editor
   defaultSchema?: ProjectSchema
 
-  // TODO
-  hotkeys?: object
-
-  onMount?: (designer: Designer) => void
   onDragstart?: (e: LocateEvent) => void
   onDrag?: (e: LocateEvent) => void
   onDragend?: (e: { dragObject: DragObject; copy: boolean }, loc?: DropLocation) => void
@@ -40,18 +36,18 @@ export enum DESIGNER_EVENT {
   DRAG_START = 'designer:dragstart',
   DRAG = 'designer:drag',
   DRAG_END = 'designer:dragend',
-  DROP_LOCATION_CHANGE = 'designer:dropLocation.change',
-
-  // TODO: 名称有点问题，因为这个暂时只是触发从物料拖拽出来了 nodedata 生效
-  INSERT_NODE_BEFORE = 'designer:node.insert.before',
-  INSERT_NODE_AFTER = 'designer:node.insert.after',
 
   CURRENT_DOCUMENT_CHANGE = 'designer:current-document.change',
   CURRENT_HISTORY_CHANGE = 'designer:current-history.change',
 
+  DROP_LOCATION_CHANGE = 'designer:dropLocation.change',
   DOCUMENT_DROP_LOCATION_CHANGE = 'designer:document.dropLocation.change',
 
+  INSERT_NODE_BEFORE = 'designer:node.insert.before',
+  INSERT_NODE_AFTER = 'designer:node.insert.after',
+
   NODE_VISIBLE_CHANGE = 'designer:node.visible.change',
+  NODE_LOCK_CHANGE = 'designer:node.lock.change',
   NODE_CHILDREN_CHANGE = 'designer:node.children.change',
   NODE_PROPS_CHANGE = 'designer:node.props.change',
   NODE_REMOVE = 'designer:node.remove',
@@ -75,7 +71,7 @@ export class Designer {
   private _dropLocation?: DropLocation
 
   get componentMetaManager() {
-    return this.editor.get('componentMetaManager') as ComponentMetaManager
+    return this.editor.get<ComponentMetaManager>('componentMetaManager')!
   }
 
   private props?: DesignerProps
@@ -228,12 +224,12 @@ export class Designer {
     this.onEvent(DESIGNER_EVENT.INIT, listener)
   }
 
-  get schema(): ProjectSchema {
-    return this.project.getSchema()
+  get schema() {
+    return this.project.export()
   }
 
-  setSchema(schema?: ProjectSchema) {
-    this.project.load(schema)
+  setSchema(schema: ProjectSchema) {
+    this.project.import(schema)
   }
 
   transformProps(props: PropsSchema, node: Node, stage: TRANSFORM_STAGE) {

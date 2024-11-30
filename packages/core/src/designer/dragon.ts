@@ -5,7 +5,7 @@ import type { Simulator } from '../simulator'
 import type { LocateEvent } from './location'
 import type { Sensor } from './sensor'
 
-import { observable } from 'mobx'
+import { action, observable } from 'mobx'
 import { isSimulator } from '../simulator'
 import { createEventBus } from '../utils'
 
@@ -177,6 +177,7 @@ export class Dragon {
    * @param dragObject drag object
    * @param boostEvent drag start event
    */
+  @action
   boost(dragObject: DragObject, boostEvent: MouseEvent | DragEvent) {
     const { designer } = this
     const masterSensors = this.getMasterSensors()
@@ -417,6 +418,9 @@ export class Dragon {
     })
   }
 
+  /**
+   * get master sensors(opened documents)
+   */
   private getMasterSensors() {
     return Array.from(
       new Set(
@@ -432,6 +436,9 @@ export class Dragon {
     )
   }
 
+  /**
+   * get all simulators
+   */
   private getSimulators() {
     return new Set(this.designer.project.documents.map(doc => doc.simulator))
   }
@@ -439,6 +446,7 @@ export class Dragon {
   /**
    * 添加投放感应区
    */
+  @action
   addSensor(sensor: Sensor) {
     this.sensors.push(sensor)
   }
@@ -446,6 +454,7 @@ export class Dragon {
   /**
    * 移除投放感应
    */
+  @action
   removeSensor(sensor: Sensor) {
     const i = this.sensors.indexOf(sensor)
     if (i > -1) {

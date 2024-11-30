@@ -1,19 +1,12 @@
-import type { Node, NodeSchema } from '../node/node'
-import type { CompositeObject, PropKey, PropValue } from './prop'
+import type { Node } from '../node/node'
+import type { PropKey, PropValue, PropsMap } from './prop'
 
 import { action, computed, observable } from 'mobx'
 import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
 import { Prop, UNSET, splitPath } from './prop'
 
-export type PropsSchema = PropsMap | PropsList
-
-export type PropsMap = CompositeObject<NodeSchema | NodeSchema[]>
-
-export type PropsList = Array<{
-  name?: string
-  value: PropValue
-}>
+export type PropsSchema = PropsMap
 
 const EXTRA_KEY_PREFIX = '__'
 
@@ -47,25 +40,27 @@ export class Props {
 
   readonly path = []
 
-  get props() {
-    return this
-  }
-
   readonly owner: Node
-
-  getProps() {
-    return this.props
-  }
 
   getNode() {
     return this.owner
   }
 
-  @observable accessor type: 'map' | 'list' = 'map'
+  get props() {
+    return this
+  }
+
+  getProps() {
+    return this.props
+  }
+
+  // TODO: no need list type
+  @observable accessor type = 'map'
 
   @observable.shallow accessor items: Prop[] = []
 
-  @computed private get maps() {
+  @computed
+  private get maps() {
     const maps = new Map<PropKey, Prop>()
 
     if (this.items.length > 0) {
@@ -79,17 +74,15 @@ export class Props {
     return maps
   }
 
-  @computed get size() {
+  @computed
+  get size() {
     return this.items.length
   }
 
   constructor(owner: Node, props?: PropsSchema, extras?: PropsSchema) {
     this.owner = owner
 
-    if (Array.isArray(props)) {
-      this.type = 'list'
-      this.items = props.map((item, idx) => new Prop(this, item.name || idx, item.value))
-    } else if (props != null) {
+    if (props != null) {
       this.items = Object.keys(props).map(key => new Prop(this, key, props[key]))
     }
     if (extras) {
@@ -100,14 +93,11 @@ export class Props {
   }
 
   @action
-  import(props?: PropsSchema | null, extras?: PropsMap) {
+  import(props?: PropsSchema | null, extras?: PropsSchema) {
     // TODO: 是否需要继承之前相同的 key，来保持响应式
 
     const originItems = this.items
-    if (Array.isArray(props)) {
-      this.type = 'list'
-      this.items = props.map((item, idx) => new Prop(this, item.name || idx, item.value))
-    } else if (props != null) {
+    if (props != null) {
       this.type = 'map'
       this.items = Object.keys(props).map(key => new Prop(this, key, props[key]))
     } else {
@@ -130,36 +120,23 @@ export class Props {
     const props: PropsSchema = {}
     const extras: PropsSchema = {}
 
-    if (this.type === 'list') {
-      for (const item of this.items) {
-        const key = item.key as string
-        const value = item.export(stage)
-
+    this.items.forEach(item => {
+      const key = item.key as string
+      if (key == null || item.isUnset()) return
+      const value = item.export(stage)
+      if (value != null) {
         if (typeof key === 'string' && isExtraKey(key)) {
           extras[getOriginalExtraKey(key)] = value
         } else {
           props[key] = value
         }
       }
-    } else {
-      this.items.forEach(item => {
-        const key = item.key as string
-        if (key == null || item.isUnset()) return
-        const value = item.export(stage)
-        if (value != null) {
-          if (typeof key === 'string' && isExtraKey(key)) {
-            extras[getOriginalExtraKey(key)] = value
-          } else {
-            props[key] = value
-          }
-        }
-      })
-    }
+    })
 
     return { props, extras }
   }
 
-  merge(value: PropsMap, extras?: PropsMap) {
+  merge(value: PropsSchema, extras?: PropsSchema) {
     Object.keys(value).forEach(key => {
       this.query(key, true)!.setValue(value[key])
       this.query(key, true)!.initItems()

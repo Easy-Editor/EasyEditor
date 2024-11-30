@@ -1,8 +1,8 @@
 import { type Logger, createLogger } from '../utils'
-import type { PluginConfig, PluginManager, PluginMeta } from './plugin-manager'
+import type { Plugin, PluginManager, PluginMeta } from './plugin-manager'
 
 export class PluginRuntime {
-  config: PluginConfig
+  config: Plugin
 
   logger: Logger
 
@@ -19,11 +19,18 @@ export class PluginRuntime {
    */
   private _disabled: boolean
 
-  constructor(pluginName: string, manager: PluginManager, config: PluginConfig, meta: PluginMeta) {
+  get ctx() {
+    return this.manager.getPluginContext({ pluginName: this.pluginName, meta: this.meta })
+  }
+
+  constructor(pluginName: string, manager: PluginManager, config: Plugin) {
     this.manager = manager
     this.config = config
     this.pluginName = pluginName
-    this.meta = meta
+    this.meta = {
+      dependencies: config?.deps || [],
+      eventPrefix: config.eventPrefix,
+    }
     this.logger = createLogger(`plugin:${pluginName}`)
   }
 
@@ -50,14 +57,14 @@ export class PluginRuntime {
   async init(forceInit?: boolean) {
     if (this._inited && !forceInit) return
     this.logger.log('method init called')
-    await this.config.init?.call(undefined)
+    await this.config.init?.call(undefined, this.ctx)
     this._inited = true
   }
 
   async destroy() {
     if (!this._inited) return
     this.logger.log('method destroy called')
-    await this.config?.destroy?.call(undefined)
+    await this.config?.destroy?.call(undefined, this.ctx)
     this._inited = false
   }
 

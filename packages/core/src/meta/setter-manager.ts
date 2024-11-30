@@ -13,8 +13,6 @@ export interface Setter {
   component: Component
   defaultProps?: object
   name?: string
-  // condition?: (field: any) => boolean
-  // initialValue?: any | ((field: any) => any)
 }
 
 interface RegisterSetterOption {
@@ -29,8 +27,18 @@ export class SetterManager {
     }
   >()
 
+  get settersMap() {
+    return this._settersMap
+  }
+
   getSetter(type: string) {
     return this._settersMap.get(type)
+  }
+
+  buildSettersMap = (setters: Record<string, Setter>) => {
+    Object.keys(setters).forEach(type => {
+      this.registerSetter(type, setters[type])
+    })
   }
 
   @action
@@ -45,15 +53,5 @@ export class SetterManager {
       title: (setter as Component).displayName || (setter as Setter).name || type,
     }
     this._settersMap.set(type, { type, ...newSetter })
-  }
-
-  buildSettersMap = (setters: Record<string, Setter>) => {
-    Object.keys(setters).forEach(type => {
-      this.registerSetter(type, setters[type])
-    })
-  }
-
-  get settersMap() {
-    return this._settersMap
   }
 }

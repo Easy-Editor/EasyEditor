@@ -1,15 +1,16 @@
 import type { PluginContextOptions } from './plugin-context'
 
 import { logger } from '../utils'
-import { PluginRuntime } from './plugin'
 import { PluginContext } from './plugin-context'
+import { PluginRuntime } from './plugin-runtime'
 import sequencify from './sequencify'
 
-export interface PluginConfig {
+export interface Plugin {
+  name: string
   deps?: string[]
-  init(): Promise<void> | void
-  destroy?(): Promise<void> | void
-  exports?(): any
+  eventPrefix?: string
+  init(ctx: PluginContext): Promise<void> | void
+  destroy?(ctx: PluginContext): Promise<void> | void
 }
 
 export interface PluginMeta {
@@ -24,12 +25,7 @@ export interface PluginMeta {
   eventPrefix?: string
 }
 
-export type PluginCreator<O = any> = (ctx: PluginContext, options: O) => PluginConfig
-
-export interface Plugin<O = any> extends PluginCreator<O> {
-  pluginName: string
-  meta?: PluginMeta
-}
+export type PluginCreator<O = any> = (options?: O) => Plugin
 
 export interface PluginRegisterOptions {
   /**
@@ -64,7 +60,7 @@ export class PluginManager {
     this.contextApiAssembler = contextApiAssembler
   }
 
-  private getPluginContext = (options: PluginContextOptions) => {
+  getPluginContext = (options: PluginContextOptions) => {
     const { pluginName } = options
     let context = this.pluginContextMap.get(pluginName)
     if (!context) {
@@ -80,20 +76,14 @@ export class PluginManager {
    * @param options - the plugin options
    * @param registerOptions - the plugin register options
    */
-  // async register(pluginModel: Plugin, registerOptions?: PluginRegisterOptions): Promise<void>
-  async register(pluginModel: Plugin, options?: any, registerOptions?: PluginRegisterOptions): Promise<void> {
-    if (isRegisterOptions(options)) {
-      registerOptions = options
-      options = {}
-    }
-
-    const { pluginName, meta = {} } = pluginModel
+  async register(pluginModel: Plugin, registerOptions?: PluginRegisterOptions): Promise<void> {
+    const config = pluginModel
+    const { name: pluginName, deps = [], eventPrefix } = config
     if (!pluginName) {
       logger.error('pluginConfigCreator.pluginName required', pluginModel)
       return
     }
-    const ctx = this.getPluginContext({ pluginName, meta })
-    const config = pluginModel(ctx, options)
+    const meta: PluginMeta = { dependencies: deps, eventPrefix }
     const allowOverride = registerOptions?.override === true
 
     if (this.pluginsMap.has(pluginName)) {
@@ -112,7 +102,7 @@ export class PluginManager {
       }
     }
 
-    const plugin = new PluginRuntime(pluginName, this, config, meta)
+    const plugin = new PluginRuntime(pluginName, this, config)
     if (registerOptions?.autoInit) {
       await plugin.init()
     }
@@ -124,16 +114,9 @@ export class PluginManager {
   /**
    * batch register plugins
    */
-  async registerPlugins(
-    plugins: Plugin[] | Array<{ plugin: Plugin; options?: any }>,
-    registerOptions?: PluginRegisterOptions,
-  ) {
+  async registerPlugins(plugins: Plugin[], registerOptions?: PluginRegisterOptions) {
     for (const plugin of plugins) {
-      if ('plugin' in plugin) {
-        await this.register(plugin.plugin, plugin.options, registerOptions)
-      } else {
-        await this.register(plugin, undefined, registerOptions)
-      }
+      await this.register(plugin, registerOptions)
     }
   }
 

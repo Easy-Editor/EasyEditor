@@ -1,13 +1,13 @@
 import type { Component, ComponentMetadata, Setter } from './meta'
 import type { Plugin } from './plugin'
-import type { EventBus } from './utils'
 
 import { action, observable } from 'mobx'
-import { Designer } from './designer'
+import { Designer, type DesignerProps } from './designer'
 import { ComponentMetaManager, SetterManager } from './meta'
 import { PluginManager } from './plugin'
+import type { ProjectSchema } from './project'
 import { Simulator } from './simulator'
-import { createEventBus, createLogger } from './utils'
+import { createEventBus, createLogger, logger } from './utils'
 
 export type EditorValueKey = string | symbol
 
@@ -20,11 +20,20 @@ export type EditorGetResult<T, ClsType> = T extends undefined
   : T
 
 export interface EditorConfig {
-  lifeCycles?: LifeCyclesConfig
-  plugins?: Plugin[] | Array<{ plugin: Plugin; options?: any }>
+  plugins?: Plugin[]
+
   setters?: Record<string, Setter>
   components?: Record<string, Component>
   componentMetas?: Record<string, ComponentMetadata>
+
+  lifeCycles?: LifeCyclesConfig
+
+  designer?: Pick<DesignerProps, 'onDragstart' | 'onDrag' | 'onDragend'>
+
+  defaultSchema?: ProjectSchema
+
+  // TODO
+  hotkeys?: any
 }
 
 export interface LifeCyclesConfig {
@@ -43,7 +52,7 @@ export class Editor {
 
   config?: EditorConfig
 
-  eventBus: EventBus
+  eventBus = createEventBus('EasyEditor')
 
   private waits = new Map<
     EditorValueKey,
@@ -54,9 +63,6 @@ export class Editor {
   >()
 
   constructor(config?: EditorConfig) {
-    this.eventBus = createEventBus('EasyEditor')
-
-    // if config is provided, initialize the editor
     if (config) {
       this.init(config)
     }
@@ -127,13 +133,27 @@ export class Editor {
 
   async init(config?: EditorConfig) {
     this.config = config || {}
-    const { lifeCycles, plugins, setters, components, componentMetas } = this.config
+    const {
+      lifeCycles,
+      plugins,
+      setters,
+      components,
+      componentMetas,
+      designer: designerProps,
+      defaultSchema,
+    } = this.config
 
     this.eventBus.emit(EDITOR_EVENT.BEFORE_INIT)
 
     const setterManager = new SetterManager()
     const componentMetaManager = new ComponentMetaManager(this)
-    const designer = new Designer({ editor: this, setterManager, componentMetaManager })
+    const designer = new Designer({
+      editor: this,
+      setterManager,
+      componentMetaManager,
+      ...designerProps,
+      defaultSchema,
+    })
     const project = designer.project
     const simulator = new Simulator(designer)
     project.mountSimulator(simulator)
@@ -160,9 +180,6 @@ export class Editor {
     this.set('simulator', simulator)
     this.set('pluginManager', pluginManager)
 
-    if (plugins) {
-      pluginManager.registerPlugins(plugins)
-    }
     if (setters) {
       setterManager.buildSettersMap(setters)
     }
@@ -172,12 +189,15 @@ export class Editor {
     if (componentMetas) {
       componentMetaManager.buildComponentMetasMap(componentMetas)
     }
+    if (plugins) {
+      pluginManager.registerPlugins(plugins)
+    }
 
     try {
       await lifeCycles?.init?.(this)
       await pluginManager.init()
     } catch (err) {
-      console.error(err)
+      logger.error(err)
     }
 
     this.eventBus.emit(EDITOR_EVENT.AFTER_INIT)
@@ -192,7 +212,7 @@ export class Editor {
       const { lifeCycles = {} } = this.config
       lifeCycles?.destroy?.(this)
     } catch (err) {
-      console.warn(err)
+      logger.warn(err)
     }
 
     this.eventBus.emit(EDITOR_EVENT.DESTROY)

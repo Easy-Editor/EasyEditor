@@ -41,7 +41,8 @@ export default class Viewport {
     }
   }
 
-  @computed get height() {
+  @computed
+  get height() {
     if (!this.rect) {
       return 600
     }
@@ -56,7 +57,8 @@ export default class Viewport {
     }
   }
 
-  @computed get width() {
+  @computed
+  get width() {
     if (!this.rect) {
       return 1000
     }
@@ -73,7 +75,8 @@ export default class Viewport {
 
   @observable.ref private accessor _scale = 1
 
-  @computed get scale() {
+  @computed
+  get scale() {
     return this._scale
   }
 
@@ -92,7 +95,8 @@ export default class Viewport {
 
   @observable.ref private accessor _contentHeight: number | AutoFit = AutoFit
 
-  @computed get contentHeight(): number | AutoFit {
+  @computed
+  get contentHeight(): number | AutoFit {
     return this._contentHeight
   }
 
@@ -100,7 +104,8 @@ export default class Viewport {
     this._contentHeight = newContentHeight
   }
 
-  @computed get contentWidth(): number | AutoFit {
+  @computed
+  get contentWidth(): number | AutoFit {
     return this._contentWidth
   }
 

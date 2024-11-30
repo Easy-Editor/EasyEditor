@@ -104,16 +104,16 @@ export const isText = (elem: any): elem is Text => {
   return elem.nodeType === Node.TEXT_NODE
 }
 
-export const isElementNode = (node: any): node is Element => {
+export const isElementElem = (node: any): node is Element => {
   return node.nodeType === Node.ELEMENT_NODE
 }
 
-export const isDocumentNode = (elem: any): elem is Document => {
+export const isDocumentElem = (elem: any): elem is Document => {
   return elem.nodeType === Node.DOCUMENT_NODE
 }
 
 export const getWindow = (elem: Element | Document): Window => {
-  return (isDocumentNode(elem) ? elem : elem.ownerDocument!).defaultView!
+  return (isDocumentElem(elem) ? elem : elem.ownerDocument!).defaultView!
 }
 
 export class DropLocation {
@@ -144,29 +144,4 @@ export class DropLocation {
       event,
     })
   }
-
-  // /**
-  //  * @deprecated
-  //  * 兼容 vision
-  //  */
-  // getContainer() {
-  //   return this.target
-  // }
-
-  // /**
-  //  * @deprecated
-  //  * 兼容 vision
-  //  */
-  // getInsertion() {
-  //   if (!this.detail) {
-  //     return null
-  //   }
-  //   if (this.detail.type === 'Children') {
-  //     if (this.detail.index <= 0) {
-  //       return null
-  //     }
-  //     return this.target.children?.get(this.detail.index - 1)
-  //   }
-  //   return (this.detail as any)?.near?.node
-  // }
 }

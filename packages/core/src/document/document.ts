@@ -1,27 +1,25 @@
-import {
-  DESIGNER_EVENT,
-  type Designer,
-  type DragNodeDataObject,
-  type DragNodeObject,
-  type DropLocation,
-  isDragNodeDataObject,
-  isDragNodeObject,
-} from '../designer'
+import type { Designer, DropLocation } from '../designer'
+import type { ComponentsMap } from '../meta'
 import type { Project } from '../project'
-import type { EventBus } from '../utils'
+import type { Simulator } from '../simulator'
 import type { NodeSchema } from './node/node'
 
 import { action, observable } from 'mobx'
-import type { Simulator } from '../simulator'
+import { DESIGNER_EVENT } from '../designer'
 import { TRANSFORM_STAGE } from '../types'
 import { createEventBus, uniqueId } from '../utils'
 import { History } from './history'
-import { NODE_EVENT, Node, insertChild, insertChildren, isNode, isNodeSchema } from './node/node'
+import { NODE_EVENT, Node, insertChild, insertChildren } from './node/node'
 
 export interface DocumentSchema {
   id?: string
+
   name?: string
+
   rootNode: NodeSchema
+
+  // TODO: 是否需要将一些 rootNode 上的东西迁移到这边
+  [key: string]: any
 }
 
 export enum DOCUMENT_EVENT {
@@ -31,33 +29,10 @@ export enum DOCUMENT_EVENT {
   OPEN = 'document:open',
 }
 
-export interface LowCodeComponent {
-  /**
-   * 研发模式
-   */
-  devMode: 'lowCode'
-  /**
-   * 组件名称
-   */
-  componentName: string
-}
-
-// export type ProCodeComponent = TypeNpmInfo;
-export interface ProCodeComponent {
-  /**
-   * 研发模式
-   */
-  devMode: 'proCode'
-  /**
-   * 组件名称
-   */
-  componentName: string
-}
-export type ComponentMap = ProCodeComponent | LowCodeComponent
-export type ComponentsMap = ComponentMap[]
-
 export class Document {
-  private emitter: EventBus
+  readonly isDocument = true
+
+  private emitter = createEventBus('Document')
 
   id: string
 
@@ -132,7 +107,6 @@ export class Document {
   }
 
   constructor(project: Project, schema?: DocumentSchema) {
-    this.emitter = createEventBus('Document')
     this.id = schema?.id ?? uniqueId('doc')
     this.project = project
     this.designer = project.designer
@@ -185,33 +159,19 @@ export class Document {
     return schema
   }
 
+  @action
   remove() {
     this.designer.postEvent(DOCUMENT_EVENT.REMOVE, { id: this.id })
     this.purge()
     this.project.removeDocument(this)
   }
 
+  @action
   purge() {
     this.rootNode?.purge()
     this.nodes.clear()
     this._nodesMap.clear()
     this.rootNode = null
-  }
-
-  // TODO
-  checkNesting(dropTarget: Node, dragObject: DragNodeObject | NodeSchema | Node | DragNodeDataObject): boolean {
-    let items: Array<Node | NodeSchema>
-    if (isDragNodeDataObject(dragObject)) {
-      items = Array.isArray(dragObject.data) ? dragObject.data : [dragObject.data]
-    } else if (isDragNodeObject(dragObject)) {
-      items = dragObject.nodes
-    } else if (isNode(dragObject) || isNodeSchema(dragObject)) {
-      items = [dragObject]
-    } else {
-      console.warn('the dragObject is not in the correct type, dragObject:', dragObject)
-      return true
-    }
-    return true
   }
 
   @action
@@ -286,6 +246,7 @@ export class Document {
     node.remove(true, useMutator)
   }
 
+  @action
   unlinkNode(node: Node) {
     this.nodes.delete(node)
     this._nodesMap.delete(node.id)
@@ -308,6 +269,7 @@ export class Document {
     return insertChildren(parent, nodes, at, copy)
   }
 
+  @action
   open() {
     const originState = this._opened
     this._opened = true
@@ -324,6 +286,7 @@ export class Document {
     return this
   }
 
+  @action
   close(): void {
     this.setOpened(false)
     this._opened = false
@@ -332,6 +295,7 @@ export class Document {
   /**
    * use open a document and suspense other documents
    */
+  @action
   private setOpened(flag: boolean) {
     if (!this._opened && !flag) {
       return
@@ -406,20 +370,10 @@ export class Document {
     const node = this.export(TRANSFORM_STAGE.SAVE)
     const data = {
       componentsMap: this.getComponentsMap(extraComps),
-      utils: this.getUtilsMap(),
+      // utils: this.getUtilsMap(),
       componentsTree: [node],
     }
     return data
-  }
-
-  getUtilsMap() {
-    // return this.designer.editor.get('assets')?.utils?.map((item: any) => ({
-    //   name: item.name,
-    //   type: item.type || 'npm',
-    //   // TODO 当前只有 npm 类型，content 直接设置为 item.npm，有 function 类型之后需要处理
-    //   content: item.npm,
-    // }));
-    return {}
   }
 
   onReady(listener: () => void) {
@@ -448,5 +402,5 @@ export class Document {
 }
 
 export function isDocument(obj: any): obj is Document {
-  return obj && obj.rootNode
+  return obj && obj.isDocument
 }

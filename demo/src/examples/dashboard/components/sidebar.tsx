@@ -18,6 +18,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { Snippet as ISnippet, NodeSchema } from '@easy-editor/core'
 import { observer } from 'mobx-react-lite'
+import { useEffect } from 'react'
 import { designer, project, simulator } from '../editor'
 
 const navMain = [
@@ -107,12 +108,10 @@ export const DashboardSidebar = observer(({ ...props }: React.ComponentProps<typ
 const Snippet = ({ snippet }: { snippet: ISnippet }) => {
   const ref = React.useRef<HTMLDivElement>(null)
 
-  React.useEffect(() => {
-    if (snippet?.schema) {
-      const unlink = simulator.linkSnippet(ref.current!, snippet)
-      return () => {
-        unlink()
-      }
+  useEffect(() => {
+    const unlink = simulator.linkSnippet(ref.current!, snippet)
+    return () => {
+      unlink()
     }
   }, [snippet])
 
