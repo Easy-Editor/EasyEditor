@@ -1,4 +1,5 @@
 import { type Logger, createLogger } from '../utils'
+import type { PluginExtend } from './plugin-extend'
 import type { Plugin, PluginManager, PluginMeta } from './plugin-manager'
 
 export class PluginRuntime {
@@ -9,6 +10,8 @@ export class PluginRuntime {
   private manager: PluginManager
 
   private _inited: boolean
+
+  private _extended: boolean
 
   private pluginName: string
 
@@ -54,6 +57,10 @@ export class PluginRuntime {
     return this._inited
   }
 
+  isExtended() {
+    return this._extended
+  }
+
   async init(forceInit?: boolean) {
     if (this._inited && !forceInit) return
     this.logger.log('method init called')
@@ -66,6 +73,13 @@ export class PluginRuntime {
     this.logger.log('method destroy called')
     await this.config?.destroy?.call(undefined, this.ctx)
     this._inited = false
+  }
+
+  async extend(pluginExtend: PluginExtend) {
+    if (this._extended) return
+    this.logger.log('method extend called')
+    await this.config?.extend?.call(undefined, pluginExtend)
+    this._extended = true
   }
 
   setDisabled(flag = true) {

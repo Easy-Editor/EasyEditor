@@ -1,5 +1,25 @@
 import type { PluginContextOptions } from './plugin-context'
+import type { PluginExtend } from './plugin-extend'
 
+import {
+  ComponentMeta,
+  ComponentMetaManager,
+  Designer,
+  Detecting,
+  Document,
+  Dragon,
+  DropLocation,
+  History,
+  Node,
+  NodeChildren,
+  Project,
+  Prop,
+  Props,
+  Selection,
+  SetterManager,
+  Simulator,
+  Viewport,
+} from '..'
 import { logger } from '../utils'
 import { PluginContext } from './plugin-context'
 import { PluginRuntime } from './plugin-runtime'
@@ -11,6 +31,7 @@ export interface Plugin {
   eventPrefix?: string
   init(ctx: PluginContext): Promise<void> | void
   destroy?(ctx: PluginContext): Promise<void> | void
+  extend?(ctx: PluginExtend): void
 }
 
 export interface PluginMeta {
@@ -56,7 +77,13 @@ export class PluginManager {
 
   private contextApiAssembler: PluginContextApiAssembler
 
-  constructor(contextApiAssembler: PluginContextApiAssembler) {
+  constructor(contextApiAssembler?: PluginContextApiAssembler) {
+    if (contextApiAssembler) {
+      this.setContextApiAssembler(contextApiAssembler)
+    }
+  }
+
+  setContextApiAssembler(contextApiAssembler: PluginContextApiAssembler) {
     this.contextApiAssembler = contextApiAssembler
   }
 
@@ -173,6 +200,35 @@ export class PluginManager {
   async destroy() {
     for (const plugin of this.plugins) {
       await plugin.destroy()
+    }
+  }
+
+  async extend() {
+    const pluginExtend: PluginExtend = {
+      Simulator,
+      Viewport,
+
+      Designer,
+      Dragon,
+      Detecting,
+      Selection,
+      DropLocation,
+
+      Project,
+      Document,
+      History,
+      Node,
+      NodeChildren,
+      Props,
+      Prop,
+
+      ComponentMetaManager,
+      SetterManager,
+      ComponentMeta,
+    }
+
+    for (const plugin of this.plugins) {
+      await plugin.extend(pluginExtend)
     }
   }
 

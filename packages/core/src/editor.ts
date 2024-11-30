@@ -1,5 +1,5 @@
 import type { Component, ComponentMetadata, Setter } from './meta'
-import type { Plugin } from './plugin'
+import type { Plugin, PluginContextApiAssembler } from './plugin'
 
 import { action, observable } from 'mobx'
 import { Designer, type DesignerProps } from './designer'
@@ -39,12 +39,15 @@ export interface EditorConfig {
 export interface LifeCyclesConfig {
   init?: (editor: Editor) => any
   destroy?: (editor: Editor) => any
+  extend?: (editor: Editor) => any
 }
 
 export enum EDITOR_EVENT {
   BEFORE_INIT = 'editor:beforeInit',
   AFTER_INIT = 'editor:afterInit',
   DESTROY = 'editor:destroy',
+  BEFORE_EXTEND = 'editor:beforeExtend',
+  AFTER_EXTEND = 'editor:afterExtend',
 }
 
 export class Editor {
@@ -143,6 +146,12 @@ export class Editor {
       defaultSchema,
     } = this.config
 
+    const pluginManager = new PluginManager()
+    if (plugins) {
+      pluginManager.registerPlugins(plugins)
+    }
+    await this.extend(pluginManager)
+
     this.eventBus.emit(EDITOR_EVENT.BEFORE_INIT)
 
     const setterManager = new SetterManager()
@@ -160,7 +169,7 @@ export class Editor {
 
     // pluginEvent is a unified eventBus for all plugins
     const pluginEvent = createEventBus('plugin')
-    const pluginManager = new PluginManager({
+    const contextApiAssembler: PluginContextApiAssembler = {
       assembleApis: (context, pluginName, meta) => {
         context.editor = this
         context.simulator = simulator
@@ -171,7 +180,8 @@ export class Editor {
         context.event = pluginEvent
         context.logger = createLogger(`plugin:${pluginName}`)
       },
-    })
+    }
+    pluginManager.setContextApiAssembler(contextApiAssembler)
 
     this.set('setterManager', setterManager)
     this.set('componentMetaManager', componentMetaManager)
@@ -189,13 +199,10 @@ export class Editor {
     if (componentMetas) {
       componentMetaManager.buildComponentMetasMap(componentMetas)
     }
-    if (plugins) {
-      pluginManager.registerPlugins(plugins)
-    }
 
     try {
-      await lifeCycles?.init?.(this)
       await pluginManager.init()
+      await lifeCycles?.init?.(this)
     } catch (err) {
       logger.error(err)
     }
@@ -216,6 +223,20 @@ export class Editor {
     }
 
     this.eventBus.emit(EDITOR_EVENT.DESTROY)
+  }
+
+  async extend(pluginManager: PluginManager) {
+    this.eventBus.emit(EDITOR_EVENT.BEFORE_EXTEND)
+
+    try {
+      const { lifeCycles = {} } = this.config!
+      lifeCycles?.extend?.(this)
+      await pluginManager.extend()
+    } catch (err) {
+      logger.warn(err)
+    }
+
+    this.eventBus.emit(EDITOR_EVENT.AFTER_EXTEND)
   }
 
   /**
@@ -287,6 +308,22 @@ export class Editor {
 
     return () => {
       this.eventBus.off(EDITOR_EVENT.DESTROY, listener)
+    }
+  }
+
+  onBeforeExtend(listener: (editor: Editor) => void) {
+    this.eventBus.on(EDITOR_EVENT.BEFORE_EXTEND, listener)
+
+    return () => {
+      this.eventBus.off(EDITOR_EVENT.BEFORE_EXTEND, listener)
+    }
+  }
+
+  onAfterExtend(listener: (editor: Editor) => void) {
+    this.eventBus.on(EDITOR_EVENT.AFTER_EXTEND, listener)
+
+    return () => {
+      this.eventBus.off(EDITOR_EVENT.AFTER_EXTEND, listener)
     }
   }
 }

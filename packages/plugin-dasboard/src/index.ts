@@ -1,5 +1,12 @@
 import { DESIGNER_EVENT, DragObjectType, type DropLocation, type PluginCreator } from '@easy-editor/core'
 
+declare module '@easy-editor/core' {
+  interface Project {
+    customExtend(name: string): void
+    customExtend2(name: string): void
+  }
+}
+
 const DashboardPlugin: PluginCreator = () => {
   return {
     name: 'DashboardPlugin',
@@ -65,6 +72,23 @@ const DashboardPlugin: PluginCreator = () => {
           }
         }
       })
+    },
+    extend(ctx) {
+      const { Project } = ctx
+
+      // 1
+      Project.prototype.customExtend = function (name) {
+        console.log('customExtend', name, this)
+      }
+
+      // 2
+      Object.defineProperty(Project.prototype, 'customExtend2', {
+        value: function (name) {
+          console.log('customExtend2', name, this)
+        },
+      })
+
+      console.log('extend', Project)
     },
   }
 }

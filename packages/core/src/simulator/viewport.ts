@@ -4,7 +4,7 @@ import type { Point } from '../designer'
 export type AutoFit = '100%'
 export const AutoFit: AutoFit = '100%'
 
-export default class Viewport {
+export class Viewport {
   @observable.ref private accessor rect: DOMRect
 
   private _bounds?: DOMRect

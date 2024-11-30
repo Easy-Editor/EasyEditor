@@ -17,7 +17,7 @@ import {
 } from '../designer'
 import { getClosestClickableNode, getClosestNode } from '../document'
 import { createEventBus } from '../utils'
-import Viewport from './viewport'
+import { Viewport } from './viewport'
 
 export interface DropContainer {
   container: Node
