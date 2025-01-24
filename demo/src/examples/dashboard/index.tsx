@@ -19,7 +19,12 @@ export const Dashboard = observer(() => {
 
           <div className='flex h-full flex-col flex-1'>
             <div className='flex flex-1 flex-col p-4'>
-              <SimulatorRenderer host={simulator} />
+              <SimulatorRenderer
+                host={simulator}
+                bemTools={{
+                  resizing: true,
+                }}
+              />
             </div>
           </div>
         </SidebarProvider>

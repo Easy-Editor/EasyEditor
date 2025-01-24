@@ -1,8 +1,7 @@
-import { ChevronRight, Component, Container, ListTree, X } from 'lucide-react'
+import { Component, ListTree, X } from 'lucide-react'
 import * as React from 'react'
 
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Label } from '@/components/ui/label'
 import {
   Sidebar,
@@ -13,13 +12,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { Snippet as ISnippet, NodeSchema } from '@easy-editor/core'
+
 import { observer } from 'mobx-react'
-import { useEffect } from 'react'
-import { designer, project, simulator } from '../editor'
+import { ComponentSidebar } from './components/component'
+import { OutlineSidebar } from './components/outline'
 
 const navMain = [
   {
@@ -102,91 +100,5 @@ export const DashboardSidebar = observer(({ ...props }: React.ComponentProps<typ
         </Sidebar>
       )}
     </div>
-  )
-})
-
-const Snippet = ({ snippet }: { snippet: ISnippet }) => {
-  const ref = React.useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const unlink = simulator.linkSnippet(ref.current!, snippet)
-    return () => {
-      unlink()
-    }
-  }, [snippet])
-
-  return (
-    <div ref={ref} className='p-3 rounded-md cursor-move text-center select-none'>
-      {snippet?.title}
-    </div>
-  )
-}
-
-const ComponentSidebar = observer(() => {
-  const snippets = designer.componentMetaManager.getComponentSnippets()
-
-  return (
-    <div className='flex flex-col'>
-      <div className='flex-1 overflow-y-auto p-4'>
-        <div className='space-y-2'>
-          {snippets.map(snippet => (
-            <Snippet key={snippet?.title} snippet={snippet} />
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-})
-
-const OutlineSidebar = observer(() => {
-  const docSchema = project.currentDocument?.export()
-
-  return (
-    <SidebarMenu>
-      <SidebarMenuItem>
-        <Collapsible className='group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90'>
-          <CollapsibleTrigger asChild>
-            <SidebarMenuButton>
-              <ChevronRight className='transition-transform' />
-              <Container />
-              {docSchema?.rootNode?.componentName}
-            </SidebarMenuButton>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <SidebarMenuSub>
-              {docSchema?.rootNode?.children?.map((subItem, index) => (
-                <OutlineTree key={index} item={subItem} />
-              ))}
-            </SidebarMenuSub>
-          </CollapsibleContent>
-        </Collapsible>
-      </SidebarMenuItem>
-    </SidebarMenu>
-  )
-})
-
-const OutlineTree = observer(({ item }: { item: NodeSchema }) => {
-  if (!item.children?.length) {
-    return <SidebarMenuButton className='data-[active=true]:bg-transparent'>{item.componentName}</SidebarMenuButton>
-  }
-
-  return (
-    <SidebarMenuItem>
-      <Collapsible className='group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90'>
-        <CollapsibleTrigger asChild>
-          <SidebarMenuButton>
-            <ChevronRight className='transition-transform' />
-            {item.componentName}
-          </SidebarMenuButton>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <SidebarMenuSub>
-            {item.children?.map((subItem, index) => (
-              <OutlineTree key={index} item={subItem} />
-            ))}
-          </SidebarMenuSub>
-        </CollapsibleContent>
-      </Collapsible>
-    </SidebarMenuItem>
   )
 })

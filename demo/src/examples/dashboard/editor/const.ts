@@ -1,7 +1,7 @@
 export const defaultRootSchema = {
   componentName: 'RootContainer',
   props: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#27272A',
   },
   $dashboard: {
     rect: {
