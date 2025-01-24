@@ -20,11 +20,8 @@
   "[json]": {
     "editor.defaultFormatter": "biomejs.biome"
   },
-  "cSpell.words": [
-    "autorun",
-    "deactive",
-    "easyeditor",
-    "inited",
-    "Metas"
-  ]
+  "cSpell.words": ["autorun", "deactive", "easyeditor", "inited", "Metas"],
+  "[html]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }

@@ -1,13 +1,15 @@
 import type { Configure } from '@easy-editor/core'
+import Button from './component'
 
 const configure: Configure = {
   props: [
     {
-      title: '功能',
-      display: 'block',
       type: 'group',
+      title: '功能',
+      setter: 'GroupSetter',
       items: [
         {
+          type: 'field',
           name: 'text',
           title: '内容',
           setter: 'StringSetter',
@@ -17,7 +19,9 @@ const configure: Configure = {
   ],
   component: {},
   supports: {},
-  advanced: {},
+  advanced: {
+    view: Button,
+  },
 }
 
 export default configure

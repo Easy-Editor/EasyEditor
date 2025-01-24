@@ -10,12 +10,15 @@ import {
   createEasyEditor,
 } from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { defaultRootSchema } from './const'
 import { formatMapFromESModule } from './utils'
 
 const plugins = (await import('./plugins')).default
 const setterMap = await import('./setters')
 const componentMap = await import('./materials/component')
 const componentMetaMap = await import('./materials/meta')
+
+export const components = formatMapFromESModule<Component>(componentMap)
 
 export const editor = createEasyEditor({
   lifeCycles: {
@@ -52,3 +55,9 @@ console.log('componentMetas', componentMetaManager.componentMetasMap)
 
 console.log('--------------------------------')
 // simulator.setupEvents()
+// renderer.mount(simulator)
+
+project.open(defaultRootSchema)
+
+// 设置模拟器样式
+// simulator.set('deviceStyle', { viewport: { width: '1920px', height: '1080px' } })

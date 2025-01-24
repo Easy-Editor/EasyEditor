@@ -1,11 +1,12 @@
-import type { Component, ComponentMetadata, Setter } from './meta'
+import type { Component, ComponentMetadata } from './designer'
 import type { Plugin, PluginContextApiAssembler } from './plugin'
+import type { Setter } from './setter-manager'
+import type { ProjectSchema } from './types'
 
 import { action, observable } from 'mobx'
-import { Designer, type DesignerProps } from './designer'
-import { ComponentMetaManager, SetterManager } from './meta'
+import { ComponentMetaManager, Designer, type DesignerProps } from './designer'
 import { PluginManager } from './plugin'
-import type { ProjectSchema } from './project'
+import { SetterManager } from './setter-manager'
 import { Simulator } from './simulator'
 import { createEventBus, createLogger, logger } from './utils'
 

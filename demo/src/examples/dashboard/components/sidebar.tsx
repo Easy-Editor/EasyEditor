@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { Snippet as ISnippet, NodeSchema } from '@easy-editor/core'
-import { observer } from 'mobx-react-lite'
+import { observer } from 'mobx-react'
 import { useEffect } from 'react'
 import { designer, project, simulator } from '../editor'
 

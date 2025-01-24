@@ -1,43 +1,13 @@
+import type { NodeSchema } from '../../types'
 import type { Document } from '../document'
-import type { CompositeValue, PropValue } from '../prop/prop'
+import type { PropValue, PropsMap } from '../prop/prop'
 
 import { action, computed, observable, runInAction } from 'mobx'
-import { DESIGNER_EVENT } from '../..'
+import { DESIGNER_EVENT, type SettingTopEntry, isJSExpression, isObject } from '../..'
 import { TRANSFORM_STAGE } from '../../types'
 import { createEventBus, uniqueId } from '../../utils'
-import { isObject } from '../prop/prop'
-import { Props, type PropsSchema, getConvertedExtraKey } from '../prop/props'
+import { Props, getConvertedExtraKey } from '../prop/props'
 import { NodeChildren } from './node-children'
-
-export interface NodeSchema {
-  id?: string
-
-  /** title */
-  title?: string
-
-  /** required */
-  componentName: string
-
-  /** props */
-  props?: PropsSchema
-
-  /** sub nodes */
-  children?: NodeSchema[]
-
-  /** hidden */
-  isHidden?: boolean
-
-  /** locked */
-  isLocked?: boolean
-
-  /** render condition */
-  condition?: CompositeValue
-
-  /** loop data */
-  loop?: CompositeValue
-
-  [key: string]: any
-}
 
 export enum NODE_EVENT {
   ADD = 'node:add',
@@ -47,7 +17,7 @@ export enum NODE_EVENT {
   PROP_CHANGE = 'node:prop.change',
 }
 
-export class Node {
+export class Node<Schema extends NodeSchema = NodeSchema> {
   protected emitter = createEventBus('Node')
 
   readonly isNode = true
@@ -122,11 +92,19 @@ export class Node {
 
   props: Props
 
+  _settingEntry: SettingTopEntry
+
+  get settingEntry() {
+    if (this._settingEntry) return this._settingEntry
+    this._settingEntry = this.document.designer.createSettingEntry([this])
+    return this._settingEntry
+  }
+
   constructor(
     readonly document: Document,
-    nodeSchema: NodeSchema,
+    Schema: Schema,
   ) {
-    const { id, componentName, children, props, ...extras } = nodeSchema
+    const { id, componentName, children, props, ...extras } = Schema
 
     this.id = id || uniqueId('node')
     this.componentName = componentName
@@ -149,17 +127,17 @@ export class Node {
     })
   }
 
-  import(data: NodeSchema, checkId = false) {
+  import(data: Schema, checkId = false) {
     const { componentName, id, children, props, ...extras } = data
 
     this.props.import(props, extras)
-    if (this.isParental()) {
+    if (this.isParental) {
       this._children?.import(children, checkId)
     }
   }
 
-  export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE) {
-    const baseSchema: NodeSchema = {
+  export<T = NodeSchema>(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): T {
+    const baseSchema: any = {
       componentName: this.componentName,
     }
 
@@ -172,13 +150,13 @@ export class Node {
 
     const { props, extras } = this.props.export()
 
-    const schema: NodeSchema = {
+    const schema: any = {
       ...baseSchema,
       props: props ? this.document.designer.transformProps(props, this, stage) : undefined,
       ...(extras ? this.document.designer.transformProps(extras, this, stage) : {}),
     }
 
-    if (this.isParental() && this.children && this.children.size > 0) {
+    if (this.isParental && this.children && this.children.size > 0) {
       schema.children = this.children.export(stage)
     }
 
@@ -200,15 +178,15 @@ export class Node {
   /**
    * get node schema
    */
-  get schema(): NodeSchema {
+  get schema(): Schema {
     return this.export(TRANSFORM_STAGE.SAVE)
   }
 
-  set schema(data: NodeSchema) {
+  set schema(data: Schema) {
     runInAction(() => this.import(data))
   }
 
-  private initBuiltinProps() {
+  initBuiltinProps() {
     this.props.has(getConvertedExtraKey('isHidden')) || this.props.add(getConvertedExtraKey('isHidden'), false)
     this.props.has(getConvertedExtraKey('isLocked')) || this.props.add(getConvertedExtraKey('isLocked'), false)
     this.props.has(getConvertedExtraKey('title')) || this.props.add(getConvertedExtraKey('title'), '')
@@ -216,11 +194,11 @@ export class Node {
     this.props.has(getConvertedExtraKey('condition')) || this.props.add(getConvertedExtraKey('condition'), true)
   }
 
-  private initProps(props: PropsSchema) {
+  private initProps(props: PropsMap) {
     return this.document.designer.transformProps(props, this, TRANSFORM_STAGE.INIT)
   }
 
-  private upgradeProps(props: PropsSchema) {
+  private upgradeProps(props: PropsMap) {
     return this.document.designer.transformProps(props, this, TRANSFORM_STAGE.UPGRADE)
   }
 
@@ -335,41 +313,25 @@ export class Node {
     return this.props
   }
 
-  isContainer(): boolean {
-    return this.isContainerNode
-  }
-
-  get isContainerNode() {
+  get isContainer(): boolean {
     return this.componentMeta.isContainer
   }
 
-  isRoot() {
-    return this.isRootNode
-  }
-
-  get isRootNode() {
+  get isRoot() {
     return this.document.rootNode === this
   }
 
   /**
    * whether child nodes are included
    */
-  isParental() {
-    return this.isParentalNode
-  }
-
-  get isParentalNode(): boolean {
-    return !this.isLeafNode
+  get isParental() {
+    return !this.isLeaf
   }
 
   /**
    * whether this node is a leaf node
    */
-  isLeaf() {
-    return this.isLeafNode
-  }
-
-  get isLeafNode(): boolean {
+  get isLeaf() {
     return this._children ? this._children.isEmpty() : true
   }
 
@@ -382,7 +344,7 @@ export class Node {
     this.emitter.emit(NODE_EVENT.VISIBLE_CHANGE, flag)
   }
 
-  isHidden() {
+  get isHidden() {
     return this.getExtraPropValue('isHidden') as boolean
   }
 
@@ -391,7 +353,7 @@ export class Node {
     this.emitter.emit(NODE_EVENT.LOCK_CHANGE, flag)
   }
 
-  isLocked() {
+  get isLocked() {
     return this.getExtraPropValue('isLocked') as boolean
   }
 
@@ -411,6 +373,9 @@ export class Node {
     }
 
     if (Array.isArray(value)) {
+      return true
+    }
+    if (isJSExpression(value)) {
       return true
     }
     return false
@@ -446,6 +411,18 @@ export class Node {
 
   clearPropValue(path: string): void {
     this.getProp(path, false)?.unset()
+  }
+
+  mergeProps(props: PropsMap) {
+    this.props.merge(props)
+  }
+
+  setProps(props?: PropsMap | Props | null) {
+    if (props instanceof Props) {
+      this.props = props
+      return
+    }
+    this.props.import(props)
   }
 
   internalSetParent(parent: Node | null, useMutator = false) {
@@ -485,6 +462,13 @@ export class Node {
   }
 
   /**
+   * migrate this node to a new parent
+   */
+  migrate(newParent: Node) {
+    this.document.migrateNode(this, newParent)
+  }
+
+  /**
    * if the node is linked in the document tree
    */
   @computed
@@ -492,7 +476,7 @@ export class Node {
     let current: Node | null = this
 
     while (current) {
-      if (current.isRoot()) {
+      if (current.isRoot) {
         return true
       }
       current = current.parent
@@ -502,10 +486,15 @@ export class Node {
   }
 
   /**
-   * insert a node at a specific position
+   * insert a node at a specific position or a reference node
    */
-  insert(node: Node, ref?: Node, useMutator = true) {
-    this.insertAfter(node, ref, useMutator)
+  insert(node: Node, ref?: Node | number, useMutator = true) {
+    if (ref && typeof ref === 'number') {
+      const nodeInstance = ensureNode(node, this.document)
+      this.children?.internalInsert(nodeInstance, ref, useMutator)
+    } else {
+      this.insertAfter(node, ref as Node, useMutator)
+    }
   }
 
   /**
@@ -558,16 +547,20 @@ export class Node {
   }
 
   getRect() {
-    if (this.isRoot()) {
+    if (this.isRoot) {
       return this.document.simulator?.viewport.contentBounds || null
     }
     return this.document.simulator?.computeRect(this) || null
   }
 
+  getDOMNode() {
+    return this.document.simulator?.getComponentInstances(this)
+  }
+
   /**
    * use schema to update this node
    */
-  wrapWith(schema: NodeSchema) {
+  wrapWith(schema: Schema) {
     const wrappedNode = this.replaceWith({ ...schema, children: [this.export()] })
     return wrappedNode?.children!.get(0)
   }
@@ -575,7 +568,7 @@ export class Node {
   /**
    * replace this node with a new node
    */
-  replaceWith(schema: NodeSchema, migrate = false) {
+  replaceWith(schema: Schema, migrate = false) {
     // reuse the same id? or replaceSelection
     schema = Object.assign({}, migrate ? this.export() : {}, schema)
     return this.parent?.replaceChild(this, schema)
@@ -584,7 +577,7 @@ export class Node {
   /**
    * replace a child node with a new node
    */
-  replaceChild(node: Node, data: NodeSchema): Node | null {
+  replaceChild(node: Node, data: Schema): Node | null {
     if (this.children?.has(node)) {
       const selected = this.document.designer.selection.has(node.id)
 
@@ -668,7 +661,7 @@ export class Node {
 
   mergeChildren(
     remover: (node: Node, idx: number) => any,
-    adder: (children: Node[]) => NodeSchema[] | null,
+    adder: (children: Node[]) => Schema[] | null,
     sorter: (firstNode: Node, secondNode: Node) => any,
   ) {
     this.children?.mergeChildren(remover, adder, sorter)
@@ -743,7 +736,7 @@ export const contains = (node1: Node, node2: Node): boolean => {
     return true
   }
 
-  if (!node1.isParental() || !node2.parent) {
+  if (!node1.isParental || !node2.parent) {
     return false
   }
 
@@ -803,10 +796,10 @@ export const insertChild = (
   copy?: boolean,
 ): Node | null => {
   let node: Node | null | undefined
-  let nodeSchema: NodeSchema
+  let Schema: NodeSchema
   if (isNode(thing) && copy) {
-    nodeSchema = thing.export()
-    node = container.document?.createNode(nodeSchema)
+    Schema = thing.export()
+    node = container.document?.createNode(Schema)
   } else if (isNode(thing)) {
     node = thing
   } else if (isNodeSchema(thing)) {

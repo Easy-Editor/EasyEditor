@@ -1,26 +1,17 @@
-import type { Designer } from '../designer'
-import type { DocumentSchema } from '../document'
-import type { ComponentsMap } from '../meta'
+import type { ComponentsMap, Designer } from '../designer'
 import type { Simulator } from '../simulator'
+import type { ProjectSchema, RootSchema } from '../types'
 
 import { action, computed, observable } from 'mobx'
+import { isLowCodeComponentType, isProCodeComponentType } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
-import { isLowCodeComponentType, isProCodeComponentType } from '../meta'
 import { TRANSFORM_STAGE } from '../types'
 import { createEventBus, logger } from '../utils'
-
-export interface ProjectSchema {
-  version: string
-  documents: DocumentSchema[]
-  config?: Record<string, any>
-
-  [key: string]: any
-}
 
 const defaultSchema: ProjectSchema = {
   // TODO: version
   version: '0.0.1',
-  documents: [],
+  componentsTree: [],
 }
 
 export enum PROJECT_EVENT {
@@ -74,7 +65,7 @@ export class Project {
     return {
       ...this.data,
       componentsMap: this.getComponentsMap(),
-      documents: this.documents.filter(doc => !doc.isBlank()).map(doc => doc.export(stage) || {}),
+      componentsTree: this.documents.filter(doc => !doc.isBlank()).map(doc => doc.export(stage) || {}),
     }
   }
 
@@ -129,7 +120,7 @@ export class Project {
     if (autoOpen) {
       if (autoOpen === true) {
         // auto open first document or open a blank page
-        const documentInstances = this.data.documents.map(data => this.createDocument(data))
+        const documentInstances = this.data.componentsTree.map(data => this.createDocument(data))
         documentInstances[0].open()
       } else {
         // auto open should be string of fileName
@@ -149,7 +140,7 @@ export class Project {
   }
 
   @action
-  createDocument(schema?: DocumentSchema) {
+  createDocument(schema?: RootSchema) {
     const doc = new Document(this, schema)
     this.documents.push(doc)
     this.documentsMap.set(doc.id, doc)
@@ -188,7 +179,7 @@ export class Project {
   /**
    * open or create a document
    */
-  open(idOrDoc?: string | Document | DocumentSchema) {
+  open(idOrDoc?: string | Document | RootSchema) {
     if (!idOrDoc) {
       const got = this.documents.find(item => item.isBlank())
       if (got) {
@@ -203,7 +194,7 @@ export class Project {
         return got.open()
       }
 
-      const data = this.data.documents.find(data => data.fileName === idOrDoc)
+      const data = this.data.componentsTree.find(data => data.fileName === idOrDoc)
       if (data) {
         return this.createDocument(data).open()
       }

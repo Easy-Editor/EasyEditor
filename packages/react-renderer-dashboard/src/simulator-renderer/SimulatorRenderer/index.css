@@ -1,0 +1,57 @@
+.lc-simulator {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+}
+
+.lc-simulator-canvas {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  overflow: hidden;
+
+  .lc-simulator-viewport {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+  }
+}
+
+/* TODO */
+.lc-simulator-device-default-canvas {
+  top: var(--simulator-top-distance, 16px);
+  right: var(--simulator-right-distance, 16px);
+  bottom: var(--simulator-bottom-distance, 16px);
+  left: var(--simulator-left-distance, 16px);
+  width: auto;
+}
+/* TODO */
+.lc-simulator-device-default-viewport {
+  box-shadow: 0 1px 40px 0 var(--color-block-background-shallow, rgba(31, 50, 88, 0.125));
+}
+
+.lc-simulator-content {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  overflow: hidden;
+
+  border: none;
+  transform-origin: 0 0;
+  height: 100%;
+  width: 100%;
+
+  .lc-simulator-frame {
+    border: none;
+    transform-origin: 0 0;
+    height: 100%;
+    width: 100%;
+  }
+}

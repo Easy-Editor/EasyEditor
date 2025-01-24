@@ -1,4 +1,5 @@
 import type { Configure } from '@easy-editor/core'
+import Input from './component'
 
 const configure: Configure = {
   props: [
@@ -24,7 +25,9 @@ const configure: Configure = {
   ],
   component: {},
   supports: {},
-  advanced: {},
+  advanced: {
+    view: Input,
+  },
 }
 
 export default configure

@@ -1,9 +1,10 @@
-import type { Document, DocumentSchema } from './document'
+import type { RootSchema } from '../types'
+import type { Document } from './document'
 
 import { reaction, untracked } from 'mobx'
 import { createEventBus, logger } from '../utils'
 
-export interface Serialization<K = DocumentSchema, T = string> {
+export interface Serialization<K = RootSchema, T = string> {
   serialize(data: K): T
   unserialize(data: T): K
 }
@@ -13,7 +14,7 @@ export enum HISTORY_EVENT {
   CURSOR_CHANGE = 'history:cursor.change',
 }
 
-export class History<T = DocumentSchema> {
+export class History<T = RootSchema> {
   emitter = createEventBus('History')
 
   /** current record */

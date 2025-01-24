@@ -1,26 +1,14 @@
-import type { Designer, DropLocation } from '../designer'
-import type { ComponentsMap } from '../meta'
+import type { ComponentsMap, Designer, DropLocation } from '../designer'
 import type { Project } from '../project'
 import type { Simulator } from '../simulator'
-import type { NodeSchema } from './node/node'
+import type { NodeSchema } from '../types'
 
 import { action, observable } from 'mobx'
 import { DESIGNER_EVENT } from '../designer'
-import { TRANSFORM_STAGE } from '../types'
+import { type RootSchema, TRANSFORM_STAGE } from '../types'
 import { createEventBus, uniqueId } from '../utils'
 import { History } from './history'
 import { NODE_EVENT, Node, insertChild, insertChildren } from './node/node'
-
-export interface DocumentSchema {
-  id?: string
-
-  name?: string
-
-  rootNode: NodeSchema
-
-  // TODO: 是否需要将一些 rootNode 上的东西迁移到这边
-  [key: string]: any
-}
 
 export enum DOCUMENT_EVENT {
   ADD = 'document:add',
@@ -63,15 +51,24 @@ export class Document {
     return this.project.simulator
   }
 
+  /** 对应 document 的 path */
+  get fileName(): string {
+    return this.rootNode?.getExtraProp('fileName', false)?.getAsString() || this.id
+  }
+
+  set fileName(fileName: string) {
+    this.rootNode?.getExtraProp('fileName', true)?.setValue(fileName)
+  }
+
   @observable.shallow private accessor nodes = new Set<Node>()
 
-  get name() {
-    return (this.rootNode?.getExtraProp('name', false)?.getValue() as string) || this.id
-  }
+  // get name() {
+  //   return (this.rootNode?.getExtraProp('name', false)?.getValue() as string) || this.id
+  // }
 
-  set name(name: string) {
-    this.rootNode?.getExtraProp('name', true)?.setValue(name)
-  }
+  // set name(name: string) {
+  //   this.rootNode?.getExtraProp('name', true)?.setValue(name)
+  // }
 
   get opened() {
     return this._opened
@@ -102,14 +99,14 @@ export class Document {
     return this._dropLocation
   }
 
-  get schema(): DocumentSchema {
+  get schema(): RootSchema {
     return this.export(TRANSFORM_STAGE.SERIALIZE)
   }
 
-  constructor(project: Project, schema?: DocumentSchema) {
-    this.id = schema?.id ?? uniqueId('doc')
+  constructor(project: Project, schema?: RootSchema) {
     this.project = project
     this.designer = project.designer
+    this.id = schema?.docId ?? uniqueId('doc')
     this.history = new History(
       () => this.export(TRANSFORM_STAGE.SERIALIZE),
       schema => {
@@ -120,43 +117,30 @@ export class Document {
     )
 
     if (schema) {
-      this.name = schema?.name ?? ''
-      if (schema?.rootNode) {
-        this.rootNode = this.createNode(schema.rootNode)
-        this._blank = false
-      }
+      this.rootNode = this.createNode(schema)
+      this._blank = false
     }
   }
 
   @action
-  import(schema?: DocumentSchema, checkId = false) {
+  import(schema?: RootSchema, checkId = false) {
     this.nodes.forEach(node => {
-      if (node.isRoot()) return
+      if (node.isRoot) return
       this.internalRemoveNode(node, true)
     })
     this.remove()
 
-    this.id = schema?.id ?? uniqueId('doc')
+    this.id = schema?.docId ?? uniqueId('doc')
     if (schema) {
-      this.name = schema?.name ?? ''
-      if (schema?.rootNode) {
-        this.rootNode?.import(schema.rootNode, checkId)
-        this.rootNode = this.createNode(schema.rootNode)
-        this._blank = false
-      }
+      this.rootNode?.import(schema, checkId)
+      this._blank = false
     } else {
       this._blank = true
     }
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE) {
-    const schema: DocumentSchema = {
-      id: this.id,
-      name: this.name,
-      rootNode: this.rootNode!.export(stage),
-    }
-
-    return schema
+    return this.rootNode!.export<RootSchema>(stage)
   }
 
   @action
@@ -181,7 +165,7 @@ export class Document {
     }
 
     let node: Node | null = null
-    if (schema.id) {
+    if (schema?.id) {
       node = this.getNode(schema.id)
       if (node && node.componentName === schema.componentName) {
         if (node.parent) {
@@ -239,7 +223,7 @@ export class Document {
       return
     }
 
-    if (node.isRoot()) {
+    if (node.isRoot) {
       this.rootNode = null
     }
 
@@ -250,6 +234,18 @@ export class Document {
   unlinkNode(node: Node) {
     this.nodes.delete(node)
     this._nodesMap.delete(node.id)
+  }
+
+  migrateNode(node: Node, newParent: Node) {
+    if (node.parent === newParent) {
+      return
+    }
+
+    if (node.parent) {
+      node.parent?.children?.internalUnlinkChild(node)
+      node.internalUnlinkParent()
+    }
+    newParent.insertAfter(node)
   }
 
   batchRemoveNode(idOrNodeList: (string | Node)[]) {

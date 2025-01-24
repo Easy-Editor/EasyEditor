@@ -1,0 +1,44 @@
+{
+  "name": "@easy-editor/react-renderer-dashboard",
+  "private": true,
+  "description": "React Render for Dashboard package for EasyEditor.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "keywords": [
+    "@easy-editor",
+    "react-render",
+    "dashboard"
+  ],
+  "author": "",
+  "scripts": {
+    "dev": "deno run --watch ./src/index.ts",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "build": "npm-run-all -nl build:*",
+    "build:clean": "rimraf dist/",
+    "build:js": "rollup -c",
+    "types": "npm-run-all -nl types:*",
+    "types:clean": "rimraf types/",
+    "types:src": "tsc --project tsconfig.build.json",
+    "test-types": "tsc --project tsconfig.test.json"
+  },
+  "files": [
+    "dist",
+    "types"
+  ],
+  "peerDependencies": {
+    "@easy-editor/core": "workspace:*",
+    "@types/react": "^19.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "mobx-react": "^9.2.0"
+  },
+  "dependencies": {
+    "@easy-editor/react-renderer": "workspace:*",
+    "lodash-es": "^4.17.21",
+    "mobx": "^6.13.5"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "^4.17.12"
+  }
+}

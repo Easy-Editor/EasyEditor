@@ -1,5 +1,5 @@
-import type { Node } from '..'
-import type { ComponentInstance } from '../meta'
+import type { Node } from '../document'
+import type { ComponentInstance } from './component-meta'
 import type { NodeInstance } from './dragon'
 import type { DropLocation, LocateEvent } from './location'
 

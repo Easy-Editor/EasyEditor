@@ -1,10 +1,12 @@
 import type { Configure } from '@easy-editor/core'
+import RootContainer from './component'
 
 const configure: Configure = {
   props: [
     {
-      title: '功能',
       type: 'group',
+      title: '功能',
+      setter: 'GroupSetter',
       items: [
         {
           name: 'backgroundColor',
@@ -16,7 +18,9 @@ const configure: Configure = {
   ],
   component: {},
   supports: {},
-  advanced: {},
+  advanced: {
+    view: RootContainer,
+  },
 }
 
 export default configure

@@ -10,6 +10,13 @@ const snippets: Snippet[] = [
         type: 'primary',
         text: '主按钮',
       },
+      // TODO: 这样写法是否奇怪
+      $dashboard: {
+        rect: {
+          width: 100,
+          height: 100,
+        },
+      },
     },
   },
   {

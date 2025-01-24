@@ -104,7 +104,7 @@ export const isText = (elem: any): elem is Text => {
   return elem.nodeType === Node.TEXT_NODE
 }
 
-export const isElementElem = (node: any): node is Element => {
+export const isElement = (node: any): node is Element => {
   return node.nodeType === Node.ELEMENT_NODE
 }
 

@@ -12,6 +12,7 @@ import {
   History,
   Node,
   NodeChildren,
+  OffsetObserver,
   Project,
   Prop,
   Props,
@@ -213,6 +214,7 @@ export class PluginManager {
       Detecting,
       Selection,
       DropLocation,
+      OffsetObserver,
 
       Project,
       Document,

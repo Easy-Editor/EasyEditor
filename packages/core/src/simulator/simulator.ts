@@ -1,9 +1,18 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
-import type { Designer, LocateEvent, LocationChildrenDetail, LocationData, NodeInstance } from '../designer'
+import type {
+  Component,
+  ComponentInstance,
+  Designer,
+  LocateEvent,
+  LocationChildrenDetail,
+  LocationData,
+  NodeInstance,
+  Rect,
+  Snippet,
+} from '../designer'
 import type { Node } from '../document'
-import type { Component, ComponentInstance, Snippet } from '../meta'
 import type { Project } from '../project'
-import type { SimulatorRenderer } from './simulator-render'
+import type { SimulatorRenderer } from './simulator-renderer'
 
 import { action, autorun, computed, observable, reaction } from 'mobx'
 import {
@@ -26,10 +35,27 @@ export interface DropContainer {
 
 export type DesignMode = 'design' | 'preview' | 'live'
 
+export type Device = 'mobile' | 'iphone' | 'pc' | string
+
 export interface SimulatorProps {
   designMode?: DesignMode
+  device?: Device
+  deviceClassName?: string
+  // @TODO 补充类型
+  /** @property 请求处理器配置 */
+  requestHandlersMap?: any
+  // library?: LibraryItem[];
+  // utilsMetadata?: UtilsMetadata
+  // simulatorUrl?: Asset;
+  // theme?: Asset;
+  // componentsAsset?: Asset;
 
   [key: string]: any
+}
+
+export interface DeviceStyleProps {
+  canvas?: object
+  viewport?: object
 }
 
 export class Simulator {
@@ -41,15 +67,54 @@ export class Simulator {
 
   readonly designer: Designer
 
-  readonly viewport = new Viewport()
+  readonly viewport: Viewport
 
-  private _iframe?: HTMLElement
+  iframe?: HTMLElement
 
   autoRender = true
+
+  get editor() {
+    return this.designer.editor
+  }
+
+  @computed get device(): string {
+    return this.get('device') || 'default'
+  }
+
+  @computed get requestHandlersMap(): any {
+    // renderer 依赖
+    // TODO: 需要根据 design mode 不同切换鼠标响应情况
+    return this.get('requestHandlersMap') || null
+  }
+
+  get thisRequiredInJSE(): boolean {
+    return this.editor.get('thisRequiredInJSE') ?? true
+  }
+
+  get enableStrictNotFoundMode(): any {
+    return this.editor.get('enableStrictNotFoundMode') ?? false
+  }
+
+  get notFoundComponent(): any {
+    return this.editor.get('notFoundComponent') ?? null
+  }
+
+  get faultComponent(): any {
+    return this.editor.get('faultComponent') ?? null
+  }
 
   @computed
   get designMode(): DesignMode {
     return this.get('designMode') || 'design'
+  }
+
+  @computed get deviceStyle(): DeviceStyleProps | undefined {
+    return this.get('deviceStyle')
+  }
+
+  @computed get componentsMap() {
+    // renderer 依赖
+    return this.designer.componentMetaManager.componentsMap
   }
 
   @observable.ref accessor _props: SimulatorProps = {}
@@ -77,7 +142,7 @@ export class Simulator {
   }
 
   @observable private accessor instancesMap: {
-    [docId: string]: Map<string, ComponentInstance>
+    [docId: string]: Map<string, ComponentInstance[]>
   } = {}
 
   private _sensorAvailable = true
@@ -94,9 +159,14 @@ export class Simulator {
 
   private sensing = false
 
+  get currentDocument() {
+    return this.project.currentDocument
+  }
+
   constructor(designer: Designer) {
     this.designer = designer
     this.project = designer.project
+    this.viewport = new Viewport(designer)
   }
 
   @action
@@ -114,6 +184,15 @@ export class Simulator {
 
   get(key: string): any {
     return this._props[key]
+  }
+
+  connect(
+    renderer: SimulatorRenderer,
+    effect: (reaction: IReactionPublic) => void,
+    options?: IReactionOptions<unknown, boolean>,
+  ) {
+    this._renderer = renderer
+    return autorun(effect, options)
   }
 
   reaction(
@@ -145,21 +224,28 @@ export class Simulator {
   }
 
   /**
-   * mount the viewport element
-   */
-  @action
-  mountViewport(viewport: HTMLElement) {
-    this._iframe = viewport
-    this._contentDocument = viewport.ownerDocument
-    this._contentWindow = viewport.ownerDocument.defaultView!
-    this.viewport.mount(viewport)
-  }
-
-  /**
    * force to rerender the viewport
    */
   rerender() {
-    return this._renderer?.rerender()
+    this.renderer?.rerender?.()
+  }
+
+  mountContentFrame(iframe: HTMLIFrameElement | HTMLElement | null) {
+    if (!iframe || this.iframe === iframe) {
+      return
+    }
+    this.iframe = iframe
+
+    if (iframe instanceof HTMLIFrameElement) {
+      this._contentWindow = iframe.contentWindow!
+      this._contentDocument = this._contentWindow.document
+    } else {
+      this._contentDocument = iframe.ownerDocument
+      this._contentWindow = iframe.ownerDocument.defaultView!
+    }
+
+    this._renderer?.run()
+    this.setupEvents()
   }
 
   getComponent(componentName: string) {
@@ -185,7 +271,8 @@ export class Simulator {
 
   setupDragAndClick() {
     const { designer } = this
-    const doc = this.contentDocument!
+    // const doc = this.contentDocument!
+    const doc = this.iframe!
 
     doc.addEventListener(
       'mousedown',
@@ -278,7 +365,8 @@ export class Simulator {
   }
 
   setupDetecting() {
-    const doc = this.contentDocument!
+    // const doc = this.contentDocument!
+    const doc = this.iframe!
     const { detecting, dragon } = this.designer
     const hover = (e: MouseEvent) => {
       if (!detecting.enable || this.designMode !== 'design') {
@@ -320,55 +408,121 @@ export class Simulator {
   }
 
   @action
-  setInstance(docId: string, id: string, instance: ComponentInstance | null) {
+  addComponent(name: string, component: Component, override = false) {
+    if (this._components[name] && !override) {
+      return
+    }
+
+    this._components[name] = component
+  }
+
+  @action
+  setInstance(docId: string, id: string, instances: ComponentInstance[] | null) {
     if (!Object.prototype.hasOwnProperty.call(this.instancesMap, docId)) {
       this.instancesMap[docId] = new Map()
     }
-    if (instance == null) {
+    if (instances == null) {
       this.instancesMap[docId].delete(id)
     } else {
-      this.instancesMap[docId].set(id, instance)
+      this.instancesMap[docId].set(id, instances.slice())
     }
   }
 
-  getComponentInstances(node: Node) {
-    const docId = node.document.id
+  getInstance(docId: string, id: string) {
+    return this.instancesMap[docId]?.get(id)?.[0]
+  }
+
+  getComponentInstances(node: Node, context?: NodeInstance<ComponentInstance, Node>): ComponentInstance | null {
+    const docId = node.document?.id
     if (!docId) {
       return null
     }
 
-    return this.instancesMap[docId]?.get(node.id) || null
+    const instances = this.instancesMap[docId]?.get(node.id) || null
+    if (!instances || !context) {
+      return instances
+    }
+
+    return instances.filter(instance => {
+      return this.getClosestNodeInstance(instance, context?.nodeId)?.instance === context.instance
+    })
   }
 
-  getClosestNodeInstance(from: ComponentInstance, specId?: string): NodeInstance<ComponentInstance, Node> | null {
-    const docId = this.project.currentDocument!.id
+  getClosestNodeInstance(from: ComponentInstance, specId?: string): NodeInstance<ComponentInstance> | null {
+    return this.renderer?.getClosestNodeInstance(from, specId) || null
+  }
 
-    if (specId && this.instancesMap[docId].has(specId)) {
-      return {
-        docId,
-        nodeId: specId,
-        instance: this.instancesMap[docId].get(specId)!,
-        node: this.project.getDocument(docId)?.getNode(specId) || null,
-      }
+  computeRect(node: Node) {
+    const instances = this.getComponentInstances(node)
+    if (!instances) {
+      return null
     }
+    return this.computeComponentInstanceRect(instances[0])
+  }
 
-    let current: Element | null = from
-    while (current) {
-      if (current.id) {
-        // Check if element exists in instancesMap
-        if (this.instancesMap[docId].has(current.id)) {
-          return {
-            docId,
-            nodeId: current.id,
-            instance: this.instancesMap[docId].get(current.id)!,
-            node: this.project.getDocument(docId)?.getNode(current.id) || null,
-          }
-        }
-      }
-      current = current.parentElement
-    }
+  computeComponentInstanceRect(instance: ComponentInstance, selector?: string): Rect | null {
+    const rect = this.renderer?.getClientRects(instance)?.[0]
+    return rect
+    // const renderer = this.renderer!;
+    // const elements = this.findDOMNodes(instance, selector);
+    // if (!elements) {
+    //   return null;
+    // }
 
-    return null
+    // const elems = elements.slice();
+    // let rects: DOMRect[] | undefined;
+    // let last: { x: number; y: number; r: number; b: number } | undefined;
+    // let _computed = false;
+    // while (true) {
+    //   if (!rects || rects.length < 1) {
+    //     const elem = elems.pop();
+    //     if (!elem) {
+    //       break;
+    //     }
+    //     rects = renderer.getClientRects(elem);
+    //   }
+    //   const rect = rects.pop();
+    //   if (!rect) {
+    //     break;
+    //   }
+    //   if (rect.width === 0 && rect.height === 0) {
+    //     continue;
+    //   }
+    //   if (!last) {
+    //     last = {
+    //       x: rect.left,
+    //       y: rect.top,
+    //       r: rect.right,
+    //       b: rect.bottom,
+    //     };
+    //     continue;
+    //   }
+    //   if (rect.left < last.x) {
+    //     last.x = rect.left;
+    //     _computed = true;
+    //   }
+    //   if (rect.top < last.y) {
+    //     last.y = rect.top;
+    //     _computed = true;
+    //   }
+    //   if (rect.right > last.r) {
+    //     last.r = rect.right;
+    //     _computed = true;
+    //   }
+    //   if (rect.bottom > last.b) {
+    //     last.b = rect.bottom;
+    //     _computed = true;
+    //   }
+    // }
+
+    // if (last) {
+    //   const r: IPublicTypeRect = new DOMRect(last.x, last.y, last.r - last.x, last.b - last.y);
+    //   r.elements = elements;
+    //   r.computed = _computed;
+    //   return r;
+    // }
+
+    // return null;
   }
 
   getNodeInstanceFromElement(target: Element | null): NodeInstance<ComponentInstance, Node> | null {
@@ -376,22 +530,17 @@ export class Simulator {
       return null
     }
 
-    return this.getClosestNodeInstance(target)
-  }
-
-  /**
-   * compute the rect of node's instance
-   */
-  computeRect(node: Node) {
-    const instance = this.getComponentInstances(node)
-    if (!instance) {
+    const nodeInstance = this.getClosestNodeInstance(target)
+    if (!nodeInstance) {
       return null
     }
-    return this.computeComponentInstanceRect(instance)
-  }
-
-  computeComponentInstanceRect(instance: ComponentInstance) {
-    return instance.getBoundingClientRect()
+    const { docId } = nodeInstance
+    const doc = this.project.getDocument(docId)!
+    const node = doc.getNode(nodeInstance.nodeId)
+    return {
+      ...nodeInstance,
+      node,
+    }
   }
 
   /**
@@ -449,7 +598,7 @@ export class Simulator {
       let parentNode = node?.parent
 
       while (parentNode) {
-        if (parentNode.isContainer()) {
+        if (parentNode.isContainer) {
           parentContainerNode = parentNode
           break
         }
@@ -478,9 +627,7 @@ export class Simulator {
     if (!dropContainer) {
       return null
     }
-    const lockedNode = dropContainer?.container
-      ? getClosestNode(dropContainer.container, node => node.isLocked())
-      : null
+    const lockedNode = dropContainer?.container ? getClosestNode(dropContainer.container, node => node.isLocked) : null
     if (lockedNode) {
       return null
     }
@@ -555,7 +702,7 @@ export class Simulator {
       container = rootNode
     }
 
-    if (!container?.isParental()) {
+    if (!container?.isParental) {
       container = container?.parent || rootNode
     }
 
@@ -573,7 +720,7 @@ export class Simulator {
         instance = this.getClosestNodeInstance(nodeInstance.instance, container?.id)?.instance
       }
     } else {
-      instance = container && this.getComponentInstances(container!)
+      instance = container && this.getComponentInstances(container!)[0]
     }
 
     let dropContainer: DropContainer = {
@@ -612,7 +759,7 @@ export class Simulator {
     const { dragObject } = e
     const document = this.project.currentDocument!
     const { rootNode } = document
-    if (container.isRoot() || container.contains(rootNode!)) {
+    if (container.isRoot || container.contains(rootNode!)) {
       // return document.checkNesting(rootNode!, dragObject as any)
       return true
     }

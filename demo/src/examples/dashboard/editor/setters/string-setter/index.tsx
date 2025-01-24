@@ -11,7 +11,7 @@ const StringSetter = (props: StringSetterProps) => {
     <input
       value={value}
       placeholder={placeholder || ''}
-      onChange={(val: any) => onChange(val)}
+      onChange={e => onChange(e.target.value)}
       style={{ width: '100%' }}
     />
   )

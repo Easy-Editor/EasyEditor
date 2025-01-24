@@ -6,8 +6,6 @@ import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
 import { Prop, UNSET, splitPath } from './prop'
 
-export type PropsSchema = PropsMap
-
 const EXTRA_KEY_PREFIX = '__'
 
 /**
@@ -54,7 +52,6 @@ export class Props {
     return this.props
   }
 
-  // TODO: no need list type
   @observable accessor type = 'map'
 
   @observable.shallow accessor items: Prop[] = []
@@ -79,7 +76,7 @@ export class Props {
     return this.items.length
   }
 
-  constructor(owner: Node, props?: PropsSchema, extras?: PropsSchema) {
+  constructor(owner: Node, props?: PropsMap, extras?: PropsMap) {
     this.owner = owner
 
     if (props != null) {
@@ -87,13 +84,13 @@ export class Props {
     }
     if (extras) {
       Object.keys(extras).forEach(key => {
-        this.items.push(new Prop(this, (extras as any)[key], getConvertedExtraKey(key)))
+        this.items.push(new Prop(this, getConvertedExtraKey(key), extras[key]))
       })
     }
   }
 
   @action
-  import(props?: PropsSchema | null, extras?: PropsSchema) {
+  import(props?: PropsMap | null, extras?: PropsMap) {
     // TODO: 是否需要继承之前相同的 key，来保持响应式
 
     const originItems = this.items
@@ -117,8 +114,8 @@ export class Props {
       return {}
     }
 
-    const props: PropsSchema = {}
-    const extras: PropsSchema = {}
+    const props: PropsMap = {}
+    const extras: PropsMap = {}
 
     this.items.forEach(item => {
       const key = item.key as string
@@ -136,7 +133,7 @@ export class Props {
     return { props, extras }
   }
 
-  merge(value: PropsSchema, extras?: PropsSchema) {
+  merge(value: PropsMap, extras?: PropsMap) {
     Object.keys(value).forEach(key => {
       this.query(key, true)!.setValue(value[key])
       this.query(key, true)!.initItems()
@@ -165,7 +162,7 @@ export class Props {
   /**
    * get a prop, if not found, create a prop when createIfNone is true
    */
-  get(path: string, createIfNone = false) {
+  get(path: PropKey, createIfNone = false) {
     const { entry, nest } = splitPath(path)
 
     let prop = this.maps.get(entry)
@@ -180,19 +177,19 @@ export class Props {
     return null
   }
 
-  query(path: string, createIfNone = true) {
+  query(path: PropKey, createIfNone = true) {
     return this.get(path, createIfNone)
   }
 
-  getProp(path: string, createIfNone = true) {
+  getProp(path: PropKey, createIfNone = true) {
     return this.query(path, createIfNone) || null
   }
 
-  getPropValue(path: string) {
+  getPropValue(path: PropKey) {
     return this.getProp(path, false)?.value
   }
 
-  setPropValue(path: string, value: any) {
+  setPropValue(path: PropKey, value: any) {
     this.getProp(path, true)!.setValue(value)
   }
 
@@ -204,7 +201,7 @@ export class Props {
     }
   }
 
-  deleteKey(key: string) {
+  deleteKey(key: PropKey) {
     this.items = this.items.filter((item, i) => {
       if (item.key === key) {
         item.purge()

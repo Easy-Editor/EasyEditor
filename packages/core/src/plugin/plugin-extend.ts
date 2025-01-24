@@ -9,6 +9,7 @@ import type {
   History,
   Node,
   NodeChildren,
+  OffsetObserver,
   Project,
   Prop,
   Props,
@@ -27,6 +28,7 @@ export interface PluginExtend {
   Detecting: typeof Detecting
   Selection: typeof Selection
   DropLocation: typeof DropLocation
+  OffsetObserver: typeof OffsetObserver
   // Sensor: typeof Sensor
 
   Project: typeof Project

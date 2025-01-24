@@ -1,7 +1,8 @@
 import type { Designer } from '.'
-import type { Node, NodeSchema } from '../document'
-import type { ComponentInstance } from '../meta'
+import type { Node } from '../document'
 import type { Simulator } from '../simulator'
+import type { NodeSchema } from '../types'
+import type { ComponentInstance } from './component-meta'
 import type { LocateEvent } from './location'
 import type { Sensor } from './sensor'
 
@@ -192,7 +193,7 @@ export class Dragon {
      * When you press esc while dragging, it will stop dnd
      */
     const checkEsc = (e: KeyboardEvent) => {
-      if (e.keyCode === 27) {
+      if (e.key === 'Escape') {
         designer.clearLocation()
         over()
       }
@@ -274,19 +275,29 @@ export class Dragon {
       if (lastSensor) {
         lastSensor.deactiveSensor()
       }
-      /* istanbul ignore next */
       if (isBoostFromDragAPI) {
         if (!didDrop) {
           designer.clearLocation()
         }
       }
 
+      // const locateEvent = createLocateEvent(e)
+      // const sensor = chooseSensor(locateEvent)
+
+      // if (sensor) {
+      //   sensor.fixEvent(locateEvent)
+      //   sensor.locate(locateEvent)
+      // }
+
       let exception: unknown
       if (this._dragging) {
         this._dragging = false
         try {
           // TODO: copy
-          this.emitter.emit(DRAGON_EVENT.DRAGEND, { dragObject, copy: false })
+          // this.emitter.emit(DRAGON_EVENT.DRAGEND, { dragObject, copy: false, e })
+          // this.emitter.emit(DRAGON_EVENT.DRAGEND, locateEvent)
+          // TODO: escape
+          this.emitter.emit(DRAGON_EVENT.DRAGEND, { dragObject, copy: false, esc: !e })
         } catch (ex) {
           exception = ex
         }
@@ -478,7 +489,7 @@ export class Dragon {
     }
   }
 
-  onDragend(func: (x: { dragObject: DragObject; copy: boolean }) => void) {
+  onDragend(func: (e: { dragObject: DragObject; copy?: boolean; esc?: boolean }) => void) {
     this.emitter.on(DRAGON_EVENT.DRAGEND, func)
 
     return () => {
@@ -487,7 +498,7 @@ export class Dragon {
   }
 }
 
-const makeEventsHandler = (boostEvent: MouseEvent | DragEvent, sensors: Simulator[]) => {
+export const makeEventsHandler = (boostEvent: MouseEvent | DragEvent, sensors: Simulator[]) => {
   const topDoc = window.document
   const sourceDoc = boostEvent.view?.document || topDoc
 

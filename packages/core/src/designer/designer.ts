@@ -1,23 +1,28 @@
-import { Project, type ProjectSchema } from '../project'
-
-import { type Node, type PropsSchema, insertChildren, isNodeSchema } from '../document'
+import type { Node, PropsMap } from '../document'
 import type { Editor } from '../editor'
-import type { ComponentMetaManager } from '../meta'
-import type { TRANSFORM_STAGE } from '../types'
+import type { ProjectSchema, TRANSFORM_STAGE } from '../types'
+import type { ComponentMetaManager } from './component-meta'
+import type { DragObject } from './dragon'
+import type { LocateEvent, LocationData } from './location'
+
+import { insertChildren, isNodeSchema } from '../document'
+import { Project } from '../project'
 import { createEventBus, logger } from '../utils'
 import { Detecting } from './detecting'
-import { type DragObject, Dragon, isDragNodeDataObject, isDragNodeObject } from './dragon'
-import type { LocateEvent, LocationData } from './location'
+import { Dragon, isDragNodeDataObject, isDragNodeObject } from './dragon'
 import { DropLocation, isLocationChildrenDetail } from './location'
+import { type NodeSelector, type OffsetObserver, createOffsetObserver } from './offset-observer'
 import { Selection } from './selection'
+import { SettingsManager } from './setting'
+import { SettingTopEntry } from './setting/setting-top-entry'
 
 export type PropsTransducer = (
-  props: PropsSchema,
+  props: PropsMap,
   node: Node,
   ctx?: {
     stage: TRANSFORM_STAGE
   },
-) => PropsSchema
+) => PropsMap
 
 export interface DesignerProps {
   editor: Editor
@@ -53,6 +58,14 @@ export enum DESIGNER_EVENT {
   NODE_REMOVE = 'designer:node.remove',
 
   SIMULATOR_SELECT = 'designer:simulator.select',
+
+  SETTING_TOP_ENTRY_VALUE_CHANGE = 'designer:setting.top-entry.value.change',
+
+  SELECTION_CHANGE = 'designer:selection.change',
+
+  NODE_RENDER = 'designer:node.render',
+
+  VIEWPORT_MOUNT = 'simulator:viewport.mount',
 }
 
 export class Designer {
@@ -68,6 +81,8 @@ export class Designer {
 
   readonly selection: Selection
 
+  readonly settingsManager: SettingsManager
+
   private _dropLocation?: DropLocation
 
   get componentMetaManager() {
@@ -77,6 +92,8 @@ export class Designer {
   private props?: DesignerProps
 
   private propsReducers = new Map<TRANSFORM_STAGE, PropsTransducer[]>()
+
+  private oobxList: OffsetObserver[] = []
 
   get currentDocument() {
     return this.project.currentDocument
@@ -93,6 +110,7 @@ export class Designer {
     this.dragon = new Dragon(this)
     this.detecting = new Detecting(this)
     this.selection = new Selection(this)
+    this.settingsManager = new SettingsManager(this.editor)
 
     this.dragon.onDragstart(e => {
       this.detecting.enable = false
@@ -116,17 +134,18 @@ export class Designer {
       this.postEvent(DESIGNER_EVENT.DRAG, e)
     })
 
+    // TODO: 这一块逻辑是否需要抽出来
     // insert node
     this.dragon.onDragend(e => {
-      const { dragObject, copy } = e
-      logger.log('onDragend: dragObject ', dragObject, ' copy ', copy)
+      const { dragObject } = e
       const loc = this._dropLocation
       if (loc) {
         this.postEvent(DESIGNER_EVENT.INSERT_NODE_BEFORE, loc)
         if (isLocationChildrenDetail(loc.detail) && loc.detail.valid !== false) {
           let nodes: Node[] | undefined
           if (isDragNodeObject(dragObject)) {
-            nodes = insertChildren(loc.target, [...dragObject.nodes], loc.detail.index, copy)
+            // TODO: 插入逻辑在 dashboard 不需要
+            // nodes = insertChildren(loc.target, [...dragObject.nodes], loc.detail.index, copy)
           } else if (isDragNodeDataObject(dragObject)) {
             // process nodeData
             const nodeData = Array.isArray(dragObject.data) ? dragObject.data : [dragObject.data]
@@ -163,6 +182,10 @@ export class Designer {
       }
     }
 
+    this.selection.onSelectionChange(ids => {
+      this.postEvent(DESIGNER_EVENT.SELECTION_CHANGE, ids)
+    })
+
     // select root node
     this.project.onCurrentDocumentChange(() => {
       this.selection.clear()
@@ -175,8 +198,14 @@ export class Designer {
       }
     })
 
+    this.init()
     this.postEvent(DESIGNER_EVENT.INIT, this)
   }
+
+  /**
+   * 该函数用于 Designer constructor 的插件扩展，因为 Object.defineProperty 无法修改 constructor
+   */
+  init() {}
 
   setProps(nextProps: DesignerProps) {
     const props = this.props ? { ...this.props, ...nextProps } : nextProps
@@ -220,6 +249,31 @@ export class Designer {
     this._dropLocation = undefined
   }
 
+  createOffsetObserver(nodeInstance: NodeSelector): OffsetObserver | null {
+    const oobx = createOffsetObserver(nodeInstance)
+    this.clearOobxList()
+    if (oobx) {
+      this.oobxList.push(oobx)
+    }
+    return oobx
+  }
+
+  private clearOobxList(force?: boolean) {
+    let l = this.oobxList.length
+    if (l > 20 || force) {
+      while (l-- > 0) {
+        if (this.oobxList[l].isPurged()) {
+          this.oobxList.splice(l, 1)
+        }
+      }
+    }
+  }
+
+  touchOffsetObserver() {
+    this.clearOobxList(true)
+    this.oobxList.forEach(item => item.compute())
+  }
+
   onInit(listener: (designer: Designer) => void) {
     this.onEvent(DESIGNER_EVENT.INIT, listener)
   }
@@ -232,7 +286,7 @@ export class Designer {
     this.project.import(schema)
   }
 
-  transformProps(props: PropsSchema, node: Node, stage: TRANSFORM_STAGE) {
+  transformProps(props: PropsMap, node: Node, stage: TRANSFORM_STAGE) {
     if (Array.isArray(props)) {
       // current not support, make this future
       return props
@@ -243,9 +297,9 @@ export class Designer {
       return props
     }
 
-    return reducers.reduce<PropsSchema>((transformedProps, reducer) => {
+    return reducers.reduce<PropsMap>((transformedProps, reducer) => {
       try {
-        return reducer(transformedProps, node, { stage }) as PropsSchema
+        return reducer(transformedProps, node, { stage }) as PropsMap
       } catch (e) {
         logger.error('Error transforming props:', e)
         return transformedProps
@@ -264,5 +318,9 @@ export class Designer {
     } else {
       this.propsReducers.set(stage, [reducer])
     }
+  }
+
+  createSettingEntry(nodes: Node[]) {
+    return new SettingTopEntry(this.editor, nodes)
   }
 }

@@ -1,0 +1,38 @@
+{
+  "name": "@easy-editor/plugin-dashboard",
+  "private": true,
+  "description": "Dashboard plugin for EasyEditor.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "keywords": [
+    "@easy-editor",
+    "dashboard",
+    "plugin"
+  ],
+  "author": "",
+  "scripts": {
+    "dev": "deno run --watch ./src/index.ts",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "build": "npm-run-all -nl build:*",
+    "build:clean": "rimraf dist/",
+    "build:js": "rollup -c",
+    "types": "npm-run-all -nl types:*",
+    "types:clean": "rimraf types/",
+    "types:src": "tsc --project tsconfig.build.json",
+    "test-types": "tsc --project tsconfig.test.json"
+  },
+  "files": [
+    "dist",
+    "types"
+  ],
+  "dependencies": {
+    "mobx": "^6.13.5"
+  },
+  "peerDependencies": {
+    "@easy-editor/core": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@types/react": "^19.0.1"
+  }
+}
