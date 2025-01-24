@@ -1,4 +1,4 @@
-import type { Designer, Node, OffsetObserver, Rect, Simulator } from '@easy-editor/core'
+import type { Designer, Node, Rect, Simulator } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import { Component } from 'react'
 import DragResizeEngine, { Direction } from './drag-resize-engine'
@@ -234,7 +234,7 @@ const calculateResizeRectByDirection = (
 }
 
 interface BorderResizingInstanceProps {
-  observed: OffsetObserver
+  node: Node
   highlight?: boolean
   dragging?: boolean
   designer: Designer
@@ -422,11 +422,9 @@ const BorderResizingInstance = observer(
       if (this.willUnbind) {
         this.willUnbind()
       }
-      this.props.observed.purge()
     }
 
     componentDidMount() {
-      // this.hoveringCapture.setBoundary(this.outline);
       this.willBind()
 
       let startNodeRect: Rect
@@ -521,8 +519,7 @@ const BorderResizingInstance = observer(
       }
 
       const unBind: any[] = []
-      const { node } = this.props.observed
-
+      const { node } = this.props
       unBind.push(
         ...[
           this.dragEngine.from(this.resizeBorderN, Direction.N, () => node),
@@ -547,17 +544,12 @@ const BorderResizingInstance = observer(
     }
 
     render() {
-      const { observed } = this.props
-      let offsetWidth = 0
-      let offsetHeight = 0
-      let offsetTop = 0
-      let offsetLeft = 0
-      if (observed.hasOffset) {
-        offsetWidth = observed.offsetWidth
-        offsetHeight = observed.offsetHeight
-        offsetTop = observed.offsetTop
-        offsetLeft = observed.offsetLeft
-      }
+      const { node } = this.props
+      const rect = node.getDashboardRect()
+      const offsetLeft = rect.x
+      const offsetTop = rect.y
+      const offsetWidth = rect.width
+      const offsetHeight = rect.height
 
       const baseBorderClass = 'lc-borders lc-resize-border'
       const baseSideClass = 'lc-borders lc-resize-side'
@@ -706,27 +698,12 @@ interface BorderResizingForNodeProps {
 
 const BorderResizingForNode: React.FC<BorderResizingForNodeProps> = observer(({ host, node, dragging }) => {
   const { designer } = host
-  const instances = host.getComponentInstances(node)
 
-  if (!instances || instances.length < 1 || dragging) {
+  if (dragging) {
     return null
   }
 
-  return (
-    <>
-      {instances.map(instance => {
-        const observed = designer.createOffsetObserver({
-          node,
-          instance,
-        })
-        if (!observed) {
-          return null
-        }
-
-        return <BorderResizingInstance key={observed.id} dragging={dragging} observed={observed} designer={designer} />
-      })}
-    </>
-  )
+  return <BorderResizingInstance key={node.id} dragging={dragging} node={node} designer={designer} />
 })
 
 interface BorderResizingBoxProps {
