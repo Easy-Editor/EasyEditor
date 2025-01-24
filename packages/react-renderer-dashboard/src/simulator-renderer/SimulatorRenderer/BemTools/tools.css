@@ -27,8 +27,8 @@
   /* border-width: 2px; */
 
   &.dragging {
-    background: var(--color-layer-mask-background, rgba(182, 178, 178, 0.8));
-    border: none;
+    /* background: var(--color-layer-mask-background, rgba(182, 178, 178, 0.8)); */
+    /* border: none; */
   }
 }
 

@@ -1,4 +1,4 @@
-import { action, computed, observable } from 'mobx'
+import { computed, observable, runInAction } from 'mobx'
 import type { ComponentInstance, Node, Viewport } from '..'
 import { uniqueId } from '../utils'
 
@@ -68,7 +68,7 @@ export class OffsetObserver {
     if (this.isRoot) {
       return 0
     }
-    if (this.lastOffsetLeft == null) {
+    if (this.lastOffsetLeft == null || this.lastOffsetLeft !== this.left) {
       this.lastOffsetLeft = this.left
     }
     return this.lastOffsetLeft
@@ -79,7 +79,7 @@ export class OffsetObserver {
     if (this.isRoot) {
       return 0
     }
-    if (this.lastOffsetTop == null) {
+    if (this.lastOffsetTop == null || this.lastOffsetTop !== this.top) {
       this.lastOffsetTop = this.top
     }
     return this.lastOffsetTop
@@ -87,7 +87,7 @@ export class OffsetObserver {
 
   @computed
   get offsetHeight() {
-    if (this.lastOffsetHeight == null) {
+    if (this.lastOffsetHeight == null || this.lastOffsetHeight !== this.height) {
       this.lastOffsetHeight = this.isRoot ? this.viewport.height : this.height
     }
     return this.lastOffsetHeight
@@ -95,7 +95,7 @@ export class OffsetObserver {
 
   @computed
   get offsetWidth() {
-    if (this.lastOffsetWidth == null) {
+    if (this.lastOffsetWidth == null || this.lastOffsetWidth !== this.width) {
       this.lastOffsetWidth = this.isRoot ? this.viewport.width : this.width
     }
     return this.lastOffsetWidth
@@ -125,7 +125,7 @@ export class OffsetObserver {
     this.isRoot = node.contains(rootNode!)
     this.viewport = host?.viewport!
     if (this.isRoot) {
-      this.hasOffset = true
+      this.hasOffset = false
       return
     }
     if (!instance) {
@@ -138,8 +138,30 @@ export class OffsetObserver {
         return
       }
 
-      // const rect = host.computeComponentInstanceRect(instance!)
-      this.checkRect()
+      const rect = this.computeRect()
+
+      // 是否再次产生偏移
+      if (
+        !rect ||
+        this._width !== rect.width ||
+        this._height !== rect.height ||
+        this._left !== rect.left ||
+        this._top !== rect.top
+      ) {
+        this.hasOffset = true
+      }
+
+      if (rect && this.hasOffset) {
+        runInAction(() => {
+          this._height = rect.height
+          this._width = rect.width
+          this._left = rect.left
+          this._top = rect.top
+          this._right = rect.right
+          this._bottom = rect.bottom
+          this.hasOffset = true
+        })
+      }
 
       this.pid = requestIdleCallback(compute)
       pid = this.pid
@@ -150,26 +172,8 @@ export class OffsetObserver {
     // try first
     compute()
     // try second, ensure the dom mounted
-    this.pid = requestIdleCallback(compute)
-    pid = this.pid
-  }
-
-  // 这部分抽出来，用于后续的 dashboard 扩展
-  @action
-  checkRect() {
-    const rect = this.computeRect()
-
-    if (!rect) {
-      this.hasOffset = false
-    } else if (!this.hasOffset) {
-      this._height = rect.height
-      this._width = rect.width
-      this._left = rect.left
-      this._top = rect.top
-      this._right = rect.right
-      this._bottom = rect.bottom
-      this.hasOffset = true
-    }
+    // this.pid = requestIdleCallback(compute)
+    // pid = this.pid
   }
 
   computeRect() {

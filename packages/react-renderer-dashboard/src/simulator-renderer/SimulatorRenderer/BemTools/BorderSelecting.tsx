@@ -1,7 +1,7 @@
 import type { Node, OffsetObserver, Simulator } from '@easy-editor/core'
 import { observer } from 'mobx-react'
-import { useMemo } from 'react'
-import { calculateDashboardRectBox } from './utils'
+import { useEffect, useRef } from 'react'
+import { calculateDOMRectBox } from './utils'
 
 interface BorderSelectingInstanceProps {
   observed: OffsetObserver
@@ -72,20 +72,54 @@ interface BorderSelectingForBoxProps {
 }
 
 const BorderSelectingForBox: React.FC<BorderSelectingForBoxProps> = observer(({ nodes, dragging }) => {
-  const boxRect = useMemo(() => calculateDashboardRectBox(nodes), [nodes])
+  const containerRef = useRef<HTMLDivElement>(null)
 
-  const style = {
-    width: boxRect.width,
-    height: boxRect.height,
-    transform: `translate3d(${boxRect.x}px, ${boxRect.y}px, 0)`,
-  }
+  useEffect(() => {
+    const container = containerRef.current!
+    let lastPid = -1
+    let pid = -1
+    let lastInfo: DOMRect | null = null
+    let hasOffset = false
+
+    const compute = () => {
+      if (lastPid !== pid) {
+        return
+      }
+
+      const rect = calculateDOMRectBox(nodes)
+
+      // 是否再次产生偏移
+      if (
+        !rect ||
+        lastInfo?.x !== rect.x ||
+        lastInfo?.y !== rect.y ||
+        lastInfo?.width !== rect.width ||
+        lastInfo?.height !== rect.height
+      ) {
+        hasOffset = true
+        lastInfo = rect
+      }
+
+      if (rect && hasOffset) {
+        container.style.width = `${rect.width}px`
+        container.style.height = `${rect.height}px`
+        container.style.transform = `translate3d(${rect.x}px, ${rect.y}px, 0)`
+      }
+
+      pid = requestIdleCallback(compute)
+      lastPid = pid
+    }
+
+    compute()
+  }, [])
+
   let classname = 'lc-borders lc-borders-selecting'
   if (dragging) {
     classname += ' dragging'
   }
 
   return (
-    <div className={classname} style={style}>
+    <div ref={containerRef} className={classname}>
       {/* <Title title={title} className='lc-borders-title' />
       {isLocked ? <Title title={intl('locked')} className='lc-borders-status' /> : null} */}
     </div>

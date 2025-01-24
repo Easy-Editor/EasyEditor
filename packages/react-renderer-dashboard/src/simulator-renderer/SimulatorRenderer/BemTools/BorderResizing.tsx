@@ -4,17 +4,241 @@ import { Component } from 'react'
 import DragResizeEngine, { Direction } from './drag-resize-engine'
 import { calculateDashboardRectBox } from './utils'
 
+/** resize 的最小宽度 */
+const RESIZE_MIN_WIDTH = 50
+/** resize 的最小高度 */
+const RESIZE_MIN_HEIGHT = 50
+
+/**
+ * 计算 resize 后的 rect
+ * @param designer
+ * @param direction 方向
+ * @param delta 偏移量
+ * @param startNodeRect 拖拽开始时的 rect
+ */
+const calculateResizeRectByDirection = (
+  designer: Designer,
+  direction: Direction,
+  delta: { x: number; y: number },
+  startNodeRect: Rect,
+) => {
+  let adsorption: ReturnType<typeof designer.guideline.getAdsorptionPosition>
+  const newRect = {
+    width: startNodeRect.width,
+    height: startNodeRect.height,
+    x: startNodeRect.x,
+    y: startNodeRect.y,
+  }
+
+  switch (direction) {
+    case Direction.N:
+      newRect.height = startNodeRect.height - delta.y
+      newRect.y = startNodeRect.y + delta.y
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        0,
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.y) {
+          newRect.y = adsorption.adsorb.y.position
+          newRect.height = startNodeRect.height - (newRect.y - startNodeRect.y)
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.height < RESIZE_MIN_HEIGHT) {
+        newRect.height = RESIZE_MIN_HEIGHT
+        newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
+      }
+      break
+    case Direction.S:
+      newRect.height = startNodeRect.height + delta.y
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        2,
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.y) {
+          newRect.height = adsorption.adsorb.y.position - newRect.y
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.height < RESIZE_MIN_HEIGHT) {
+        newRect.height = RESIZE_MIN_HEIGHT
+      }
+      break
+    case Direction.W:
+      newRect.width = startNodeRect.width - delta.x
+      newRect.x = startNodeRect.x + delta.x
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        0,
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.x) {
+          newRect.x = adsorption.adsorb.x.position
+          newRect.width = startNodeRect.width - (newRect.x - startNodeRect.x)
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.width < RESIZE_MIN_WIDTH) {
+        newRect.width = RESIZE_MIN_WIDTH
+        newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
+      }
+      break
+    case Direction.E:
+      newRect.width = startNodeRect.width + delta.x
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        2,
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.x) {
+          newRect.width = adsorption.adsorb.x.position - newRect.x
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.width < RESIZE_MIN_WIDTH) {
+        newRect.width = RESIZE_MIN_WIDTH
+      }
+      break
+    case Direction.NW:
+      newRect.x = startNodeRect.x + delta.x
+      newRect.width = startNodeRect.width - delta.x
+      newRect.y = startNodeRect.y + delta.y
+      newRect.height = startNodeRect.height - delta.y
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        0,
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.x) {
+          newRect.x = adsorption.adsorb.x.position
+          newRect.width = startNodeRect.width - (newRect.x - startNodeRect.x)
+        }
+        if (adsorption.adsorb.y) {
+          newRect.y = adsorption.adsorb.y.position
+          newRect.height = startNodeRect.height - (newRect.y - startNodeRect.y)
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.width < RESIZE_MIN_WIDTH) {
+        newRect.width = RESIZE_MIN_WIDTH
+        newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
+      }
+      if (newRect.height < RESIZE_MIN_HEIGHT) {
+        newRect.height = RESIZE_MIN_HEIGHT
+        newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
+      }
+      break
+    case Direction.NE:
+      newRect.width = startNodeRect.width + delta.x
+      newRect.height = startNodeRect.height - delta.y
+      newRect.y = startNodeRect.y + delta.y
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        [0, 2],
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.x && adsorption.adsorb.x.position > newRect.x) {
+          newRect.width = adsorption.adsorb.x.position - newRect.x
+        }
+        if (adsorption.adsorb.y && adsorption.adsorb.y.position <= newRect.y) {
+          newRect.y = adsorption.adsorb.y.position
+          newRect.height = startNodeRect.height - (newRect.y - startNodeRect.y)
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.width < RESIZE_MIN_WIDTH) {
+        newRect.width = RESIZE_MIN_WIDTH
+      }
+      if (newRect.height < RESIZE_MIN_HEIGHT) {
+        newRect.height = RESIZE_MIN_HEIGHT
+        newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
+      }
+      break
+    case Direction.SE:
+      newRect.width = startNodeRect.width + delta.x
+      newRect.height = startNodeRect.height + delta.y
+
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        2,
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.x && adsorption.adsorb.x.position > newRect.x) {
+          newRect.width = adsorption.adsorb.x.position - newRect.x
+        }
+        if (adsorption.adsorb.y && adsorption.adsorb.y.position > newRect.y) {
+          newRect.height = adsorption.adsorb.y.position - newRect.y
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.width < RESIZE_MIN_WIDTH) {
+        newRect.width = RESIZE_MIN_WIDTH
+      }
+      if (newRect.height < RESIZE_MIN_HEIGHT) {
+        newRect.height = RESIZE_MIN_HEIGHT
+      }
+      break
+    case Direction.SW:
+      newRect.x = startNodeRect.x + delta.x
+      newRect.width = startNodeRect.width - delta.x
+      newRect.height = startNodeRect.height + delta.y
+      // 计算吸附位置
+      adsorption = designer.guideline.getAdsorptionPosition(
+        new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
+        [0, 2],
+      )
+      if (adsorption.isAdsorption) {
+        if (adsorption.adsorb.x && adsorption.adsorb.x.position <= newRect.x) {
+          newRect.x = adsorption.adsorb.x.position
+          newRect.width = startNodeRect.width - (newRect.x - startNodeRect.x)
+        }
+        if (adsorption.adsorb.y && adsorption.adsorb.y.position > newRect.y) {
+          newRect.height = adsorption.adsorb.y.position - newRect.y
+        }
+      }
+
+      // 限制缩放最小宽高
+      if (newRect.width < RESIZE_MIN_WIDTH) {
+        newRect.width = RESIZE_MIN_WIDTH
+        newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
+      }
+      if (newRect.height < RESIZE_MIN_HEIGHT) {
+        newRect.height = RESIZE_MIN_HEIGHT
+      }
+      break
+  }
+
+  return new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height)
+}
+
 interface BorderResizingInstanceProps {
   observed: OffsetObserver
   highlight?: boolean
   dragging?: boolean
   designer: Designer
 }
-
-/** resize 的最小宽度 */
-const RESIZE_MIN_WIDTH = 50
-/** resize 的最小高度 */
-const RESIZE_MIN_HEIGHT = 50
 
 const BorderResizingInstance = observer(
   class BoxResizingInstance extends Component<BorderResizingInstanceProps> {
@@ -39,224 +263,6 @@ const BorderResizingInstance = observer(
 
     /**
      * 计算 resize 后的 rect
-     * @param direction 方向
-     * @param delta 偏移量
-     * @param startNodeRect 拖拽开始时的 rect
-     */
-    private calculateResizeRectByDirection(direction: Direction, delta: { x: number; y: number }, startNodeRect: Rect) {
-      let adsorption: ReturnType<typeof this.props.designer.guideline.getAdsorptionPosition>
-      const newRect = {
-        width: startNodeRect.width,
-        height: startNodeRect.height,
-        x: startNodeRect.x,
-        y: startNodeRect.y,
-      }
-
-      switch (direction) {
-        case Direction.N:
-          newRect.height = startNodeRect.height - delta.y
-          newRect.y = startNodeRect.y + delta.y
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            0,
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.y) {
-              newRect.y = adsorption.adsorb.y.position
-              newRect.height = startNodeRect.height - (newRect.y - startNodeRect.y)
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.height < RESIZE_MIN_HEIGHT) {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.S:
-          newRect.height = startNodeRect.height + delta.y
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            2,
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.y) {
-              newRect.height = adsorption.adsorb.y.position - newRect.y
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.height < RESIZE_MIN_HEIGHT) {
-            newRect.height = RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.W:
-          newRect.width = startNodeRect.width - delta.x
-          newRect.x = startNodeRect.x + delta.x
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            0,
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.x) {
-              newRect.x = adsorption.adsorb.x.position
-              newRect.width = startNodeRect.width - (newRect.x - startNodeRect.x)
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.width < RESIZE_MIN_WIDTH) {
-            newRect.width = RESIZE_MIN_WIDTH
-            newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
-          }
-          break
-        case Direction.E:
-          newRect.width = startNodeRect.width + delta.x
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            2,
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.x) {
-              newRect.width = adsorption.adsorb.x.position - newRect.x
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.width < RESIZE_MIN_WIDTH) {
-            newRect.width = RESIZE_MIN_WIDTH
-          }
-          break
-        case Direction.NW:
-          newRect.x = startNodeRect.x + delta.x
-          newRect.width = startNodeRect.width - delta.x
-          newRect.y = startNodeRect.y + delta.y
-          newRect.height = startNodeRect.height - delta.y
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            0,
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.x) {
-              newRect.x = adsorption.adsorb.x.position
-              newRect.width = startNodeRect.width - (newRect.x - startNodeRect.x)
-            }
-            if (adsorption.adsorb.y) {
-              newRect.y = adsorption.adsorb.y.position
-              newRect.height = startNodeRect.height - (newRect.y - startNodeRect.y)
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.width < RESIZE_MIN_WIDTH) {
-            newRect.width = RESIZE_MIN_WIDTH
-            newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
-          }
-          if (newRect.height < RESIZE_MIN_HEIGHT) {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.NE:
-          newRect.width = startNodeRect.width + delta.x
-          newRect.height = startNodeRect.height - delta.y
-          newRect.y = startNodeRect.y + delta.y
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            [0, 2],
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.x && adsorption.adsorb.x.position > newRect.x) {
-              newRect.width = adsorption.adsorb.x.position - newRect.x
-            }
-            if (adsorption.adsorb.y && adsorption.adsorb.y.position <= newRect.y) {
-              newRect.y = adsorption.adsorb.y.position
-              newRect.height = startNodeRect.height - (newRect.y - startNodeRect.y)
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.width < RESIZE_MIN_WIDTH) {
-            newRect.width = RESIZE_MIN_WIDTH
-          }
-          if (newRect.height < RESIZE_MIN_HEIGHT) {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.SE:
-          newRect.width = startNodeRect.width + delta.x
-          newRect.height = startNodeRect.height + delta.y
-
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            2,
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.x && adsorption.adsorb.x.position > newRect.x) {
-              newRect.width = adsorption.adsorb.x.position - newRect.x
-            }
-            if (adsorption.adsorb.y && adsorption.adsorb.y.position > newRect.y) {
-              newRect.height = adsorption.adsorb.y.position - newRect.y
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.width < RESIZE_MIN_WIDTH) {
-            newRect.width = RESIZE_MIN_WIDTH
-          }
-          if (newRect.height < RESIZE_MIN_HEIGHT) {
-            newRect.height = RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.SW:
-          newRect.x = startNodeRect.x + delta.x
-          newRect.width = startNodeRect.width - delta.x
-          newRect.height = startNodeRect.height + delta.y
-          // 计算吸附位置
-          adsorption = this.props.designer.guideline.getAdsorptionPosition(
-            new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height),
-            [0, 2],
-          )
-          if (adsorption.isAdsorption) {
-            if (adsorption.adsorb.x && adsorption.adsorb.x.position <= newRect.x) {
-              newRect.x = adsorption.adsorb.x.position
-              newRect.width = startNodeRect.width - (newRect.x - startNodeRect.x)
-            }
-            if (adsorption.adsorb.y && adsorption.adsorb.y.position > newRect.y) {
-              newRect.height = adsorption.adsorb.y.position - newRect.y
-            }
-          }
-
-          // 限制缩放最小宽高
-          if (newRect.width < RESIZE_MIN_WIDTH) {
-            newRect.width = RESIZE_MIN_WIDTH
-            newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
-          }
-          if (newRect.height < RESIZE_MIN_HEIGHT) {
-            newRect.height = RESIZE_MIN_HEIGHT
-          }
-          break
-      }
-
-      return new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height)
-    }
-
-    /**
-     * 计算 resize 后的 rect
      * @param node 节点
      * @param direction 方向
      * @param delta 偏移量
@@ -268,7 +274,7 @@ const BorderResizingInstance = observer(
       delta: { x: number; y: number },
       startNodeRect: Rect,
     ) {
-      const resizeRect = this.calculateResizeRectByDirection(direction, delta, startNodeRect)
+      const resizeRect = calculateResizeRectByDirection(this.props.designer, direction, delta, startNodeRect)
 
       switch (direction) {
         case Direction.N:
@@ -360,7 +366,7 @@ const BorderResizingInstance = observer(
         return
       }
 
-      const resizeRect = this.calculateResizeRectByDirection(direction, delta, startNodeRect)
+      const resizeRect = calculateResizeRectByDirection(this.props.designer, direction, delta, startNodeRect)
       domNode.style.left = `${resizeRect.x}px`
       domNode.style.top = `${resizeRect.y}px`
       domNode.style.width = `${resizeRect.width}px`
@@ -452,7 +458,6 @@ const BorderResizingInstance = observer(
           ;(e as any).deltaY = moveY
           advanced.callbacks.onResize({ ...e, trigger: direction, deltaX: moveX, deltaY: moveY }, node)
         }
-        // this.calculateResizeRectByDirection(node, direction, { x: moveX, y: moveY }, startNodeRect)
         this.updateResizeRectByDirectionByDOM(node, direction, { x: moveX, y: moveY }, startNodeRect)
         lastNodeInfo = {
           node,
@@ -753,97 +758,6 @@ const BorderResizingBox = observer(
 
     /**
      * 计算 resize 后的 rect
-     * @param direction 方向
-     * @param delta 偏移量
-     * @param startNodeRect 拖拽开始时的 rect
-     */
-    private calculateResizeRectByDirection(direction: Direction, delta: { x: number; y: number }, startNodeRect: Rect) {
-      const newRect = {
-        width: startNodeRect.width,
-        height: startNodeRect.height,
-        x: startNodeRect.x,
-        y: startNodeRect.y,
-      }
-
-      switch (direction) {
-        case Direction.N:
-          if (startNodeRect.height - delta.y > RESIZE_MIN_HEIGHT) {
-            newRect.height = startNodeRect.height - delta.y
-            newRect.y = startNodeRect.y + delta.y
-          } else {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.S:
-          newRect.height =
-            startNodeRect.height + delta.y > RESIZE_MIN_HEIGHT ? startNodeRect.height + delta.y : RESIZE_MIN_HEIGHT
-          break
-        case Direction.W:
-          if (startNodeRect.width - delta.x > RESIZE_MIN_WIDTH) {
-            newRect.width = startNodeRect.width - delta.x
-            newRect.x = startNodeRect.x + delta.x
-          } else {
-            newRect.width = RESIZE_MIN_WIDTH
-            newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
-          }
-          break
-        case Direction.E:
-          newRect.width =
-            startNodeRect.width + delta.x > RESIZE_MIN_WIDTH ? startNodeRect.width + delta.x : RESIZE_MIN_WIDTH
-          break
-        case Direction.NW:
-          if (startNodeRect.width - delta.x > RESIZE_MIN_WIDTH) {
-            newRect.width = startNodeRect.width - delta.x
-            newRect.x = startNodeRect.x + delta.x
-          } else {
-            newRect.width = RESIZE_MIN_WIDTH
-            newRect.x = startNodeRect.x + startNodeRect.width - RESIZE_MIN_WIDTH
-          }
-          if (startNodeRect.height - delta.y > RESIZE_MIN_HEIGHT) {
-            newRect.height = startNodeRect.height - delta.y
-            newRect.y = startNodeRect.y + delta.y
-          } else {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.NE:
-          newRect.width =
-            startNodeRect.width + delta.x > RESIZE_MIN_WIDTH ? startNodeRect.width + delta.x : RESIZE_MIN_WIDTH
-          if (startNodeRect.height - delta.y > RESIZE_MIN_HEIGHT) {
-            newRect.height = startNodeRect.height - delta.y
-            newRect.y = startNodeRect.y + delta.y
-          } else {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          break
-        case Direction.SE:
-          newRect.width =
-            startNodeRect.width + delta.x > RESIZE_MIN_WIDTH ? startNodeRect.width + delta.x : RESIZE_MIN_WIDTH
-          newRect.height =
-            startNodeRect.height + delta.y > RESIZE_MIN_HEIGHT ? startNodeRect.height + delta.y : RESIZE_MIN_HEIGHT
-          break
-        case Direction.SW:
-          newRect.width =
-            startNodeRect.width - delta.x > RESIZE_MIN_WIDTH ? startNodeRect.width - delta.x : RESIZE_MIN_WIDTH
-          if (startNodeRect.height + delta.y > RESIZE_MIN_HEIGHT) {
-            newRect.height = startNodeRect.height + delta.y
-            newRect.y = startNodeRect.y + delta.y
-          } else {
-            newRect.height = RESIZE_MIN_HEIGHT
-            newRect.y = startNodeRect.y + startNodeRect.height - RESIZE_MIN_HEIGHT
-          }
-          newRect.x = startNodeRect.x + delta.x
-          break
-      }
-
-      return new DOMRect(newRect.x, newRect.y, newRect.width, newRect.height)
-    }
-
-    /**
-     * 计算 resize 后的 rect
      * @param node 节点
      * @param direction 方向
      * @param delta 偏移量
@@ -855,7 +769,7 @@ const BorderResizingBox = observer(
       delta: { x: number; y: number },
       startNodeRect: Rect,
     ) {
-      const resizeRect = this.calculateResizeRectByDirection(direction, delta, startNodeRect)
+      const resizeRect = calculateResizeRectByDirection(this.props.designer, direction, delta, startNodeRect)
       // 根据 box 的缩放大小计算，缩放比例
       const ratioWidth = resizeRect.width / startNodeRect.width
       const ratioHeight = resizeRect.height / startNodeRect.height
@@ -898,7 +812,7 @@ const BorderResizingBox = observer(
       delta: { x: number; y: number },
       startNodeRect: Rect,
     ) {
-      const resizeRect = this.calculateResizeRectByDirection(direction, delta, startNodeRect)
+      const resizeRect = calculateResizeRectByDirection(this.props.designer, direction, delta, startNodeRect)
       const ratioWidth = resizeRect.width / startNodeRect.width
       const ratioHeight = resizeRect.height / startNodeRect.height
 

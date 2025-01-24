@@ -60,4 +60,4 @@ console.log('--------------------------------')
 project.open(defaultRootSchema)
 
 // 设置模拟器样式
-// simulator.set('deviceStyle', { viewport: { width: '1920px', height: '1080px' } })
+simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })

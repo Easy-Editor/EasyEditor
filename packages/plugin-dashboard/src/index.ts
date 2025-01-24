@@ -423,7 +423,20 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       Object.defineProperties(OffsetObserver.prototype, {
         computeRect: {
           value(this: OffsetObserver) {
-            return this.node.getDashboardRect()
+            // return this.node.getDashboardRect()
+            const { node, instance } = this.nodeInstance
+            const host = node.document?.simulator!
+            const rect = host.computeComponentInstanceRect(instance!)
+
+            const { viewport } = node.document.simulator!
+            const local = viewport.toLocalPoint({ clientX: rect!.x, clientY: rect!.y })
+
+            return new DOMRect(
+              local.clientX,
+              local.clientY,
+              rect!.width / viewport.scale,
+              rect!.height / viewport.scale,
+            )
           },
         },
         height: {

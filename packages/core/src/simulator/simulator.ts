@@ -56,6 +56,7 @@ export interface SimulatorProps {
 export interface DeviceStyleProps {
   canvas?: object
   viewport?: object
+  content?: object
 }
 
 export class Simulator {

@@ -1,5 +1,5 @@
-import type { Simulator } from '@easy-editor/core'
 import { observer } from 'mobx-react'
+import type { SimulatorRendererProps } from '..'
 import { BorderDetecting } from './BorderDetecting'
 import { BorderResizing } from './BorderResizing'
 import { BorderSelecting } from './BorderSelecting'
@@ -8,24 +8,28 @@ import { GuideLine } from './GuideLine'
 import './index.css'
 import './tools.css'
 
-interface BemToolsProps {
-  host: Simulator
-}
+interface BemToolsProps extends SimulatorRendererProps {}
 
-export const BemTools: React.FC<BemToolsProps> = observer(({ host }) => {
+export const BemTools: React.FC<BemToolsProps> = observer(({ host, bemTools }) => {
   const { designMode } = host
 
-  if (designMode === 'live') {
+  if (typeof bemTools === 'boolean' && !bemTools) {
     return null
   }
 
+  if (designMode !== 'design') {
+    return null
+  }
+
+  const { detecting = true, resizing = true, selecting = true, guideLine = true, extra } = bemTools || ({} as any)
+
   return (
     <div className='lc-bem-tools'>
-      <BorderDetecting host={host} />
-      <BorderSelecting host={host} />
-      <BorderResizing host={host} />
-
-      <GuideLine host={host} />
+      {detecting && <BorderDetecting host={host} />}
+      {selecting && <BorderSelecting host={host} />}
+      {resizing && <BorderResizing host={host} />}
+      {guideLine && <GuideLine host={host} />}
+      {extra}
     </div>
   )
 })
