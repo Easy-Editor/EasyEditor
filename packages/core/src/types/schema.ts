@@ -75,10 +75,10 @@ export interface NodeSchema {
   children?: NodeSchema[]
 
   /** hidden */
-  isHidden?: boolean
+  hidden?: boolean
 
   /** locked */
-  isLocked?: boolean
+  locked?: boolean
 
   /** render condition */
   condition?: CompositeValue

@@ -1,4 +1,6 @@
-export const defaultRootSchema = {
+import type { RootSchema } from '@easy-editor/core'
+
+export const defaultRootSchema: RootSchema = {
   componentName: 'RootContainer',
   props: {
     backgroundColor: '#27272A',
@@ -24,6 +26,38 @@ export const defaultRootSchema = {
           y: 100,
           width: 50,
           height: 30,
+        },
+      },
+    },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: 'Button in Root with hidden',
+      },
+      hidden: true,
+      $dashboard: {
+        rect: {
+          x: 1000,
+          y: 100,
+          width: 80,
+          height: 150,
+        },
+      },
+    },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: 'Button in Root with locked',
+      },
+      locked: true,
+      $dashboard: {
+        rect: {
+          x: 1000,
+          y: 200,
+          width: 130,
+          height: 50,
         },
       },
     },

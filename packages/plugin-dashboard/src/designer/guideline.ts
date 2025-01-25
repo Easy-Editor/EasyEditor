@@ -152,7 +152,7 @@ export class GuideLine {
     }
 
     nodes
-      .filter(node => !node.isHidden)
+      .filter(node => !node.hidden)
       .forEach(node => {
         if (selected.includes(node.id) || node.isRoot || node.isGroup) return
 

@@ -187,8 +187,8 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   initBuiltinProps() {
-    this.props.has(getConvertedExtraKey('isHidden')) || this.props.add(getConvertedExtraKey('isHidden'), false)
-    this.props.has(getConvertedExtraKey('isLocked')) || this.props.add(getConvertedExtraKey('isLocked'), false)
+    this.props.has(getConvertedExtraKey('hidden')) || this.props.add(getConvertedExtraKey('hidden'), false)
+    this.props.has(getConvertedExtraKey('locked')) || this.props.add(getConvertedExtraKey('locked'), false)
     this.props.has(getConvertedExtraKey('title')) || this.props.add(getConvertedExtraKey('title'), '')
     this.props.has(getConvertedExtraKey('loop')) || this.props.add(getConvertedExtraKey('loop'), undefined)
     this.props.has(getConvertedExtraKey('condition')) || this.props.add(getConvertedExtraKey('condition'), true)
@@ -340,21 +340,29 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   hide(flag = true) {
-    this.setExtraProp('isHidden', flag)
+    this.setExtraProp('hidden', flag)
     this.emitter.emit(NODE_EVENT.VISIBLE_CHANGE, flag)
   }
 
+  get hidden() {
+    return this.getExtraPropValue('hidden') as boolean
+  }
+
   get isHidden() {
-    return this.getExtraPropValue('isHidden') as boolean
+    return this.hidden
   }
 
   lock(flag = true) {
-    this.setExtraProp('isLocked', flag)
+    this.setExtraProp('locked', flag)
     this.emitter.emit(NODE_EVENT.LOCK_CHANGE, flag)
   }
 
+  get locked() {
+    return this.getExtraPropValue('locked') as boolean
+  }
+
   get isLocked() {
-    return this.getExtraPropValue('isLocked') as boolean
+    return this.locked
   }
 
   hasCondition() {
@@ -855,7 +863,7 @@ export const getClosestClickableNode = (currentNode: Node | undefined | null, ev
     let canClick = node.canClick(event)
     const lockedNode = getClosestNode(node, n => {
       // if the current node is locked, start searching from the parent node
-      return !!(node?.isLocked ? n.parent?.isLocked : n.isLocked)
+      return !n.locked
     })
     if (lockedNode && lockedNode.getId() !== node.getId()) {
       canClick = false

@@ -628,7 +628,7 @@ export class Simulator {
     if (!dropContainer) {
       return null
     }
-    const lockedNode = dropContainer?.container ? getClosestNode(dropContainer.container, node => node.isLocked) : null
+    const lockedNode = dropContainer?.container ? getClosestNode(dropContainer.container, node => node.locked) : null
     if (lockedNode) {
       return null
     }

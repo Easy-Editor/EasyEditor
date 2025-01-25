@@ -612,6 +612,7 @@ export function baseRendererFactory(): BaseRenderComponent {
           {
             ...props,
             ...otherProps,
+            // TODO: 看看这里需要怎么处理简洁
             __inner__: {
               hidden: schema.hidden,
               condition,

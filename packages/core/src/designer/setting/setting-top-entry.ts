@@ -58,7 +58,7 @@ export class SettingTopEntry implements SettingEntry {
   }
 
   get isLocked(): boolean {
-    return this.first.isLocked
+    return this.first.locked
   }
 
   /**
