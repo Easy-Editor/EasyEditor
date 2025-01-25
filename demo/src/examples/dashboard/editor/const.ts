@@ -64,6 +64,7 @@ export const defaultRootSchema: RootSchema = {
     {
       componentName: 'Group',
       isGroup: true,
+      locked: true,
       children: [
         {
           componentName: 'Group',
