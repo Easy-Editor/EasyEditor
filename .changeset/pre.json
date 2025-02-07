@@ -1,8 +1,0 @@
-{
-  "mode": "pre",
-  "tag": "alpha",
-  "initialVersions": {
-    "@easy-editor/core": "0.0.0"
-  },
-  "changesets": []
-}
