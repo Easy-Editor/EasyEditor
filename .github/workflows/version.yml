@@ -6,6 +6,8 @@ on:
       - release/**
       - release
 
+permissions: write-all
+
 jobs:
   version:
     name: Version
