@@ -28,21 +28,17 @@ jobs:
           cache: 'pnpm'
 
       - name: Setup
-        run: pnpm run setup
-
-      - name: Setup git user
-        run: pnpm run setup-git
+        run: pnpm run pub:build
 
       - name: Publish to npm
         id: changesets
         uses: changesets/action@v1
         with:
-          version: pnpm run version
+          version: pnpm run pub:version
           commit: 'chore: update versions'
           title: 'chore: update versions'
-          publish: pnpm release
+          publish: pnpm run pub:release
           createGithubReleases: false
-          setupGitUser: false
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
