@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - release/**
+      - release
 
 jobs:
   version:
@@ -36,7 +37,7 @@ jobs:
       - name: Create Release Pull Request
         uses: changesets/action@v1
         with:
-          version: pnpm run version
+          version: pnpm run pub:version
           commit: 'chore: update versions'
           title: 'chore: update versions'
           setupGitUser: false
