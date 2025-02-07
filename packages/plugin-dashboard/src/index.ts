@@ -61,8 +61,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         const { dragObject } = e
 
         if (dragObject && dragObject.type === DragObjectType.NodeData) {
-          startOffsetNodeData.x = e.globalX! - e.target!.offsetLeft
-          startOffsetNodeData.y = e.globalY! - e.target!.offsetTop
+          startOffsetNodeData.x = e.globalX! - (e.target as HTMLElement).offsetLeft
+          startOffsetNodeData.y = e.globalY! - (e.target as HTMLElement).offsetTop
         }
       })
 

@@ -56,7 +56,6 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
-    "types:clean": "rimraf types/",
     "types:src": "tsc --project tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },

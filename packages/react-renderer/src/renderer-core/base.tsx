@@ -7,7 +7,6 @@ import {
   isJSExpression,
   isJSFunction,
 } from '@easy-editor/core'
-import classnames from 'classnames'
 import { forEach, isEmpty } from 'lodash-es'
 import { Component } from 'react'
 import { adapter } from './adapter'
@@ -16,6 +15,7 @@ import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrappe
 import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, NodeInfo } from './types'
 import {
   checkPropTypes,
+  classnames,
   getFileCssName,
   getValue,
   isSchema,

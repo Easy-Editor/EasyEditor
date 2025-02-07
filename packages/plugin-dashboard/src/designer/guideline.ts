@@ -197,7 +197,7 @@ export class GuideLine {
    *  - 2: 右 | 下
    */
   @action
-  getAdsorptionPosition(rect: DOMRect, adsorption?: 0 | 1 | 2 | Array<0 | 1 | 2>) {
+  getAdsorptionPosition(rect: DOMRect, adsorption?: number | Array<number>) {
     if (typeof adsorption === 'number') {
       adsorption = [adsorption]
     }

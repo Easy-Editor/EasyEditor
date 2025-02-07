@@ -1,15 +1,53 @@
 {
   "name": "@easy-editor/plugin-dashboard",
-  "private": true,
+  "version": "0.0.0",
   "description": "Dashboard plugin for EasyEditor.",
   "type": "module",
-  "main": "./src/index.ts",
+  "source": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "typings": "dist/index.d.ts",
+  "module": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/Easy-Editor/EasyEditor",
+  "license": "MIT",
+  "author": "JinSo <kimjinso@qq.com>",
+  "contributors": [
+    {
+      "name": "NoahCodeGG",
+      "email": "noahcodegg@gmail.com",
+      "url": "https://github.com/NoahCodeGG"
+    }
+  ],
   "keywords": [
     "@easy-editor",
-    "dashboard",
-    "plugin"
+    "easyeditor",
+    "low-code",
+    "editor",
+    "engine"
   ],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Easy-Editor/EasyEditor"
+  },
+  "bugs": {
+    "url": "https://github.com/Easy-Editor/EasyEditor/issues"
+  },
   "scripts": {
     "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
@@ -18,19 +56,12 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
-    "types:clean": "rimraf types/",
     "types:src": "tsc --project tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },
-  "files": [
-    "dist",
-    "types"
-  ],
-  "dependencies": {
-    "mobx": "^6.13.5"
-  },
   "peerDependencies": {
     "@easy-editor/core": "workspace:*",
+    "mobx": "^6.13.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

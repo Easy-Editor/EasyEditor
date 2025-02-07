@@ -18,17 +18,17 @@ export class OffsetObserver {
 
   private lastOffsetWidth?: number
 
-  @observable private accessor _height = 0
+  @observable accessor _height = 0
 
-  @observable private accessor _width = 0
+  @observable accessor _width = 0
 
-  @observable private accessor _left = 0
+  @observable accessor _left = 0
 
-  @observable private accessor _top = 0
+  @observable accessor _top = 0
 
-  @observable private accessor _right = 0
+  @observable accessor _right = 0
 
-  @observable private accessor _bottom = 0
+  @observable accessor _bottom = 0
 
   @computed
   get height() {
@@ -110,7 +110,7 @@ export class OffsetObserver {
 
   readonly viewport: Viewport
 
-  private isRoot: boolean
+  isRoot: boolean
 
   readonly node: Node
 

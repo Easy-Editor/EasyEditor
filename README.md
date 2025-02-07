@@ -7,7 +7,8 @@
 
 <b>A cross-framework low-code engine with scale-out design</b>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fcore?label=%40easy-editor%2Fcore&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/core)
+[![GitHub License](https://img.shields.io/github/license/Easy-Editor/EasyEditor)](./LICENSE)
 
 English | [简体中文](./README-zh_CN.md)
 
@@ -135,10 +136,10 @@ pnpm install
 pnpm example:dashboard
 ```
 
-## Thanks
-
-Thanks [lowcode-engine](https://github.com/alibaba/lowcode-engine) for inspiration and reference.
-
 ## License
 
 [MIT](./LICENSE) License &copy; 2024-PRESENT [JinSo](https://github.com/JinSooo)
+
+## Acknowledgments
+
+Thanks [lowcode-engine](https://github.com/alibaba/lowcode-engine) for inspiration and reference.
