@@ -29,22 +29,21 @@
   "scripts": {
     "prepare": "husky",
     "preinstall": "npx only-allow pnpm",
-    "build": "turbo build",
+    "build": "turbo build --filter ./packages/core",
     "dev": "turbo dev",
     "format": "turbo format",
     "lint": "turbo lint",
-    "types": "turbo types",
+    "types": "turbo types --filter ./packages/core",
     "test-types": "turbo test-types",
     "test": "turbo test",
-    "publish": "pnpm run build && pnpm run types && pnpm run release:only",
-    "bump": "changeset add",
-    "release:only": "changeset publish",
     "example:dashboard": "turbo dev --filter ./examples/dashboard",
     "pub:changeset": "pnpm changeset",
-    "pub:build": "pnpm build && pnpm types",
+    "pub:build": "pnpm i && pnpm build && pnpm types",
     "pub:alpha": "pnpm changeset pre enter alpha",
     "pub:beta": "pnpm changeset pre enter beta",
-    "pub:rc": "pnpm changeset pre enter rc"
+    "pub:rc": "pnpm changeset pre enter rc",
+    "pub:version": "pnpm changeset version",
+    "pub:release": "pnpm changeset publish"
   },
   "devDependencies": {
     "@babel/cli": "^7.26.4",
