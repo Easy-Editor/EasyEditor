@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/react-renderer-dashboard",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "React Renderer for Dashboard package for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
@@ -44,7 +44,6 @@
   "bugs": {
     "url": "https://github.com/Easy-Editor/EasyEditor/issues"
   },
-
   "scripts": {
     "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
