@@ -1,4 +1,2 @@
-import { simulatorRenderer } from './simulator-renderer'
-import { SimulatorRenderer } from './SimulatorRenderer'
-
-export { SimulatorRenderer, simulatorRenderer }
+export * from './simulator-renderer'
+export * from './SimulatorRenderer'

@@ -1,15 +1,56 @@
 {
   "name": "@easy-editor/react-renderer",
-  "private": true,
-  "description": "React Render package for EasyEditor.",
+  "version": "0.0.0",
+  "description": "React Renderer package for EasyEditor.",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "src/index.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "typings": "dist/index.d.ts",
+    "module": "dist/index.js",
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "require": "./dist/cjs/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "homepage": "https://github.com/Easy-Editor/EasyEditor",
+  "license": "MIT",
+  "author": "JinSo <kimjinso@qq.com>",
+  "contributors": [
+    {
+      "name": "NoahCodeGG",
+      "email": "noahcodegg@gmail.com",
+      "url": "https://github.com/NoahCodeGG"
+    }
+  ],
   "keywords": [
     "@easy-editor",
-    "react-render",
-    "dashboard"
+    "easyeditor",
+    "low-code",
+    "editor",
+    "engine",
+    "dashboard",
+    "react",
+    "renderer"
   ],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Easy-Editor/EasyEditor"
+  },
+  "bugs": {
+    "url": "https://github.com/Easy-Editor/EasyEditor/issues"
+  },
   "scripts": {
     "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
@@ -18,26 +59,25 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
-    "types:clean": "rimraf types/",
     "types:src": "tsc --project tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },
-  "files": [
-    "dist",
-    "types"
-  ],
   "peerDependencies": {
     "@easy-editor/core": "workspace:*",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1"
+    "@types/react-dom": "^18.3.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "dependencies": {
     "lodash-es": "^4.17.21",
-    "mobx-react": "^9.2.0"
+    "mobx-react": "^9.2.0",
+    "prop-types": "^15.8.1",
+    "react-is": "^18.3.1"
   },
   "devDependencies": {
-    "@types/lodash-es": "^4.17.12"
+    "@types/lodash-es": "^4.17.12",
+    "@types/prop-types": "^15.7.14",
+    "@types/react-is": "^18.3.0"
   }
 }

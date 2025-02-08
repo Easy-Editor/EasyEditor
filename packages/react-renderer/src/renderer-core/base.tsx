@@ -591,9 +591,9 @@ export function baseRendererFactory(): BaseRenderComponent {
         }
 
         // scope需要传入到组件上
-        if (scopeKey && this.__compScopes[scopeKey]) {
-          props.__scope = this.__compScopes[scopeKey]
-        }
+        // if (scopeKey && this.__compScopes[scopeKey]) {
+        //   props.__scope = this.__compScopes[scopeKey]
+        // }
         if (schema?.__ctx?.lceKey) {
           if (!isSchema(schema)) {
             engine.props?.onCompGetCtx(schema, scope)

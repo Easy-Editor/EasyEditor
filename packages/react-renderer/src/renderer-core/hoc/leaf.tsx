@@ -18,6 +18,8 @@ export interface ComponentHocProps {
   componentId: any
   _leaf: any
   forwardedRef?: any
+
+  children?: any | undefined
 }
 
 export interface ComponentHocState {
@@ -172,7 +174,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
     return cache.component.get(componentCacheId).LeafWrapper
   }
 
-  class LeafHoc extends Component {
+  class LeafHoc extends Component<LeftWrapperProps, ComponentHocState> {
     recordInfo: {
       startTime?: number | null
       type?: string
@@ -219,7 +221,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
       super(props)
       // 监听以下事件，当变化时更新自己
       logger.log(`${schema.componentName}[${this.leaf?.id}] leaf render in SimulatorRendererView`)
-      clearRerenderEvent(componentCacheId)
+      componentCacheId && clearRerenderEvent(componentCacheId)
       this.curEventLeaf = this.leaf
 
       cache.ref.set(componentCacheId, {
@@ -333,7 +335,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         return
       }
 
-      if (leaf.isRootNode) {
+      if (leaf.isRoot) {
         this.renderUnitInfo = {
           singleRender: true,
           ...(this.renderUnitInfo || {}),
@@ -521,10 +523,10 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
     }
 
     get leaf(): Node | undefined {
-      if (this.props._leaf?.isMock) {
-        // 低代码组件作为一个整体更新，其内部的组件不需要监听相关事件
-        return undefined
-      }
+      // if (this.props._leaf?.isMock) {
+      //   // 低代码组件作为一个整体更新，其内部的组件不需要监听相关事件
+      //   return undefined
+      // }
 
       return getNode?.(componentCacheId)
     }

@@ -29,11 +29,11 @@
   "scripts": {
     "prepare": "husky",
     "preinstall": "npx only-allow pnpm",
-    "build": "turbo build --filter ./packages/core",
+    "build": "turbo build --filter ./packages/*",
     "dev": "turbo dev",
     "format": "turbo format",
     "lint": "turbo lint",
-    "types": "turbo types --filter ./packages/core",
+    "types": "turbo types --filter ./packages/*",
     "test-types": "turbo test-types",
     "test": "turbo test",
     "example:dashboard": "turbo dev --filter ./examples/dashboard",

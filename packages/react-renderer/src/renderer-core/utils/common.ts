@@ -1,6 +1,11 @@
 import { type NodeSchema, isJSExpression } from '@easy-editor/core'
+// import { default as factoryWithTypeCheckers } from 'prop-types/factoryWithTypeCheckers'
+// import { default as ReactPropTypesSecret } from 'prop-types/lib/ReactPropTypesSecret'
 import { Component, type ComponentClass, type ComponentType } from 'react'
 import { logger } from './logger'
+
+// const PropTypes2 = factoryWithTypeCheckers(ReactIs.isElement, true)
+const PropTypes2 = true
 
 export function inSameDomain() {
   try {
@@ -150,7 +155,7 @@ export function checkPropTypes(value: any, name: string, rule: any, componentNam
     componentName,
     'prop',
     null,
-    ReactPropTypesSecret,
+    // ReactPropTypesSecret,
   )
   if (err) {
     logger.warn(err)

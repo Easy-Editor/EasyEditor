@@ -1,15 +1,50 @@
 {
   "name": "@easy-editor/react-renderer-dashboard",
-  "private": true,
-  "description": "React Render for Dashboard package for EasyEditor.",
+  "version": "0.0.0",
+  "description": "React Renderer for Dashboard package for EasyEditor.",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "src/index.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "typings": "dist/index.d.ts",
+    "module": "dist/index.js",
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "require": "./dist/cjs/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "homepage": "https://github.com/Easy-Editor/EasyEditor",
+  "license": "MIT",
+  "author": "JinSo <kimjinso@qq.com>",
   "keywords": [
     "@easy-editor",
-    "react-render",
-    "dashboard"
+    "easyeditor",
+    "low-code",
+    "editor",
+    "engine",
+    "dashboard",
+    "react",
+    "renderer"
   ],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Easy-Editor/EasyEditor"
+  },
+  "bugs": {
+    "url": "https://github.com/Easy-Editor/EasyEditor/issues"
+  },
+
   "scripts": {
     "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
@@ -22,22 +57,19 @@
     "types:src": "tsc --project tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },
-  "files": [
-    "dist",
-    "types"
-  ],
   "peerDependencies": {
     "@easy-editor/core": "workspace:*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@easy-editor/plugin-dashboard": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1"
   },
   "dependencies": {
     "@easy-editor/react-renderer": "workspace:*",
     "lodash-es": "^4.17.21",
     "mobx": "^6.13.5",
-    "mobx-react": "^9.2.0",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1"
+    "mobx-react": "^9.2.0"
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12"

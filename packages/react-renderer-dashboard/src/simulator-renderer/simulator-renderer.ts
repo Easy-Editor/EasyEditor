@@ -8,12 +8,12 @@ import type { RendererProps } from '@easy-editor/react-renderer'
 import { isPlainObject } from 'lodash-es'
 import { action, computed, observable, runInAction, untracked } from 'mobx'
 import { type ReactInstance, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import * as ReactDOM from 'react-dom/client'
 import { RendererView } from './RendereView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
 import { buildComponents, getClientRects } from './utils'
 
-export class SimulatorRenderer implements ISimulatorRenderer {
+export class SimulatorRendererContainer implements ISimulatorRenderer {
   readonly isSimulatorRenderer = true
 
   private _requestHandlersMap: any
@@ -250,7 +250,7 @@ export class SimulatorRenderer implements ISimulatorRenderer {
       }
     }
 
-    createRoot(container).render(
+    ReactDOM.createRoot(container).render(
       createElement(RendererView, {
         simulatorRenderer: this,
         documentInstance: this.documentInstances[0],
@@ -355,4 +355,4 @@ const getLowCodeComponentProps = (props: any) => {
   return newProps
 }
 
-export const simulatorRenderer = new SimulatorRenderer()
+export const simulatorRenderer = new SimulatorRendererContainer()

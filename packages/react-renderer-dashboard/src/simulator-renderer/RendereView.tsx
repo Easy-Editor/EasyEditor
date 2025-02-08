@@ -3,7 +3,7 @@ import { observer } from 'mobx-react'
 import { Component, type ReactInstance } from 'react'
 import { LowCodeRenderer } from '../renderer'
 import type { DocumentInstance } from './document-instance'
-import type { SimulatorRenderer } from './simulator-renderer'
+import type { SimulatorRendererContainer } from './simulator-renderer'
 
 /**
  * judges if current simulator renderer detached or not
@@ -16,7 +16,7 @@ export function isRendererDetached() {
 
 interface RendererViewProps {
   documentInstance: DocumentInstance
-  simulatorRenderer: SimulatorRenderer
+  simulatorRenderer: SimulatorRendererContainer
   host: Simulator
 }
 

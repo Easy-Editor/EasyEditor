@@ -48,15 +48,16 @@ export const compWrapper: ComponentConstruct = (Comp, info) => {
     return Comp
   }
 
-  if (cache.has(info.schema.id) && cache.get(info.schema.id)?.Comp === Comp) {
+  if (info.schema.id && cache.has(info.schema.id) && cache.get(info.schema.id)?.Comp === Comp) {
     return cache.get(info.schema.id)?.WrapperComponent
   }
 
-  class Wrapper extends Component {
+  class Wrapper extends Component<any> {
     static displayName = Comp.displayName
 
     render() {
       const { forwardRef, ...rest } = this.props
+      // @ts-ignore
       return createElement(Comp, { ...rest, ref: forwardRef })
     }
   }
@@ -65,7 +66,7 @@ export const compWrapper: ComponentConstruct = (Comp, info) => {
 
   const WrapperComponent = createForwardRefHocElement(Wrapper, Comp)
 
-  cache.set(info.schema.id, { WrapperComponent, Comp })
+  info.schema.id && cache.set(info.schema.id, { WrapperComponent, Comp })
 
   return WrapperComponent
 }

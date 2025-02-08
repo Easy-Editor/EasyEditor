@@ -23,7 +23,7 @@ export interface RendererProps {
   schema: RootSchema | NodeSchema
 
   /** 组件依赖的实例 */
-  components: Record<string, React.ComponentType>
+  components: Record<string, React.ComponentType<any>>
 
   /** CSS 类名 */
   className?: string
@@ -228,7 +228,9 @@ export type BaseRendererInstance = Component<BaseRendererProps, Record<string, a
   __checkSchema(schema: NodeSchema | undefined, extraComponents?: string | string[]): any
   __renderComp(Comp: any, ctxProps: object): any
   $(id: string, instance?: any): any
+
   context: BaseRendererContext
+  __designModeIsDesign?: boolean
 }
 
 export interface BaseRenderComponent {

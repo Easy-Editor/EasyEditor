@@ -18,6 +18,10 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
 
       const rect = computeRect(schema)
 
+      if (!rect) {
+        return null
+      }
+
       // TODO: TEMP
       if (schema.componentName === 'RootContainer') {
         return (
@@ -95,7 +99,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
  */
 const computeRect = (node: NodeSchema) => {
   if (!node.isGroup || !node.children || node.children.length === 0) {
-    return node.$dashboard.rect
+    return node.$dashboard?.rect
   }
 
   let [minX, minY, maxX, maxY] = [
@@ -110,12 +114,12 @@ const computeRect = (node: NodeSchema) => {
     if (child.isGroup) {
       childRect = computeRect(child)
     } else {
-      childRect = child.$dashboard.rect
+      childRect = child.$dashboard?.rect
     }
-    const x = childRect.x
-    const y = childRect.y
-    const width = childRect.width || 0
-    const height = childRect.height || 0
+    const x = childRect?.x
+    const y = childRect?.y
+    const width = childRect?.width || 0
+    const height = childRect?.height || 0
 
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)

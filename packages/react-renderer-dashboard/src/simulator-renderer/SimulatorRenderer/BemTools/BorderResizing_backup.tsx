@@ -275,7 +275,7 @@ const BorderResizingForNode: React.FC<BorderResizingForNodeProps> = observer(({ 
 
   return (
     <>
-      {instances.map(instance => {
+      {instances.map((instance: any) => {
         const observed = designer.createOffsetObserver({
           node,
           instance,

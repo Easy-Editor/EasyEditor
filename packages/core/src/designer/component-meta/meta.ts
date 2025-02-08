@@ -165,14 +165,26 @@ export interface FieldExtraProps {
 }
 
 export interface ComponentConfigure {
+  /**
+   * 是否容器组件
+   */
   isContainer?: boolean
 
+  /**
+   * 组件树描述信息
+   */
   descriptor?: string
 
   /**
-   * disable some behaviors, such as `'copy'`, `'move'`, `'remove'` or array of them
+   * 禁用的行为，可以为 `'copy'`, `'move'`, `'remove'` 或它们组成的数组
    */
   disableBehaviors?: string[] | string
+
+  /**
+   * 是否是最小渲染单元
+   * 最小渲染单元下的组件渲染和更新都从单元的根节点开始渲染和更新。如果嵌套了多层最小渲染单元，渲染会从最外层的最小渲染单元开始渲染。
+   */
+  isMinimalRenderUnit?: boolean
 }
 
 export interface ConfigureSupport {

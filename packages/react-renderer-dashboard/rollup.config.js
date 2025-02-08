@@ -1,21 +1,15 @@
 import babel from '@rollup/plugin-babel'
 import nodeResolve from '@rollup/plugin-node-resolve'
 import replace from '@rollup/plugin-replace'
-import typescript from '@rollup/plugin-typescript'
 import cleanup from 'rollup-plugin-cleanup'
 import postcss from 'rollup-plugin-postcss'
+import pkg from './package.json' assert { type: 'json' }
 
-const external = ['react', 'react-dom', 'mobx-react']
+const external = [...Object.keys(pkg.peerDependencies), 'mobx-react-lite', 'mobx-react', 'mobx', 'lodash-es']
 
 const plugins = [
   nodeResolve({
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
-  }),
-  typescript({
-    tsconfig: './tsconfig.json',
-    declaration: true,
-    declarationDir: './dist/types',
-    outDir: './dist',
   }),
   postcss({
     modules: true,
@@ -63,11 +57,27 @@ export default [
     input: 'src/index.ts',
     output: [
       {
-        file: 'dist/easy-editor.production.cjs',
+        file: 'dist/cjs/index.js',
         format: 'cjs',
+        sourcemap: true,
       },
       {
-        file: 'dist/easy-editor.production.js',
+        file: 'dist/cjs/index.production.js',
+        format: 'cjs',
+        sourcemap: true,
+      },
+      {
+        file: 'dist/esm/index.js',
+        format: 'es',
+        sourcemap: true,
+      },
+      {
+        file: 'dist/esm/index.production.js',
+        format: 'es',
+        sourcemap: true,
+      },
+      {
+        file: 'dist/index.js',
         format: 'es',
       },
     ],
@@ -78,12 +88,14 @@ export default [
     input: 'src/index.ts',
     output: [
       {
-        file: 'dist/easy-editor.development.cjs',
+        file: 'dist/cjs/index.development.js',
         format: 'cjs',
+        sourcemap: true,
       },
       {
-        file: 'dist/easy-editor.development.js',
+        file: 'dist/esm/index.development.js',
         format: 'es',
+        sourcemap: true,
       },
     ],
     plugins: [replaceDev(true)].concat(plugins),

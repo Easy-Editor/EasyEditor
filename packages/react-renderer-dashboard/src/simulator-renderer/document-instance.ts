@@ -2,7 +2,7 @@ import { type Document, type Node, TRANSFORM_STAGE, isElement } from '@easy-edit
 import type { RendererProps } from '@easy-editor/react-renderer'
 import { computed, observable } from 'mobx'
 import type { ReactInstance } from 'react'
-import type { SimulatorRenderer } from './simulator-renderer'
+import type { SimulatorRendererContainer } from './simulator-renderer'
 
 export class DocumentInstance {
   instancesMap = new Map<string, ReactInstance[]>()
@@ -78,7 +78,7 @@ export class DocumentInstance {
   }
 
   constructor(
-    readonly container: SimulatorRenderer,
+    readonly container: SimulatorRendererContainer,
     readonly document: Document,
   ) {}
 
