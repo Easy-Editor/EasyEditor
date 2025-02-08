@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@easy-editor/example-dashboard"]
+  "ignore": ["example-dashboard"]
 }
