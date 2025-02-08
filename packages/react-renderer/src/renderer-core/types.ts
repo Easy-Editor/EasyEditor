@@ -228,6 +228,7 @@ export type BaseRendererInstance = Component<BaseRendererProps, Record<string, a
   __checkSchema(schema: NodeSchema | undefined, extraComponents?: string | string[]): any
   __renderComp(Comp: any, ctxProps: object): any
   $(id: string, instance?: any): any
+  context: BaseRendererContext
 }
 
 export interface BaseRenderComponent {

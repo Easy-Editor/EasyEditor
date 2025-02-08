@@ -27,7 +27,8 @@ const NotFoundComponent: FC<NotFoundComponentProps> = ({ componentName = '', ena
         border: '2px solid #eab308',
       }}
     >
-      {children || `${componentName} Component Not Found`}
+      {/* {children || `${componentName} Component Not Found`} */}
+      {`${componentName} Component Not Found`}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { createContext, use } from 'react'
+import { createContext, useContext } from 'react'
 
 export interface RendererContext {
   [extra: string]: any
@@ -8,7 +8,7 @@ export const RendererContext = createContext<RendererContext>({} as RendererCont
 
 export const useRendererContext = () => {
   try {
-    return use(RendererContext)
+    return useContext(RendererContext)
   } catch (error) {
     console.warn('useRendererContext must be used within a RendererContextProvider')
   }
