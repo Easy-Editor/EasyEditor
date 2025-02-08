@@ -7,8 +7,12 @@
 
 <b>A cross-framework low-code engine with scale-out design</b>
 
-[![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fcore?label=%40easy-editor%2Fcore&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/core)
 [![GitHub License](https://img.shields.io/github/license/Easy-Editor/EasyEditor)](./LICENSE)
+[![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fcore?label=%40easy-editor%2Fcore&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/core)
+[![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Freact-renderer?label=%40easy-editor%2Freact-renderer&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/react-renderer)
+<br/>
+[![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fplugin-dashboard?label=%40easy-editor%2Fplugin-dashboard&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/plugin-dashboard)
+[![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Freact-renderer-dashboard?label=%40easy-editor%2Freact-renderer-dashboard&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/react-renderer-dashboard)
 
 English | [简体中文](./README-zh_CN.md)
 

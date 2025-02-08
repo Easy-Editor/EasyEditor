@@ -1,8 +1,6 @@
 import type { ComponentType } from 'react'
 import type { BaseRenderComponent } from '../types'
 
-import { componentRendererFactory, pageRendererFactory } from '..'
-
 export interface RendererModules {
   BaseRenderer?: BaseRenderComponent
   PageRenderer: BaseRenderComponent
@@ -10,10 +8,8 @@ export interface RendererModules {
 }
 
 class Adapter {
-  renderers: RendererModules = {
-    PageRenderer: pageRendererFactory(),
-    ComponentRenderer: componentRendererFactory(),
-  }
+  // @ts-ignore
+  renderers: RendererModules = {}
 
   setRenderers(renderers: RendererModules) {
     this.renderers = renderers
