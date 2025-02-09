@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/core",
-  "version": "0.0.3-alpha.0",
+  "version": "0.0.3-alpha.1",
   "description": "A cross-framework low-code engine with scale-out design.",
   "type": "module",
   "main": "src/index.ts",
