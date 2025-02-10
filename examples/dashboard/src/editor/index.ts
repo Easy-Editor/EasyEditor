@@ -10,6 +10,7 @@ import {
   createEasyEditor,
 } from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { defaultRootSchema } from './const'
 import { formatMapFromESModule } from './utils'
 
@@ -29,7 +30,7 @@ export const editor = createEasyEditor({
       console.log('destroy')
     },
   },
-  plugins: [DashboardPlugin(), ...plugins],
+  plugins: [DashboardPlugin(), HotkeyPlugin(), ...plugins],
   setters: formatMapFromESModule<Setter>(setterMap),
   components: formatMapFromESModule<Component>(componentMap),
   componentMetas: formatMapFromESModule<ComponentMetadata>(componentMetaMap),
