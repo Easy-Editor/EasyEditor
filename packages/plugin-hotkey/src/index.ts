@@ -1,4 +1,4 @@
-import type { PluginCreator } from '@easy-editor/core'
+import { type PluginCreator, TRANSFORM_STAGE, clipboard, insertChildren } from '@easy-editor/core'
 import { HOTKEY_MAP } from './const'
 
 interface HotkeyPluginOptions {
@@ -49,8 +49,6 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = options => {
         }
 
         selection.clear()
-
-        return false
       })
 
       hotkey.bind(HOTKEY_MAP.SHOW_HIDE, () => {
@@ -69,37 +67,39 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = options => {
         }
 
         selection.clear()
-
-        return false
       })
 
       hotkey.bind(HOTKEY_MAP.COPY, async () => {
-        // const data = await project.currentDocument?.copyToSchema()
-        // if (data) {
-        //   navigator.clipboard
-        //     .writeText(data)
-        //     .then(() => {
-        //       logger.log('复制成功')
-        //     })
-        //     .catch(() => {
-        //       logger.error('复制失败')
-        //     })
-        // }
+        const selected = designer.selection.getTopNodes(false)
 
-        return false
+        if (!selected || selected.length < 1) {
+          return
+        }
+
+        const componentsTree = selected.map(item => item?.export(TRANSFORM_STAGE.CLONE))
+        const data = { type: 'NodeSchema', componentsMap: {}, componentsTree }
+
+        clipboard.setData(data)
       })
 
-      hotkey.bind(HOTKEY_MAP.PASTE, async () => {
-        // const data = await navigator.clipboard.readText().catch(() => logger.error('粘贴失败'))
-        // const pasteNodeIds = project.currentDocument?.pasteFromSchema(data)
-        // if (pasteNodeIds) {
-        //   logger.log('粘贴成功')
-        //   designer.selection.batchSelect(pasteNodeIds)
-        // } else {
-        //   logger.error('粘贴失败')
-        // }
+      hotkey.bind(HOTKEY_MAP.PASTE, e => {
+        const doc = project.currentDocument
+        const selection = designer.selection
 
-        return false
+        clipboard.waitPasteData(e, ({ componentsTree }) => {
+          if (componentsTree) {
+            const target = doc?.rootNode
+
+            if (!target) {
+              return
+            }
+
+            const nodes = insertChildren(target, componentsTree)
+            if (nodes) {
+              selection.selectAll(nodes.map(o => o.id))
+            }
+          }
+        })
       })
     },
   }

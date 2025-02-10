@@ -242,6 +242,8 @@ export class Simulator {
 
     this._renderer?.run()
     this.setupEvents()
+
+    clipboard.injectCopyPaster(this._contentDocument!)
   }
 
   getComponent(componentName: string) {
@@ -262,7 +264,6 @@ export class Simulator {
   setupEvents() {
     this.setupDragAndClick()
     this.setupDetecting()
-    clipboard.injectCopyPaster(this._contentDocument!)
   }
 
   setupDragAndClick() {
