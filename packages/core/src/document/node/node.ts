@@ -131,9 +131,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     const { componentName, id, children, props, ...extras } = data
 
     this.props.import(props, extras)
-    if (this.isParental) {
-      this._children?.import(children, checkId)
-    }
+    this._children?.import(children, checkId)
   }
 
   export<T = NodeSchema>(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): T {

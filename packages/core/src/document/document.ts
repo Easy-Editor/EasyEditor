@@ -129,9 +129,7 @@ export class Document {
       if (node.isRoot) return
       this.internalRemoveNode(node, true)
     })
-    this.remove()
 
-    this.id = schema?.docId ?? uniqueId('doc')
     if (schema) {
       this.rootNode?.import(schema, checkId)
       this._blank = false
