@@ -59,15 +59,11 @@ export interface JSExpression {
 
   /**
    * 模拟值
-   *
-   * @todo 待标准描述
    */
   mock?: any
 
   /**
    * 源码
-   *
-   * @todo 待标准描述
    */
   compiled?: string
 }
@@ -82,22 +78,16 @@ export interface JSFunction {
 
   /**
    * 源码
-   *
-   * @todo 待标准描述
    */
   compiled?: string
 
   /**
    * 模拟值
-   *
-   * @todo 待标准描述
    */
   mock?: any
 
   /**
    * 额外扩展属性，如 extType、events
-   *
-   * @todo 待标准描述
    */
   [key: string]: any
 }

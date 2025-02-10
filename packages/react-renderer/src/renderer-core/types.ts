@@ -23,7 +23,7 @@ export interface RendererProps {
   schema: RootSchema | NodeSchema
 
   /** 组件依赖的实例 */
-  components: Record<string, React.ComponentType>
+  components: Record<string, React.ComponentType<any>>
 
   /** CSS 类名 */
   className?: string
@@ -80,12 +80,6 @@ export interface RendererProps {
 
   /** 设备信息 */
   device?: 'default' | 'pc' | 'mobile' | string
-
-  /**
-   * @default true
-   * JSExpression 是否只支持使用 this 来访问上下文变量
-   */
-  thisRequiredInJSE?: boolean
 
   /**
    * @default false
@@ -183,7 +177,6 @@ export interface BaseRendererProps {
   id?: string | number
   getSchemaChangedSymbol?: () => boolean
   setSchemaChangedSymbol?: (symbol: boolean) => void
-  thisRequiredInJSE?: boolean
   documentId?: string
   getNode?: any
 
@@ -228,6 +221,9 @@ export type BaseRendererInstance = Component<BaseRendererProps, Record<string, a
   __checkSchema(schema: NodeSchema | undefined, extraComponents?: string | string[]): any
   __renderComp(Comp: any, ctxProps: object): any
   $(id: string, instance?: any): any
+
+  context: BaseRendererContext
+  __designModeIsDesign?: boolean
 }
 
 export interface BaseRenderComponent {

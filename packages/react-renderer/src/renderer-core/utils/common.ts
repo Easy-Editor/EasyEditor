@@ -1,5 +1,11 @@
-import type { NodeSchema } from '@easy-editor/core'
+import { type NodeSchema, isJSExpression } from '@easy-editor/core'
+// import { default as factoryWithTypeCheckers } from 'prop-types/factoryWithTypeCheckers'
+// import { default as ReactPropTypesSecret } from 'prop-types/lib/ReactPropTypesSecret'
+import { Component, type ComponentClass, type ComponentType } from 'react'
 import { logger } from './logger'
+
+// const PropTypes2 = factoryWithTypeCheckers(ReactIs.isElement, true)
+const PropTypes2 = true
 
 export function inSameDomain() {
   try {
@@ -7,6 +13,22 @@ export function inSameDomain() {
   } catch (e) {
     return false
   }
+}
+
+/**
+ * get css styled name from schema`s fileName
+ * FileName -> lce-file-name
+ * @returns string
+ */
+export function getFileCssName(fileName: string) {
+  if (!fileName) {
+    return
+  }
+  const name = fileName.replace(/([A-Z])/g, '-$1').toLowerCase()
+  return `lce-${name}`
+    .split('-')
+    .filter(p => !!p)
+    .join('-')
 }
 
 export const isSchema = (schema: any): schema is NodeSchema => {
@@ -68,11 +90,18 @@ export function transformArrayToMap(arr: any[], key: string, overwrite = true) {
 }
 
 interface IParseOptions {
-  thisRequiredInJSE?: boolean
   logScope?: string
 }
 
 export const parseData = (schema: unknown, self: any, options: IParseOptions = {}): any => {
+  if (isJSExpression(schema)) {
+    return parseExpression({
+      str: schema,
+      self,
+      thisRequired: true,
+      logScope: options.logScope,
+    })
+  }
   if (typeof schema === 'string') {
     return schema.trim()
   } else if (Array.isArray(schema)) {
@@ -125,7 +154,7 @@ export function checkPropTypes(value: any, name: string, rule: any, componentNam
     componentName,
     'prop',
     null,
-    ReactPropTypesSecret,
+    // ReactPropTypesSecret,
   )
   if (err) {
     logger.warn(err)
@@ -226,4 +255,12 @@ export function capitalizeFirstLetter(word: string) {
     return word
   }
   return word[0].toUpperCase() + word.slice(1)
+}
+
+export const isReactClass = (obj: any): obj is ComponentClass<any> => {
+  return obj && obj.prototype && (obj.prototype.isReactComponent || obj.prototype instanceof Component)
+}
+
+export function isReactComponent(obj: any): obj is ComponentType<any> {
+  return obj && (isReactClass(obj) || typeof obj === 'function')
 }

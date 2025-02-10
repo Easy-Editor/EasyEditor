@@ -7,10 +7,7 @@ export interface FaultComponentProps extends NodeSchema {
 }
 
 const FaultComponent: FC<FaultComponentProps> = ({ componentName = '', error }) => {
-  logger.error(
-    `%c${componentName} 组件渲染异常, 异常原因: ${(error as Error)?.message || error || '未知'}`,
-    'color: #ff0000;',
-  )
+  logger.error(`${componentName} 组件渲染异常, 异常原因: ${(error as Error)?.message || error || '未知'}`)
 
   return (
     <div

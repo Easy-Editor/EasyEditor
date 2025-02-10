@@ -21,6 +21,7 @@ export class Detecting {
     return this._enable
   }
 
+  @action
   set enable(flag: boolean) {
     this._enable = flag
     if (!flag) {

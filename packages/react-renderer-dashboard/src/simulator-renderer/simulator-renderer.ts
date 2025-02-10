@@ -6,14 +6,14 @@ import {
 } from '@easy-editor/core'
 import type { RendererProps } from '@easy-editor/react-renderer'
 import { isPlainObject } from 'lodash-es'
-import { computed, observable, untracked } from 'mobx'
+import { action, computed, observable, runInAction, untracked } from 'mobx'
 import { type ReactInstance, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import * as ReactDOM from 'react-dom/client'
 import { RendererView } from './RendereView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
 import { buildComponents, getClientRects } from './utils'
 
-export class SimulatorRenderer implements ISimulatorRenderer {
+export class SimulatorRendererContainer implements ISimulatorRenderer {
   readonly isSimulatorRenderer = true
 
   private _requestHandlersMap: any
@@ -71,28 +71,31 @@ export class SimulatorRenderer implements ISimulatorRenderer {
     this.init()
   }
 
+  @action
   init() {
     this.autoRender = this.host.autoRender
 
     this.disposeFunctions.push(
       this.host.connect(this, () => {
-        // todo: split with others, not all should recompute
-        // if (this._libraryMap !== host.libraryMap) {
-        //   this._libraryMap = host.libraryMap || {}
-        // }
-        if (this._componentsMap !== this.host.designer.componentMetaManager.componentsMap) {
-          this._componentsMap = this.host.designer.componentMetaManager.componentsMap
-          this.buildComponents()
-        }
+        runInAction(() => {
+          // todo: split with others, not all should recompute
+          // if (this._libraryMap !== host.libraryMap) {
+          //   this._libraryMap = host.libraryMap || {}
+          // }
+          if (this._componentsMap !== this.host.designer.componentMetaManager.componentsMap) {
+            this._componentsMap = this.host.designer.componentMetaManager.componentsMap
+            this.buildComponents()
+          }
 
-        // sync designMode
-        this._designMode = this.host.designMode
+          // sync designMode
+          this._designMode = this.host.designMode
 
-        // sync requestHandlersMap
-        this._requestHandlersMap = this.host.requestHandlersMap
+          // sync requestHandlersMap
+          this._requestHandlersMap = this.host.requestHandlersMap
 
-        // sync device
-        this._device = this.host.device
+          // sync device
+          this._device = this.host.device
+        })
       }),
     )
     const documentInstanceMap = new Map<string, DocumentInstance>()
@@ -100,13 +103,15 @@ export class SimulatorRenderer implements ISimulatorRenderer {
     let firstRun = true
     this.disposeFunctions.push(
       this.host.autorun(() => {
-        this._documentInstances = this.host.project.documents.map(doc => {
-          let inst = documentInstanceMap.get(doc.id)
-          if (!inst) {
-            inst = new DocumentInstance(this, doc)
-            documentInstanceMap.set(doc.id, inst)
-          }
-          return inst
+        runInAction(() => {
+          this._documentInstances = this.host.project.documents.map(doc => {
+            let inst = documentInstanceMap.get(doc.id)
+            if (!inst) {
+              inst = new DocumentInstance(this, doc)
+              documentInstanceMap.set(doc.id, inst)
+            }
+            return inst
+          })
         })
         const path = this.host.project.currentDocument
           ? documentInstanceMap.get(this.host.project.currentDocument.id)!.path
@@ -206,7 +211,6 @@ export class SimulatorRenderer implements ISimulatorRenderer {
   //           device={renderer.device}
   //           appHelper={renderer.context}
   //           rendererName='LowCodeRenderer'
-  //           thisRequiredInJSE={renderer.host.thisRequiredInJSE}
   //           faultComponent={renderer.host.faultComponent}
   //           faultComponentMap={renderer.host.faultComponentMap}
   //           customCreateElement={(Comp: any, props: any, children: any) => {
@@ -245,7 +249,7 @@ export class SimulatorRenderer implements ISimulatorRenderer {
       }
     }
 
-    createRoot(container).render(
+    ReactDOM.createRoot(container).render(
       createElement(RendererView, {
         simulatorRenderer: this,
         documentInstance: this.documentInstances[0],
@@ -350,4 +354,4 @@ const getLowCodeComponentProps = (props: any) => {
   return newProps
 }
 
-export const simulatorRenderer = new SimulatorRenderer()
+export const simulatorRenderer = new SimulatorRendererContainer()

@@ -8,6 +8,7 @@ export interface RendererModules {
 }
 
 class Adapter {
+  // @ts-ignore
   renderers: RendererModules = {}
 
   setRenderers(renderers: RendererModules) {
@@ -27,7 +28,7 @@ class Adapter {
   }
 
   getRenderers() {
-    return (this.renderers || {}) as unknown as Record<string, ComponentType>
+    return (this.renderers || {}) as unknown as Record<string, ComponentType<any>>
   }
 }
 

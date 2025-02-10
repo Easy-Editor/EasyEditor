@@ -15,7 +15,7 @@ export const DEV = '_EASY_EDITOR_DEV_'
 // TODO
 configure({
   // 仅能通过 action 来修改响应式数据
-  // enforceActions: 'always',
+  enforceActions: 'always',
   // lint
   // computedRequiresReaction: true,
   // reactionRequiresObservable: true,

@@ -8,7 +8,7 @@ import { ComponentMetaManager, Designer, type DesignerProps } from './designer'
 import { PluginManager } from './plugin'
 import { SetterManager } from './setter-manager'
 import { Simulator } from './simulator'
-import { createEventBus, createLogger, logger } from './utils'
+import { Hotkey, type HotkeyConfig, createEventBus, createLogger, logger } from './utils'
 
 export type EditorValueKey = string | symbol
 
@@ -21,20 +21,45 @@ export type EditorGetResult<T, ClsType> = T extends undefined
   : T
 
 export interface EditorConfig {
+  /**
+   * 插件 Plugin
+   */
   plugins?: Plugin[]
 
+  /**
+   * 设置器 Setter
+   */
   setters?: Record<string, Setter>
+
+  /**
+   * 组件 Component
+   */
   components?: Record<string, Component>
+
+  /**
+   * 组件元数据 ComponentMetadata
+   */
   componentMetas?: Record<string, ComponentMetadata>
 
+  /**
+   * 生命周期
+   */
   lifeCycles?: LifeCyclesConfig
 
+  /**
+   * designer props
+   */
   designer?: Pick<DesignerProps, 'onDragstart' | 'onDrag' | 'onDragend'>
 
+  /**
+   * 默认项目 Schema
+   */
   defaultSchema?: ProjectSchema
 
-  // TODO
-  hotkeys?: any
+  /**
+   * 快捷键
+   */
+  hotkeys?: HotkeyConfig[]
 }
 
 export interface LifeCyclesConfig {
@@ -143,18 +168,24 @@ export class Editor {
       setters,
       components,
       componentMetas,
+      hotkeys,
       designer: designerProps,
       defaultSchema,
     } = this.config
 
+    // 1. register plugins
     const pluginManager = new PluginManager()
     if (plugins) {
       pluginManager.registerPlugins(plugins)
     }
+
+    // 2. plugins.extend()
     await this.extend(pluginManager)
 
+    // 3. init
     this.eventBus.emit(EDITOR_EVENT.BEFORE_INIT)
 
+    const hotkey = new Hotkey()
     const setterManager = new SetterManager()
     const componentMetaManager = new ComponentMetaManager(this)
     const designer = new Designer({
@@ -179,6 +210,7 @@ export class Editor {
         context.setterManager = setterManager
         context.componentMetaManager = componentMetaManager
         context.event = pluginEvent
+        context.hotkey = hotkey
         context.logger = createLogger(`plugin:${pluginName}`)
       },
     }
@@ -199,6 +231,9 @@ export class Editor {
     }
     if (componentMetas) {
       componentMetaManager.buildComponentMetasMap(componentMetas)
+    }
+    if (hotkeys) {
+      hotkey.batchBind(hotkeys)
     }
 
     try {

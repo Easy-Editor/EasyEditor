@@ -1,20 +1,12 @@
-import { computed, observable, runInAction } from 'mobx'
-import {
-  type ComponentMeta,
-  DESIGNER_EVENT,
-  type Designer,
-  type FieldExtraProps,
-  type Node,
-  type PropKey,
-  createEventBus,
-  isJSExpression,
-  uniqueId,
-} from '../..'
+import type { ComponentMeta, Designer, FieldExtraProps, Node, PropKey } from '../..'
 import type { Editor } from '../../editor'
 import type { SetterManager } from '../../setter-manager'
 import type { SettingEntry } from './setting-entry'
 import type { SetValueOptions, SettingField } from './setting-field'
 import type { SettingTopEntry } from './setting-top-entry'
+
+import { computed, observable, runInAction } from 'mobx'
+import { DESIGNER_EVENT, createEventBus, isJSExpression, uniqueId } from '../..'
 
 export class SettingPropEntry implements SettingEntry {
   readonly editor: Editor

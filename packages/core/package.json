@@ -1,13 +1,52 @@
 {
   "name": "@easy-editor/core",
-  "private": true,
-  "description": "Core package for EasyEditor.",
+  "version": "0.0.3-alpha.1",
+  "description": "A cross-framework low-code engine with scale-out design.",
   "type": "module",
-  "main": "./src/index.ts",
-  "keywords": [
-    "@easy-editor"
+  "main": "src/index.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
-  "author": "",
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "typings": "dist/index.d.ts",
+    "module": "dist/index.js",
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "require": "./dist/cjs/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "homepage": "https://github.com/Easy-Editor/EasyEditor",
+  "license": "MIT",
+  "author": "JinSo <kimjinso@qq.com>",
+  "contributors": [
+    {
+      "name": "NoahCodeGG",
+      "email": "noahcodegg@gmail.com",
+      "url": "https://github.com/NoahCodeGG"
+    }
+  ],
+  "keywords": [
+    "@easy-editor",
+    "easyeditor",
+    "low-code",
+    "editor",
+    "engine"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Easy-Editor/EasyEditor"
+  },
+  "bugs": {
+    "url": "https://github.com/Easy-Editor/EasyEditor/issues"
+  },
   "scripts": {
     "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
@@ -16,16 +55,13 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
-    "types:clean": "rimraf types/",
     "types:src": "tsc --project tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },
-  "files": [
-    "dist",
-    "types"
-  ],
+  "peerDependencies": {
+    "mobx": "^6.13.5"
+  },
   "dependencies": {
-    "mobx": "^6.13.5",
     "nanoid": "^5.0.7"
   }
 }

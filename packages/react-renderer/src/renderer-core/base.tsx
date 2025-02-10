@@ -15,13 +15,14 @@ import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrappe
 import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, NodeInfo } from './types'
 import {
   checkPropTypes,
+  classnames,
+  getFileCssName,
   getValue,
   isSchema,
   isUseLoop,
   logger,
   parseData,
   parseExpression,
-  parseThisRequiredExpression,
   transformArrayToMap,
   transformStringToFunction,
 } from './utils'
@@ -29,13 +30,7 @@ import {
 /**
  * execute method in schema.lifeCycles with context
  */
-export function executeLifeCycleMethod(
-  context: any,
-  schema: RootSchema,
-  method: string,
-  args: any,
-  thisRequiredInJSE: boolean | undefined,
-): any {
+export function executeLifeCycleMethod(context: any, schema: RootSchema, method: string, args: any): any {
   if (!context || !isSchema(schema) || !method) {
     return
   }
@@ -48,7 +43,7 @@ export function executeLifeCycleMethod(
 
   // TODO: cache
   if (isJSExpression(fn) || isJSFunction(fn)) {
-    fn = thisRequiredInJSE ? parseThisRequiredExpression(fn, context) : parseExpression(fn, context)
+    fn = parseExpression(fn, context, true)
   }
 
   if (typeof fn !== 'function') {
@@ -83,7 +78,7 @@ export function baseRendererFactory(): BaseRenderComponent {
 
   const DEFAULT_LOOP_ARG_ITEM = 'item'
   const DEFAULT_LOOP_ARG_INDEX = 'index'
-  let scopeIdx = 0
+  // const scopeIdx = 0
 
   return class BaseRenderer extends Component<BaseRendererProps, BaseRendererProps> {
     [key: string]: any
@@ -123,7 +118,7 @@ export function baseRendererFactory(): BaseRenderComponent {
     constructor(props: BaseRendererProps) {
       super(props)
       this.__parseExpression = (str: string, self: any) => {
-        return parseExpression({ str, self, thisRequired: props?.thisRequiredInJSE, logScope: props.componentName })
+        return parseExpression({ str, self, logScope: props.componentName })
       }
       this.__beforeInit(props)
       this.__init(props)
@@ -142,14 +137,7 @@ export function baseRendererFactory(): BaseRenderComponent {
     __afterInit(props: BaseRendererProps) {}
 
     static getDerivedStateFromProps(props: BaseRendererProps, state: any) {
-      const result = executeLifeCycleMethod(
-        // biome-ignore lint/complexity/noThisInStatic: <explanation>
-        this,
-        props?.__schema,
-        'getDerivedStateFromProps',
-        [props, state],
-        props.thisRequiredInJSE,
-      )
+      const result = executeLifeCycleMethod(this, props?.__schema, 'getDerivedStateFromProps', [props, state])
       return result === undefined ? null : result
     }
 
@@ -217,7 +205,7 @@ export function baseRendererFactory(): BaseRenderComponent {
      * execute method in schema.lifeCycles
      */
     __executeLifeCycleMethod = (method: string, args?: any) => {
-      executeLifeCycleMethod(this, this.props.__schema, method, args, this.props.thisRequiredInJSE)
+      executeLifeCycleMethod(this, this.props.__schema, method, args)
     }
 
     /**
@@ -266,14 +254,15 @@ export function baseRendererFactory(): BaseRenderComponent {
     }
 
     __parseData = (data: any, ctx?: Record<string, any>) => {
-      const { __ctx, thisRequiredInJSE, componentName } = this.props
-      return parseData(data, ctx || __ctx || this, { thisRequiredInJSE, logScope: componentName })
+      const { __ctx, componentName } = this.props
+      return parseData(data, ctx || __ctx || this, { logScope: componentName })
     }
 
     __initDataSource = (props: BaseRendererProps) => {
       if (!props) {
         return
       }
+      // TODO: 数据源引擎方案
       // const schema = props.__schema || {}
       // const defaultDataSource: DataSource = {
       //   list: [],
@@ -427,7 +416,7 @@ export function baseRendererFactory(): BaseRenderComponent {
         return null
       }
 
-      let scope = originalScope
+      const scope = originalScope
       const schema = originalSchema
       const { engine } = this.context || {}
 
@@ -529,34 +518,34 @@ export function baseRendererFactory(): BaseRenderComponent {
           return null
         }
 
-        // TODO
-        let scopeKey = ''
-        // 判断组件是否需要生成scope，且只生成一次，挂在this.__compScopes上
-        if (Comp.generateScope) {
-          const key = this.__parseExpression(schema.props?.key, scope)
-          if (key) {
-            // 如果组件自己设置key则使用组件自己的key
-            scopeKey = key
-          } else if (schema.__ctx) {
-            // 需要判断循环的情况
-            scopeKey = schema.__ctx.lceKey + (idx !== undefined ? `_${idx}` : '')
-          } else {
-            // 在生产环境schema没有__ctx上下文，需要手动生成一个lceKey
-            schema.__ctx = {
-              lceKey: `lce${++scopeIdx}`,
-            }
-            scopeKey = schema.__ctx.lceKey
-          }
-          if (!this.__compScopes[scopeKey]) {
-            this.__compScopes[scopeKey] = Comp.generateScope(this, schema)
-          }
-        }
-        // 如果组件有设置scope，需要为组件生成一个新的scope上下文
-        if (scopeKey && this.__compScopes[scopeKey]) {
-          const compSelf = { ...this.__compScopes[scopeKey] }
-          compSelf.__proto__ = scope
-          scope = compSelf
-        }
+        // TODO: scope
+        // let scopeKey = ''
+        // // 判断组件是否需要生成scope，且只生成一次，挂在this.__compScopes上
+        // if (Comp.generateScope) {
+        //   const key = this.__parseExpression(schema.props?.key, scope)
+        //   if (key) {
+        //     // 如果组件自己设置key则使用组件自己的key
+        //     scopeKey = key
+        //   } else if (schema.__ctx) {
+        //     // 需要判断循环的情况
+        //     scopeKey = schema.__ctx.lceKey + (idx !== undefined ? `_${idx}` : '')
+        //   } else {
+        //     // 在生产环境schema没有__ctx上下文，需要手动生成一个lceKey
+        //     schema.__ctx = {
+        //       lceKey: `lce${++scopeIdx}`,
+        //     }
+        //     scopeKey = schema.__ctx.lceKey
+        //   }
+        //   if (!this.__compScopes[scopeKey]) {
+        //     this.__compScopes[scopeKey] = Comp.generateScope(this, schema)
+        //   }
+        // }
+        // // 如果组件有设置scope，需要为组件生成一个新的scope上下文
+        // if (scopeKey && this.__compScopes[scopeKey]) {
+        //   const compSelf = { ...this.__compScopes[scopeKey] }
+        //   compSelf.__proto__ = scope
+        //   scope = compSelf
+        // }
 
         if (engine.props?.designMode) {
           otherProps.__designMode = engine.props.designMode
@@ -589,9 +578,9 @@ export function baseRendererFactory(): BaseRenderComponent {
         }
 
         // scope需要传入到组件上
-        if (scopeKey && this.__compScopes[scopeKey]) {
-          props.__scope = this.__compScopes[scopeKey]
-        }
+        // if (scopeKey && this.__compScopes[scopeKey]) {
+        //   props.__scope = this.__compScopes[scopeKey]
+        // }
         if (schema?.__ctx?.lceKey) {
           if (!isSchema(schema)) {
             engine.props?.onCompGetCtx(schema, scope)
@@ -832,7 +821,7 @@ export function baseRendererFactory(): BaseRenderComponent {
 
     __renderContextProvider = (customProps?: object, children?: any) => {
       return (
-        <RendererContext
+        <RendererContext.Provider
           value={{
             ...this.context,
             blockContext: this,
@@ -840,7 +829,7 @@ export function baseRendererFactory(): BaseRenderComponent {
           }}
         >
           {children || this.__createDom()}
-        </RendererContext>
+        </RendererContext.Provider>
       )
     }
 
@@ -883,7 +872,7 @@ export function baseRendererFactory(): BaseRenderComponent {
         Comp,
         componentInfo: {},
       })
-      // const { className } = data
+      const { className } = data
       const otherProps: any = {}
       const { engine } = this.context || {}
       if (!engine) {
@@ -900,7 +889,11 @@ export function baseRendererFactory(): BaseRenderComponent {
           ...data,
           ...this.props,
           ref: this.__getRef,
-          // className: classnames(getFileCssName(__schema?.fileName), className, this.props.className),
+          className: classnames(
+            __schema?.fileName && getFileCssName(__schema.fileName),
+            className,
+            this.props.className,
+          ),
           __id: __schema?.id,
           ...otherProps,
         },
@@ -912,21 +905,16 @@ export function baseRendererFactory(): BaseRenderComponent {
     __renderContent(children: any) {
       const { __schema } = this.props
       const parsedProps = this.__parseData(__schema.props)
-      // const className = classnames(
-      //   `lce-${this.__namespace}`,
-      //   getFileCssName(__schema.fileName),
-      //   parsedProps.className,
-      //   this.props.className,
-      // )
+      const className = classnames(
+        `lce-${this.__namespace}`,
+        __schema?.fileName && getFileCssName(__schema.fileName),
+        parsedProps.className,
+        this.props.className,
+      )
       const style = { ...(parsedProps.style || {}), ...(typeof this.props.style === 'object' ? this.props.style : {}) }
       const id = this.props.id || parsedProps.id
       return (
-        <div
-          ref={this.__getRef}
-          // className={className}
-          id={id}
-          style={style}
-        >
+        <div ref={this.__getRef} className={className} id={id} style={style}>
           {children}
         </div>
       )

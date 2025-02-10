@@ -56,14 +56,13 @@ export enum DESIGNER_EVENT {
   NODE_CHILDREN_CHANGE = 'designer:node.children.change',
   NODE_PROPS_CHANGE = 'designer:node.props.change',
   NODE_REMOVE = 'designer:node.remove',
-
-  SIMULATOR_SELECT = 'designer:simulator.select',
+  NODE_RENDER = 'designer:node.render',
 
   SETTING_TOP_ENTRY_VALUE_CHANGE = 'designer:setting.top-entry.value.change',
 
   SELECTION_CHANGE = 'designer:selection.change',
 
-  NODE_RENDER = 'designer:node.render',
+  SIMULATOR_SELECT = 'designer:simulator.select',
 
   VIEWPORT_MOUNT = 'simulator:viewport.mount',
 }

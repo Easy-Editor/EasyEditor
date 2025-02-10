@@ -1,8 +1,11 @@
-import { action } from 'mobx'
 import type { Component } from '../designer'
+
+import { action } from 'mobx'
 import { logger } from '../utils'
 
-/** for setter component props */
+/**
+ * for setter component props
+ */
 export interface SetterProps<T = unknown> {
   value: T
   onChange: (val: T) => void

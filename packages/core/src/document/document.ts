@@ -1,11 +1,11 @@
 import type { ComponentsMap, Designer, DropLocation } from '../designer'
 import type { Project } from '../project'
 import type { Simulator } from '../simulator'
-import type { NodeSchema } from '../types'
+import type { NodeSchema, RootSchema } from '../types'
 
 import { action, observable } from 'mobx'
 import { DESIGNER_EVENT } from '../designer'
-import { type RootSchema, TRANSFORM_STAGE } from '../types'
+import { TRANSFORM_STAGE } from '../types'
 import { createEventBus, uniqueId } from '../utils'
 import { History } from './history'
 import { NODE_EVENT, Node, insertChild, insertChildren } from './node/node'
@@ -90,6 +90,7 @@ export class Document {
 
   @observable.ref private accessor _dropLocation: DropLocation | null = null
 
+  @action
   set dropLocation(loc: DropLocation | null) {
     this._dropLocation = loc
     this.designer.postEvent(DESIGNER_EVENT.DOCUMENT_DROP_LOCATION_CHANGE, { document: this, location: loc })

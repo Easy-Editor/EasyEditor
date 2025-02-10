@@ -1,7 +1,4 @@
 {
-  "extends": "../../tsconfig.json",
-  "include": ["./src"],
-  "compilerOptions": {
-    "outDir": "./types"
-  }
+  "extends": "./tsconfig.build.json",
+  "include": ["./src", "./test"],
 }

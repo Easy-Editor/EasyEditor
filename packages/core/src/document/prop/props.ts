@@ -6,7 +6,7 @@ import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
 import { Prop, UNSET, splitPath } from './prop'
 
-const EXTRA_KEY_PREFIX = '__'
+const EXTRA_KEY_PREFIX = '___'
 
 /**
  * prop key convert to extra key

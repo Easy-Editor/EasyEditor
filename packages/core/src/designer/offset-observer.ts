@@ -18,17 +18,17 @@ export class OffsetObserver {
 
   private lastOffsetWidth?: number
 
-  @observable private accessor _height = 0
+  @observable accessor _height = 0
 
-  @observable private accessor _width = 0
+  @observable accessor _width = 0
 
-  @observable private accessor _left = 0
+  @observable accessor _left = 0
 
-  @observable private accessor _top = 0
+  @observable accessor _top = 0
 
-  @observable private accessor _right = 0
+  @observable accessor _right = 0
 
-  @observable private accessor _bottom = 0
+  @observable accessor _bottom = 0
 
   @computed
   get height() {
@@ -110,7 +110,7 @@ export class OffsetObserver {
 
   readonly viewport: Viewport
 
-  private isRoot: boolean
+  isRoot: boolean
 
   readonly node: Node
 
@@ -125,7 +125,9 @@ export class OffsetObserver {
     this.isRoot = node.contains(rootNode!)
     this.viewport = host?.viewport!
     if (this.isRoot) {
-      this.hasOffset = false
+      runInAction(() => {
+        this.hasOffset = false
+      })
       return
     }
     if (!instance) {
@@ -148,7 +150,9 @@ export class OffsetObserver {
         this._left !== rect.left ||
         this._top !== rect.top
       ) {
-        this.hasOffset = true
+        runInAction(() => {
+          this.hasOffset = true
+        })
       }
 
       if (rect && this.hasOffset) {
@@ -159,7 +163,9 @@ export class OffsetObserver {
           this._top = rect.top
           this._right = rect.right
           this._bottom = rect.bottom
-          this.hasOffset = true
+          runInAction(() => {
+            this.hasOffset = true
+          })
         })
       }
 

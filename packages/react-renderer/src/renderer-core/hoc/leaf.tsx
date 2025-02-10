@@ -18,6 +18,8 @@ export interface ComponentHocProps {
   componentId: any
   _leaf: any
   forwardedRef?: any
+
+  children?: any | undefined
 }
 
 export interface ComponentHocState {
@@ -111,7 +113,7 @@ const initRerenderEvent = ({ schema, container, getNode }: any) => {
           `${schema.componentName}[${schema.id}] leaf not render in SimulatorRendererView, leaf onChildrenChange make rerender`,
         )
         debounceRerender()
-      }) as Function,
+      }),
       leaf?.onVisibleChange?.(() => {
         if (!container.autoRepaintNode) {
           return
@@ -172,7 +174,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
     return cache.component.get(componentCacheId).LeafWrapper
   }
 
-  class LeafHoc extends Component {
+  class LeafHoc extends Component<LeftWrapperProps, ComponentHocState> {
     recordInfo: {
       startTime?: number | null
       type?: string
@@ -211,15 +213,15 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         nextState.nodeChildren = nextProps.children
       }
 
-      logger.log(`${this.leaf?.componentName}(${this.props.componentId}) MinimalRenderUnit Render!`)
+      logger.log(`${this.leaf?.componentName}(${this.leaf?.id}) MinimalRenderUnit Render!`)
       this.setState(nextState)
     }, 20)
 
     constructor(props: LeftWrapperProps) {
       super(props)
       // 监听以下事件，当变化时更新自己
-      logger.log(`${schema.componentName}[${this.props.componentId}] leaf render in SimulatorRendererView`)
-      clearRerenderEvent(componentCacheId)
+      logger.log(`${schema.componentName}[${this.leaf?.id}] leaf render in SimulatorRendererView`)
+      componentCacheId && clearRerenderEvent(componentCacheId)
       this.curEventLeaf = this.leaf
 
       cache.ref.set(componentCacheId, {
@@ -322,7 +324,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         return
       }
       logger.log(
-        `${this.leaf?.componentName}(${this.props.componentId}) need render, make its minimalRenderUnit ${renderUnitInfo.minimalUnitName}(${renderUnitInfo.minimalUnitId})`,
+        `${this.leaf?.componentName}(${this.leaf?.id}) need render, make its minimalRenderUnit ${renderUnitInfo.minimalUnitName}(${renderUnitInfo.minimalUnitId})`,
       )
       ref.makeUnitRender()
     }
@@ -333,7 +335,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         return
       }
 
-      if (leaf.isRootNode) {
+      if (leaf.isRoot) {
         this.renderUnitInfo = {
           singleRender: true,
           ...(this.renderUnitInfo || {}),
@@ -415,7 +417,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
           nodeCacheProps[key] = newValue
         }
         logger.log(
-          `${leaf?.componentName}[${this.props.componentId}] component trigger onPropsChange!`,
+          `${leaf?.componentName}[${this.leaf?.id}] component trigger onPropsChange!`,
           nodeProps,
           nodeCacheProps,
           key,
@@ -460,7 +462,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
           return
         }
 
-        logger.log(`${leaf?.componentName}[${this.props.componentId}] component trigger onVisibleChange(${flag}) event`)
+        logger.log(`${leaf?.componentName}[${this.leaf?.id}] component trigger onVisibleChange(${flag}) event`)
         this.beforeRender(RerenderType.VisibleChanged)
         this.setState({
           visible: flag,
@@ -485,10 +487,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         // 缓存二级 children Next 查询筛选组件有问题
         // 缓存一级 children Next Tab 组件有问题
         const nextChild = getChildren(leaf?.export?.(TRANSFORM_STAGE.RENDER) as NodeSchema, scope, Comp)
-        logger.log(
-          `${schema.componentName}[${this.props.componentId}] component trigger onChildrenChange event`,
-          nextChild,
-        )
+        logger.log(`${schema.componentName}[${this.leaf?.id}] component trigger onChildrenChange event`, nextChild)
         this.setState({
           nodeChildren: nextChild,
           childrenInState: true,
@@ -524,10 +523,10 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
     }
 
     get leaf(): Node | undefined {
-      if (this.props._leaf?.isMock) {
-        // 低代码组件作为一个整体更新，其内部的组件不需要监听相关事件
-        return undefined
-      }
+      // if (this.props._leaf?.isMock) {
+      //   // 低代码组件作为一个整体更新，其内部的组件不需要监听相关事件
+      //   return undefined
+      // }
 
       return getNode?.(componentCacheId)
     }
@@ -544,7 +543,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         ...(this.state.nodeCacheProps || {}),
         ...(this.state.nodeProps || {}),
         children: [],
-        __id: this.props.componentId,
+        __id: this.leaf?.id,
         ref: forwardRef,
       }
 

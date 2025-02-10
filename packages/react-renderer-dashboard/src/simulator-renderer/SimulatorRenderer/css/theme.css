@@ -200,23 +200,6 @@
   --color-canvas-detecting-background: rgba(0, 121, 242, 0.04);
 
   --pane-title-bg-color: rgba(31, 56, 88, 0.04);
-}
 
-/* @deprecated 变量 */
-:root {
-  --color-function-success: var(--brand-success);
-  --color-function-success-dark: rgb(82, 168, 72);
-  --color-function-success-light: rgb(122, 208, 112);
-  --color-function-warning: var(--brand-warning);
-  --color-function-warning-dark: rgb(230, 169, 0);
-  --color-function-warning-light: rgb(255, 209, 34);
-  --color-function-information: var(--brand-link-hover);
-  --color-function-information-dark: rgb(36, 98, 136);
-  --color-function-information-light: rgb(56, 138, 186);
-  --color-function-error: var(--brand-danger);
-  --color-function-error-dark: rgb(220, 50, 29);
-  --color-function-error-light: rgb(255, 90, 69);
-  --color-function-purple: rgb(144, 94, 190);
-  --color-function-brown: #7b605b;
-  --color-text-regular: var(--normal-alpha-2);
+  --color-guideline: rgba(235, 86, 72, 1);
 }

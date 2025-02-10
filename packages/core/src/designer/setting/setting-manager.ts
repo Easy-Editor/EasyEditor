@@ -1,6 +1,7 @@
+import type { SettingTopEntry } from './setting-top-entry'
+
 import { action, computed, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type Editor, type Node, type Selection, generateSessionId } from '../..'
-import type { SettingTopEntry } from './setting-top-entry'
 
 export class SettingsManager {
   private _sessionId = ''

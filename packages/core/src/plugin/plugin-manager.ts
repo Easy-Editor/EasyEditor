@@ -1,5 +1,5 @@
 import type { PluginContextOptions } from './plugin-context'
-import type { PluginExtend } from './plugin-extend'
+import { type PluginExtend, type PluginExtendClass, extend } from './plugin-extend'
 
 import {
   ComponentMeta,
@@ -205,7 +205,7 @@ export class PluginManager {
   }
 
   async extend() {
-    const pluginExtend: PluginExtend = {
+    const extendClass: PluginExtendClass = {
       Simulator,
       Viewport,
 
@@ -228,9 +228,14 @@ export class PluginManager {
       SetterManager,
       ComponentMeta,
     }
+    const extendMap: Record<keyof PluginExtendClass, PluginExtendClass[keyof PluginExtendClass]> = extendClass
 
     for (const plugin of this.plugins) {
-      await plugin.extend(pluginExtend)
+      await plugin.extend({
+        extendClass,
+        // @ts-ignore
+        extend: (extendClass, properties) => extend(extendMap, extendClass, properties),
+      })
     }
   }
 

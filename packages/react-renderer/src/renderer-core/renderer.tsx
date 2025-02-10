@@ -26,7 +26,6 @@ export function rendererFactory(): RenderComponent {
       schema: {} as RootSchema,
       onCompGetRef: () => {},
       onCompGetCtx: () => {},
-      thisRequiredInJSE: true,
     }
 
     constructor(props: RendererProps) {
@@ -111,7 +110,7 @@ export function rendererFactory(): RenderComponent {
       }
 
       return (
-        <RendererContext
+        <RendererContext.Provider
           value={{
             appHelper,
             components: allComponents,
@@ -127,7 +126,7 @@ export function rendererFactory(): RenderComponent {
             __designMode={designMode}
             {...this.props}
           />
-        </RendererContext>
+        </RendererContext.Provider>
       )
     }
   }

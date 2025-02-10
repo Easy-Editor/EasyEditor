@@ -1,3 +1,4 @@
-# @easy-editor/core
+# @easy-editor/react-renderer-dashboard
 
-Core package for EasyEditor.
+React renderer for EasyEditor in dashboard.
+

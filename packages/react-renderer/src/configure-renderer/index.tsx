@@ -4,11 +4,11 @@ import { useMemo } from 'react'
 import { SettingSetter } from './SettingSetter'
 import { SettingRendererContext, useSettingRendererContext } from './context'
 
-interface SettingFieldItemProps {
+interface SettingFieldProps {
   field: SettingField
 }
 
-const SettingFieldItem = observer(({ field }: SettingFieldItemProps) => {
+const SettingFieldItem = observer<React.FC<SettingFieldProps>>(({ field }) => {
   const { customFieldItem } = useSettingRendererContext()
 
   if (customFieldItem) {
@@ -25,11 +25,7 @@ const SettingFieldItem = observer(({ field }: SettingFieldItemProps) => {
   )
 })
 
-interface SettingFieldGroupProps {
-  field: SettingField
-}
-
-const SettingFieldGroup = ({ field }: SettingFieldGroupProps) => {
+const SettingFieldGroup = observer<React.FC<SettingFieldProps>>(({ field }) => {
   const { customFieldGroup } = useSettingRendererContext()
 
   if (customFieldGroup) {
@@ -50,13 +46,9 @@ const SettingFieldGroup = ({ field }: SettingFieldGroupProps) => {
       ))}
     </SettingSetter>
   )
-}
+})
 
-interface SettingFieldViewProps {
-  field: SettingField
-}
-
-export const SettingFieldView = ({ field }: SettingFieldViewProps) => {
+export const SettingFieldView: React.FC<SettingFieldProps> = ({ field }) => {
   if (field.isGroup) {
     return <SettingFieldGroup field={field} key={field.id} />
   } else {
@@ -66,7 +58,7 @@ export const SettingFieldView = ({ field }: SettingFieldViewProps) => {
 
 interface SettingRenderProps extends SettingRendererContext {}
 
-export const SettingRender = observer<SettingRenderProps>(props => {
+export const SettingRender = observer<React.FC<SettingRenderProps>>(props => {
   const { editor, customFieldItem, customFieldGroup } = props
   const designer = editor.get<Designer>('designer')!
   const setterManager = editor.get<SetterManager>('setterManager')!
@@ -127,10 +119,10 @@ export const SettingRender = observer<SettingRenderProps>(props => {
   }
 
   return (
-    <SettingRendererContext value={ctx}>
+    <SettingRendererContext.Provider value={ctx}>
       {items?.map(item => (
         <SettingFieldView key={item.id} field={item} />
       ))}
-    </SettingRendererContext>
+    </SettingRendererContext.Provider>
   )
 })

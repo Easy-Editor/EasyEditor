@@ -24,6 +24,12 @@ export class ComponentMeta {
     return this._isContainer!
   }
 
+  private _isMinimalRenderUnit?: boolean
+
+  get isMinimalRenderUnit(): boolean {
+    return this._isMinimalRenderUnit || false
+  }
+
   private _descriptor?: string
 
   get descriptor() {
@@ -75,6 +81,7 @@ export class ComponentMeta {
     if (component) {
       this._isContainer = !!component.isContainer
       this._descriptor = component.descriptor
+      this._isMinimalRenderUnit = component.isMinimalRenderUnit
     } else {
       this._isContainer = false
     }

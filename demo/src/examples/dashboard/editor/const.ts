@@ -1,9 +1,11 @@
 import type { RootSchema } from '@easy-editor/core'
 
 export const defaultRootSchema: RootSchema = {
+  fileName: 'home',
   componentName: 'RootContainer',
   props: {
     backgroundColor: '#27272A',
+    className: 'page test',
   },
   $dashboard: {
     rect: {
@@ -136,5 +138,180 @@ export const defaultRootSchema: RootSchema = {
         },
       ],
     },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: {
+          type: 'JSExpression',
+          value: 'this.state.text',
+          mock: 'Button with state',
+        },
+      },
+      $dashboard: {
+        rect: {
+          x: 500,
+          y: 500,
+          width: 50,
+          height: 30,
+        },
+      },
+    },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: 'Button with event',
+        __events: {
+          eventDataList: [
+            {
+              type: 'componentEvent',
+              name: 'onClick',
+              relatedEventName: 'testFunc',
+            },
+          ],
+          eventList: [
+            {
+              name: 'onClick',
+              description: '鼠标点击',
+              disabled: true,
+            },
+          ],
+        },
+        onClick: {
+          type: 'JSFunction',
+          value: 'function(){return this.changeState.apply(this,Array.prototype.slice.call(arguments).concat([])) }',
+        },
+      },
+      $dashboard: {
+        rect: {
+          x: 400,
+          y: 500,
+          width: 50,
+          height: 30,
+        },
+      },
+    },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: 'Button with Condition',
+      },
+      $dashboard: {
+        rect: {
+          x: 800,
+          y: 600,
+          width: 50,
+          height: 30,
+        },
+      },
+      condition: false,
+    },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: 'Button with Loop',
+      },
+      $dashboard: {
+        rect: {
+          x: 700,
+          y: 600,
+          width: 50,
+          height: 30,
+        },
+      },
+      loop: [1, 2, 3, 4, 5],
+      loopArgs: [null, null],
+    },
+    // {
+    //   componentName: 'Button',
+    //   props: {
+    //     type: 'primary',
+    //     text: { error: 'error' },
+    //   },
+    //   $dashboard: {
+    //     rect: {
+    //       x: 700,
+    //       y: 600,
+    //       width: 50,
+    //       height: 30,
+    //     },
+    //   },
+    // },
+    {
+      componentName: 'Button',
+      props: {
+        type: 'primary',
+        text: 'Button with className',
+        className: 'button test',
+      },
+      $dashboard: {
+        rect: {
+          x: 700,
+          y: 600,
+          width: 50,
+          height: 30,
+        },
+      },
+    },
   ],
+  dataSource: {
+    list: [
+      {
+        type: 'fetch',
+        isInit: true,
+        options: {
+          params: {},
+          method: 'GET',
+          isCors: true,
+          timeout: 5000,
+          headers: {},
+          uri: 'mock/info.json',
+        },
+        id: 'info',
+        shouldFetch: {
+          type: 'JSFunction',
+          value: "function() { \n  console.log('should fetch.....');\n  return true; \n}",
+        },
+      },
+    ],
+  },
+  state: {
+    text: {
+      type: 'JSExpression',
+      value: '"outer"',
+    },
+    isShowDialog: {
+      type: 'JSExpression',
+      value: 'false',
+    },
+  },
+  css: 'body {\n  font-size: 12px;\n}\n\n.button {\n  width: 100px;\n  color: #ff00ff\n}',
+  lifeCycles: {
+    componentDidMount: {
+      type: 'JSFunction',
+      value:
+        "function componentDidMount() {\n  console.log('did mount ===========', this);\n  console.log(this.state.text, this.testFunc() );\n}",
+      source: "function componentDidMount() {\n  console.log('did mount');\n}",
+    },
+    componentWillUnmount: {
+      type: 'JSFunction',
+      value: "function componentWillUnmount() {\n  console.log('will unmount');\n}",
+      source: "function componentWillUnmount() {\n  console.log('will unmount');\n}",
+    },
+  },
+  methods: {
+    testFunc: {
+      type: 'JSFunction',
+      value: "function testFunc() {\n  console.log('test func');\n}",
+      source: "function testFunc() {\n  console.log('test func');\n}",
+    },
+    changeState: {
+      type: 'JSFunction',
+      value: "function changeState() {\n  this.setState({text: 'inner'});\n}",
+      source: "function changeState() {\n  this.setState({text: 'inner'});\n}",
+    },
+  },
 }

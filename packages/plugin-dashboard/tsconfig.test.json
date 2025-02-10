@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.test.json",
+  "compilerOptions": {
+    "baseUrl": "",
+  },
+  "include": ["./test", "./web/test", "./store/test"]
+}

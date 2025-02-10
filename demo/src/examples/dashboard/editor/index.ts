@@ -33,6 +33,15 @@ export const editor = createEasyEditor({
   setters: formatMapFromESModule<Setter>(setterMap),
   components: formatMapFromESModule<Component>(componentMap),
   componentMetas: formatMapFromESModule<ComponentMetadata>(componentMetaMap),
+  hotkeys: [
+    {
+      combos: ['ctrl+a'],
+      callback: e => {
+        e.preventDefault()
+        console.log('ctrl+a', e)
+      },
+    },
+  ],
 })
 console.log('🚀 ~ easyEditor:', editor)
 

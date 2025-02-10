@@ -1,4 +1,4 @@
-type ITaks = Record<
+type Tasks = Record<
   string,
   {
     name: string
@@ -15,7 +15,7 @@ export function sequence({
   nest,
   parentName,
 }: {
-  tasks: ITaks
+  tasks: Tasks
   names: string[]
   results: string[]
   missing: string[]
@@ -53,7 +53,7 @@ export function sequence({
 
 // tasks: object with keys as task names
 // names: array of task names
-export default function (tasks: ITaks, names: string[]) {
+export default function (tasks: Tasks, names: string[]) {
   let results: string[] = [] // the final sequence
   const missing: string[] = [] // missing tasks
   const recursive: string[][] = [] // recursive task dependencies

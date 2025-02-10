@@ -1,14 +1,13 @@
 import {
-  type ComponentInstance,
   DESIGNER_EVENT,
   type Designer,
   type Document,
   DragObjectType,
   type DropLocation,
   type Node,
+  type NodeSchema,
   type OffsetObserver,
   type PluginCreator,
-  type Simulator,
   getConvertedExtraKey,
 } from '@easy-editor/core'
 import { GuideLine } from './designer/guideline'
@@ -16,31 +15,39 @@ import { GroupComponent, GroupComponentMeta } from './materials/group'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
 interface DashboardPluginOptions {
-  dndMode?: 'props' | 'dom'
+  group?: {
+    schema?: NodeSchema
+  }
 
   // TODO: 配置分组内容(schema、meta)
   xxx?: string
 }
 
-const groupSchema = {
+const defaultGroupSchema = {
   componentName: 'Group',
   title: '分组',
   isGroup: true,
 }
 
 const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
-  const { dndMode = 'dom' } = options || {}
+  const { group = {} } = options || {}
+  const { schema: groupSchema = defaultGroupSchema } = group || {}
 
   return {
     name: 'DashboardPlugin',
     deps: [],
     init(ctx) {
-      const { designer, simulator, componentMetaManager } = ctx
+      const { designer, simulator, componentMetaManager, hotkey, logger } = ctx
+
+      // test hotkey
+      hotkey.bind('ctrl+d', e => {
+        e.preventDefault()
+        logger.log('ctrl+d')
+      })
 
       // add guideline
       designer.onEvent(DESIGNER_EVENT.INIT, (designer: Designer) => {
         designer.guideline = new GuideLine(designer)
-        console.log('🚀 ~ designer.onEvent ~ designer:', designer)
       })
 
       // add componentMeta
@@ -54,8 +61,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         const { dragObject } = e
 
         if (dragObject && dragObject.type === DragObjectType.NodeData) {
-          startOffsetNodeData.x = e.globalX! - e.target!.offsetLeft
-          startOffsetNodeData.y = e.globalY! - e.target!.offsetTop
+          startOffsetNodeData.x = e.globalX! - (e.target as HTMLElement).offsetLeft
+          startOffsetNodeData.y = e.globalY! - (e.target as HTMLElement).offsetTop
         }
       })
 
@@ -191,12 +198,12 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         lastOffsetNodes = {}
       })
     },
-    extend(ctx) {
-      const { Document, Node, Simulator, OffsetObserver, Designer } = ctx
+    extend({ extendClass, extend }) {
+      const { Node, Designer } = extendClass
 
       /* -------------------------------- Designer -------------------------------- */
       const originalInit = Designer.prototype.init
-      Object.defineProperties(Designer.prototype, {
+      extend('Designer', {
         init: {
           value(this: Designer) {
             originalInit.call(this)
@@ -207,7 +214,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       })
 
       /* -------------------------------- Document -------------------------------- */
-      Object.defineProperties(Document.prototype, {
+      extend('Document', {
         group: {
           value(this: Document, nodeIdList: Node[] | string[]) {
             if (nodeIdList.length === 0) return
@@ -261,7 +268,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
       /* ---------------------------------- Node ---------------------------------- */
       const originalInitProps = Node.prototype.initBuiltinProps
-      Object.defineProperties(Node.prototype, {
+      extend('Node', {
         getDashboardContainer: {
           value(this: Node) {
             return document.getElementById(`${this.id}-mask`)
@@ -391,36 +398,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         },
       })
 
-      /* -------------------------------- Simulator ------------------------------- */
-      // TODO: 是否需要
-      Object.defineProperties(Simulator.prototype, {
-        computeDashboardRect: {
-          value(this: Simulator, node: Node) {
-            const instances = this.getComponentInstances(node)
-            if (!instances) {
-              return null
-            }
-            return this.computeComponentInstanceRect(instances[0])
-          },
-        },
-        computeComponentInstanceDashboardRect: {
-          value(this: Simulator, instance: ComponentInstance) {
-            if (!instance || !instance.parentNode) return new DOMRect(0, 0, 0, 0)
-
-            // const style = instance.parentNode.style
-            const properties = getComputedStyle(instance.parentNode)
-            return new DOMRect(
-              Number.parseFloat(properties.left ?? 0),
-              Number.parseFloat(properties.top ?? 0),
-              Number.parseFloat(properties.width ?? 0),
-              Number.parseFloat(properties.height ?? 0),
-            )
-          },
-        },
-      })
-
       /* ----------------------------- OffsetObserver ----------------------------- */
-      Object.defineProperties(OffsetObserver.prototype, {
+      extend('OffsetObserver', {
         computeRect: {
           value(this: OffsetObserver) {
             // return this.node.getDashboardRect()

@@ -94,7 +94,7 @@
 .lc-guideline {
   position: absolute;
   z-index: 999;
-  background-color: red;
+  background-color: var(--color-guideline, #eb5648);
 
   &.vertical {
     left: 0;

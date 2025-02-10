@@ -1,0 +1,27 @@
+# @easy-editor/core
+
+## 0.0.3-alpha.1
+
+### Patch Changes
+
+- 92574e0: perf: remove thisRequiredInJSE
+- 1c9ec92: chore: remove package's CHANGELOG.md
+- 6f282a3: build: move mobx,mobx-react to peerDependencies
+
+## 0.0.3-alpha.0
+
+### Patch Changes
+
+- 3f130ae: test: build alpha
+
+## 0.0.2
+
+### Patch Changes
+
+- 9a2c9ae: feat: all packages publish
+
+## 0.0.1
+
+### Patch Changes
+
+- 096c32d: feat: first publish

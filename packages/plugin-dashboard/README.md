@@ -1,3 +1,3 @@
-# @easy-editor/core
+# @easy-editor/plugin-dashboard
 
-Core package for EasyEditor.
+Dashboard plugin for EasyEditor.

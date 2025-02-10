@@ -1,5 +1,5 @@
 import type { Editor, SettingField } from '@easy-editor/core'
-import { type ReactNode, createContext, use } from 'react'
+import { type ReactNode, createContext, useContext } from 'react'
 
 export interface SettingRendererContext {
   editor: Editor
@@ -17,7 +17,7 @@ export const SettingRendererContext = createContext<SettingRendererContext>({} a
 
 export const useSettingRendererContext = () => {
   try {
-    return use(SettingRendererContext)
+    return useContext(SettingRendererContext)
   } catch (error) {
     console.warn('useSettingRendererContext must be used within a SettingRendererContextProvider')
   }

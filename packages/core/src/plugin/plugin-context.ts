@@ -1,5 +1,5 @@
 import type { ComponentMetaManager, Designer, Editor, Project, SetterManager, Simulator } from '..'
-import type { EventBus, Logger } from '../utils'
+import type { EventBus, Hotkey, Logger } from '../utils'
 import type { PluginContextApiAssembler, PluginMeta } from './plugin-manager'
 
 import { createEventBus } from '../utils'
@@ -19,6 +19,7 @@ export class PluginContext {
   logger: Logger
   event: EventBus
   pluginEvent: EventBus
+  hotkey: Hotkey
 
   constructor(options: PluginContextOptions, contextApiAssembler: PluginContextApiAssembler) {
     const { pluginName = 'anonymous', meta = {} } = options
