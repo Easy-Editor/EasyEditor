@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.3-alpha.2
+
+### Patch Changes
+
+- bd41334: fix: document.import error
+
 ## 0.0.3-alpha.1
 
 ### Patch Changes
