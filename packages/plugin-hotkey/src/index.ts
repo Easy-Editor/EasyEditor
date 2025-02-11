@@ -1,14 +1,8 @@
 import { type PluginCreator, TRANSFORM_STAGE, clipboard, insertChildren } from '@easy-editor/core'
 import { HOTKEY_MAP } from './const'
+import { isFormEvent } from './utils'
 
-interface HotkeyPluginOptions {
-  copy?: boolean
-  paste?: boolean
-}
-
-const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = options => {
-  const { copy = false } = options || {}
-
+const HotkeyPlugin: PluginCreator = () => {
   return {
     name: 'HotkeyPlugin',
     deps: [],
@@ -69,9 +63,13 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = options => {
         selection.clear()
       })
 
-      hotkey.bind(HOTKEY_MAP.COPY, async () => {
-        const selected = designer.selection.getTopNodes(false)
+      hotkey.bind(HOTKEY_MAP.COPY, e => {
+        const doc = project.currentDocument
+        if (isFormEvent(e) || !doc) {
+          return
+        }
 
+        const selected = designer.selection.getTopNodes(false)
         if (!selected || selected.length < 1) {
           return
         }
@@ -82,9 +80,37 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = options => {
         clipboard.setData(data)
       })
 
+      hotkey.bind(HOTKEY_MAP.CUT, e => {
+        const doc = project.currentDocument
+        if (isFormEvent(e) || !doc) {
+          return
+        }
+
+        const selection = designer.selection
+        const selected = selection.getTopNodes(false)
+        if (!selected || selected.length < 1) {
+          return
+        }
+
+        const componentsTree = selected.map(item => item?.export(TRANSFORM_STAGE.CLONE))
+        const data = { type: 'NodeSchema', componentsMap: {}, componentsTree }
+
+        clipboard.setData(data)
+
+        for (const node of selected) {
+          node?.parent?.select()
+          node.remove()
+        }
+        selection.clear()
+      })
+
       hotkey.bind(HOTKEY_MAP.PASTE, e => {
         const doc = project.currentDocument
         const selection = designer.selection
+
+        if (isFormEvent(e) || !doc) {
+          return
+        }
 
         clipboard.waitPasteData(e, ({ componentsTree }) => {
           if (componentsTree) {
@@ -100,6 +126,31 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = options => {
             }
           }
         })
+      })
+
+      hotkey.bind(HOTKEY_MAP.DELETE, e => {
+        const doc = project.currentDocument
+        const selection = designer.selection
+
+        if (isFormEvent(e) || !doc) {
+          return
+        }
+
+        const nodes = selection.getTopNodes()
+        for (const node of nodes) {
+          node && doc?.removeNode(node)
+        }
+        selection.clear()
+      })
+
+      hotkey.bind(HOTKEY_MAP.CLEAR_SELECTION, e => {
+        const selection = designer.selection
+
+        if (isFormEvent(e) || !selection) {
+          return
+        }
+
+        selection.clear()
       })
     },
   }
