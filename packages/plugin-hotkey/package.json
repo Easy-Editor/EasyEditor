@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/plugin-hotkey",
-  "version": "0.0.1-alpha.0",
+  "version": "0.0.1",
   "description": "Hotkey plugin for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
