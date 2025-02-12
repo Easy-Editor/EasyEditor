@@ -1,5 +1,17 @@
 # @easy-editor/plugin-dashboard
 
+## 0.0.2
+
+### Patch Changes
+
+- 1c9ec92: chore: remove package's CHANGELOG.md
+- eaf4ff7: fix: react@19-18 ref error
+- abb00ee: fix: postcss build
+- Updated dependencies [92574e0]
+- Updated dependencies [1c9ec92]
+- Updated dependencies [6f282a3]
+  - @easy-editor/core@0.0.3
+
 ## 0.0.2-alpha.1
 
 ### Patch Changes
