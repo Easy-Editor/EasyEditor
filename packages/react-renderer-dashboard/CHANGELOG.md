@@ -1,5 +1,23 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.2
+
+### Patch Changes
+
+- da54175: perf: remove thisRequiredInJSE
+- ca396de: feat: update
+- d59eab1: chore: remove package's CHANGELOG.md
+- b5899e6: perf: add --color-guideline variable
+- 2d0a1fa: build: move mobx,mobx-react to peerDependencies
+- Updated dependencies [da54175]
+- Updated dependencies [ca396de]
+- Updated dependencies [d59eab1]
+- Updated dependencies [0c4970d]
+- Updated dependencies [2d0a1fa]
+  - @easy-editor/react-renderer@0.0.2
+  - @easy-editor/core@0.0.3
+  - @easy-editor/plugin-dashboard@0.0.2
+
 ## 0.0.2-alpha.2
 
 ### Patch Changes
