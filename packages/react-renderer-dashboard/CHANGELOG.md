@@ -1,5 +1,14 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.3
+
+### Patch Changes
+
+- Updated dependencies [29cf0a6]
+  - @easy-editor/core@0.0.4
+  - @easy-editor/plugin-dashboard@0.0.3
+  - @easy-editor/react-renderer@0.0.3
+
 ## 0.0.2
 
 ### Patch Changes

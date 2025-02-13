@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.4
+
+### Patch Changes
+
+- 29cf0a6: fix: naoid env error
+
 ## 0.0.3
 
 ### Patch Changes
