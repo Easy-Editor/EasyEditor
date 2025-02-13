@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.5
+
+### Patch Changes
+
+- 8a49484: build: perf build workflow
+
 ## 0.0.4
 
 ### Patch Changes
