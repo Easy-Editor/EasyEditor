@@ -6,6 +6,7 @@ import cleanup from 'rollup-plugin-cleanup'
 const plugins = [
   nodeResolve({
     extensions: ['.js', '.ts'],
+    browser: true,
   }),
   babel({
     extensions: ['.js', '.ts'],
