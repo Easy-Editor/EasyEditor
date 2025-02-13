@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/plugin-dashboard",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Dashboard plugin for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
@@ -54,7 +54,7 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "^0.0.1",
+    "@easy-editor/core": "^0.0.5",
     "mobx": "^6.13.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -64,5 +64,4 @@
   "devDependencies": {
     "@easy-editor/core": "workspace:*"
   }
-
 }
