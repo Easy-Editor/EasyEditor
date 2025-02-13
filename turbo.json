@@ -5,7 +5,8 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+      "cache": false
     },
     "dev": {
       "cache": false,
@@ -18,7 +19,10 @@
       "dependsOn": ["^format"]
     },
     "types": {
-      "dependsOn": ["^types"]
+      "dependsOn": ["^types"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+      "cache": false
     },
     "test-types": {
       "dependsOn": ["^test-types"]

@@ -171,9 +171,6 @@ importers:
 
   packages/plugin-dashboard:
     dependencies:
-      '@easy-editor/core':
-        specifier: workspace:*
-        version: link:../core
       '@types/react':
         specifier: ^18.3.12
         version: 18.3.18
@@ -189,18 +186,19 @@ importers:
       react-dom:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@easy-editor/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/plugin-hotkey:
-    dependencies:
+    devDependencies:
       '@easy-editor/core':
         specifier: workspace:*
         version: link:../core
 
   packages/react-renderer:
     dependencies:
-      '@easy-editor/core':
-        specifier: workspace:*
-        version: link:../core
       '@types/react':
         specifier: ^18.3.12
         version: 18.3.18
@@ -226,6 +224,9 @@ importers:
         specifier: ^18.3.1
         version: 18.3.1
     devDependencies:
+      '@easy-editor/core':
+        specifier: workspace:*
+        version: link:../core
       '@types/lodash-es':
         specifier: ^4.17.12
         version: 4.17.12
@@ -238,15 +239,6 @@ importers:
 
   packages/react-renderer-dashboard:
     dependencies:
-      '@easy-editor/core':
-        specifier: workspace:*
-        version: link:../core
-      '@easy-editor/plugin-dashboard':
-        specifier: workspace:*
-        version: link:../plugin-dashboard
-      '@easy-editor/react-renderer':
-        specifier: workspace:*
-        version: link:../react-renderer
       '@types/react':
         specifier: ^18.3.12
         version: 18.3.18
@@ -269,6 +261,15 @@ importers:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
     devDependencies:
+      '@easy-editor/core':
+        specifier: workspace:*
+        version: link:../core
+      '@easy-editor/plugin-dashboard':
+        specifier: workspace:*
+        version: link:../plugin-dashboard
+      '@easy-editor/react-renderer':
+        specifier: workspace:*
+        version: link:../react-renderer
       '@types/lodash-es':
         specifier: ^4.17.12
         version: 4.17.12

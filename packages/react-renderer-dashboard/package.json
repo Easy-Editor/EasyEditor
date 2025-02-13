@@ -56,8 +56,8 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "workspace:*",
-    "@easy-editor/plugin-dashboard": "workspace:*",
+    "@easy-editor/core": "^0.0.1",
+    "@easy-editor/plugin-dashboard": "^0.0.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "react": "^18.3.1",
@@ -66,10 +66,12 @@
     "mobx-react": "^9.2.0"
   },
   "dependencies": {
-    "@easy-editor/react-renderer": "workspace:*",
     "lodash-es": "^4.17.21"
   },
   "devDependencies": {
+    "@easy-editor/core": "workspace:*",
+    "@easy-editor/plugin-dashboard": "workspace:*",
+    "@easy-editor/react-renderer": "workspace:*",
     "@types/lodash-es": "^4.17.12"
   }
 }

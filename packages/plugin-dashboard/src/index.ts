@@ -14,6 +14,8 @@ import { GuideLine } from './designer/guideline'
 import { GroupComponent, GroupComponentMeta } from './materials/group'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
+export * from './type'
+
 interface DashboardPluginOptions {
   group?: {
     schema?: NodeSchema
