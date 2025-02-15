@@ -4,7 +4,7 @@ import nodeResolve from '@rollup/plugin-node-resolve'
 import cleanup from 'rollup-plugin-cleanup'
 import pkg from './package.json' assert { type: 'json' }
 
-const external = Object.keys(pkg.peerDependencies)
+const external = [...Object.keys(pkg.peerDependencies), 'react/jsx-runtime']
 
 const plugins = [
   nodeResolve({

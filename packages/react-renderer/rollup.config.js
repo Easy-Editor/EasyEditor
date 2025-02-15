@@ -5,7 +5,7 @@ import replace from '@rollup/plugin-replace'
 import cleanup from 'rollup-plugin-cleanup'
 import pkg from './package.json' assert { type: 'json' }
 
-const external = [...Object.keys(pkg.peerDependencies), 'mobx-react-lite', 'mobx-react', 'mobx', 'lodash-es']
+const external = [...Object.keys(pkg.peerDependencies), 'mobx-react-lite', 'mobx-react', 'mobx', 'react/jsx-runtime']
 
 const plugins = [
   nodeResolve({

@@ -56,10 +56,8 @@
   "peerDependencies": {
     "@easy-editor/core": "^0.0.5",
     "mobx": "^6.13.5",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1"
+    "react": "^18 || ^19",
+    "@types/react": "^18 || ^19"
   },
   "devDependencies": {
     "@easy-editor/core": "workspace:*"

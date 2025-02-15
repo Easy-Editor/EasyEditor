@@ -6,7 +6,14 @@ import cleanup from 'rollup-plugin-cleanup'
 import postcss from 'rollup-plugin-postcss'
 import pkg from './package.json' assert { type: 'json' }
 
-const external = [...Object.keys(pkg.peerDependencies), 'mobx-react-lite', 'mobx-react', 'mobx', 'lodash-es']
+const external = [
+  ...Object.keys(pkg.peerDependencies),
+  'mobx-react-lite',
+  'mobx-react',
+  'mobx',
+  'react/jsx-runtime',
+  'react-dom/client',
+]
 
 const plugins = [
   nodeResolve({

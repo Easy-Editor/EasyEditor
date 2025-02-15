@@ -58,12 +58,12 @@
   "peerDependencies": {
     "@easy-editor/core": "^0.0.5",
     "@easy-editor/plugin-dashboard": "^0.0.4",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "mobx": "^6.13.5",
-    "mobx-react": "^9.2.0"
+    "mobx-react": "^9.2.0",
+    "react": "^18 || ^19",
+    "react-dom": "^18 || ^19",
+    "@types/react": "^18 || ^19",
+    "@types/react-dom": "^18 || ^19"
   },
   "dependencies": {
     "lodash-es": "^4.17.21"
