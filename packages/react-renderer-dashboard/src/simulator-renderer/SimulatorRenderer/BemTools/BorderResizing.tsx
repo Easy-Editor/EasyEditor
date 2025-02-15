@@ -1126,7 +1126,8 @@ interface BorderResizingProps {
 export const BorderResizing: React.FC<BorderResizingProps> = observer(({ host }) => {
   const { selection } = host.designer
   const dragging = host.designer.dragon.dragging
-  const selecting = dragging ? selection.getTopNodes() : selection.getNodes()
+  let selecting = dragging ? selection.getTopNodes() : selection.getNodes()
+  selecting = selecting.filter(node => !node.isRoot)
 
   if (!selecting) {
     return null
