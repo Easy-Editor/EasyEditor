@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/react-renderer-dashboard",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "React Renderer for Dashboard package for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
@@ -57,7 +57,7 @@
   },
   "peerDependencies": {
     "@easy-editor/core": "^0.0.5",
-    "@easy-editor/plugin-dashboard": "^0.0.4",
+    "@easy-editor/plugin-dashboard": "^0.0.5",
     "mobx": "^6.13.5",
     "mobx-react": "^9.2.0",
     "react": "^18 || ^19",

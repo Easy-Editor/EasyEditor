@@ -1,5 +1,11 @@
 # @easy-editor/plugin-dashboard
 
+## 0.0.5
+
+### Patch Changes
+
+- 6682a96: build: perf bundle size
+
 ## 0.0.4
 
 ### Patch Changes

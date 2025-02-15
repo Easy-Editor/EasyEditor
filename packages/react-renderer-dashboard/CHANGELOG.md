@@ -1,5 +1,14 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.5
+
+### Patch Changes
+
+- 2d2f7f4: fix: bemtools filter rootNode
+- 6682a96: build: perf bundle size
+- Updated dependencies [6682a96]
+  - @easy-editor/plugin-dashboard@0.0.5
+
 ## 0.0.4
 
 ### Patch Changes
