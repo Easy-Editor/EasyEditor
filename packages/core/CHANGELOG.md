@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.7
+
+### Patch Changes
+
+- 13293b6: fix: cancel default select rootNode
+
 ## 0.0.6
 
 ### Patch Changes
