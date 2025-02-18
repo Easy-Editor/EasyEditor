@@ -286,6 +286,8 @@ export class Simulator {
         }
         const nodeInst = this.getNodeInstanceFromElement(downEvent.target as Element)
         const { rootNode } = documentModel
+        // const node = getClosestClickableNode(nodeInst?.node || rootNode, downEvent)
+        // TODO: 默认不选择根节点，不然点击外部任意位置，都会选中根节点，后面想想有没有其他办法
         const node = getClosestClickableNode(nodeInst?.node || rootNode, downEvent)
         // 如果找不到可点击的节点，直接返回
         if (!node) {
