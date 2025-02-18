@@ -105,6 +105,11 @@ export interface FieldConfig {
   name?: PropKey
 
   /**
+   * the field key, for group items
+   */
+  key?: string
+
+  /**
    * the field title, for configure tooltip
    */
   title?: string

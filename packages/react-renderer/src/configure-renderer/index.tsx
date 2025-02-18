@@ -39,6 +39,11 @@ const SettingFieldGroup = observer<React.FC<SettingFieldProps>>(({ field }) => {
     )
   }
 
+  // 如果 field 没有 setter，则理解为其 父级 field 的 items 数据
+  if (!field.setter) {
+    return field.items?.map(item => <SettingFieldView key={item.id} field={item} />)
+  }
+
   return (
     <SettingSetter field={field}>
       {field.items?.map(item => (

@@ -1,4 +1,5 @@
-import type { Component } from '../designer'
+import type { Node } from '..'
+import type { Component, SettingField } from '../designer'
 
 import { action } from 'mobx'
 import { logger } from '../utils'
@@ -7,8 +8,13 @@ import { logger } from '../utils'
  * for setter component props
  */
 export interface SetterProps<T = unknown> {
+  field: SettingField
+  selected: Node
+  initialValue?: T
   value: T
   onChange: (val: T) => void
+  onInitial: () => void
+  removeProp: () => void
 }
 
 export interface Setter {
