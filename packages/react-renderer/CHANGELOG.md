@@ -1,5 +1,13 @@
 # @easy-editor/react-renderer
 
+## 0.0.8
+
+### Patch Changes
+
+- 5d41297: perf: add some prop
+- Updated dependencies [5d41297]
+  - @easy-editor/core@0.0.8
+
 ## 0.0.7
 
 ### Patch Changes

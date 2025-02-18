@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.8
+
+### Patch Changes
+
+- 5d41297: perf: add some prop
+
 ## 0.0.7
 
 ### Patch Changes
