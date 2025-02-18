@@ -1,5 +1,14 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.6
+
+### Patch Changes
+
+- 3cad9b8: fix: ignore rootNode's detecting
+- Updated dependencies [62a83ed]
+  - @easy-editor/core@0.0.6
+  - @easy-editor/plugin-dashboard@0.0.6
+
 ## 0.0.5
 
 ### Patch Changes

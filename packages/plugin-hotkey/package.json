@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/plugin-hotkey",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Hotkey plugin for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
@@ -54,7 +54,7 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "^0.0.5"
+    "@easy-editor/core": "^0.0.6"
   },
   "devDependencies": {
     "@easy-editor/core": "workspace:*"
