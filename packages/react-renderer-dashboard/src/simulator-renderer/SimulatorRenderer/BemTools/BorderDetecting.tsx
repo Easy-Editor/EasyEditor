@@ -37,7 +37,7 @@ export const BorderDetecting: React.FC<BorderDetectingProps> = observer(({ host 
   const curDoc = host.currentDocument
   const { selection } = host.designer
   const { current } = host.designer.detecting
-  if (!current || current.document !== curDoc || selection.has(current.id)) {
+  if (!current || current.document !== curDoc || selection.has(current.id) || current.id === curDoc.rootNode?.id) {
     return null
   }
 
