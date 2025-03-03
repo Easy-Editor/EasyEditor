@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.9
+
+### Patch Changes
+
+- 944bc94: feat: field setValue add oldValue
+
 ## 0.0.8
 
 ### Patch Changes

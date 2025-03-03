@@ -1,5 +1,13 @@
 # @easy-editor/react-renderer
 
+## 0.0.9
+
+### Patch Changes
+
+- 944bc94: feat: field setValue add oldValue
+- Updated dependencies [944bc94]
+  - @easy-editor/core@0.0.9
+
 ## 0.0.8
 
 ### Patch Changes
