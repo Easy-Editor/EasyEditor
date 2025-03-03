@@ -149,7 +149,7 @@ export interface FieldExtraProps {
   /**
    * set value for field
    */
-  setValue?: (target: SettingField, value: any) => void
+  setValue?: (target: SettingField, value: any, oldValue?: any) => void
 
   /**
    * the field conditional show, is not set always true

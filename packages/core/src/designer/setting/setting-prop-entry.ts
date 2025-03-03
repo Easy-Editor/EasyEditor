@@ -183,7 +183,7 @@ export class SettingPropEntry implements SettingEntry {
     const { setValue } = this.extraProps
     if (setValue && !extraOptions?.disableMutator) {
       try {
-        setValue(this as unknown as SettingField, val)
+        setValue(this as unknown as SettingField, val, oldValue)
       } catch (e) {
         /* istanbul ignore next */
         console.warn(e)
