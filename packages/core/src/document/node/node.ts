@@ -415,6 +415,10 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     this.setPropValue(getConvertedExtraKey(key), value)
   }
 
+  clearExtraPropValue(key: string): void {
+    this.getProp(getConvertedExtraKey(key), false)?.unset()
+  }
+
   clearPropValue(path: string): void {
     this.getProp(path, false)?.unset()
   }
