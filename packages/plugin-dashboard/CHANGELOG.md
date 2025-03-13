@@ -1,5 +1,14 @@
 # @easy-editor/plugin-dashboard
 
+## 0.0.10
+
+### Patch Changes
+
+- b3666f5: fix: snippet's dnd loc error
+- Updated dependencies [f0dc7d1]
+- Updated dependencies [b3666f5]
+  - @easy-editor/core@0.0.10
+
 ## 0.0.9
 
 ### Patch Changes
