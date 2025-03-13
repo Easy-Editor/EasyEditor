@@ -1,5 +1,12 @@
 # @easy-editor/core
 
+## 0.0.10
+
+### Patch Changes
+
+- f0dc7d1: feat(core): add clearExtraPropValue
+- b3666f5: fix: snippet's dnd loc error
+
 ## 0.0.9
 
 ### Patch Changes
