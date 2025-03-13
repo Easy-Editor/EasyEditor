@@ -154,7 +154,7 @@ export class Dragon {
         return
       }
 
-      this.boost(dragObject, e)
+      this.boost(dragObject, e, shell)
     }
     if (eventType === 'drag') {
       shell.draggable = true
@@ -177,9 +177,10 @@ export class Dragon {
    * boost your dragObject for dragging(flying)
    * @param dragObject drag object
    * @param boostEvent drag start event
+   * @param shell shell element(which trigger the boost)
    */
   @action
-  boost(dragObject: DragObject, boostEvent: MouseEvent | DragEvent) {
+  boost(dragObject: DragObject, boostEvent: MouseEvent | DragEvent, shell?: HTMLElement) {
     const { designer } = this
     const masterSensors = this.getMasterSensors()
     const handleEvents = makeEventsHandler(boostEvent, masterSensors)
@@ -239,7 +240,7 @@ export class Dragon {
         })
       }
 
-      this.emitter.emit(DRAGON_EVENT.DRAGSTART, locateEvent)
+      this.emitter.emit(DRAGON_EVENT.DRAGSTART, { ...locateEvent, shell })
     }
 
     // drag move
@@ -468,7 +469,17 @@ export class Dragon {
     }
   }
 
-  onDragstart(func: (e: LocateEvent) => void) {
+  onDragstart(
+    func: (
+      e: LocateEvent & {
+        /**
+         * 触发拖拽的元素
+         * @description 目前用于 Snippet
+         */
+        shell?: HTMLElement
+      },
+    ) => void,
+  ) {
     this.emitter.on(DRAGON_EVENT.DRAGSTART, func)
 
     return () => {

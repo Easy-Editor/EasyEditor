@@ -40,6 +40,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
     deps: [],
     init(ctx) {
       const { designer, simulator, componentMetaManager, hotkey, logger } = ctx
+      const { viewport } = simulator
 
       // test hotkey
       hotkey.bind('ctrl+d', e => {
@@ -60,11 +61,14 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       const startOffsetNodeData = { x: 0, y: 0 }
 
       designer.dragon.onDragstart(e => {
+        if (!e.shell) return
+
         const { dragObject } = e
+        const shellRect = simulator.computeComponentInstanceRect(e.shell)
 
         if (dragObject && dragObject.type === DragObjectType.NodeData) {
-          startOffsetNodeData.x = e.globalX! - (e.target as HTMLElement).offsetLeft
-          startOffsetNodeData.y = e.globalY! - (e.target as HTMLElement).offsetTop
+          startOffsetNodeData.x = (e.globalX! - shellRect?.left!) / viewport.scale
+          startOffsetNodeData.y = (e.globalY! - shellRect?.top!) / viewport.scale
         }
       })
 
