@@ -499,7 +499,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    * insert a node at a specific position or a reference node
    */
   insert(node: Node, ref?: Node | number, useMutator = true) {
-    if (ref && typeof ref === 'number') {
+    if (ref !== undefined && typeof ref === 'number') {
       const nodeInstance = ensureNode(node, this.document)
       this.children?.internalInsert(nodeInstance, ref, useMutator)
     } else {

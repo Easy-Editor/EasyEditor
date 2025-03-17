@@ -68,6 +68,31 @@ declare module '@easy-editor/core' {
      * 获取当前 Group 下的所有 Node
      */
     getAllNodesInGroup(): Node[]
+
+    /**
+     * 移动到指定层级
+     */
+    moveToLevel(level: number): void
+
+    /**
+     * 置顶
+     */
+    levelTop(): void
+
+    /**
+     * 置底
+     */
+    levelBottom(): void
+
+    /**
+     * 上移一层
+     */
+    levelUp(): void
+
+    /**
+     * 下移一层
+     */
+    levelDown(): void
   }
 
   interface NodeSchema {

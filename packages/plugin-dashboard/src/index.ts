@@ -275,6 +275,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       /* ---------------------------------- Node ---------------------------------- */
       const originalInitProps = Node.prototype.initBuiltinProps
       extend('Node', {
+        // Dashboard
         getDashboardContainer: {
           value(this: Node) {
             return document.getElementById(`${this.id}-mask`)
@@ -324,6 +325,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
             }
           },
         },
+        // Group
         isGroup: {
           get(this: Node) {
             return this.getExtraPropValue('isGroup')
@@ -392,7 +394,6 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
             return nodes
           },
         },
-        // override
         initBuiltinProps: {
           value(this: Node) {
             // 实现类似 super.initBuiltinProps 的效果
@@ -400,6 +401,36 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
             originalInitProps.call(this)
 
             this.props.has(getConvertedExtraKey('isGroup')) || this.props.add(getConvertedExtraKey('isGroup'), false)
+          },
+        },
+        // Level
+        moveToLevel: {
+          value(this: Node, level: number) {
+            if (level < -1 || level >= this.parent!.childrenNodes.length) return
+            if (this.index === level) return
+            if (this.isRoot) return
+
+            this.parent!.insert(this, level)
+          },
+        },
+        levelTop: {
+          value(this: Node) {
+            this.moveToLevel(0)
+          },
+        },
+        levelBottom: {
+          value(this: Node) {
+            this.moveToLevel(-1)
+          },
+        },
+        levelUp: {
+          value(this: Node) {
+            this.moveToLevel(this.index - 1)
+          },
+        },
+        levelDown: {
+          value(this: Node) {
+            this.moveToLevel(this.index + 1)
           },
         },
       })

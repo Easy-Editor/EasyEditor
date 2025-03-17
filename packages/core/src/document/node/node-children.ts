@@ -210,10 +210,6 @@ export class NodeChildren {
         return
       }
 
-      if (index === i) {
-        return
-      }
-
       children.splice(index, 1)
       children.splice(i, 0, node)
     }
