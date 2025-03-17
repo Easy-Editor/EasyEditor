@@ -5,17 +5,13 @@ import { Component } from 'react'
 export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInfo, scope }: ComponentHocInfo) {
   // const getNode = baseRenderer.props?.getNode
   // const container = baseRenderer.props?.__container
-  // const host = baseRenderer.props?.__host
-  // const designer = host?.designer
+  const host = baseRenderer.props?.__host
+  // dashboardStyle 大屏配置信息
+  const { mask = true } = host?.get('dashboardStyle') || {}
 
   class Wrapper extends Component<any> {
-    // shouldComponentUpdate(nextProps, nextState) {
-    //   return designer?.detecting.current?.id === schema.id || designer?.selection.has(schema.id!)
-    // }
-
     render() {
-      const { forwardRef, children, __designMode, ...rest } = this.props
-
+      const { forwardRef, children, __designMode, className, ...rest } = this.props
       const rect = computeRect(schema)
 
       if (!rect) {
@@ -35,17 +31,12 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
         // mask 层
         <div
           id={`${schema.id}-container`}
+          className={`lc-simulator-component-container ${mask ? 'mask' : ''}`}
           style={{
-            position: 'absolute',
             left: rect.x,
             top: rect.y,
             width: rect.width,
             height: rect.height,
-            border: 'none',
-            userSelect: 'none',
-            touchAction: 'none',
-            pointerEvents: 'auto',
-            // boxSizing: 'border-box',
           }}
         >
           {/* 重置坐标系 */}
@@ -58,9 +49,10 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
           >
             {/* 组件坐标定位 */}
             <div
+              ref={forwardRef}
               id={`${schema.id}-mask`}
+              className='lc-simulator-component-mask'
               style={{
-                position: 'absolute',
                 left: rect.x!,
                 top: rect.y!,
                 width: rect.width,
@@ -68,7 +60,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
               }}
             >
               {/* 组件渲染 */}
-              <Comp ref={forwardRef} {...rest}>
+              <Comp className={`lc-simulator-component ${mask ? 'mask' : ''} ${className}`} {...rest}>
                 {children && (
                   // 再次重置坐标系，用于内部组件定位
                   <div
@@ -82,7 +74,6 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
                   </div>
                 )}
               </Comp>
-              {/* {createElement(Comp, { ...rest, ref: forwardRef })} */}
             </div>
           </div>
         </div>

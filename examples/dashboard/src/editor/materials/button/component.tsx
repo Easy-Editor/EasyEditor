@@ -8,7 +8,7 @@ interface ButtonProps {
 
 const Button = forwardRef((props: ButtonProps, ref: Ref<HTMLButtonElement>) => {
   return (
-    <button ref={ref} type='button' className='w-full h-full' onClick={props.onClick}>
+    <button ref={ref} type='button' className={`w-full h-full ${props.className}`} onClick={props.onClick}>
       {props?.text}
     </button>
   )

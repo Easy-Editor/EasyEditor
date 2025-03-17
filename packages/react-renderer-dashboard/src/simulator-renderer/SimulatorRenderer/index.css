@@ -55,3 +55,25 @@
     width: 100%;
   }
 }
+
+.lc-simulator-component-container {
+  position: absolute;
+  border: none;
+  user-select: none;
+  touch-action: none;
+  pointer-events: auto;
+
+  &.mask {
+    cursor: move !important;
+  }
+}
+
+.lc-simulator-component-mask {
+  position: absolute;
+}
+
+.lc-simulator-component {
+  &.mask {
+    pointer-events: none;
+  }
+}
