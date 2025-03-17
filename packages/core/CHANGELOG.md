@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.11
+
+### Patch Changes
+
+- 9d5d085: feat: node add level operation
+
 ## 0.0.10
 
 ### Patch Changes
