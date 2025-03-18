@@ -1,5 +1,13 @@
 # @easy-editor/plugin-dashboard
 
+## 0.0.12
+
+### Patch Changes
+
+- 9fcbce4: perf: schema add isRoot
+- d9d8d1c: feat: simulator add dashboardStyle
+- 2208ad1: perf: remove dom quota
+
 ## 0.0.11
 
 ### Patch Changes

@@ -1,5 +1,18 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.12
+
+### Patch Changes
+
+- 9fcbce4: perf: schema add isRoot
+- 4e476b0: style: css format
+- d9d8d1c: feat: simulator add dashboardStyle
+- 3a2fe7a: feat: add node mask
+- Updated dependencies [9fcbce4]
+- Updated dependencies [d9d8d1c]
+- Updated dependencies [2208ad1]
+  - @easy-editor/plugin-dashboard@0.0.12
+
 ## 0.0.11
 
 ### Patch Changes
