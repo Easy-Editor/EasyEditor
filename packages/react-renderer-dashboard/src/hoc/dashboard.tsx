@@ -24,8 +24,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
         return null
       }
 
-      // TODO: TEMP
-      if (schema.componentName === 'RootContainer') {
+      if (schema.isRoot) {
         return (
           <Comp ref={forwardRef} {...rest}>
             {children}

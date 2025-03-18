@@ -97,6 +97,11 @@ declare module '@easy-editor/core' {
 
   interface NodeSchema {
     /**
+     * 是否是根节点
+     */
+    isRoot?: boolean
+
+    /**
      * 是否是分组
      */
     isGroup?: boolean
