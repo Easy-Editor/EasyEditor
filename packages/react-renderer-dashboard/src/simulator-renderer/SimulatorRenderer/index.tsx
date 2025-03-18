@@ -94,13 +94,13 @@ export const SimulatorRenderer = observer(({ host, bemTools }: SimulatorRenderer
 
   return (
     // Simulator
-    <div className='lc-simulator'>
+    <div className='easy-editor'>
       {/* Canvas */}
-      <div ref={canvasRef} className='lc-simulator-canvas lc-simulator-device-default-canvas' style={canvasStyle}>
+      <div ref={canvasRef} className='easy-editor-canvas easy-editor-device-default-canvas' style={canvasStyle}>
         {/* viewport */}
         <div
           ref={viewportRef}
-          className='lc-simulator-viewport lc-simulator-device-default-viewport'
+          className='easy-editor-viewport easy-editor-device-default-viewport'
           style={{
             ...frameStyle,
             ...viewportStyle,
@@ -109,7 +109,7 @@ export const SimulatorRenderer = observer(({ host, bemTools }: SimulatorRenderer
           {/* BemTools */}
           <BemTools host={host} bemTools={bemTools} />
           {/* Content */}
-          <div ref={contentRef} className='lc-simulator-content' style={contentStyle} />
+          <div ref={contentRef} className='easy-editor-content' style={contentStyle} />
         </div>
       </div>
     </div>

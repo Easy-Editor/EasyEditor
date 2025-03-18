@@ -21,7 +21,7 @@ const BorderSelectingInstance: React.FC<BorderSelectingInstanceProps> = observer
       height: offsetHeight,
       transform: `translate3d(${offsetLeft}px, ${offsetTop}px, 0)`,
     }
-    let classname = 'lc-borders lc-borders-selecting'
+    let classname = 'easy-editor-borders easy-editor-borders-selecting'
     if (dragging) {
       classname += ' dragging'
     }
@@ -113,7 +113,7 @@ const BorderSelectingForBox: React.FC<BorderSelectingForBoxProps> = observer(({ 
     compute()
   }, [])
 
-  let classname = 'lc-borders lc-borders-selecting'
+  let classname = 'easy-editor-borders easy-editor-borders-selecting'
   if (dragging) {
     classname += ' dragging'
   }

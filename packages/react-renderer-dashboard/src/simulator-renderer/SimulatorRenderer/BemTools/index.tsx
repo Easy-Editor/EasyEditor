@@ -24,7 +24,7 @@ export const BemTools: React.FC<BemToolsProps> = observer(({ host, bemTools }) =
   const { detecting = true, resizing = true, selecting = true, guideLine = true, extra } = bemTools || ({} as any)
 
   return (
-    <div className='lc-bem-tools'>
+    <div className='easy-editor-bem-tools'>
       {detecting && <BorderDetecting host={host} />}
       {selecting && <BorderSelecting host={host} />}
       {resizing && <BorderResizing host={host} />}

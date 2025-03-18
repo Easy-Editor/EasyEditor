@@ -551,9 +551,9 @@ const BorderResizingInstance = observer(
       const offsetWidth = rect.width
       const offsetHeight = rect.height
 
-      const baseBorderClass = 'lc-borders lc-resize-border'
-      const baseSideClass = 'lc-borders lc-resize-side'
-      const baseCornerClass = 'lc-borders lc-resize-corner'
+      const baseBorderClass = 'easy-editor-borders easy-editor-resize-border'
+      const baseSideClass = 'easy-editor-borders easy-editor-resize-side'
+      const baseCornerClass = 'easy-editor-borders easy-editor-resize-corner'
 
       return (
         <div>
@@ -964,9 +964,9 @@ const BorderResizingBox = observer(
       const offsetWidth = rect.width
       const offsetHeight = rect.height
 
-      const baseBorderClass = 'lc-borders lc-resize-border'
-      const baseSideClass = 'lc-borders lc-resize-side'
-      const baseCornerClass = 'lc-borders lc-resize-corner'
+      const baseBorderClass = 'easy-editor-borders easy-editor-resize-border'
+      const baseSideClass = 'easy-editor-borders easy-editor-resize-side'
+      const baseCornerClass = 'easy-editor-borders easy-editor-resize-corner'
 
       return (
         <div>

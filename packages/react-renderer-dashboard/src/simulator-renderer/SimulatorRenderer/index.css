@@ -1,11 +1,11 @@
-.lc-simulator {
+.easy-editor {
   position: relative;
   height: 100%;
   width: 100%;
   overflow: auto;
 }
 
-.lc-simulator-canvas {
+.easy-editor-canvas {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -13,7 +13,7 @@
   width: 100%;
   overflow: hidden;
 
-  .lc-simulator-viewport {
+  .easy-editor-viewport {
     position: absolute;
     top: 0;
     bottom: 0;
@@ -23,19 +23,20 @@
 }
 
 /* TODO */
-.lc-simulator-device-default-canvas {
+.easy-editor-device-default-canvas {
   top: var(--simulator-top-distance, 16px);
   right: var(--simulator-right-distance, 16px);
   bottom: var(--simulator-bottom-distance, 16px);
   left: var(--simulator-left-distance, 16px);
   width: auto;
 }
+
 /* TODO */
-.lc-simulator-device-default-viewport {
+.easy-editor-device-default-viewport {
   box-shadow: 0 1px 40px 0 var(--color-block-background-shallow, rgba(31, 50, 88, 0.125));
 }
 
-.lc-simulator-content {
+.easy-editor-content {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -48,7 +49,7 @@
   height: 100%;
   width: 100%;
 
-  .lc-simulator-frame {
+  .easy-editor-simulator-frame {
     border: none;
     transform-origin: 0 0;
     height: 100%;
@@ -56,7 +57,7 @@
   }
 }
 
-.lc-simulator-component-container {
+.easy-editor-component-container {
   position: absolute;
   border: none;
   user-select: none;
@@ -66,14 +67,14 @@
   &.mask {
     cursor: move !important;
   }
-}
 
-.lc-simulator-component-mask {
-  position: absolute;
-}
+  .easy-editor-component-mask {
+    position: absolute;
 
-.lc-simulator-component {
-  &.mask {
-    pointer-events: none;
+    .easy-editor-component {
+      &.mask {
+        pointer-events: none;
+      }
+    }
   }
 }

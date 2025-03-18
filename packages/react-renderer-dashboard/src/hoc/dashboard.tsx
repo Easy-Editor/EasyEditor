@@ -30,8 +30,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
       return (
         // mask 层
         <div
-          id={`${schema.id}-container`}
-          className={`lc-simulator-component-container ${mask ? 'mask' : ''}`}
+          className={`easy-editor-component-container ${mask ? 'mask' : ''}`}
           style={{
             left: rect.x,
             top: rect.y,
@@ -50,8 +49,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
             {/* 组件坐标定位 */}
             <div
               ref={forwardRef}
-              id={`${schema.id}-mask`}
-              className='lc-simulator-component-mask'
+              className='easy-editor-component-mask'
               style={{
                 left: rect.x!,
                 top: rect.y!,
@@ -60,7 +58,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
               }}
             >
               {/* 组件渲染 */}
-              <Comp className={`lc-simulator-component ${mask ? 'mask' : ''} ${className}`} {...rest}>
+              <Comp className={`easy-editor-component ${mask ? 'mask' : ''} ${className}`} {...rest}>
                 {children && (
                   // 再次重置坐标系，用于内部组件定位
                   <div
