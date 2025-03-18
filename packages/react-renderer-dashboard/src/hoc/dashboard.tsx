@@ -6,8 +6,14 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
   // const getNode = baseRenderer.props?.getNode
   // const container = baseRenderer.props?.__container
   const host = baseRenderer.props?.__host
+  const isDesignMode = host?.designMode === 'design'
   // dashboardStyle 大屏配置信息
-  const { mask = true } = host?.get('dashboardStyle') || {}
+  let { mask = true } = host?.dashboardStyle || {}
+
+  // 非设计模式下，不显示 mask
+  if (!isDesignMode) {
+    mask = false
+  }
 
   class Wrapper extends Component<any> {
     render() {

@@ -8,6 +8,7 @@ import {
   type NodeSchema,
   type OffsetObserver,
   type PluginCreator,
+  type Simulator,
   getConvertedExtraKey,
 } from '@easy-editor/core'
 import { GuideLine } from './designer/guideline'
@@ -488,6 +489,14 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         },
       })
 
+      /* -------------------------------- Simulator ------------------------------- */
+      extend('Simulator', {
+        getDashboardStyle: {
+          get(this: Simulator) {
+            return this.get('dashboardStyle') || {}
+          },
+        },
+      })
       /* -------------------------------- Viewport -------------------------------- */
       /**
        * 这里需要对坐标转换的偏移做额外的处理，因为在大屏的使用中，外层画布容器使用到了 translate(-50%, -50%) 进行居中定位，但是

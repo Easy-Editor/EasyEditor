@@ -114,6 +114,17 @@ declare module '@easy-editor/core' {
 
   interface Simulator {
     /**
+     * 获取 dashboard 配置
+     */
+    dashboardStyle: {
+      /**
+       * 组件是否显示 mask 遮罩层(在 design 模式下)
+       * @default true
+       */
+      mask?: boolean
+    }
+
+    /**
      * 获取组件在 dashboard 中的位置
      */
     computeDashboardRect(node: Node): DOMRect
