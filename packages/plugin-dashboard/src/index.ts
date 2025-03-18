@@ -278,7 +278,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         // Dashboard
         getDashboardContainer: {
           value(this: Node) {
-            return document.getElementById(`${this.id}-mask`)
+            const domNodes = this.getDOMNode()
+            return domNodes.length > 0 ? domNodes[0] : null
           },
         },
         getDashboardRect: {
