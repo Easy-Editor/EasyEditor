@@ -9,7 +9,8 @@ import { isPlainObject } from 'lodash-es'
 import { action, computed, observable, runInAction, untracked } from 'mobx'
 import { type ReactInstance, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
-import { RendererView } from './RendererView'
+import { createMemoryRouter } from 'react-router'
+import { Renderer } from './RendererView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
 import { buildComponents, getClientRects } from './utils'
 
@@ -20,9 +21,21 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
   private disposeFunctions: Array<() => void> = []
 
+  router: ReturnType<typeof createMemoryRouter>
+
   @observable.ref private accessor _documentInstances: DocumentInstance[] = []
   get documentInstances() {
     return this._documentInstances
+  }
+
+  @observable private accessor _layout: any = null
+
+  @computed get layout(): any {
+    return this._layout
+  }
+
+  set layout(value: any) {
+    this._layout = value
   }
 
   private _libraryMap: { [key: string]: string } = {}
@@ -78,6 +91,9 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     this.disposeFunctions.push(
       this.host.connect(this, () => {
         runInAction(() => {
+          // sync layout config
+          this._layout = this.host.project.get('config')?.layout
+
           // todo: split with others, not all should recompute
           // if (this._libraryMap !== host.libraryMap) {
           //   this._libraryMap = host.libraryMap || {}
@@ -119,12 +135,30 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
         if (firstRun) {
           initialEntry = path
           firstRun = false
+        } else if (this.history.location.pathname !== path) {
+          this.history.replace(path)
         }
       }),
     )
+    const router = createMemoryRouter([], {
+      initialEntries: [initialEntry],
+    })
+    this.router = router
+    history.listen(location => {
+      const docId = location.pathname.slice(1)
+      docId && host.project.open(docId)
+    })
     this._appContext = {
       utils: {
         // ...getProjectUtils(this._libraryMap, host.get('utilsMetadata')),
+        router: {
+          navigate: (path: string) => {
+            router.navigate(path)
+          },
+          replace: (path: string) => {
+            router.navigate(path, { replace: true })
+          },
+        },
       },
       constants: {},
       requestHandlersMap: this._requestHandlersMap,
@@ -250,7 +284,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     }
 
     createRoot(container).render(
-      createElement(RendererView, {
+      createElement(Renderer, {
         simulatorRenderer: this,
         documentInstance: this.documentInstances[0],
         host: this.host,
