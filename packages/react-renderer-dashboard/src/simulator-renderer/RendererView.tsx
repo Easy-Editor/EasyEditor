@@ -1,6 +1,8 @@
 import { DESIGNER_EVENT, type Simulator } from '@easy-editor/core'
 import { observer } from 'mobx-react'
-import { Component, type ReactInstance } from 'react'
+import type React from 'react'
+import { Component, type ReactInstance, createElement } from 'react'
+import { RouterProvider } from 'react-router'
 import { LowCodeRenderer } from '../renderer'
 import type { DocumentInstance } from './document-instance'
 import type { SimulatorRendererContainer } from './simulator-renderer'
@@ -14,14 +16,62 @@ export function isRendererDetached() {
   return !window.parent
 }
 
-interface RendererViewProps {
-  documentInstance: DocumentInstance
+const SimulatorRendererView: React.FC<{
   simulatorRenderer: SimulatorRendererContainer
-  host: Simulator
+}> = props => {
+  const { simulatorRenderer } = props
+  return (
+    <Layout simulatorRenderer={simulatorRenderer}>
+      <RouterProvider router={simulatorRenderer.router} />
+    </Layout>
+  )
 }
 
-export const RendererView = observer(
-  class RendererView extends Component<RendererViewProps> {
+const Layout: React.FC<
+  {
+    simulatorRenderer: SimulatorRendererContainer
+  } & React.PropsWithChildren
+> = observer(props => {
+  const { simulatorRenderer, children } = props
+  const { layout } = simulatorRenderer
+
+  if (layout) {
+    const { Component, props, componentName } = layout
+    if (Component) {
+      return (
+        <Component key='layout' props={props}>
+          {children}
+        </Component>
+      )
+    }
+    if (componentName && simulatorRenderer.getComponent(componentName)) {
+      return createElement(
+        simulatorRenderer.getComponent(componentName)!,
+        {
+          ...props,
+          key: 'layout',
+        },
+        [children],
+      )
+    }
+  }
+
+  return <>{children}</>
+})
+
+const Routes: React.FC<{
+  simulatorRenderer: SimulatorRendererContainer
+}> = props => {
+  const { simulatorRenderer } = props
+  return <Routes></Routes>
+}
+
+export const Renderer = observer(
+  class Renderer extends Component<{
+    documentInstance: DocumentInstance
+    simulatorRenderer: SimulatorRendererContainer
+    host: Simulator
+  }> {
     startTime: number | null = null
     schemaChangedSymbol = false
 
@@ -73,7 +123,9 @@ export const RendererView = observer(
           designMode={designMode}
           device={device}
           documentId={document.id}
-          suspended={!document._opened}
+          // suspended={!document._opened}
+          suspended={renderer.suspended}
+          self={renderer.scope}
           getSchemaChangedSymbol={this.getSchemaChangedSymbol}
           setSchemaChangedSymbol={this.setSchemaChangedSymbol}
           getNode={(id: string) => documentInstance.getNode(id)!}
