@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.12
+
+### Patch Changes
+
+- 8560d49: perf: document open logic
+
 ## 0.0.11
 
 ### Patch Changes
