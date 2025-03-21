@@ -261,10 +261,6 @@ export class Simulator {
     }))
   }
 
-  setSuspense(suspended: boolean) {
-    return false
-  }
-
   setupEvents() {
     this.setupDragAndClick()
     this.setupDetecting()

@@ -30,7 +30,7 @@ export class Project {
 
   @computed
   get currentDocument() {
-    return this.documents.find(document => document.active)
+    return this.documents.find(document => document.opened)
   }
 
   @observable private accessor _config: Record<string, any> | undefined
@@ -188,16 +188,15 @@ export class Project {
       return this.createDocument().open()
     }
 
-    if (typeof idOrDoc === 'string' || typeof idOrDoc === 'number') {
-      const got = this.documents.find(item => item.fileName === String(idOrDoc) || String(item.id) === String(idOrDoc))
+    if (typeof idOrDoc === 'string') {
+      const got = this.documents.find(doc => doc.id === idOrDoc)
       if (got) {
         return got.open()
       }
 
-      const data = this.data.componentsTree.find(data => data.fileName === String(idOrDoc))
+      const data = this.data.componentsTree.find(data => data.fileName === idOrDoc)
       if (data) {
-        const doc = this.createDocument(data)
-        return doc.open()
+        return this.createDocument(data).open()
       }
 
       return null
