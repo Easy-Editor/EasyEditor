@@ -5,14 +5,14 @@ import {
   isElement,
 } from '@easy-editor/core'
 import type { RendererProps } from '@easy-editor/react-renderer'
+import { type MemoryHistory, createMemoryHistory } from 'history'
 import { isPlainObject } from 'lodash-es'
 import { action, computed, observable, runInAction, untracked } from 'mobx'
 import { type ReactInstance, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createMemoryRouter } from 'react-router'
-import { Renderer } from './RendererView'
+import { SimulatorRendererView } from './RendererView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
-import { buildComponents, getClientRects } from './utils'
+import { buildComponents, getClientRects, withQueryParams } from './utils'
 
 export class SimulatorRendererContainer implements ISimulatorRenderer {
   readonly isSimulatorRenderer = true
@@ -21,7 +21,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
   private disposeFunctions: Array<() => void> = []
 
-  router: ReturnType<typeof createMemoryRouter>
+  history: MemoryHistory
 
   @observable.ref private accessor _documentInstances: DocumentInstance[] = []
   get documentInstances() {
@@ -115,7 +115,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       }),
     )
     const documentInstanceMap = new Map<string, DocumentInstance>()
-    let initialEntry = '/'
+    let initialEntry = '/index'
     let firstRun = true
     this.disposeFunctions.push(
       this.host.autorun(() => {
@@ -129,34 +129,36 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
             return inst
           })
         })
+
         const path = this.host.project.currentDocument
           ? documentInstanceMap.get(this.host.project.currentDocument.id)!.path
-          : '/'
+          : '/index'
+
         if (firstRun) {
           initialEntry = path
           firstRun = false
         } else if (this.history.location.pathname !== path) {
-          this.history.replace(path)
+          this.history.push(path, { replace: true })
         }
       }),
     )
-    const router = createMemoryRouter([], {
-      initialEntries: [initialEntry],
-    })
-    this.router = router
-    history.listen(location => {
+
+    const history = createMemoryHistory({ initialEntries: [initialEntry] })
+    history.listen(({ location }) => {
       const docId = location.pathname.slice(1)
-      docId && host.project.open(docId)
+      docId && this.host.project.open(docId)
     })
+    this.history = history
+
     this._appContext = {
       utils: {
         // ...getProjectUtils(this._libraryMap, host.get('utilsMetadata')),
         router: {
-          navigate: (path: string) => {
-            router.navigate(path)
+          navigate: (path: string, param?: object) => {
+            history.push(withQueryParams(path, param))
           },
-          replace: (path: string) => {
-            router.navigate(path, { replace: true })
+          replace: (path: string, param?: object) => {
+            history.replace(withQueryParams(path, param))
           },
         },
       },
@@ -284,10 +286,8 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     }
 
     createRoot(container).render(
-      createElement(Renderer, {
+      createElement(SimulatorRendererView, {
         simulatorRenderer: this,
-        documentInstance: this.documentInstances[0],
-        host: this.host,
       }),
     )
 

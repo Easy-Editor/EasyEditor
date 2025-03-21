@@ -56,3 +56,31 @@ export function getClientRects(node: Element | Text) {
   cycleRange.selectNode(node)
   return Array.from(cycleRange.getClientRects())
 }
+
+/**
+ * Stringify object to query parammeters
+ * @param  {Object} obj
+ * @return {String}
+ */
+export function stringifyQuery(obj: any): string {
+  const param: string[] = []
+  Object.keys(obj).forEach(key => {
+    let value = obj[key]
+    if (value && typeof value === 'object') {
+      value = JSON.stringify(value)
+    }
+    param.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+  })
+  return param.join('&')
+}
+
+export function withQueryParams(url: string, params?: object) {
+  const queryStr = params ? stringifyQuery(params) : ''
+  if (queryStr === '') {
+    return url
+  }
+  const urlSplit = url.split('#')
+  const hash = urlSplit[1] ? `#${urlSplit[1]}` : ''
+  const urlWithoutHash = urlSplit[0]
+  return `${urlWithoutHash}${~urlWithoutHash.indexOf('?') ? '&' : '?'}${queryStr}${hash}`
+}
