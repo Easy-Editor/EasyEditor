@@ -176,6 +176,10 @@ export class Project {
     return this.documents.find(doc => doc.id === id)
   }
 
+  getDocumentByFileName(fileName: string) {
+    return this.documents.find(doc => doc.fileName === fileName)
+  }
+
   /**
    * open or create a document
    */
