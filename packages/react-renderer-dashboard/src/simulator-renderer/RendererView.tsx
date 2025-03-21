@@ -1,8 +1,8 @@
-import { DESIGNER_EVENT } from '@easy-editor/core'
+import { DESIGNER_EVENT, type Simulator } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import type React from 'react'
 import { Component, type ReactInstance, createElement } from 'react'
-import { unstable_HistoryRouter as HistoryRouter, Route, Routes } from 'react-router'
+import { RouterProvider } from 'react-router'
 import { LowCodeRenderer } from '../renderer'
 import type { DocumentInstance } from './document-instance'
 import type { SimulatorRendererContainer } from './simulator-renderer'
@@ -16,16 +16,14 @@ export function isRendererDetached() {
   return !window.parent
 }
 
-export const SimulatorRendererView: React.FC<{
+const SimulatorRendererView: React.FC<{
   simulatorRenderer: SimulatorRendererContainer
 }> = props => {
   const { simulatorRenderer } = props
   return (
-    <HistoryRouter history={simulatorRenderer.history}>
-      <Layout simulatorRenderer={simulatorRenderer}>
-        <RouteList simulatorRenderer={simulatorRenderer} />
-      </Layout>
-    </HistoryRouter>
+    <Layout simulatorRenderer={simulatorRenderer}>
+      <RouterProvider router={simulatorRenderer.router} />
+    </Layout>
   )
 }
 
@@ -61,28 +59,18 @@ const Layout: React.FC<
   return <>{children}</>
 })
 
-const RouteList: React.FC<{
+const Routes: React.FC<{
   simulatorRenderer: SimulatorRendererContainer
 }> = props => {
   const { simulatorRenderer } = props
-
-  return (
-    <Routes>
-      {simulatorRenderer.documentInstances.map(inst => (
-        <Route
-          key={inst.path}
-          path={inst.path}
-          element={<Renderer documentInstance={inst} simulatorRenderer={simulatorRenderer} />}
-        />
-      ))}
-    </Routes>
-  )
+  return <Routes></Routes>
 }
 
 export const Renderer = observer(
   class Renderer extends Component<{
     documentInstance: DocumentInstance
     simulatorRenderer: SimulatorRendererContainer
+    host: Simulator
   }> {
     startTime: number | null = null
     schemaChangedSymbol = false
@@ -93,10 +81,9 @@ export const Renderer = observer(
 
     recordTime() {
       if (this.startTime) {
-        const { host } = this.props.simulatorRenderer
         const time = Date.now() - this.startTime
-        const nodeCount = host.currentDocument?.getNodeCount?.()
-        host.designer.postEvent(DESIGNER_EVENT.NODE_RENDER, {
+        const nodeCount = this.props.host.currentDocument?.getNodeCount?.()
+        this.props.host.designer.postEvent(DESIGNER_EVENT.NODE_RENDER, {
           componentName: 'Renderer',
           type: 'All',
           time,
@@ -118,8 +105,7 @@ export const Renderer = observer(
     }
 
     render() {
-      const { documentInstance, simulatorRenderer: renderer } = this.props
-      const { host } = renderer
+      const { documentInstance, simulatorRenderer: renderer, host } = this.props
       const { container, document } = documentInstance
       const { designMode, device } = container
       this.startTime = Date.now()
@@ -137,7 +123,9 @@ export const Renderer = observer(
           designMode={designMode}
           device={device}
           documentId={document.id}
-          suspended={documentInstance.suspended}
+          // suspended={!document._opened}
+          suspended={renderer.suspended}
+          self={renderer.scope}
           getSchemaChangedSymbol={this.getSchemaChangedSymbol}
           setSchemaChangedSymbol={this.setSchemaChangedSymbol}
           getNode={(id: string) => documentInstance.getNode(id)!}
