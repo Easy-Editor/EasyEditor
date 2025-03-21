@@ -115,8 +115,6 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       }),
     )
     const documentInstanceMap = new Map<string, DocumentInstance>()
-    let initialEntry = '/index'
-    let firstRun = true
     this.disposeFunctions.push(
       this.host.autorun(() => {
         runInAction(() => {
@@ -132,18 +130,15 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
         const path = this.host.project.currentDocument
           ? documentInstanceMap.get(this.host.project.currentDocument.id)!.path
-          : '/index'
+          : '/'
 
-        if (firstRun) {
-          initialEntry = path
-          firstRun = false
-        } else if (this.history.location.pathname !== path) {
+        if (this.history.location.pathname !== path) {
           this.history.push(path, { replace: true })
         }
       }),
     )
 
-    const history = createMemoryHistory({ initialEntries: [initialEntry] })
+    const history = createMemoryHistory({ initialEntries: ['/'] })
     history.listen(({ location }) => {
       const docId = location.pathname.slice(1)
       docId && this.host.project.open(docId)

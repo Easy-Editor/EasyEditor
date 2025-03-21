@@ -65,7 +65,6 @@ const RouteList: React.FC<{
   simulatorRenderer: SimulatorRendererContainer
 }> = observer(props => {
   const { simulatorRenderer } = props
-
   return (
     <Routes>
       {simulatorRenderer.documentInstances.map(inst => (
