@@ -1,5 +1,16 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.13
+
+### Patch Changes
+
+- 02bd1ae: fix: detecting rootNode
+- 6287c7e: feat: add Router
+- d66b56c: fix: types build error
+- Updated dependencies [8560d49]
+  - @easy-editor/core@0.0.12
+  - @easy-editor/plugin-dashboard@0.0.13
+
 ## 0.0.12
 
 ### Patch Changes
