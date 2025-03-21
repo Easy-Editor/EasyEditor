@@ -27,6 +27,23 @@ export class Document {
   /** document is open or not */
   @observable.ref accessor _opened = false
 
+  /** document is suspended or not */
+  @observable.ref accessor _suspended = false
+
+  /**
+   * 是否为非激活状态
+   */
+  get suspended() {
+    return this._suspended || !this._opened
+  }
+
+  /**
+   * 与 suspended 相反，是否为激活状态，这个函数可能用的更多一点
+   */
+  get active() {
+    return !this.suspended
+  }
+
   /** document is blank or not */
   private _blank = true
 
@@ -264,6 +281,30 @@ export class Document {
     return insertChildren(parent, nodes, at, copy)
   }
 
+  /**
+   * 切换激活，只有打开的才能激活
+   * 不激活，打开之后切换到另外一个时发生，比如 tab 视图，切换到另外一个标签页
+   */
+  @action
+  private setSuspense(flag: boolean) {
+    if (!this._opened && !flag) {
+      return
+    }
+    this._suspended = flag
+    this.simulator?.setSuspense(flag)
+    if (!flag) {
+      this.project.checkExclusive(this)
+    }
+  }
+
+  suspense() {
+    this.setSuspense(true)
+  }
+
+  activate() {
+    this.setSuspense(false)
+  }
+
   @action
   open() {
     const originState = this._opened
@@ -272,43 +313,18 @@ export class Document {
     if (originState === false) {
       this.designer.postEvent(DOCUMENT_EVENT.OPEN, this)
     }
-    if (this._opened) {
-      this.project.checkExclusive(this)
+    if (this._suspended) {
+      this.setSuspense(false)
     } else {
-      this.setOpened(false)
+      this.project.checkExclusive(this)
     }
-
     return this
   }
 
   @action
-  close(): void {
-    this.setOpened(false)
+  close() {
+    this.setSuspense(true)
     this._opened = false
-  }
-
-  /**
-   * use open a document and suspense other documents
-   */
-  @action
-  private setOpened(flag: boolean) {
-    if (!this._opened && !flag) {
-      return
-    }
-
-    this._opened = flag
-    // this.simulator?.setSuspense(flag);
-    if (!flag) {
-      this.project.checkExclusive(this)
-    }
-  }
-
-  suspense() {
-    this.setOpened(false)
-  }
-
-  activate() {
-    this.setOpened(true)
   }
 
   /**
