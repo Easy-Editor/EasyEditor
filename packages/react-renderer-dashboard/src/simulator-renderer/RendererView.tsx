@@ -21,7 +21,7 @@ export const SimulatorRendererView: React.FC<{
 }> = props => {
   const { simulatorRenderer } = props
   return (
-    <HistoryRouter history={simulatorRenderer.history}>
+    <HistoryRouter history={simulatorRenderer.history as any}>
       <Layout simulatorRenderer={simulatorRenderer}>
         <RouteList simulatorRenderer={simulatorRenderer} />
       </Layout>
