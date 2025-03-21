@@ -63,7 +63,7 @@ const Layout: React.FC<
 
 const RouteList: React.FC<{
   simulatorRenderer: SimulatorRendererContainer
-}> = props => {
+}> = observer(props => {
   const { simulatorRenderer } = props
 
   return (
@@ -77,7 +77,7 @@ const RouteList: React.FC<{
       ))}
     </Routes>
   )
-}
+})
 
 export const Renderer = observer(
   class Renderer extends Component<{
