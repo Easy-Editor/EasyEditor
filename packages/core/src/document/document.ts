@@ -161,6 +161,7 @@ export class Document {
 
   @action
   remove() {
+    this.history.destroy()
     this.designer.postEvent(DOCUMENT_EVENT.REMOVE, { id: this.id })
     this.purge()
     this.project.removeDocument(this)

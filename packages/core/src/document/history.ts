@@ -48,6 +48,8 @@ export class History<T = RootSchema> {
     this.serialization = serialization
   }
 
+  private disposer: () => void
+
   constructor(
     dataFn: () => T | null,
     private redoer: (data: T) => void,
@@ -59,7 +61,7 @@ export class History<T = RootSchema> {
     /**
      * listen the change of schema
      */
-    reaction(
+    this.disposer = reaction(
       (): any => {
         return dataFn()
       },
@@ -168,6 +170,7 @@ export class History<T = RootSchema> {
 
   destroy() {
     this.records = []
+    this.disposer()
   }
 
   /**
