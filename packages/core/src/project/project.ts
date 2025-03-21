@@ -167,7 +167,6 @@ export class Project {
       return logger.warn('document not found', idOrDoc)
     }
 
-    document.remove()
     this.documents.splice(index, 1)
     this.documentsMap.delete(document.id)
   }
