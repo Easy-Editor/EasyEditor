@@ -1,5 +1,17 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.14
+
+### Patch Changes
+
+- 9575b05: fix: default route error
+- d23db1c: fix: routeList miss observer
+- Updated dependencies [f0a103a]
+- Updated dependencies [5287320]
+- Updated dependencies [cc48de5]
+  - @easy-editor/core@0.0.13
+  - @easy-editor/plugin-dashboard@0.0.14
+
 ## 0.0.13
 
 ### Patch Changes

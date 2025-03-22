@@ -1,5 +1,13 @@
 # @easy-editor/core
 
+## 0.0.13
+
+### Patch Changes
+
+- f0a103a: fix: document remove error
+- 5287320: fix: project removeDocument deadCycle
+- cc48de5: feat: project add getDocumentByFileName
+
 ## 0.0.12
 
 ### Patch Changes
