@@ -1,5 +1,12 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.15
+
+### Patch Changes
+
+- 416f5dd: feat: add PureRenderer
+- 302725b: feat: add live renderer
+
 ## 0.0.14
 
 ### Patch Changes
