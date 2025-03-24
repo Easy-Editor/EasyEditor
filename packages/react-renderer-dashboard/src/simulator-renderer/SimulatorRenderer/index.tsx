@@ -5,7 +5,6 @@ import { simulatorRenderer } from '..'
 import { BemTools } from './BemTools'
 import { useResizeObserver } from './hooks/useResizeObserver'
 
-import './css/theme.css'
 import './index.css'
 
 const defaultDeviceStyle = {

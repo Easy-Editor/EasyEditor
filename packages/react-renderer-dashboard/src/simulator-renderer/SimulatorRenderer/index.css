@@ -1,27 +1,3 @@
-.easy-editor {
-  position: relative;
-  height: 100%;
-  width: 100%;
-  overflow: auto;
-}
-
-.easy-editor-canvas {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  overflow: hidden;
-
-  .easy-editor-viewport {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-  }
-}
-
 /* TODO */
 .easy-editor-device-default-canvas {
   top: var(--simulator-top-distance, 16px);
@@ -34,47 +10,4 @@
 /* TODO */
 .easy-editor-device-default-viewport {
   box-shadow: 0 1px 40px 0 var(--color-block-background-shallow, rgba(31, 50, 88, 0.125));
-}
-
-.easy-editor-content {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  overflow: hidden;
-
-  border: none;
-  transform-origin: 0 0;
-  height: 100%;
-  width: 100%;
-
-  .easy-editor-simulator-frame {
-    border: none;
-    transform-origin: 0 0;
-    height: 100%;
-    width: 100%;
-  }
-}
-
-.easy-editor-component-container {
-  position: absolute;
-  border: none;
-  user-select: none;
-  touch-action: none;
-  pointer-events: auto;
-
-  &.mask {
-    cursor: move !important;
-  }
-
-  .easy-editor-component-mask {
-    position: absolute;
-
-    .easy-editor-component {
-      &.mask {
-        pointer-events: none;
-      }
-    }
-  }
 }
