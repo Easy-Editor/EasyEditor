@@ -149,11 +149,12 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       utils: {
         // ...getProjectUtils(this._libraryMap, host.get('utilsMetadata')),
         router: {
-          navigate: (path: string, param?: object) => {
-            history.push(withQueryParams(path, param))
-          },
-          replace: (path: string, param?: object) => {
-            history.replace(withQueryParams(path, param))
+          navigate: (path: string, param?: object & { replace?: boolean }) => {
+            if (param?.replace) {
+              history.replace(withQueryParams(path, param))
+            } else {
+              history.push(withQueryParams(path, param))
+            }
           },
         },
       },
