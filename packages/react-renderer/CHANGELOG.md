@@ -1,5 +1,14 @@
 # @easy-editor/react-renderer
 
+## 0.0.14
+
+### Patch Changes
+
+- e612dad: feat: add excuteLifeCycleInDesign
+- Updated dependencies [f753cfe]
+- Updated dependencies [e612dad]
+  - @easy-editor/core@0.0.14
+
 ## 0.0.13
 
 ### Patch Changes

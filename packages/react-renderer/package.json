@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/react-renderer",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "React Renderer package for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
@@ -62,7 +62,7 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "^0.0.13",
+    "@easy-editor/core": "^0.0.14",
     "mobx-react": "^9.2.0",
     "react": "^18 || ^19",
     "react-dom": "^18 || ^19",
