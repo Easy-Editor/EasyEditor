@@ -82,8 +82,8 @@ export interface RendererProps {
   device?: 'default' | 'pc' | 'mobile' | string
 
   /**
-   * @default false
    * 当开启组件未找到严格模式时，渲染模块不会默认给一个容器组件
+   * @default false
    */
   enableStrictNotFoundMode?: boolean
 
@@ -95,27 +95,33 @@ export interface RendererProps {
 
   /** 渲染模块的 container */
   __container?: SimulatorRenderer
+
+  /**
+   * 是否在设计模式下执行生命周期方法
+   * @default false
+   */
+  excuteLifeCycleInDesignMode?: boolean
 }
 
 export interface RenderComponent {
   displayName: string
   defaultProps: RendererProps
 
-  new (
-    props: RendererProps,
-  ): Component<RendererProps, RendererState> & {
-    [x: string]: any
-    __getRef: (ref: any) => void
-    componentDidMount(): Promise<void> | void
-    componentDidUpdate(): Promise<void> | void
-    componentWillUnmount(): Promise<void> | void
-    componentDidCatch(e: any): Promise<void> | void
-    shouldComponentUpdate(nextProps: RendererProps): boolean
-    isValidComponent(SetComponent: any): any
-    createElement(SetComponent: any, props: any, children?: any): any
-    getNotFoundComponent(): any
-    getFaultComponent(): any
-  }
+  new (props: RendererProps): RendererComponentInstance
+}
+
+export interface RendererComponentInstance extends Component<RendererProps, RendererState> {
+  [x: string]: any
+  __getRef: (ref: any) => void
+  componentDidMount(): Promise<void> | void
+  componentDidUpdate(): Promise<void> | void
+  componentWillUnmount(): Promise<void> | void
+  componentDidCatch(e: any): Promise<void> | void
+  shouldComponentUpdate(nextProps: RendererProps): boolean
+  isValidComponent(SetComponent: any): any
+  createElement(SetComponent: any, props: any, children?: any): any
+  getNotFoundComponent(): any
+  getFaultComponent(): any
 }
 
 export interface RendererAppHelper {
@@ -162,7 +168,7 @@ export interface DataSource {
   dataHandler?: JSExpression
 }
 
-export interface BaseRendererProps {
+export interface BaseRendererProps extends RendererProps {
   __appHelper?: RendererAppHelper
   __components: Record<string, React.ComponentType>
   __ctx?: Record<string, any>
@@ -190,7 +196,8 @@ export interface BaseRendererProps {
 export interface BaseRendererContext {
   appHelper: RendererAppHelper
   components: Record<string, React.ComponentType>
-  engine: Record<string, any>
+  // engine: Record<string, any>
+  engine: RendererComponentInstance
   pageContext?: BaseRenderComponent
   compContext?: BaseRenderComponent
 }

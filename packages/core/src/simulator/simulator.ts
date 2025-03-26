@@ -90,6 +90,10 @@ export class Simulator {
     return this.editor.get('enableStrictNotFoundMode') ?? false
   }
 
+  get excuteLifeCycleInDesignMode(): any {
+    return this.editor.get('excuteLifeCycleInDesignMode') ?? false
+  }
+
   get notFoundComponent(): any {
     return this.editor.get('notFoundComponent') ?? null
   }

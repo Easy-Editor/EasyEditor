@@ -205,6 +205,11 @@ export function baseRendererFactory(): BaseRenderComponent {
      * execute method in schema.lifeCycles
      */
     __executeLifeCycleMethod = (method: string, args?: any) => {
+      const { engine } = this.context
+      if (!engine.props.enableStrictNotFoundMode) {
+        return
+      }
+
       executeLifeCycleMethod(this, this.props.__schema, method, args)
     }
 
@@ -352,7 +357,7 @@ export function baseRendererFactory(): BaseRenderComponent {
 
       const { engine } = this.context
       if (engine) {
-        engine.props.onCompGetCtx(schema, this)
+        engine.props?.onCompGetCtx?.(schema, this)
         // 画布场景才需要每次渲染bind自定义方法
         if (this.__designModeIsDesign) {
           this.__bindCustomMethods(this.props)
@@ -366,7 +371,7 @@ export function baseRendererFactory(): BaseRenderComponent {
       const { __schema } = this.props
       // ref && engine?.props?.onCompGetRef(__schema, ref)
       // TODO: 只在 ref 存在执行，会影响 documentInstance 的卸载
-      engine?.props?.onCompGetRef(__schema, ref)
+      engine.props?.onCompGetRef?.(__schema, ref)
       this.__ref = ref
     }
 
@@ -486,7 +491,7 @@ export function baseRendererFactory(): BaseRenderComponent {
               componentId: schema.id,
               enableStrictNotFoundMode: engine.props.enableStrictNotFoundMode,
               ref: (ref: any) => {
-                ref && engine.props?.onCompGetRef(schema, ref)
+                ref && engine.props?.onCompGetRef?.(schema, ref)
               },
             },
             this.__getSchemaChildrenVirtualDom(schema, scope, Comp),
@@ -574,7 +579,7 @@ export function baseRendererFactory(): BaseRenderComponent {
           if (refProps && typeof refProps === 'string') {
             this[refProps] = ref
           }
-          ref && engine.props?.onCompGetRef(schema, ref)
+          ref && engine.props?.onCompGetRef?.(schema, ref)
         }
 
         // scope需要传入到组件上
@@ -583,7 +588,7 @@ export function baseRendererFactory(): BaseRenderComponent {
         // }
         if (schema?.__ctx?.lceKey) {
           if (!isSchema(schema)) {
-            engine.props?.onCompGetCtx(schema, scope)
+            engine.props?.onCompGetCtx?.(schema, scope)
           }
           props.key = props.key || `${schema.__ctx.lceKey}_${schema.__ctx.idx || 0}_${idx !== undefined ? idx : ''}`
         } else if ((typeof idx === 'number' || typeof idx === 'string') && !props.key) {

@@ -26,6 +26,7 @@ export function rendererFactory(): RenderComponent {
       schema: {} as RootSchema,
       onCompGetRef: () => {},
       onCompGetCtx: () => {},
+      excuteLifeCycleInDesignMode: false,
     }
 
     constructor(props: RendererProps) {

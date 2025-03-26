@@ -149,6 +149,7 @@ export const Renderer = observer(
             documentInstance.mountInstance(schema.id, ref)
           }}
           enableStrictNotFoundMode={host.enableStrictNotFoundMode}
+          excuteLifeCycleInDesignMode={host.excuteLifeCycleInDesignMode}
         />
       )
     }
