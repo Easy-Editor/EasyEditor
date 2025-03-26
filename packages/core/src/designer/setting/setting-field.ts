@@ -9,6 +9,7 @@ export interface SetValueOptions {
   disableMutator?: boolean
   type?: PropValueChangedType
   fromSetHotValue?: boolean
+  forceHotValue?: boolean
 }
 
 export enum PropValueChangedType {
@@ -159,6 +160,11 @@ export class SettingField extends SettingPropEntry {
     super.setValue(val, isHotValue, extraOptions)
   }
 
+  clearValue() {
+    this.hotValue = null
+    super.clearValue()
+  }
+
   getHotValue(): any {
     if (this.hotValue) {
       return this.hotValue
@@ -177,11 +183,12 @@ export class SettingField extends SettingPropEntry {
     const value = data
     if (options) {
       options.fromSetHotValue = true
+      options.forceHotValue = true
     } else {
-      options = { fromSetHotValue: true }
+      options = { fromSetHotValue: true, forceHotValue: true }
     }
-    if (this.isUseVariable()) {
-      const oldValue = this.getValue()
+    if (this.isUseVariable() || options?.forceHotValue) {
+      const oldValue = this.getValue() || {}
       if (isJSExpression(value)) {
         this.setValue(
           {

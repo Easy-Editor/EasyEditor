@@ -204,7 +204,6 @@ export class SettingPropEntry implements SettingEntry {
       try {
         setValue(this as unknown as SettingField, undefined)
       } catch (e) {
-        /* istanbul ignore next */
         console.warn(e)
       }
     }
