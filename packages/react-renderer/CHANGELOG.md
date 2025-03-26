@@ -1,5 +1,11 @@
 # @easy-editor/react-renderer
 
+## 0.0.15
+
+### Patch Changes
+
+- 014991a: fix: run \_\_executeLifeCycleMethod error
+
 ## 0.0.14
 
 ### Patch Changes
