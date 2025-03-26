@@ -205,9 +205,12 @@ export function baseRendererFactory(): BaseRenderComponent {
      * execute method in schema.lifeCycles
      */
     __executeLifeCycleMethod = (method: string, args?: any) => {
-      const { engine } = this.context
-      if (!engine.props.enableStrictNotFoundMode) {
-        return
+      // construct 场景下，跳过判断
+      if (this.context) {
+        const { engine } = this.context
+        if (!engine.props.excuteLifeCycleInDesignMode) {
+          return
+        }
       }
 
       executeLifeCycleMethod(this, this.props.__schema, method, args)
