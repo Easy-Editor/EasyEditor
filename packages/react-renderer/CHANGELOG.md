@@ -1,5 +1,11 @@
 # @easy-editor/react-renderer
 
+## 0.0.16
+
+### Patch Changes
+
+- 145a271: chore: dependencies upgrade
+
 ## 0.0.15
 
 ### Patch Changes
