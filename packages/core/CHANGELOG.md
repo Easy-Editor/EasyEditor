@@ -1,5 +1,12 @@
 # @easy-editor/core
 
+## 0.0.14
+
+### Patch Changes
+
+- f753cfe: perf: setting-field setHotValue
+- e612dad: feat: add excuteLifeCycleInDesign
+
 ## 0.0.13
 
 ### Patch Changes

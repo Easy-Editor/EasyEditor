@@ -1,5 +1,15 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.16
+
+### Patch Changes
+
+- e612dad: feat: add excuteLifeCycleInDesign
+- Updated dependencies [f753cfe]
+- Updated dependencies [e612dad]
+  - @easy-editor/core@0.0.14
+  - @easy-editor/plugin-dashboard@0.0.15
+
 ## 0.0.15
 
 ### Patch Changes

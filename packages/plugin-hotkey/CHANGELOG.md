@@ -1,5 +1,13 @@
 # @easy-editor/plugin-hotkey
 
+## 0.0.12
+
+### Patch Changes
+
+- Updated dependencies [f753cfe]
+- Updated dependencies [e612dad]
+  - @easy-editor/core@0.0.14
+
 ## 0.0.11
 
 ### Patch Changes
