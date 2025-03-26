@@ -205,7 +205,7 @@ export function baseRendererFactory(): BaseRenderComponent {
      * execute method in schema.lifeCycles
      */
     __executeLifeCycleMethod = (method: string, args?: any) => {
-      // construct 场景下，跳过判断
+      // 跳过 construct 的执行
       if (this.context) {
         const { engine } = this.context
         if (!engine.props.excuteLifeCycleInDesignMode) {
