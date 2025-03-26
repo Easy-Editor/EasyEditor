@@ -1,5 +1,11 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.17
+
+### Patch Changes
+
+- 145a271: chore: dependencies upgrade
+
 ## 0.0.16
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/react-renderer",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "React Renderer package for EasyEditor.",
   "type": "module",
   "main": "src/index.ts",
