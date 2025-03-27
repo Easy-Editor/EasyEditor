@@ -29,7 +29,7 @@ export interface EditorConfig {
   /**
    * 设置器 Setter
    */
-  setters?: Record<string, Setter>
+  setters?: Record<string, Component | Setter>
 
   /**
    * 组件 Component
