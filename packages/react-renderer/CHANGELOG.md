@@ -1,5 +1,12 @@
 # @easy-editor/react-renderer
 
+## 0.0.17
+
+### Patch Changes
+
+- Updated dependencies [f4f4b3e]
+  - @easy-editor/core@0.0.15
+
 ## 0.0.16
 
 ### Patch Changes

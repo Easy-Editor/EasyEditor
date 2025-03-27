@@ -1,5 +1,11 @@
 # @easy-editor/core
 
+## 0.0.15
+
+### Patch Changes
+
+- f4f4b3e: fix: Editor setters types error
+
 ## 0.0.14
 
 ### Patch Changes

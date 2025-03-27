@@ -1,5 +1,15 @@
 # @easy-editor/react-renderer-dashboard
 
+## 0.0.18
+
+### Patch Changes
+
+- 8feb642: chore: move @easy-editor/react-renderer to peer
+- Updated dependencies [f4f4b3e]
+  - @easy-editor/core@0.0.15
+  - @easy-editor/plugin-dashboard@0.0.16
+  - @easy-editor/react-renderer@0.0.17
+
 ## 0.0.17
 
 ### Patch Changes
