@@ -5,7 +5,7 @@
 <br />
 <br />
 
-<b>一个面向扩展的跨框架低代码引擎</b>
+<b>一个用于构建可视化应用平台的面向扩展的跨框架低代码引擎</b>
 
 [![GitHub License](https://img.shields.io/github/license/Easy-Editor/EasyEditor)](./LICENSE)
 [![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fcore?label=%40easy-editor%2Fcore&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/core)
@@ -22,11 +22,38 @@ EasyEditor 是一个面向扩展的跨框架低代码引擎，提供了一套完
 
 ## 核心特性
 
-- **解耦设计**：引擎核心与框架无关，支持多种框架渲染扩展
-- **可视化设计**：完整的设计器实现，拖拽布局、吸附对齐、多设备预览、撤销/重做栈...
-- **插件化架构**：灵活的插件系统设计，生命周期管理、热键绑定、类扩展机制、依赖注入...
-- **渲染引擎**：多框架支持、实时预览、Schema 驱动、组件隔离沙箱
-- **企业级能力**：数据源管理、多语言支持、版本控制、在线协作
+- **解耦设计**: 引擎核心与框架无关，支持多种框架渲染扩展
+- **可视化设计**: 完整的设计器实现，拖拽布局、吸附对齐、多设备预览、撤销/重做栈...
+- **插件化架构**: 灵活的插件系统设计，生命周期管理、热键绑定、类扩展机制、依赖注入...
+- **渲染引擎**: 多框架支持、实时预览、Schema 驱动、组件隔离沙箱
+- **企业级能力**: 数据源管理、多语言支持、版本控制、在线协作
+
+## 技术架构
+
+                       +----------------+
+                       |  Core          |
+                       |  - Schema      |
+                       |  - Component   |
+                       |  - Plugin      |
+                       +----------------+
+                           /        \
+                          /          \
+                         /            \
+          +-------------+              +---------------+
+          |  Renderers  |              |  Plugins      |
+          |  - React    | ------------ |  - Dashboard  |
+          |  - Vue      | ------------ |  - Form       |
+          |  - Custom   |              |  - Document   |
+          +-------------+              +---------------+
+                         \            /
+                          \          /
+                           \        /
+                       +----------------+
+                       |  Applications  |
+                       |  - Dashboard   |
+                       |  - Form        |
+                       |  - ...         |
+                       +----------------+
 
 ## 文档
 
@@ -147,11 +174,15 @@ pnpm install
 pnpm example:dashboard
 ```
 
+## 贡献
+
+欢迎提交 Issue 和 PR，一起完善这个项目。
+
+## 许可证
+
+[MIT](./LICENSE) License &copy; 2024-PRESENT [JinSo](https://github.com/JinSooo)
 
 ## 致谢
 
 感谢 [lowcode-engine](https://github.com/alibaba/lowcode-engine) 的启发和参考。
 
-## 许可证
-
-[MIT](./LICENSE) License &copy; 2024-PRESENT [JinSo](https://github.com/JinSooo)

@@ -5,7 +5,7 @@
 <br />
 <br />
 
-<b>A cross-framework low-code engine with scale-out design</b>
+<b>A scalable and cross-framework low-code engine for building visual application platforms</b>
 
 [![GitHub License](https://img.shields.io/github/license/Easy-Editor/EasyEditor)](./LICENSE)
 [![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fcore?label=%40easy-editor%2Fcore&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/core)
@@ -22,11 +22,38 @@ EasyEditor is a cross-framework low-code engine with scale-out design, providing
 
 ## Features
 
-- **Decoupling Design**：Engine core is framework-independent, supporting multiple framework rendering extensions
-- **Visual Design**：Complete implementation of the designer, drag-and-drop layout, snapping alignment, multi-device preview, undo/redo stack...
-- **Plugin Architecture**：Flexible plugin system design, lifecycle management, hotkey binding, class extension mechanism, dependency injection...
-- **Rendering Engine**：Multi-framework support, real-time preview, Schema driven, component isolation sandbox
-- **Enterprise-level Capabilities**：Data source management, multi-language support, version control, online collaboration
+- **Decoupling Design**: Engine core is framework-independent, supporting multiple framework rendering extensions
+- **Visual Design**: Complete implementation of the designer, drag-and-drop layout, snapping alignment, multi-device preview, undo/redo stack...
+- **Plugin Architecture**: Flexible plugin system design, lifecycle management, hotkey binding, class extension mechanism, dependency injection...
+- **Rendering Engine**: Multi-framework support, real-time preview, Schema driven, component isolation sandbox
+- **Enterprise-level Capabilities**: Data source management, multi-language support, version control, online collaboration
+
+## Technical Architecture
+
+                       +----------------+
+                       |  Core          |
+                       |  - Schema      |
+                       |  - Component   |
+                       |  - Plugin      |
+                       +----------------+
+                           /        \
+                          /          \
+                         /            \
+          +-------------+              +---------------+
+          |  Renderers  |              |  Plugins      |
+          |  - React    | ------------ |  - Dashboard  |
+          |  - Vue      | ------------ |  - Form       |
+          |  - Custom   |              |  - Document   |
+          +-------------+              +---------------+
+                         \            /
+                          \          /
+                           \        /
+                       +----------------+
+                       |  Applications  |
+                       |  - Dashboard   |
+                       |  - Form        |
+                       |  - ...         |
+                       +----------------+
 
 ## Documentation
 
@@ -145,6 +172,10 @@ cd EasyEditor
 pnpm install
 pnpm example:dashboard
 ```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests to help improve this project.
 
 ## License
 
