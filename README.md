@@ -5,7 +5,7 @@
 <br />
 <br />
 
-<b>A scalable and cross-framework low-code engine for building visual application platforms</b>
+<b>Plugin-based cross-framework low-code engine for building visual application platforms</b>
 
 [![GitHub License](https://img.shields.io/github/license/Easy-Editor/EasyEditor)](./LICENSE)
 [![NPM Version](https://img.shields.io/npm/v/%40easy-editor%2Fcore?label=%40easy-editor%2Fcore&color=%230a7cbd)](https://www.npmjs.com/package/@easy-editor/core)
@@ -18,15 +18,16 @@ English | [简体中文](./README-zh_CN.md)
 
 </div>
 
-EasyEditor is a cross-framework low-code engine with scale-out design, providing a complete visual design system and flexible plugin architecture. Applications can be quickly built through simple drag-and-drop operations, while supporting rendering extensions for multiple frameworks such as React and Vue. It not only has enterprise-level features but also high customizability, allowing developers to create their own low-code platform according to actual needs.
+EasyEditor is a plugin-based cross-framework low-code engine, providing a complete visual design system and flexible plugin architecture. Applications can be quickly built through simple drag-and-drop operations, while supporting rendering extensions for multiple frameworks such as React and Vue. It not only has enterprise-level features but also high customizability, allowing developers to create their own low-code platform according to actual needs.
 
 ## Features
 
-- **Decoupling Design**: Engine core is framework-independent, supporting multiple framework rendering extensions
-- **Visual Design**: Complete implementation of the designer, drag-and-drop layout, snapping alignment, multi-device preview, undo/redo stack...
-- **Plugin Architecture**: Flexible plugin system design, lifecycle management, hotkey binding, class extension mechanism, dependency injection...
-- **Rendering Engine**: Multi-framework support, real-time preview, Schema driven, component isolation sandbox
-- **Enterprise-level Capabilities**: Data source management, multi-language support, version control, online collaboration
+- **🔌 Decoupling Design**: Engine core is framework-independent, supporting multiple framework rendering extensions
+- **🎨 Visual Design**: Complete implementation of the designer, drag-and-drop layout, snapping alignment, multi-device preview, undo/redo stack...
+- **🧩 Plugin Architecture**: Flexible plugin system design, lifecycle management, hotkey binding, class extension mechanism, dependency injection...
+- **⚡ Renderer Engine**: Multi-framework support, real-time preview, Schema driven, component isolation sandbox
+- **🏢 Enterprise-level Capabilities**: Data source management, multi-language support, version control, online collaboration
+- **📦 Component Ecosystem**: Built-in material market, component packaging specifications, material development tools, component version management...
 
 ## Documentation
 
