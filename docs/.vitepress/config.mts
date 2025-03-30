@@ -1,15 +1,35 @@
 import { defineConfig } from 'vitepress'
 
+const version = '0.0.1'
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   lang: 'zh',
   title: 'EasyEditor',
-  description: 'A scalable and cross-framework low-code engine for building visual application platforms',
+  description: 'Plugin-based cross-framework low-code engine for building visual application platforms',
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Examples', link: '/markdown-examples' },
+      {
+        text: `v${version}`,
+        items: [
+          {
+            text: 'Release Notes',
+            link: 'https://github.com/unocss/unocss/releases',
+          },
+          {
+            text: 'Contributing',
+            link: 'https://github.com/unocss/unocss/blob/main/.github/CONTRIBUTING.md',
+          },
+          {
+            component: 'RainbowAnimationSwitcher',
+            props: {
+              text: 'Rainbow Animation',
+            },
+          },
+        ],
+      },
     ],
 
     sidebar: [
@@ -31,10 +51,8 @@ export default defineConfig({
     },
     en: {
       label: 'English',
-      lang: 'en', // optional, will be added  as `lang` attribute on `html` tag
-      link: '/en', // default /fr/ -- shows on navbar translations menu, can be external
-
-      // other locale specific properties...
+      lang: 'en',
+      link: '/en',
     },
   },
 })

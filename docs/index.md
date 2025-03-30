@@ -1,6 +1,7 @@
 ---
 # https://vitepress.dev/reference/default-theme-home-page
 layout: home
+title: "EasyEditor: 用于构建可视化应用平台的插件化跨框架低代码引擎"
 
 hero:
   name: EasyEditor
