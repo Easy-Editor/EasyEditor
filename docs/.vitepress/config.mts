@@ -1,13 +1,32 @@
 import { defineConfig } from 'vitepress'
+import { version } from '../../packages/core/package.json'
 
-const version = '0.0.1'
-// https://vitepress.dev/reference/site-config
+const title = 'EasyEditor'
+const description = 'Plugin-based cross-framework low-code engine for building visual application platforms'
+
 export default defineConfig({
   lang: 'zh',
-  title: 'EasyEditor',
-  description: 'Plugin-based cross-framework low-code engine for building visual application platforms',
+  title,
+  titleTemplate: title,
+  description,
+  outDir: './dist',
+  head: [
+    ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+    ['link', { rel: 'alternate icon', href: '/favicon.ico', type: 'image/png', sizes: '16x16' }],
+    ['meta', { name: 'author', content: 'JinSo' }],
+    [
+      'link',
+      { rel: 'search', type: 'application/opensearchdescription+xml', href: '/search.xml', title: 'EasyEditor' },
+    ],
+  ],
+  lastUpdated: true,
+  cleanUrls: true,
+
   themeConfig: {
-    // https://vitepress.dev/reference/default-theme-config
+    logo: '/logo-dark.svg',
+    search: {
+      provider: 'local',
+    },
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Examples', link: '/markdown-examples' },
@@ -16,11 +35,11 @@ export default defineConfig({
         items: [
           {
             text: 'Release Notes',
-            link: 'https://github.com/unocss/unocss/releases',
+            link: 'https://github.com/Easy-Editor/EasyEditor/releases',
           },
           {
-            text: 'Contributing',
-            link: 'https://github.com/unocss/unocss/blob/main/.github/CONTRIBUTING.md',
+            text: 'Report',
+            link: 'https://github.com/Easy-Editor/EasyEditor/issues',
           },
           {
             component: 'RainbowAnimationSwitcher',
@@ -42,7 +61,11 @@ export default defineConfig({
       },
     ],
 
-    socialLinks: [{ icon: 'github', link: 'https://github.com/vuejs/vitepress' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/Easy-Editor/EasyEditor' }],
+    footer: {
+      message: 'Released under the MIT License.',
+      copyright: 'Copyright © 2024-PRESENT JinSo',
+    },
   },
   locales: {
     root: {
