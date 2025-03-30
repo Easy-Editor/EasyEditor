@@ -4,13 +4,17 @@ outline: deep
 
 # 为什么选择 EasyEditor?
 
+## 什么是 EasyEditor?
+
+EasyEditor 是一个插件化跨框架低代码引擎，提供了一套完整的可视化设计系统和灵活的插件架构。通过简单的拖拽操作即可快速搭建应用，同时支持 React、Vue 等多种框架的渲染扩展。它不仅拥有企业级的功能特性，还具备高度的可定制性，让开发者能够根据实际需求打造专属的低代码平台。
+
 ## 动机
 
 EasyEditor 的灵感源于公司内部设计的低代码引擎以及 [lowcode-engine](https://github.com/alibaba/lowcode-engine)。我们在原有规范的基础上进行了扩展，支持多种渲染方式，不仅限于表单，还包括大屏、门户和工作流等。
 
 我个人对低代码的理念深感兴趣，研究了多个项目的框架和渲染方式，以加深对这一领域的理解。个人也非常喜欢lowcode-engine的理念，它实现了一套低代码的协议规范，旨在统一低代码的规范，促进不同低代码项目之间的互通。
 
-## EasyEditor 与 lowcode-engine的区别
+## EasyEditor 与 lowcode-engine 的区别
 
 通过 lowcode-engine 官网的案例可以看出，lowcode-engine主要专注于表单的低代码渲染，虽然也支持其他类型的渲染，如流程图等，但仍以表单为主。
 
