@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { useData } from 'vitepress'
+import { inBrowser, useData } from 'vitepress'
 import DefaultTheme from 'vitepress/theme'
-import { nextTick, provide } from 'vue'
+import { nextTick, provide, watchEffect } from 'vue'
 
-const { isDark } = useData()
+const { isDark, lang } = useData()
 
 function enableTransitions() {
   return 'startViewTransition' in document && window.matchMedia('(prefers-reduced-motion: no-preference)').matches
@@ -33,6 +33,12 @@ provide('toggle-appearance', async ({ clientX: x, clientY: y }: MouseEvent) => {
       pseudoElement: `::view-transition-${isDark.value ? 'old' : 'new'}(root)`,
     },
   )
+})
+
+watchEffect(() => {
+  if (inBrowser) {
+    document.cookie = `nf_lang=${lang.value}; expires=Mon, 1 Jan 2030 00:00:00 UTC; path=/`
+  }
 })
 </script>
 
