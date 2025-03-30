@@ -5,7 +5,7 @@ const title = 'EasyEditor'
 const description = 'Plugin-based cross-framework low-code engine for building visual application platforms'
 
 const Guides: DefaultTheme.NavItemWithLink[] = [
-  { text: 'Getting Started', link: '/guide/' },
+  { text: 'Getting Started', link: '/guide/getting-started' },
   { text: 'Why EasyEditor?', link: '/guide/why' },
 ]
 

@@ -1,5 +1,4 @@
 ---
-# https://vitepress.dev/reference/default-theme-home-page
 layout: home
 title: "EasyEditor: Plugin-based cross-framework low-code engine for building visual application platforms"
 
@@ -14,10 +13,10 @@ hero:
   actions:
     - theme: brand
       text: What is EasyEditor?
-      link: /markdown-examples
+      link: /guide/why
     - theme: alt
       text: Getting Started
-      link: /guide
+      link: /guide/getting-started
     - theme: alt
       text: Reference
       link: /reference
