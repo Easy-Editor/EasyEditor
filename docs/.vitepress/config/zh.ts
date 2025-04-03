@@ -13,12 +13,13 @@ const GettingStartedGuides: DefaultTheme.NavItemWithLink[] = [
 ]
 
 // 核心功能
-const CoreGuides: DefaultTheme.NavItemWithLink[] = [
-  { text: '引擎设计', link: '/guide/core/' },
-  { text: 'Schema 协议', link: '/guide/core/schema' },
-  { text: '渲染器机制', link: '/guide/core/renderer' },
-  { text: '插件系统', link: '/guide/core/plugin' },
-  { text: '生命周期', link: '/guide/core/lifecycle' },
+const DesignGuides: DefaultTheme.NavItemWithLink[] = [
+  { text: '架构综述', link: '/guide/design/overview' },
+  { text: '协议栈简介', link: '/guide/design/specs' },
+  { text: '编排模块', link: '/guide/design/editor' },
+  { text: '渲染模块', link: '/guide/design/renderer' },
+  { text: '插件系统', link: '/guide/design/plugin' },
+  { text: '设计器模块', link: '/guide/design/setter' },
 ]
 
 // 插件开发
@@ -59,8 +60,8 @@ const SidebarGuide: DefaultTheme.SidebarItem[] = [
     items: GettingStartedGuides,
   },
   {
-    text: '核心功能',
-    items: CoreGuides,
+    text: '引擎设计',
+    items: DesignGuides,
   },
   {
     text: '扩展开发',
@@ -105,7 +106,7 @@ const Nav: DefaultTheme.NavItem[] = [
       },
       {
         text: '核心功能',
-        items: CoreGuides.slice(0, 2),
+        items: DesignGuides.slice(0, 2),
       },
       {
         text: '场景实践',
