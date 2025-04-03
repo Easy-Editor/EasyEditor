@@ -7,12 +7,52 @@ const description = '用于构建可视化应用平台的插件化跨框架低�
 const GettingStartedGuides: DefaultTheme.NavItemWithLink[] = [
   { text: '为什么选择 EasyEditor', link: '/guide/why' },
   { text: '快速开始', link: '/guide/getting-started' },
-  { text: '安装', link: '/guide/getting-started/installation' },
-  { text: '基础概念', link: '/guide/getting-started/concepts' },
-  { text: '第一个应用', link: '/guide/getting-started/first-app' },
+  { text: '核心概念', link: '/guide/core-concepts' },
 ]
 
-// 核心功能
+// 扩展开发
+const ExtensionGuides: DefaultTheme.NavItemWithLink[] = [
+  { text: '插件扩展', link: '/guide/extension/plugin' },
+  { text: '物料扩展', link: '/guide/extension/material' },
+  { text: '设置器扩展', link: '/guide/extension/setter' },
+]
+
+// 渲染器开发
+const RendererGuides: DefaultTheme.NavItemWithLink[] = [
+  { text: '概述', link: '/guide/renderer/' },
+  { text: '使用编辑态', link: '/guide/renderer/editor' },
+  { text: '使用运行态', link: '/guide/renderer/runtime' },
+  { text: '渲染器定制', link: '/guide/renderer/custom' },
+  { text: '主题定制', link: '/guide/renderer/theme' },
+]
+
+// 场景实践
+const ScenarioGuides: DefaultTheme.SidebarItem[] = [
+  {
+    text: '大屏设计',
+    collapsed: true,
+    items: [
+      { text: '介绍', link: '/guide/scenarios/dashboard/' },
+      { text: '快速开始', link: '/guide/scenarios/dashboard/getting-started' },
+      { text: '组件配置', link: '/guide/scenarios/dashboard/components' },
+      { text: '主题定制', link: '/guide/scenarios/dashboard/theme' },
+      { text: '最佳实践', link: '/guide/scenarios/dashboard/best-practices' },
+    ],
+  },
+  {
+    text: '表单设计',
+    collapsed: true,
+    items: [
+      { text: '介绍', link: '/guide/scenarios/form/' },
+      { text: '快速开始', link: '/guide/scenarios/form/getting-started' },
+      { text: '字段配置', link: '/guide/scenarios/form/fields' },
+      { text: '校验规则', link: '/guide/scenarios/form/validation' },
+      { text: '最佳实践', link: '/guide/scenarios/form/best-practices' },
+    ],
+  },
+]
+
+// 设计功能
 const DesignGuides: DefaultTheme.NavItemWithLink[] = [
   { text: '架构综述', link: '/guide/design/overview' },
   { text: '协议栈简介', link: '/guide/design/specs' },
@@ -20,31 +60,6 @@ const DesignGuides: DefaultTheme.NavItemWithLink[] = [
   { text: '渲染模块', link: '/guide/design/renderer' },
   { text: '插件系统', link: '/guide/design/plugin' },
   { text: '设计器模块', link: '/guide/design/setter' },
-]
-
-// 插件开发
-const ExtensionGuides: DefaultTheme.NavItemWithLink[] = [
-  { text: '渲染器开发', link: '/guide/renderer/' },
-  { text: '自定义渲染器', link: '/guide/renderer/custom' },
-  { text: '组件适配', link: '/guide/renderer/components' },
-  // { text: '主题定制', link: '/guide/renderer/theme' },
-]
-
-// 场景实践
-const ScenarioGuides: DefaultTheme.NavItemWithLink[] = [
-  { text: '大屏设计', link: '/guide/dashboard/' },
-  { text: '快速开始', link: '/guide/dashboard/getting-started' },
-  { text: '组件配置', link: '/guide/dashboard/config' },
-  { text: '渲染器使用', link: '/guide/dashboard/renderer' },
-  { text: '主题定制', link: '/guide/dashboard/theme' },
-]
-
-// 进阶主题
-const AdvancedGuides: DefaultTheme.NavItemWithLink[] = [
-  { text: '性能优化', link: '/guide/advanced/performance' },
-  { text: '国际化', link: '/guide/advanced/i18n' },
-  { text: '数据源管理', link: '/guide/advanced/data-source' },
-  { text: '版本控制', link: '/guide/advanced/version-control' },
 ]
 
 // API 参考
@@ -60,36 +75,17 @@ const SidebarGuide: DefaultTheme.SidebarItem[] = [
     items: GettingStartedGuides,
   },
   {
-    text: '引擎设计',
-    items: DesignGuides,
-  },
-  {
     text: '扩展开发',
     items: ExtensionGuides,
   },
   {
-    text: '场景实践',
-    items: [
-      {
-        text: '大屏设计',
-        collapsed: true,
-        items: ScenarioGuides,
-      },
-      {
-        text: '表单设计',
-        collapsed: true,
-        items: [
-          { text: '快速开始', link: '/guide/form/getting-started' },
-          { text: '字段类型', link: '/guide/form/fields' },
-          { text: '验证规则', link: '/guide/form/validation' },
-        ],
-      },
-    ],
+    text: '渲染器开发',
+    items: RendererGuides,
   },
-  // {
-  //   text: '进阶主题',
-  //   items: AdvancedGuides,
-  // },
+  {
+    text: '场景实践',
+    items: ScenarioGuides,
+  },
   {
     text: 'API 参考',
     link: '/reference/',
@@ -105,18 +101,19 @@ const Nav: DefaultTheme.NavItem[] = [
         items: GettingStartedGuides.slice(0, 2),
       },
       {
-        text: '核心功能',
-        items: DesignGuides.slice(0, 2),
+        text: '扩展开发',
+        items: ExtensionGuides.slice(0, 2),
       },
       {
-        text: '场景实践',
-        items: [
-          { text: '大屏设计', link: '/guide/dashboard/' },
-          { text: '表单设计', link: '/guide/form/' },
-        ],
+        text: '渲染器开发',
+        items: RendererGuides.slice(0, 2),
       },
     ],
     activeMatch: '^/guide/',
+  },
+  {
+    text: '原理',
+    items: DesignGuides,
   },
   {
     text: '参考',
@@ -150,6 +147,7 @@ const Nav: DefaultTheme.NavItem[] = [
 
 const Sidebar: DefaultTheme.Sidebar = {
   '/guide/': SidebarGuide,
+  '/design/': DesignGuides,
   '/reference/': [
     {
       text: 'API 参考',

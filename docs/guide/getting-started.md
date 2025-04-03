@@ -20,7 +20,11 @@ description: EasyEditor 的使用
 
 ::: code-group
 ```sh [pnpm]
-$ pnpm add @easyeditor/core
+# 用于 core 和 renderer 进行数据驱动和响应式处理
+pnpm add mobx
+
+# 安装引擎核心和插件
+pnpm add @easyeditor/core
 ```
 :::
 
