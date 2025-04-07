@@ -30,8 +30,8 @@ pnpm add @easyeditor/core
 
 EasyEditor 支持多种应用类型，包括大屏、表单等。根据你的需求，可以选择:
 
-- [大屏应用指南](/guide/dashboard) - 了解如何构建可视化大屏应用
-- [表单应用指南](/guide/form) - 了解如何构建动态表单应用
+- [大屏应用指南](/guide/scenarios/dashboard) - 了解如何构建可视化大屏应用
+- [表单应用指南](/guide/scenarios/form) - 了解如何构建动态表单应用
 
 ## 使用
 
@@ -94,8 +94,8 @@ export const simulator = await editor.onceGot<Simulator>('simulator')
 
 ## 下一步
 
-- 如果想了解 EasyEditor API 参数，可以查看 [API参考]()。
-- 想要了解大屏可视化渲染，可以查看 [大屏渲染]()。
-- 想要了解表单可视化渲染，可以查看 [表单渲染]()。
-- 想要了解渲染器配置，可以查看 [渲染器配置]()。
-- 想了解EasyEditor的设计理念，可以查看 [为什么选择 EasyEditor]()。
+- 如果想了解 EasyEditor API 参数，可以查看 [API参考](/reference/overview)。
+- 想要了解大屏可视化渲染，可以查看 [大屏渲染](/guide/scenarios/dashboard)。
+- 想要了解表单可视化渲染，可以查看 [表单渲染](/guide/scenarios/form)。
+- 想要了解渲染器配置，可以查看 [渲染器配置](/guide/renderer)。
+- 想了解EasyEditor的设计理念，可以查看 [为什么选择 EasyEditor](/guide/why)。
