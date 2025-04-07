@@ -54,16 +54,17 @@ const ScenarioGuides: DefaultTheme.SidebarItem[] = [
 
 // 设计功能
 const DesignGuides: DefaultTheme.NavItemWithLink[] = [
-  { text: '架构综述', link: '/guide/design/overview' },
-  { text: '协议栈简介', link: '/guide/design/specs' },
-  { text: '编排模块', link: '/guide/design/editor' },
-  { text: '渲染模块', link: '/guide/design/renderer' },
-  { text: '插件系统', link: '/guide/design/plugin' },
-  { text: '设计器模块', link: '/guide/design/setter' },
+  { text: '架构综述', link: '/design/overview' },
+  { text: '协议栈简介', link: '/design/specs' },
+  { text: '编排模块', link: '/design/editor' },
+  { text: '渲染模块', link: '/design/renderer' },
+  { text: '插件系统', link: '/design/plugin' },
+  { text: '设置器模块', link: '/design/setter' },
 ]
 
 // API 参考
 const References: DefaultTheme.NavItemWithLink[] = [
+  { text: '总览', link: '/reference/overview' },
   { text: '核心 API', link: '/reference/core' },
   { text: '渲染器 API', link: '/reference/renderer' },
   { text: '插件 API', link: '/reference/plugin' },
@@ -85,6 +86,10 @@ const SidebarGuide: DefaultTheme.SidebarItem[] = [
   {
     text: '场景实践',
     items: ScenarioGuides,
+  },
+  {
+    text: '设计原理',
+    link: '/design/',
   },
   {
     text: 'API 参考',
