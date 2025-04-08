@@ -91,3 +91,51 @@ table {
 .dark::view-transition-old(root) {
   z-index: 9999;
 }
+
+/* 自定义滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vp-c-divider);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vp-c-text-3);
+}
+
+/* 深色模式下的滚动条 */
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--vp-c-divider);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: var(--vp-c-text-3);
+}
+
+/* 针对代码块的滚动条 */
+.vp-doc div[class*="language-"] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vp-c-divider) transparent;
+}
+
+.vp-doc div[class*="language-"]::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.vp-doc div[class*="language-"]::-webkit-scrollbar-thumb {
+  background: var(--vp-c-divider);
+  border-radius: 2px;
+}
+
+.vp-doc div[class*="language-"]::-webkit-scrollbar-thumb:hover {
+  background: var(--vp-c-text-3);
+}
