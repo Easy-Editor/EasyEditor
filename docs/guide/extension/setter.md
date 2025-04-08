@@ -17,10 +17,10 @@ string-setter/
 
 ## 设置器开发
 
-### 1. 实现设置器 (index.tsx)
+### 1. 基础设置器
 
 ```typescript
-import type { StringSetterProps } from './interface'
+import type { SetterProps } from '@easy-editor/core'
 
 export interface StringSetterProps extends SetterProps<string> {
   placeholder?: string  // 自定义的设置器属性
@@ -40,6 +40,119 @@ const StringSetter = (props: StringSetterProps) => {
 }
 
 export default StringSetter
+```
+
+### 2. 分组设置器
+
+分组设置器用于组织和管理其他设置器，通常不需要 `name` 属性。以下是常用的分组设置器简易实现：
+
+#### GroupSetter
+最基础的分组设置器，用于垂直排列多个设置器：
+
+```typescript
+import type { SetterProps } from '@easy-editor/core'
+import type { PropsWithChildren } from 'react'
+
+interface GroupSetterProps extends SetterProps<string>, PropsWithChildren {}
+
+const GroupSetter = (props: GroupSetterProps) => {
+  const { children } = props
+
+  return <div className='space-y-4 flex flex-col gap-2'>{children}</div>
+}
+
+export default GroupSetter
+```
+
+#### CollapseSetter
+可折叠的分组设置器，适用于需要收起/展开的复杂设置组：
+
+```typescript
+import type { SetterProps } from '@easy-editor/core'
+import type { PropsWithChildren } from 'react'
+import { useState } from 'react'
+// ...
+
+interface CollapseSetterProps extends SetterProps<boolean>, PropsWithChildren {
+  icon?: boolean
+}
+
+const CollapseSetter = (props: CollapseSetterProps) => {
+  const { field, children, initialValue, icon = true } = props
+  const [isOpen, setIsOpen] = useState(initialValue ?? true)
+
+  return (
+    <Collapsible
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      className='w-[calc(100%_+_32px)] space-y-2 -translate-x-4'
+    >
+      <div className='flex items-center justify-between space-x-4 px-4 h-8 bg-muted'>
+        <h4>{field.title}</h4>
+        {icon && (
+          <CollapsibleTrigger asChild>
+            <Button variant='ghost' size='sm'>
+              <ChevronsUpDown className='h-4 w-4' />
+              <span className='sr-only'>Toggle</span>
+            </Button>
+          </CollapsibleTrigger>
+        )}
+      </div>
+      <CollapsibleContent className='space-y-3 px-4 py-2'>
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+export default CollapseSetter
+```
+
+分组设置器的使用示例：
+
+```typescript
+const configure: Configure = {
+  props: [
+    // 基础分组
+    {
+      type: 'group',
+      title: '基础设置',
+      setter: 'GroupSetter',
+      items: [
+        {
+          name: 'content',
+          title: '内容',
+          setter: 'StringSetter'
+        }
+      ]
+    },
+
+    // 可折叠分组
+    {
+      type: 'group',
+      title: '样式设置',
+      setter: {
+        componentName: 'CollapseSetter',
+        props: {
+          icon: true
+        }
+      },
+      items: [
+        {
+          type: 'group',
+          title: '文字',
+          items: [
+            {
+              name: 'text.fontSize',
+              title: '字体大小',
+              setter: 'NumberSetter'
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
 ## 设置器配置
@@ -407,14 +520,6 @@ interface FieldExtraProps {
   }
 }
 ```
-
-### 最佳实践
-
-1. **合理使用默认值**：为关键属性设置合适的默认值，提升用户体验
-2. **优化条件显示**：使用 `condition` 控制设置器的显示，避免界面混乱
-3. **谨慎使用联动**：在 `setValue` 和 `onChange` 中的联动操作要考虑性能影响
-4. **注意值的处理**：在 `getValue` 和 `setValue` 中注意数据类型的转换和验证
-5. **合理使用 autorun**：避免在 `autorun` 中进行过于复杂的操作，以免影响性能
 
 通过合理组合这些特性，可以构建出功能强大、交互友好的设置器配置。
 
