@@ -1,4 +1,4 @@
-# 大屏设计场景
+# 介绍
 
 EasyEditor 的大屏设计场景是基于插件化架构实现的，通过 `@easy-editor/plugin-dashboard` 和 `@easy-editor/react-renderer-dashboard` 两个核心包，为开发者提供了完整的大屏设计能力。
 
