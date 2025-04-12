@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitepress'
+import { groupIconMdPlugin, groupIconVitePlugin } from 'vitepress-plugin-group-icons'
 
 const title = 'EasyEditor'
 
@@ -30,5 +31,16 @@ export const shared = defineConfig({
       message: 'Released under the MIT License.',
       copyright: 'Copyright © 2024-PRESENT JinSo',
     },
+  },
+
+  markdown: {
+    // math: true,
+    config(md) {
+      md.use(groupIconMdPlugin)
+    },
+  },
+
+  vite: {
+    plugins: [groupIconVitePlugin()],
   },
 })

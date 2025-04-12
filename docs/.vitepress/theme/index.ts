@@ -4,6 +4,7 @@ import Layout from './Layout.vue'
 import RainbowAnimationSwitcher from './components/RainbowAnimationSwitcher.vue'
 
 import 'uno.css'
+import 'virtual:group-icons.css'
 import './overrides.css'
 import './rainbow.css'
 import './vars.css'
