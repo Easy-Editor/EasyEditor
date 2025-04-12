@@ -6,90 +6,189 @@
 
 插件是 EasyEditor 的扩展单元，用于增强编辑器的功能。插件可以：
 
-- 添加新功能
+- 添加新功能和UI组件
 - 扩展现有类的方法和属性
 - 监听和响应编辑器事件
-- 与其他插件协作
+- 与其他插件协作和通信
+- 集成第三方库和服务
+
+EasyEditor 采用了"微内核+插件"的架构设计，大部分功能都是通过插件实现的，这使得编辑器非常灵活和可扩展。
+
+## 插件生命周期
+
+插件遵循以下生命周期：
+
+1. **注册阶段**：插件向编辑器注册，设置插件名称、依赖等基本信息
+2. **初始化阶段**：调用插件的 `init` 方法，设置事件监听，初始化资源
+3. **扩展阶段**：如果存在 `extend` 方法，调用它来扩展核心类
+4. **运行阶段**：插件正常工作，响应事件，提供功能
+5. **销毁阶段**：调用插件的 `destroy` 方法，清理资源，移除事件监听
+
+编辑器会确保按照正确的依赖顺序初始化插件，并在适当的时候销毁插件。
 
 ## 插件结构
 
-一个完整的插件只需要一个文件：
+一个完整的插件通常包含以下文件结构：
 
 ```bash
 my-plugin/
-├── index.ts      # 插件实现
+├── index.ts               # 插件入口
+├── components/            # 插件UI组件
+│   └── PluginPanel.tsx    # 示例面板组件
+├── utils/                 # 工具函数
+│   └── helpers.ts         # 辅助函数
+└── types.ts               # 类型定义
 ```
+
+最简单的插件可以只有一个入口文件。
 
 ## 插件开发
 
 ### 1. 基础插件
 
+最基本的插件示例：
+
 ```typescript
 import type { Plugin } from '@easy-editor/core'
 
-const MyPlugin: Plugin = ctx => {
+// 插件工厂函数，可接收配置参数
+const MyPlugin = (options = {}): Plugin => {
+  // 返回插件定义
   return {
-    name: 'MyPlugin',
-    deps: [],  // 依赖的其他插件
-    init() {
-      ctx.logger.log('MyPlugin initialized')
+    name: 'MyPlugin',              // 插件名称，必须唯一
+    deps: [],                      // 依赖的其他插件
+    init(ctx) {                    // 初始化方法
+      ctx.logger.info('MyPlugin initialized')
 
-      ctx.project.set('myPlugin', {
-        data: 'value'
+      // 注册全局变量，可以被其他插件访问
+      ctx.set('myPluginData', {
+        version: '1.0.0',
+        ...options
+      })
+
+      // 注册事件监听
+      ctx.event.on('document.open', (doc) => {
+        ctx.logger.info('Document opened:', doc.id)
       })
     },
+    destroy(ctx) {                 // 销毁方法
+      ctx.logger.info('MyPlugin destroyed')
+
+      // 移除事件监听，避免内存泄漏
+      ctx.event.off('document.open')
+    }
   }
 }
 
 export default MyPlugin
 ```
 
-### 2. 注册插件
+### 2. 事件处理插件
 
-在编辑器初始化时注册插件：
+处理编辑器事件的插件示例：
 
 ```typescript
-import { createEasyEditor } from '@easy-editor/core'
-import MyPlugin from './plugins/my-plugin'
+import type { Plugin } from '@easy-editor/core'
 
-const editor = createEasyEditor({
-  // ...其他配置
-  plugins: [
-    MyPlugin()
-  ]
-})
+const EventHandlerPlugin = (): Plugin => {
+  return {
+    name: 'EventHandlerPlugin',
+    deps: [],
+    init(ctx) {
+      // 监听组件选择事件
+      ctx.event.on('node.select', (nodeId) => {
+        const node = ctx.designer.currentDocument?.getNode(nodeId)
+        if (node) {
+          ctx.logger.info('Selected component:', node.componentName)
+        }
+      })
+
+      // 监听属性变更事件
+      ctx.event.on('node.prop.change', ({ node, prop, value }) => {
+        ctx.logger.info(`Property ${prop} of ${node.id} changed to:`, value)
+      })
+
+      // 监听拖拽事件
+      ctx.event.on('dragon.drop', (info) => {
+        ctx.logger.info('Component dropped:', info)
+      })
+    }
+  }
+}
+
+export default EventHandlerPlugin
 ```
 
 ### 3. 功能扩展插件
 
-下面是一个扩展现有功能的插件示例：
+扩展编辑器核心类的插件示例：
 
 ```typescript
-import type { Plugin, PluginExtend } from '@easy-editor/core'
+import type { Plugin } from '@easy-editor/core'
 
-const ExtendPlugin: Plugin = ctx => {
+const ExtendPlugin = (): Plugin => {
   return {
     name: 'ExtendPlugin',
     deps: [],
-    init() {
-      ctx.logger.log('ExtendPlugin initialized')
+    init(ctx) {
+      ctx.logger.info('ExtendPlugin initialized')
     },
     // 扩展核心类
     extend({ extendClass, extend }) {
-      const { Node } = extendClass
+      const { Node, Document } = extendClass
 
       // 扩展 Node 类
       extend('Node', {
         // 添加自定义方法
-        customMethod: {
+        duplicate: {
           value(this: Node) {
-            return 'Custom method result'
+            const parent = this.parent
+            if (!parent) return null
+
+            const index = parent.children.indexOf(this)
+            const schema = this.export()
+
+            // 创建副本
+            return parent.document.createNode({
+              ...schema,
+              id: undefined,  // 让系统生成新ID
+              props: {
+                ...schema.props,
+                label: `${schema.props?.label || 'Component'} Copy`
+              }
+            }, parent, { index: index + 1 })
           }
         },
         // 添加自定义属性
-        customProperty: {
+        isContainer: {
           get(this: Node) {
-            return this.getExtraPropValue('customProp')
+            // 检查节点是否为容器类型
+            return this.componentMeta?.configure?.component?.isContainer || false
+          }
+        }
+      })
+
+      // 扩展 Document 类
+      extend('Document', {
+        // 添加导出为HTML方法
+        exportAsHtml: {
+          value(this: Document) {
+            const schema = this.export()
+            // 简化实现，实际可能需要更复杂的处理
+            return `
+              <!DOCTYPE html>
+              <html>
+                <head>
+                  <title>${schema.fileName || 'Exported Page'}</title>
+                </head>
+                <body>
+                  <div id="root">${JSON.stringify(schema)}</div>
+                  <script>
+                    // 这里可以放置渲染脚本
+                  </script>
+                </body>
+              </html>
+            `
           }
         }
       })
@@ -98,6 +197,110 @@ const ExtendPlugin: Plugin = ctx => {
 }
 
 export default ExtendPlugin
+```
+
+### 4. 注册插件
+
+在编辑器初始化时注册插件：
+
+```typescript
+import { createEditor } from '@easy-editor/core'
+import MyPlugin from './plugins/my-plugin'
+import EventHandlerPlugin from './plugins/event-handler-plugin'
+import ExtendPlugin from './plugins/extend-plugin'
+
+const editor = createEditor({
+  // ...其他配置
+  plugins: [
+    MyPlugin({ debug: true }),
+    EventHandlerPlugin(),
+    ExtendPlugin()
+  ]
+})
+
+// 也可以在编辑器创建后动态注册插件
+editor.pluginManager.register(
+  MyNewPlugin(),
+  { autoInit: true }  // 立即初始化
+)
+```
+
+## 插件通信模式
+
+插件之间可以通过以下方式进行通信：
+
+### 1. 事件通信
+
+通过编辑器的事件系统进行通信：
+
+```typescript
+// 插件 A
+init(ctx) {
+  // 触发自定义事件
+  ctx.event.emit('pluginA.dataChanged', { someData: 'value' })
+}
+
+// 插件 B
+init(ctx) {
+  // 监听插件 A 的事件
+  ctx.event.on('pluginA.dataChanged', (data) => {
+    console.log('Received data from Plugin A:', data)
+  })
+}
+```
+
+### 2. 共享上下文
+
+通过插件上下文共享数据和方法：
+
+```typescript
+// 插件 A
+init(ctx) {
+  // 注册共享服务
+  ctx.set('dataService', {
+    getData: () => ({ value: 42 }),
+    setData: (data) => console.log('Data set:', data)
+  })
+}
+
+// 插件 B
+init(ctx) {
+  // 获取插件 A 注册的服务
+  const dataService = ctx.get('dataService')
+  if (dataService) {
+    const data = dataService.getData()
+    console.log('Got data:', data)
+    dataService.setData({ newValue: 100 })
+  }
+}
+```
+
+### 3. 访问扩展方法
+
+通过扩展方法进行通信：
+
+```typescript
+// 插件 A 扩展了 Node 类
+extend({ extend }) {
+  extend('Node', {
+    pluginAMethod: {
+      value(this: Node, param: string) {
+        return `Plugin A method: ${param}`
+      }
+    }
+  })
+}
+
+// 插件 B 使用插件 A 的扩展方法
+init(ctx) {
+  ctx.event.on('node.select', (nodeId) => {
+    const node = ctx.designer.currentDocument?.getNode(nodeId)
+    if (node && typeof node['pluginAMethod'] === 'function') {
+      const result = node['pluginAMethod']('test')
+      console.log(result)  // 输出: "Plugin A method: test"
+    }
+  })
+}
 ```
 
 ## 插件配置项
@@ -120,7 +323,7 @@ export default ExtendPlugin
 
 ```typescript
 {
-  deps: ['PluginA', 'PluginB']  // 依赖 PluginA 和 PluginB
+  deps: ['CorePlugin', 'UIPlugin']  // 依赖 CorePlugin 和 UIPlugin
 }
 ```
 
@@ -130,7 +333,7 @@ export default ExtendPlugin
 
 ```typescript
 {
-  eventPrefix: 'my-plugin'
+  eventPrefix: 'my-plugin'  // 事件名将变为 'my-plugin.eventName'
 }
 ```
 
@@ -144,10 +347,10 @@ export default ExtendPlugin
 {
   init(ctx) {
     // 初始化逻辑
-    ctx.logger.log('Plugin initialized')
+    ctx.logger.info('Plugin initialized')
 
     // 订阅事件
-    ctx.event.on('event-name', (data) => {
+    ctx.event.on('document.open', (doc) => {
       // 处理事件
     })
 
@@ -170,10 +373,18 @@ export default ExtendPlugin
 {
   destroy(ctx) {
     // 清理资源
-    ctx.logger.log('Plugin destroyed')
+    ctx.logger.info('Plugin destroyed')
 
     // 取消事件订阅
-    ctx.event.off('event-name')
+    ctx.event.off('document.open')
+
+    // 清除定时器
+    clearInterval(this.timer)
+
+    // 销毁DOM元素
+    if (this.element && this.element.parentNode) {
+      this.element.parentNode.removeChild(this.element)
+    }
   }
 }
 ```
@@ -199,7 +410,10 @@ export default ExtendPlugin
       // 添加属性
       customProperty: {
         get(this: Node) {
-          return 'Custom property value'
+          return this.getExtraPropValue('customProp')
+        },
+        set(this: Node, value) {
+          this.setExtraPropValue('customProp', value)
         }
       }
     })
@@ -219,8 +433,113 @@ export default ExtendPlugin
 
 ## 插件上下文 (Context)
 
-插件上下文 `ctx` 是一个包含编辑器核心功能的对象，它提供了访问和操作编辑器各个部分的能力。通过 `ctx` 你可以访问编辑器的日志系统、事件系统、项目管理等核心功能。详细的 API 文档请参考 [插件上下文 API]()。
+插件上下文 `ctx` 是一个包含编辑器核心功能的对象，提供了访问和操作编辑器各个部分的能力。主要包括：
 
+### 核心模块访问
+
+```typescript
+// 获取编辑器实例
+const editor = ctx.editor
+// 获取设计器实例
+const designer = ctx.designer
+// 获取项目管理实例
+const project = ctx.project
+// 获取模拟器实例
+const simulator = ctx.simulator
+// 获取设置器管理实例
+const setterManager = ctx.setterManager
+// 获取组件元数据管理实例
+const componentMetaManager = ctx.componentMetaManager
+// 获取热键管理
+const hotkey = ctx.hotkey
+```
+
+### 日志系统
+
+```typescript
+// 记录日志
+ctx.logger.debug('Debug message')
+ctx.logger.info('Info message')
+ctx.logger.warn('Warning message')
+ctx.logger.error('Error message')
+```
+
+### 事件系统
+
+插件上下文提供了两个事件系统：全局事件系统 `event` 和插件专用事件系统 `pluginEvent`。
+
+```typescript
+// 全局事件系统
+// 订阅事件
+ctx.event.on('eventName', (data) => {
+  // 处理事件
+})
+
+// 一次性事件订阅
+ctx.event.once('eventName', (data) => {
+  // 只会触发一次
+})
+
+// 取消事件订阅
+ctx.event.off('eventName')
+
+// 触发事件
+ctx.event.emit('eventName', eventData)
+
+// 插件专用事件系统
+// 使用插件名作为事件前缀
+ctx.pluginEvent.emit('dataChanged', { value: 100 })
+ctx.pluginEvent.on('dataChanged', (data) => {
+  console.log('Plugin event received:', data)
+})
+```
+
+### 数据共享
+
+```typescript
+// 存储共享数据
+ctx.set('key', value)
+
+// 获取共享数据
+const value = ctx.get('key')
+
+// 删除共享数据
+ctx.delete('key')
+```
+
+## 可扩展的核心类
+
+`extend` 方法允许你扩展以下核心类：
+
+### 设计器相关类
+
+- **Designer**: 设计器主类
+- **Dragon**: 拖拽管理
+- **Detecting**: 检测管理
+- **Selection**: 选区管理
+- **DropLocation**: 放置位置
+- **OffsetObserver**: 偏移观察器
+
+### 模拟器相关类
+
+- **Simulator**: 模拟器主类
+- **Viewport**: 视口管理
+
+### 项目相关类
+
+- **Project**: 项目管理
+- **Document**: 文档管理
+- **History**: 历史记录
+- **Node**: 节点
+- **NodeChildren**: 节点子元素
+- **Props**: 属性集合
+- **Prop**: 单个属性
+
+### 组件相关类
+
+- **ComponentMetaManager**: 组件元数据管理器
+- **SetterManager**: 设置器管理器
+- **ComponentMeta**: 组件元数据
 
 ## 注册选项
 
@@ -232,7 +551,7 @@ export default ExtendPlugin
 
 ```typescript
 // 注册并立即初始化插件
-await pluginManager.register(MyPlugin, { autoInit: true })
+await pluginManager.register(MyPlugin(), { autoInit: true })
 ```
 
 ### `override` (可选)
@@ -241,11 +560,12 @@ await pluginManager.register(MyPlugin, { autoInit: true })
 
 ```typescript
 // 注册并覆盖同名插件
-await pluginManager.register(MyPlugin, { override: true })
+await pluginManager.register(MyPlugin(), { override: true })
 ```
 
 ## 下一步
 
 - 了解更多[插件配置选项](/api/plugin-api)
-- 探索[高级插件开发](/guide/advanced-plugin)
-- 查看[插件最佳实践](/guide/plugin-best-practices)
+- 探索[内置插件列表](/api/builtin-plugins)
+- 查看[插件开发示例](/examples/plugins)
+- 学习[插件调试技巧](/guide/debug-plugin)

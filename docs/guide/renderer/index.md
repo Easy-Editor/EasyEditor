@@ -1,81 +1,97 @@
-# 概述
+# 渲染器开发
 
-渲染器是 EasyEditor 中的核心模块之一，负责将可视化搭建生成的 Schema 转换为实际可运行的页面。它是连接设计态和运行态的关键桥梁，确保用户在设计器中所见即所得。
+渲染器是 EasyEditor 的核心组件之一，负责将设计器中的组件配置渲染为实际可见的界面。EasyEditor 支持多种框架的渲染器实现，本指南将帮助你了解渲染器的基本概念和使用方法。
 
-## 渲染模式
+## 渲染器概述
 
-EasyEditor 提供了两种核心渲染模式：
+EasyEditor 的渲染器分为两种模式：
 
-### 设计态渲染
+1. **设计态渲染器**：用于在设计器中进行可视化编辑，支持组件选择、拖拽、调整等操作。
+2. **运行态渲染器**：用于将设计好的配置渲染为最终用户可交互的界面。
 
-设计态渲染主要用于可视化编辑器中，提供实时预览和编辑能力。在这种模式下，渲染器需要处理：
-- 组件的实时预览和属性更新
-- 拖拽交互和放置位置计算
-- 选中态和激活态的展示
-- 组件树关系的维护
-- 配置面板的联动更新
+## 内置渲染器
 
-### 预览态渲染
+EasyEditor 目前提供以下内置渲染器：
 
-预览态渲染用于实际应用环境，专注于性能和稳定性。这种模式主要负责：
-- Schema 的解析和组件树构建
-- 组件的按需加载和实例化
-- 属性的计算和响应式处理
-- 样式的解析和动态应用
-- 组件间的事件通信
+- `@easyeditor/react-renderer`: 基础 React 渲染器
+- `@easyeditor/react-renderer-dashboard`: 大屏应用 React 渲染器
+- `@easyeditor/react-renderer-form`: 表单应用 React 渲染器 (开发中)
 
-## 核心特性
+## 渲染器使用
 
-### 框架无关设计
-- 核心渲染逻辑与框架解耦
-- 统一的渲染协议和接口
-- 可扩展的框架适配层
+### 设计态渲染器
 
-### 组件隔离机制
-- 样式隔离防止冲突
-- 独立的组件运行环境
-- 可控的生命周期管理
+设计态渲染器通常通过 `SimulatorRenderer` 组件实现：
 
-### 性能优化
-- 智能的组件渲染策略
-- 多级缓存机制
-- 异步渲染支持
+```tsx
+import { SimulatorRenderer } from '@easyeditor/react-renderer-dashboard'
+import { simulator } from './editor'
 
-### 扩展能力
-- 自定义渲染器接入
-- 可扩展的生命周期
-- 灵活的上下文机制
+export const DesignEditor = () => {
+  return <SimulatorRenderer host={simulator} />
+}
+```
 
-## 渲染流程
+### 运行态渲染器
 
-渲染器在处理页面时，会经过以下关键阶段：
+运行态渲染器通过 `Renderer` 组件实现：
 
-### 1. Schema 解析
-- 解析页面结构定义
-- 收集组件依赖信息
-- 处理配置项和变量
+```tsx
+import { Renderer } from '@easyeditor/react-renderer-dashboard'
+import { components } from './materials'
 
-### 2. 组件处理
-- 组件的实例化
-- 属性的计算和注入
-- 样式的解析和应用
-- 事件系统的构建
+export const RuntimePreview = ({ schema }) => {
+  return (
+    <Renderer
+      schema={schema}
+      components={components}
+      viewport={{ width: 1920, height: 1080 }}
+    />
+  )
+}
+```
 
-### 3. 渲染执行
-- 构建虚拟组件树
-- 执行渲染操作
-- 处理交互响应
-- 维护更新机制
+## 渲染器配置
 
-### 4. 生命周期
-- 组件的创建和初始化
-- 属性和状态的更新
-- 组件的卸载和清理
-- 上下文的传递和维护
+渲染器支持多种配置选项：
 
-## 下一步
+```tsx
+<Renderer
+  // 必须项：组件配置Schema
+  schema={schema}
 
-- 了解如何[使用设计态渲染器](/guide/renderer/design-mode)
-- 学习如何在实际应用中[使用运行态渲染器](/guide/renderer/live-mode)
-- 探索如何开发[自定义渲染器](/guide/renderer/custom)
-- 查看完整的[渲染器 API 参考](/api/renderer)
+  // 必须项：组件映射
+  components={components}
+
+  // 可选项：视口配置
+  viewport={{ width: 1920, height: 1080 }}
+
+  // 可选项：设计模式
+  designMode={false}
+
+  // 可选项：应用辅助对象，提供工具方法和上下文
+  appHelper={{
+    utils: {
+      navigate: (path) => { /* 导航处理 */ },
+      request: (url, options) => { /* API请求处理 */ }
+    },
+    ctx: {
+      currentUser: { /* 用户信息 */ }
+    }
+  }}
+/>
+```
+
+## 渲染器扩展
+
+EasyEditor 支持开发自定义渲染器来适配不同的框架或特定的应用场景。渲染器扩展可以：
+
+1. **支持新的框架**：如 Vue、Angular 等
+2. **定制渲染行为**：例如为特定组件实现定制的渲染逻辑
+3. **增强交互能力**：添加新的交互能力、动画效果等
+
+详细的渲染器开发指南，请参考以下章节：
+
+- [使用设计态渲染器](/guide/renderer/editor)
+- [使用运行态渲染器](/guide/renderer/runtime)
+- [自定义渲染器开发](/guide/renderer/custom)

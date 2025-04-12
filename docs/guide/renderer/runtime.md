@@ -1,89 +1,230 @@
-# 使用运行态
+# 使用运行态渲染器
 
-运行态渲染器是 EasyEditor 中用于在生产环境中渲染页面的核心组件。它与设计态渲染器共享许多基础功能，但在实现上更注重性能和稳定性。以下是关于运行态渲染器的详细说明。
+运行态渲染器是将低代码设计生成的 Schema 转换为可交互的最终用户界面的关键组件。本文将指导你如何在项目中正确使用运行态渲染器。
 
-## 快速开始
+## 基本使用
 
-### 安装依赖
+### 引入渲染器
 
-```bash
-pnpm add @easy-editor/react-renderer
-```
+首先，你需要引入对应的运行态渲染器组件：
 
-### 基础使用
-
-```typescript
-import { rendererFactory } from '@easy-editor/react-renderer'
-import { components } from '@/editor/materials'
-
-const Renderer = rendererFactory()
-
-const App = () => {
-  const schema = {/* 页面组件树的 JSON 描述 */}
-  return <Renderer schema={schema} components={components} />
-}
-```
-
-
-## Renderer 扩展
-
-`@easy-editor/react-renderer-dashboard` 是基于基础渲染器的扩展实现，专门为大屏场景优化。
-
-### 使用案例
-
-```typescript
+```tsx
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
-import { components } from '@/editor/materials'
+```
 
-const DashboardPreview = () => {
-  const schema = {/* 页面组件树的 JSON 描述 */}
+### 配置渲染器
 
+运行态渲染器的基本用法：
+
+```tsx
+import { Renderer } from '@easy-editor/react-renderer-dashboard'
+import { components } from '@/materials'
+
+const RuntimePreview = ({ schema }) => {
   return (
-    <div className='h-full w-full'>
-      <Renderer
-        schema={schema}
-        components={components}
-        viewport={{ width: 1920, height: 1080 }}
-        appHelper={{
-          utils: {
-            navigate: (e: Event, path: string) => {
-              // 处理页面跳转
-              window.location.href = path
-            },
-            request: async (config) => {
-              // 处理数据请求
-              const response = await fetch(config.uri, config)
-              return response.json()
-            }
-          },
-        }}
-      />
-    </div>
+    <Renderer
+      schema={schema}
+      components={components}
+    />
   )
 }
 ```
 
-## 配置说明
+## 必要参数
 
-这里只展示了部分核心属性的介绍，详细可以查看 [Renderer API](docs/api/renderer.md)
+### schema
 
-| 参数 | 说明 | 类型 | 默认值 |
-|------|------|------|--------|
-| schema | 页面组件树的 JSON 描述，用于定义页面的结构和内容 | `RootSchema \| NodeSchema` | - |
-| components | 组件依赖的实例，包含所有可用的自定义组件和基础组件 | `Record<string, React.ComponentType<any>>` | - |
-| viewport | 视口配置，定义画布的宽度和高度 | `{ width: number, height: number }` | - |
-| appHelper | 应用助手，提供全局工具函数和常量 | `RendererAppHelper` | - |
-| designMode | 设计模式，可选值：`live`、`design` | `DesignMode` | - |
-| device | 设备信息，支持 `default`、`pc`、`mobile` | `'default' \| 'pc' \| 'mobile' \| string` | `'default'` |
+schema 参数是描述页面结构和组件配置的核心数据：
 
-通过以上文档，您可以快速了解运行态渲染器的使用方法及其与设计态的区别。后续的渲染器定制将进一步介绍如何根据具体需求调整渲染器的行为。
+```tsx
+const schema = {
+  componentName: 'Page',
+  children: [
+    {
+      componentName: 'Text',
+      props: {
+        content: '这是一段文本',
+        style: {
+          fontSize: '24px',
+          color: '#333'
+        }
+      }
+    },
+    {
+      componentName: 'Button',
+      props: {
+        text: '点击按钮',
+        type: 'primary'
+      }
+    }
+  ]
+}
 
-## 运行态与设计态的区别
+<Renderer schema={schema} components={components} />
+```
 
-- **设计态**：主要用于开发环境，提供实时预览和编辑功能，支持组件拖拽、属性修改等。
-- **运行态**：用于生产环境，专注于稳定性和性能，去除了设计态的编辑功能。
+### components
+
+components 参数是组件名称和实际组件实现的映射关系：
+
+```tsx
+import Text from '@/components/Text'
+import Button from '@/components/Button'
+import Chart from '@/components/Chart'
+
+const components = {
+  Text,
+  Button,
+  Chart,
+  // 其他组件...
+}
+
+<Renderer schema={schema} components={components} />
+```
+
+## 高级配置
+
+运行态渲染器支持多种高级配置项：
+
+```tsx
+<Renderer
+  // 必须项：组件配置Schema
+  schema={schema}
+
+  // 必须项：组件映射
+  components={components}
+
+  // 可选项：视口配置
+  viewport={{ width: 1920, height: 1080 }}
+
+  // 可选项：全局属性
+  globalProps={{
+    theme: 'dark',
+    locale: 'zh-CN'
+  }}
+
+  // 可选项：应用工具和上下文
+  appHelper={{
+    utils: {
+      // 导航处理
+      navigate: (path, options) => {
+        console.log(`Navigating to ${path}`, options)
+        // 实际导航逻辑...
+      },
+      // API 请求
+      request: async (url, options) => {
+        const response = await fetch(url, options)
+        return response.json()
+      },
+      // 事件总线
+      event: {
+        emit: (eventName, data) => {
+          console.log(`Event emitted: ${eventName}`, data)
+        },
+        on: (eventName, callback) => {
+          console.log(`Event listener added: ${eventName}`)
+        }
+      }
+    },
+    // 应用上下文
+    ctx: {
+      currentUser: {
+        id: '001',
+        name: '张三',
+        role: 'admin'
+      },
+      permissions: ['read', 'write', 'manage']
+    }
+  }}
+/>
+```
+
+## 常见场景
+
+### 动态数据加载
+
+结合 useState 和 useEffect 动态加载数据：
+
+```tsx
+import { useState, useEffect } from 'react'
+import { Renderer } from '@easy-editor/react-renderer-dashboard'
+import { components } from '@/materials'
+
+const DynamicDataPage = () => {
+  const [schema, setSchema] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // 从服务器加载 Schema
+    const fetchSchema = async () => {
+      try {
+        setLoading(true)
+        const response = await fetch('/api/schema')
+        const data = await response.json()
+        setSchema(data)
+      } catch (error) {
+        console.error('Failed to load schema:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchSchema()
+  }, [])
+
+  if (loading) {
+    return <div>加载中...</div>
+  }
+
+  if (!schema) {
+    return <div>加载失败</div>
+  }
+
+  return (
+    <Renderer
+      schema={schema}
+      components={components}
+    />
+  )
+}
+```
+
+### 多页面路由集成
+
+结合 React Router 实现多页面渲染：
+
+```tsx
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { Suspense, lazy } from 'react'
+import { Renderer } from '@easy-editor/react-renderer-dashboard'
+import { components } from '@/materials'
+
+// 懒加载各页面 Schema
+const HomePage = lazy(() => import('@/schemas/home'))
+const DashboardPage = lazy(() => import('@/schemas/dashboard'))
+const ProfilePage = lazy(() => import('@/schemas/profile'))
+
+const PageRenderer = ({ schema }) => (
+  <Renderer schema={schema} components={components} />
+)
+
+const AppRouter = () => {
+  return (
+    <BrowserRouter>
+      <Suspense fallback={<div>页面加载中...</div>}>
+        <Routes>
+          <Route path="/" element={<PageRenderer schema={HomePage} />} />
+          <Route path="/dashboard" element={<PageRenderer schema={DashboardPage} />} />
+          <Route path="/profile" element={<PageRenderer schema={ProfilePage} />} />
+        </Routes>
+      </Suspense>
+    </BrowserRouter>
+  )
+}
+```
 
 ## 下一步
 
-- [EasyDashboard 运行态页面](https://github.com/Easy-Editor/EasyDashboard/blob/main/src/pages/preview/index.tsx)
-- [设计态渲染器文档](docs/guide/renderer/editor.md)
+- 了解[编辑态渲染器](/guide/renderer/editor)的使用方法
+- 学习如何[自定义渲染器](/guide/renderer/custom)
+- 查看[渲染器 API 参考](/reference/renderer)获取更详细的信息

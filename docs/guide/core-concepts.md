@@ -1,244 +1,217 @@
 # 核心概念
 
-## 引擎架构
+本文档将帮助你理解 EasyEditor 的基本架构和核心概念，为你的开发工作打下坚实基础。
 
-EasyEditor 采用模块化的架构设计，主要包含以下核心模块：
+## 架构概览
+
+EasyEditor 采用模块化的架构设计，各个模块之间通过清晰的接口进行通信，形成一个灵活且可扩展的低代码引擎系统。核心架构由编辑器引擎、设计器、项目管理和模拟器四大部分组成，通过插件系统实现功能扩展。
+
+## 核心模块介绍
 
 ### 编辑器引擎 (Editor)
 
-编辑器引擎是整个系统的核心，负责协调各个模块的工作：
+编辑器引擎是整个系统的核心，负责协调各个模块的工作并管理插件的生命周期。它提供了统一的事件系统和状态管理能力，是连接各个模块的枢纽。
 
-```typescript
-interface EditorConfig {
-  /**
-   * 插件 Plugin
-   */
-  plugins?: Plugin[]
+编辑器引擎通过 `createEditor` 函数创建，可接收多种配置选项，包括：
 
-  /**
-   * 设置器 Setter
-   */
-  setters?: Record<string, Component | Setter>
+- **plugins**：要加载的插件列表，用于扩展核心功能
+- **setters**：属性设置器注册表，用于组件属性编辑
+- **components**：物料组件注册表，可用于页面设计
+- **componentMetas**：组件元数据，定义组件的配置信息
+- **lifeCycles**：生命周期钩子，用于控制编辑器初始化过程
+- **hotkeys**：快捷键配置，定义编辑器全局快捷键
+- **defaultSchema**：默认项目结构，初始化项目内容
 
-  /**
-   * 组件 Component
-   */
-  components?: Record<string, Component>
-
-  /**
-   * 组件元数据 ComponentMetadata
-   */
-  componentMetas?: Record<string, ComponentMetadata>
-
-  /**
-   * 生命周期
-   */
-  lifeCycles?: LifeCyclesConfig
-
-  /**
-   * designer props
-   */
-  designer?: Pick<DesignerProps, "onDragstart" | "onDrag" | "onDragend">
-
-  /**
-   * 默认项目 Schema
-   */
-  defaultSchema?: ProjectSchema
-
-  /**
-   * 快捷键
-   */
-  hotkeys?: HotkeyConfig[]
-}
-```
+编辑器引擎提供了一系列方法获取各个模块的实例，如 `onceGot` 方法可以获取设计器、项目管理等核心模块。
 
 ### 设计器 (Designer)
 
-设计器负责页面编排和交互：
+设计器负责页面编排和交互，管理用户与界面的交互逻辑。它是用户进行可视化编辑的核心模块，提供了多种能力：
 
-```typescript
-interface Designer {
-  // 编辑器实例
-  readonly editor: Editor
-  // 项目实例
-  readonly project: Project
-  // 选区管理
-  readonly selection: Selection
-  // 拖拽管理
-  readonly dragon: Dragon
+**选区管理 (Selection)**：
+- 负责管理组件的选中状态
+- 提供单选、多选、取消选择等功能
+- 支持通过组件ID或节点实例进行选择
 
-  // 获取当前文档
-  get currentDocument(): Document | undefined
-  // 获取当前历史记录
-  get currentHistory(): History | undefined
-  // 导出 Schema
-  get schema(): ProjectSchema
-  // 设置 Schema
-  setSchema(schema: ProjectSchema): void
-  // ...
-}
-```
+**拖拽管理 (Dragon)**：
+- 处理组件拖拽的全生命周期
+- 支持组件的添加、移动和调整位置
+- 提供拖拽开始、过程中和结束的事件处理
+
+**文档操作**：
+- 获取当前编辑的文档
+- 管理文档的历史记录
+- 导入导出文档数据
+
+设计器通过暴露清晰的方法和属性，使开发者能够轻松控制编辑器的交互行为，如组件选择、拖拽放置、调整大小等核心能力。
 
 ### 项目管理 (Project)
 
-项目管理负责文档和资源的管理：
+项目管理负责文档和资源的管理，提供了文档的创建、打开、保存和关闭功能，以及导入导出 Schema 的能力。它管理着编辑器中的所有文档实例，是多页面应用设计的核心模块。
 
-```typescript
-interface Project {
-  readonly designer: Designer
-  readonly documents: Document[]
+项目管理的主要能力包括：
 
-  // 导入项目
-  import(schema: ProjectSchema): void
-  // 导出项目
-  export(stage?: TRANSFORM_STAGE): ProjectSchema
-  // 创建文档
-  createDocument(schema?: RootSchema): Document
-  // 打开文档
-  open(idOrDoc?: string | Document | RootSchema): Document | null
-  // ...
-}
-```
+**文档管理**：
+- 创建新的文档实例
+- 打开和切换不同的文档
+- 保存文档更改
+- 关闭不需要的文档
+
+**Schema 管理**：
+- 将项目导出为 Schema 数据结构
+- 从 Schema 数据结构导入项目
+- 支持不同转换阶段的 Schema 处理
+
+**资源管理**：
+- 管理项目中的静态资源
+- 处理资源引用关系
+- 维护资源的元数据
+
+项目管理为多页面、多文档的应用设计提供了强大支持，使开发者可以轻松创建复杂的应用结构。
 
 ### 模拟器 (Simulator)
 
-模拟器提供预览和调试能力：
+模拟器提供预览和调试能力，负责组件的渲染和交互。它是连接设计器和渲染器的桥梁，确保用户在设计时可以实时看到效果。
 
-```typescript
-interface Simulator {
-  readonly project: Project
-  readonly designer: Designer
-  readonly viewport: Viewport
+模拟器的主要功能包括：
 
-  // 设计模式
-  get designMode(): "design" | "preview" | "live"
-  // 组件映射
-  get components(): Record<string, Component>
-  // 重新渲染
-  rerender(): void
-  // 构建组件映射
-  buildComponentMap(components: Record<string, Component>): void
-  // ...
-}
-```
+**视口管理**：
+- 控制画布的大小和比例
+- 支持多种设备尺寸的模拟
+- 提供画布的缩放和平移能力
+
+**渲染控制**：
+- 配置渲染模式（设计态、预览态、运行态）
+- 管理组件的渲染生命周期
+- 处理组件的事件和交互
+
+**组件映射**：
+- 将 Schema 中的组件名映射到实际组件实现
+- 维护组件的实例引用
+- 管理组件的上下文和属性传递
+
+模拟器使开发者能够在设计过程中实时预览效果，大大提高了设计效率和准确性。
 
 ### 插件系统 (Plugin)
 
-插件系统提供了扩展引擎能力的机制：
+插件系统提供了扩展引擎能力的机制，允许开发者添加新功能或修改现有行为。它是 EasyEditor 实现高度可扩展性的关键。
 
-```typescript
-interface Plugin {
-  // 插件名称
-  name: string
-  // 插件依赖
-  deps?: string[]
-  // 初始化
-  init(ctx: PluginContext): Promise<void> | void
-  // 销毁
-  destroy?(ctx: PluginContext): Promise<void> | void
-  // 扩展功能
-  extend?(ctx: PluginExtend): void
-}
-```
+插件的基本结构包括：
 
-## 核心功能
+- **name**：插件名称，必须唯一
+- **deps**：插件依赖，声明依赖的其他插件
+- **init**：初始化方法，在插件加载时执行
+- **destroy**：销毁方法，在插件卸载时执行
+- **extend**：扩展方法，用于扩展现有模块的功能
 
-### 设计器 (Designer)
+插件系统的强大之处在于：
 
-设计器提供了可视化编辑的能力：
+1. **声明式依赖**：插件可以声明其依赖的其他插件，系统会自动处理加载顺序
+2. **上下文共享**：插件可以通过上下文对象共享数据和方法
+3. **事件通信**：插件可以监听和触发事件，实现松耦合的通信
+4. **功能扩展**：插件可以扩展核心模块的功能，如添加新方法或修改现有行为
 
-- 组件拖拽
-- 属性配置
-- 布局调整
-- 实时预览
+通过插件系统，EasyEditor 可以根据不同的需求场景进行功能定制，如大屏设计、表单设计等专业场景。
 
-### 项目管理 (Project)
+## 核心功能详解
 
-项目管理负责文档和资源的管理：
+### 设计器功能
 
-- 文档管理
-- 组件管理
-- 配置管理
-- 历史记录
+设计器提供了丰富的可视化编辑能力，包括但不限于：
 
-### 模拟器 (Simulator)
+**组件拖拽**：通过拖拽操作添加、移动组件，支持精确定位和智能辅助线等功能。设计器提供了完整的拖拽生命周期管理，从拖拽开始到结束，开发者可以在不同阶段执行自定义逻辑。
 
-模拟器提供了预览和调试能力：
+**组件选择**：支持单选、多选和框选等多种方式选择组件。选中的组件会显示特殊的视觉效果，并可以通过属性面板进行配置。选区管理模块维护了当前选中的组件列表，并提供了丰富的选择操作API。
 
-- 实时预览
-- 多设备适配
-- 事件模拟
-- 状态查看
+**属性配置**：通过属性面板可视化编辑组件的各种属性，如样式、事件处理等。设计器会将属性更改实时应用到组件上，实现所见即所得的编辑体验。
 
-## 扩展机制
+**布局调整**：支持组件大小调整、对齐、分布等布局操作，帮助用户快速构建整齐的界面。布局系统支持多种布局模式，如流式布局、绝对定位和弹性布局等。
 
-### 渲染器扩展
+### 项目管理功能
 
-支持多框架渲染：
+项目管理负责文档和资源的维护，主要功能包括：
 
-```typescript
-interface RendererProps {
-  schema: Schema
-  // 组件映射
-  components: Record<string, Component>
-  // 设计模式
-  designMode?: boolean
-}
-```
+**文档管理**：创建、打开、保存和关闭文档，支持多文档编辑和切换。每个文档有独立的组件树和历史记录，可以单独导出和导入。
 
-### 插件扩展
+**组件管理**：维护项目中使用的组件库，包括组件的注册、卸载和更新。组件管理模块确保组件的元数据和实现代码保持同步。
 
-提供完整的插件开发能力：
+**配置管理**：管理项目级别的配置，如主题、国际化设置等。这些配置可以影响整个项目的渲染和行为。
 
-```typescript
-const ExamplePlugin: Plugin = ctx => ({
-  name: 'ExamplePlugin',
-  // 插件依赖
-  deps?: string[],
-  init(ctx) {
-    // 插件初始化逻辑
-    ctx.logger.log('plugin initialized')
-  },
-  extend({ extend }) {
-    // 扩展现有功能
-    extend('Designer', {
-      // 扩展方法
-    })
-  }
-})
-```
+**历史记录**：提供操作的撤销和重做功能，记录用户的编辑历史。历史记录模块使用高效的差异算法，只记录必要的变更信息，确保内存使用合理。
 
-### 设置器扩展
+### 模拟器功能
 
-自定义组件配置面板：
+模拟器提供了预览和调试能力，主要功能包括：
 
-```typescript
-interface Setter {
-  // 设置器名称
-  name: string
-  // 设置器类型
-  type: string
-  // 设置器属性
-  props?: Record<string, any>
-}
-```
+**实时预览**：将设计中的页面实时渲染，使用户可以立即看到编辑效果。实时预览使用高效的增量更新算法，只更新发生变化的部分，确保预览的性能。
+
+**多设备适配**：支持模拟不同设备尺寸，预览在不同设备上的显示效果。开发者可以定义自定义设备配置，如手机、平板和桌面等不同尺寸。
+
+**事件模拟**：支持在设计时模拟运行时的事件，如点击、滚动等，便于调试交互逻辑。事件模拟系统可以记录和重放用户操作，帮助开发者排查交互问题。
+
+**状态查看**：查看组件的运行状态、数据流向和属性变化，辅助调试。状态检查工具可以实时显示组件的内部状态，帮助开发者理解组件的行为。
 
 ## 工作流程
 
-```typescript
-// 1. 创建编辑器实例
-const editor = createEasyEditor({
-  plugins: [DashboardPlugin()],
-  setters,
-  components,
-  componentMetas
-})
+EasyEditor 的典型工作流程如下：
 
-// 2. 获取核心模块
-const designer = await editor.onceGot<Designer>("designer")
-const project = await editor.onceGot<Project>("project")
-const simulator = await editor.onceGot<Simulator>("simulator")
+1. **初始化编辑器**：创建编辑器实例，加载必要的插件和配置
+2. **获取核心模块**：获取设计器、项目管理和模拟器等核心模块实例
+3. **创建/加载项目**：创建新项目或加载现有项目的 Schema
+4. **编辑设计**：通过设计器进行界面设计，添加组件、配置属性等
+5. **预览调试**：使用模拟器实时预览和调试设计效果
+6. **导出项目**：将完成的设计导出为 Schema 数据，用于保存或发布
 
-// 3. 渲染设计器
-<SimulatorRenderer host={simulator} />
-```
+整个过程中，编辑器引擎协调各个模块的工作，确保它们之间的数据流转和状态同步，提供流畅的设计体验。
+
+## 扩展机制
+
+EasyEditor 提供了多种扩展机制，使开发者可以根据需求定制和增强系统功能：
+
+### 插件扩展
+
+插件是扩展 EasyEditor 功能的主要方式，通过插件可以：
+
+- 添加新的功能模块，如数据源管理、国际化支持等
+- 修改现有模块的行为，如自定义拖拽逻辑、重写渲染流程等
+- 集成外部系统，如版本控制、团队协作功能等
+
+插件可以访问编辑器的各个核心模块，并通过事件系统与其他插件通信，形成松耦合的架构。
+
+### 渲染器扩展
+
+渲染器负责将 Schema 转换为实际的用户界面，EasyEditor 支持扩展不同的渲染器实现：
+
+- 支持不同的前端框架，如 React、Vue 等
+- 针对特定场景定制渲染行为，如大屏渲染、表单渲染等
+- 实现不同的渲染优化策略，如懒加载、虚拟滚动等
+
+渲染器通过统一的接口与编辑器引擎通信，确保不同渲染器实现的一致性和可互操作性。
+
+### 物料扩展
+
+物料是可视化搭建的基础组件，EasyEditor 支持丰富的物料扩展能力：
+
+- 注册自定义组件作为物料
+- 定义组件的元数据，如属性、事件、样式等
+- 配置组件的设置器，实现属性的可视化编辑
+- 实现组件的缩略图和预览效果
+
+通过物料扩展，开发者可以将业务组件库接入 EasyEditor，实现业务定制化的低代码平台。
+
+### 设置器扩展
+
+设置器是编辑组件属性的交互控件，通过设置器扩展可以：
+
+- 实现复杂属性的可视化编辑，如颜色选择器、富文本编辑器等
+- 定制属性编辑的交互方式，提升用户体验
+- 实现特定业务场景的属性编辑逻辑，如数据绑定、条件配置等
+
+设置器扩展极大地增强了属性编辑的能力，使复杂的配置变得简单直观。
+
+## 下一步
+
+- 查看[快速开始](/guide/getting-started)指南开始使用 EasyEditor
+- 了解[插件开发](/guide/extension/plugin)以扩展核心功能
+- 学习[渲染器开发](/guide/renderer/)以支持自定义渲染
+- 探索[物料开发](/guide/extension/material)以扩充组件库

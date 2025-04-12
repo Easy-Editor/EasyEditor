@@ -1,163 +1,438 @@
-# 设置器扩展
+# 自定义属性设置器
 
-设置器(Setter)是 EasyEditor 中用于配置组件属性的 UI 控件。本指南将帮助你了解如何开发和集成自定义设置器。
+属性设置器（Setter）是 EasyEditor 中用于编辑组件属性的交互控件。本指南将帮助你了解如何创建自定义的属性设置器，以满足特定的编辑需求。
 
-## 设置器介绍
+## Setter 介绍
 
-设置器是属性配置面板中的基础 UI 控件，用于编辑组件的各种属性值。
+Setter 是一种特殊的组件，用于在设计器中为特定类型的属性提供可视化的编辑界面。EasyEditor 内置了一系列基础的 Setter，如文本输入、数字输入、颜色选择器等，但在某些场景下，你可能需要创建自定义的 Setter 来提供更专业或更便捷的编辑体验。
 
-## 设置器结构
+Setter 的主要职责包括：
 
-一个完整的设置器包含以下文件结构：
+- 展示属性当前值
+- 提供交互界面修改属性值
+- 验证输入的有效性
+- 转换数据格式
+- 提供友好的用户体验
+
+## Setter 生命周期
+
+Setter 组件在 EasyEditor 中的生命周期如下：
+
+1. **注册阶段**：Setter 组件被注册到编辑器的 SetterManager 中
+2. **创建实例**：当属性面板打开时，相应的 Setter 实例被创建
+3. **接收属性值**：Setter 从设计器中接收当前选中节点的属性值
+4. **用户交互**：用户通过 Setter 界面交互修改属性值
+5. **值变更**：Setter 内部状态更新，并调用 onChange 函数
+6. **通知设计器**：设计器接收到属性变更通知
+7. **更新节点**：设计器更新节点的属性值
+8. **设计器刷新**：UI 刷新以反映最新状态
+
+## Setter 结构
+
+一个完整的 Setter 项目通常包含以下文件结构：
 
 ```bash
-string-setter/
-├── index.tsx      # 设置器组件
+my-setter/
+├── index.tsx       # Setter 组件实现
 ```
 
-## 设置器开发
+## Setter 开发
 
-### 1. 基础设置器
+### 1. 基础 Setter 组件 (index.tsx)
 
-```typescript
+一个基本的 Setter 组件需要实现 `SetterProps` 接口：
+
+```tsx
+import React from 'react'
 import type { SetterProps } from '@easy-editor/core'
 
-export interface StringSetterProps extends SetterProps<string> {
-  placeholder?: string  // 自定义的设置器属性
+export interface CustomSetterProps extends SetterProps {
+  // 自定义属性
+  placeholder?: string;
+  options?: Array<{ label: string; value: any }>;
 }
 
-const StringSetter = (props: StringSetterProps) => {
-  const { value, placeholder, onChange } = props
+const CustomSetter: React.FC<CustomSetterProps> = (props) => {
+  const { value, onChange, placeholder, options = [] } = props;
+
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    onChange(e.target.value);
+  };
 
   return (
-    <input
+    <select
       value={value}
-      placeholder={placeholder}
-      onChange={e => onChange(e.target.value)}
+      onChange={handleChange}
       className="w-full px-2 py-1 border rounded"
-    />
-  )
-}
+    >
+      {placeholder && (
+        <option value="" disabled>
+          {placeholder}
+        </option>
+      )}
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+};
 
-export default StringSetter
+export default CustomSetter;
 ```
 
-### 2. 分组设置器
+### 2. 复合属性 Setter (index.tsx)
 
-分组设置器用于组织和管理其他设置器，通常不需要 `name` 属性。以下是常用的分组设置器简易实现：
+对于包含多个子属性的复合属性，如边距、定位等，可以创建复合 Setter：
 
-#### GroupSetter
-最基础的分组设置器，用于垂直排列多个设置器：
-
-```typescript
+```tsx
+import React from 'react'
 import type { SetterProps } from '@easy-editor/core'
-import type { PropsWithChildren } from 'react'
 
-interface GroupSetterProps extends SetterProps<string>, PropsWithChildren {}
-
-const GroupSetter = (props: GroupSetterProps) => {
-  const { children } = props
-
-  return <div className='space-y-4 flex flex-col gap-2'>{children}</div>
+interface MarginValue {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
 }
 
-export default GroupSetter
-```
-
-#### CollapseSetter
-可折叠的分组设置器，适用于需要收起/展开的复杂设置组：
-
-```typescript
-import type { SetterProps } from '@easy-editor/core'
-import type { PropsWithChildren } from 'react'
-import { useState } from 'react'
-// ...
-
-interface CollapseSetterProps extends SetterProps<boolean>, PropsWithChildren {
-  icon?: boolean
+interface MarginSetterProps extends SetterProps<MarginValue> {
+  units?: string[];
+  defaultUnit?: string;
 }
 
-const CollapseSetter = (props: CollapseSetterProps) => {
-  const { field, children, initialValue, icon = true } = props
-  const [isOpen, setIsOpen] = useState(initialValue ?? true)
+const MarginSetter: React.FC<MarginSetterProps> = (props) => {
+  const { value = {}, onChange, units = ['px', '%', 'rem'], defaultUnit = 'px' } = props;
+  const [selectedUnit, setSelectedUnit] = React.useState(defaultUnit);
+
+  const handleChange = (key: keyof MarginValue, val: string) => {
+    const numValue = parseFloat(val);
+    onChange({
+      ...value,
+      [key]: isNaN(numValue) ? undefined : numValue,
+    });
+  };
+
+  const handleUnitChange = (unit: string) => {
+    setSelectedUnit(unit);
+    // 可以在这里实现单位转换逻辑
+  };
 
   return (
-    <Collapsible
-      open={isOpen}
-      onOpenChange={setIsOpen}
-      className='w-[calc(100%_+_32px)] space-y-2 -translate-x-4'
-    >
-      <div className='flex items-center justify-between space-x-4 px-4 h-8 bg-muted'>
-        <h4>{field.title}</h4>
-        {icon && (
-          <CollapsibleTrigger asChild>
-            <Button variant='ghost' size='sm'>
-              <ChevronsUpDown className='h-4 w-4' />
-              <span className='sr-only'>Toggle</span>
-            </Button>
-          </CollapsibleTrigger>
-        )}
+    <div className="grid grid-cols-2 gap-2">
+      <div className="flex items-center">
+        <label className="text-xs mr-2">上:</label>
+        <input
+          type="number"
+          value={value.top ?? ''}
+          onChange={(e) => handleChange('top', e.target.value)}
+          className="w-full px-2 py-1 border rounded"
+        />
       </div>
-      <CollapsibleContent className='space-y-3 px-4 py-2'>
-        {children}
-      </CollapsibleContent>
-    </Collapsible>
+      <div className="flex items-center">
+        <label className="text-xs mr-2">右:</label>
+        <input
+          type="number"
+          value={value.right ?? ''}
+          onChange={(e) => handleChange('right', e.target.value)}
+          className="w-full px-2 py-1 border rounded"
+        />
+      </div>
+      <div className="flex items-center">
+        <label className="text-xs mr-2">下:</label>
+        <input
+          type="number"
+          value={value.bottom ?? ''}
+          onChange={(e) => handleChange('bottom', e.target.value)}
+          className="w-full px-2 py-1 border rounded"
+        />
+      </div>
+      <div className="flex items-center">
+        <label className="text-xs mr-2">左:</label>
+        <input
+          type="number"
+          value={value.left ?? ''}
+          onChange={(e) => handleChange('left', e.target.value)}
+          className="w-full px-2 py-1 border rounded"
+        />
+      </div>
+      <div className="col-span-2 flex justify-end">
+        <select
+          value={selectedUnit}
+          onChange={(e) => handleUnitChange(e.target.value)}
+          className="text-xs px-1 border rounded"
+        >
+          {units.map((unit) => (
+            <option key={unit} value={unit}>
+              {unit}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+};
+
+export default MarginSetter;
+```
+
+### 3. 集成第三方库 Setter
+
+有时我们需要集成第三方库来提供更专业的编辑体验，如颜色选择器、日期选择器等：
+
+```tsx
+import React from 'react'
+import type { SetterProps } from '@easy-editor/core'
+import { SketchPicker } from 'react-color'
+
+interface ColorSetterProps extends SetterProps<string> {
+  presetColors?: string[];
+  showAlpha?: boolean;
+}
+
+const ColorSetter: React.FC<ColorSetterProps> = (props) => {
+  const { value = '#000000', onChange, presetColors, showAlpha = true } = props;
+  const [isOpen, setIsOpen] = React.useState(false);
+
+  const handleClick = () => {
+    setIsOpen(!isOpen);
+  };
+
+  const handleChange = (color: any) => {
+    onChange(color.hex);
+  };
+
+  const handleClose = () => {
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <div
+        className="w-full h-8 rounded cursor-pointer border flex items-center px-2"
+        style={{ backgroundColor: value }}
+        onClick={handleClick}
+      >
+        <span className="text-xs text-white shadow-sm">{value}</span>
+      </div>
+      {isOpen && (
+        <div className="absolute z-10 mt-1">
+          <div className="fixed inset-0" onClick={handleClose} />
+          <SketchPicker
+            color={value}
+            onChange={handleChange}
+            presetColors={presetColors}
+            disableAlpha={!showAlpha}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ColorSetter;
+```
+
+### 4. 高级事件 Setter
+
+Setter 可以访问设计器、文档和节点，实现更复杂的功能，如事件绑定：
+
+```tsx
+import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import type { JSFunction, SetterProps } from '@easy-editor/core'
+import { Settings, Trash } from 'lucide-react'
+import { useState } from 'react'
+
+interface EventData {
+  type: string
+  name: string
+  relatedEventName: string
+  paramStr?: string
+}
+
+export interface Event {
+  eventDataList?: EventData[]
+  eventList?: Array<{
+    name: string
+    description?: string
+    disabled?: boolean
+  }>
+}
+
+interface EventSetterProps extends SetterProps<Event> {
+  events: Array<{
+    title: string
+    children: Array<{
+      label: string
+      value: string
+      description?: string
+    }>
+  }>
+  field: any // SettingField 类型
+}
+
+const EventSetter = (props: EventSetterProps) => {
+  const { value, onChange, events, field } = props
+
+  // 通过 field 可以访问设计器、文档和节点
+  const methods = field.designer?.currentDocument?.rootNode?.getExtraPropValue('methods') as Record<string, JSFunction>
+
+  // 其他状态和方法
+  const [openKey, setOpenKey] = useState(0)
+  const [open, setOpen] = useState(false)
+  const [eventName, setEventName] = useState<string | undefined>(undefined)
+  const [editEventName, setEditEventName] = useState<string | undefined>(undefined)
+
+  const handleValueChange = (value: string) => {
+    setOpenKey(prev => prev + 1)
+    setOpen(true)
+    setEventName(value)
+  }
+
+  const handleAddEvent = (eventName: string, method: string, params?: string) => {
+    if (!eventName) return
+
+    const newEventData: EventData = {
+      type: 'method',
+      name: eventName,
+      relatedEventName: method,
+    }
+
+    if (params) {
+      newEventData.paramStr = params
+    }
+
+    // 编辑现有事件
+    if (editEventName) {
+      onChange?.({
+        ...value,
+        eventDataList: value?.eventDataList?.map(item =>
+          item.name === editEventName ? newEventData : item
+        ),
+      })
+      setEditEventName(undefined)
+    }
+    // 添加新事件
+    else {
+      onChange?.({
+        eventDataList: [...(value?.eventDataList || []), newEventData],
+        eventList: [...(value?.eventList || []), { name: newEventData.name }],
+      })
+    }
+  }
+
+  const handleDeleteEvent = (eventData: EventData) => {
+    onChange?.({
+      eventDataList: value?.eventDataList?.filter(item => item.name !== eventData.name),
+      eventList: value?.eventList?.filter(item => item.name !== eventData.name),
+    })
+  }
+
+  return (
+    <div className="flex flex-col space-y-4">
+      {/* 事件选择 */}
+      <div className="flex flex-col w-full">
+        {events.map((event, index) => (
+          <Select key={`${event.title}-${openKey}-${index}`} value={undefined} onValueChange={handleValueChange}>
+            <SelectTrigger className="w-full justify-center text-xs">
+              <SelectValue placeholder={event.title} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {event.children.map(child => (
+                  <SelectItem
+                    key={child.value}
+                    value={child.value}
+                    disabled={value?.eventDataList?.some(item => item.name === child.value)}
+                    className="flex justify-between"
+                  >
+                    <span>{child.label}</span>
+                    <span className="text-xs text-gray-500">{child.description}</span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        ))}
+      </div>
+
+      {/* 事件列表 */}
+      <Table className="mt-4">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[220px] text-xs">已有事件</TableHead>
+            <TableHead className="text-xs">操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {value?.eventDataList?.map(eventData => (
+            <TableRow key={eventData.name}>
+              <TableCell className="font-medium text-xs">
+                {eventData.name}
+                <span className="px-2">-</span>
+                <Button variant="link" className="text-xs px-0 py-0 h-0">
+                  {eventData.relatedEventName}
+                </Button>
+              </TableCell>
+              <TableCell className="flex gap-2">
+                <Settings
+                  className="h-3 w-3 cursor-pointer"
+                  onClick={() => {
+                    setOpen(true)
+                    setEventName(eventData.name)
+                    setEditEventName(eventData.name)
+                  }}
+                />
+                <Trash
+                  className="h-3 w-3 cursor-pointer"
+                  onClick={() => handleDeleteEvent(eventData)}
+                />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+
+      {/* 事件编辑弹窗会在这里 */}
+    </div>
   )
 }
 
-export default CollapseSetter
+export default EventSetter
 ```
 
-分组设置器的使用示例：
+## 注册与使用
+
+### 注册 Setter
+
+创建完 Setter 组件后，需要将其注册到 EasyEditor 中：
 
 ```typescript
-const configure: Configure = {
-  props: [
-    // 基础分组
-    {
-      type: 'group',
-      title: '基础设置',
-      setter: 'GroupSetter',
-      items: [
-        {
-          name: 'content',
-          title: '内容',
-          setter: 'StringSetter'
-        }
-      ]
-    },
+import { createEditor } from '@easy-editor/core'
+import CustomSetter from './path/to/CustomSetter'
+import MarginSetter from './path/to/MarginSetter'
+import ColorSetter from './path/to/ColorSetter'
+import EventSetter from './path/to/EventSetter'
 
-    // 可折叠分组
-    {
-      type: 'group',
-      title: '样式设置',
-      setter: {
-        componentName: 'CollapseSetter',
-        props: {
-          icon: true
-        }
-      },
-      items: [
-        {
-          type: 'group',
-          title: '文字',
-          items: [
-            {
-              name: 'text.fontSize',
-              title: '字体大小',
-              setter: 'NumberSetter'
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
+// 在创建编辑器实例时注册
+const editor = createEditor({
+  // ...其他配置
+  setters: {
+    // 注册自定义设置器
+    CustomSetter,
+    MarginSetter,
+    ColorSetter,
+    EventSetter
+  }
+})
 ```
 
-## 设置器配置
+### 在物料中使用
 
-在组件的 `configure.ts` 中使用设置器：
+在组件的属性配置中，可以通过指定 `setter` 字段来使用自定义的 Setter：
 
 ```typescript
 import type { Configure } from '@easy-editor/core'
@@ -165,366 +440,207 @@ import type { Configure } from '@easy-editor/core'
 const configure: Configure = {
   props: [
     {
-      type: 'field',·           // 设置器类型，分为 field、group
-      name: 'content',          // 映射到物料上的配置属性
-      title: '文本内容',         // 配置字段显示的名称
-      setter: 'StringSetter',   // 选择的设置器
-    },
-  ]
-}
-```
-
-### `setter` 属性的三种使用方式
-
-在 EasyEditor 中，`setter` 可以通过以下三种方式进行配置：
-
-#### 1. 字符串方式
-
-最简单的配置方式，直接使用字符串指定设置器的名称。适用于不需要额外配置的简单设置器。
-
-```typescript
-{
-  name: 'loading',
-  title: '加载状态',
-  setter: 'SwitchSetter'  // 直接使用字符串指定设置器
-}
-```
-
-#### 2. 对象方式
-
-当需要为设置器提供额外的配置项时，使用对象方式。对象必须包含 `componentName` 属性，可选包含 `props` 属性。
-
-```typescript
-{
-  name: 'variant',
-  title: '按钮样式',
-  setter: {
-    componentName: 'SelectSetter',  // 设置器名称
-    props: {                        // 设置器属性
-      options: [
-        { label: '默认', value: 'default' },
-        { label: '主要', value: 'primary' },
-        { label: '危险', value: 'destructive' }
-      ]
-    }
-  }
-}
-```
-
-对象配置支持的完整属性：
-
-```typescript
-interface SetterConfig {
-  componentName: string;           // 设置器名称（必需）
-  props?: Record<string, any>;     // 传递给设置器的属性
-  isRequired?: boolean;            // 是否必填
-  defaultValue?: any;              // 默认值
-}
-```
-
-#### 3. 函数方式
-
-最灵活的配置方式，可以根据当前字段状态动态返回设置器配置。函数接收当前字段实例作为参数。
-
-```typescript
-{
-  name: 'size',
-  title: '尺寸',
-  setter: (field: SettingField) => {
-    // 根据其他字段值动态决定使用哪个设置器
-    const type = field.getValue('type');
-
-    if (type === 'number') {
-      return {
-        componentName: 'NumberSetter',
-        props: {
-          min: 0,
-          max: 100,
-          suffix: 'px'
+      type: 'group',
+      title: '基础',
+      setter: 'GroupSetter',
+      items: [
+        {
+          type: 'field',
+          name: 'type',
+          title: '按钮类型',
+          setter: 'CustomSetter',  // 使用自定义的 Setter
+          extraProps: {
+            placeholder: '请选择按钮类型',
+            options: [
+              { label: '主要按钮', value: 'primary' },
+              { label: '次要按钮', value: 'secondary' },
+              { label: '文本按钮', value: 'text' },
+            ],
+          }
+        },
+        {
+          type: 'field',
+          name: 'margin',
+          title: '外边距',
+          setter: 'MarginSetter',  // 使用自定义的复合 Setter
+          extraProps: {
+            units: ['px', 'rem', 'em'],
+            defaultUnit: 'px'
+          }
+        },
+        {
+          type: 'field',
+          name: 'backgroundColor',
+          title: '背景色',
+          setter: 'ColorSetter',  // 使用自定义的颜色 Setter
+          extraProps: {
+            presetColors: ['#FF5630', '#00B8D9', '#36B37E', '#6554C0', '#FFAB00'],
+            showAlpha: true
+          }
         }
-      };
-    }
-
-    return 'StringSetter';  // 可以返回字符串
-  }
-}
-```
-
-函数方式的类型定义：
-
-```typescript
-type DynamicSetter = (target: SettingField) => string | SetterConfig;
-```
-
-### 使用示例
-
-下面是一个综合使用这三种方式的示例：
-
-```typescript
-const configure: Configure = {
-  props: [
+      ]
+    },
     {
       type: 'group',
-      title: '基础设置',
+      title: '事件设置',
+      setter: 'CollapseSetter',
       items: [
-        // 1. 字符串方式
         {
-          name: 'visible',
-          title: '是否显示',
-          setter: 'SwitchSetter'
-        },
-
-        // 2. 对象方式
-        {
-          name: 'align',
-          title: '对齐方式',
+          name: '__events',
+          title: '点击绑定事件',
           setter: {
-            componentName: 'RadioSetter',
+            componentName: 'EventSetter',  // 使用事件设置器
             props: {
-              options: [
-                { label: '左对齐', value: 'left' },
-                { label: '居中', value: 'center' },
-                { label: '右对齐', value: 'right' }
-              ]
+              events: [
+                {
+                  title: '组件自带事件',
+                  children: [
+                    {
+                      label: 'onClick',
+                      value: 'onClick',
+                      description: '点击事件',
+                    },
+                  ],
+                },
+              ],
             }
-          }
-        },
+          },
+          extraProps: {
+            // 通过 setValue 可以实现高级的数据转换和处理
+            setValue(target, value, oldValue) {
+              const { eventDataList } = value
+              const { eventList: oldEventList } = oldValue
 
-        // 3. 函数方式
-        {
-          name: 'size',
-          title: '尺寸',
-          setter: (field) => {
-            const unit = field.getValue('unit');
-            return {
-              componentName: 'NumberSetter',
-              props: {
-                suffix: unit || 'px',
-                min: 0,
-                step: unit === '%' ? 1 : 0.5
-              }
-            };
+              // 删除老事件
+              Array.isArray(oldEventList) &&
+                oldEventList.map(item => {
+                  target.parent.clearPropValue(item.name)
+                  return item
+                })
+
+              // 重新添加新事件
+              Array.isArray(eventDataList) &&
+                eventDataList.map(item => {
+                  target.parent.setPropValue(item.name, {
+                    type: 'JSFunction',
+                    value: `function(){return this.${
+                      item.relatedEventName
+                    }.apply(this,Array.prototype.slice.call(arguments).concat([${item.paramStr ? item.paramStr : ''}])) }`,
+                  })
+                  return item
+                })
+            }
           }
         }
       ]
     }
   ]
+}
+
+export default configure
+```
+
+## Setter 与设计器的交互
+
+### 1. 使用 field 属性
+
+Setter 组件可以通过 `field` 属性访问设计器上下文，包括当前文档、选中节点等信息：
+
+```tsx
+import React from 'react'
+import type { SetterProps } from '@easy-editor/core'
+
+const AdvancedSetter: React.FC<SetterProps> = (props) => {
+  const { value, onChange, field } = props;
+
+  // 获取当前选中的节点
+  const selectedNode = field.getNode();
+
+  // 获取当前文档
+  const currentDocument = field.designer?.currentDocument;
+
+  // 获取组件元数据
+  const componentMeta = selectedNode && currentDocument?.getComponentMeta(selectedNode.componentName);
+
+  // 访问其他属性
+  const otherPropValue = field.parent.getPropValue('otherProp');
+
+  return (
+    <div>
+      <div>当前组件: {selectedNode?.componentName}</div>
+      <div>
+        <button onClick={() => onChange(value + 1)}>
+          增加值
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default AdvancedSetter;
+```
+
+### 2. 使用 extraProps 进行高级数据转换
+
+通过 `extraProps` 中的 `setValue` 和 `getValue` 方法，可以在值变更前后执行特殊处理：
+
+```typescript
+{
+  name: 'complexProp',
+  title: '复杂属性',
+  setter: 'CustomSetter',
+  extraProps: {
+    // 将原始数据转换为 setter 可用格式
+    getValue(target, fieldValue) {
+      // 从原始数据中提取需要的部分
+      return fieldValue?.someNestedValue || '';
+    },
+
+    // 将 setter 输出的值转换为组件需要的格式
+    setValue(target, value, oldValue) {
+      // 更新其他相关属性
+      if (value === 'special') {
+        target.parent.setPropValue('relatedProp', true);
+      }
+
+      // 返回处理后的值
+      return {
+        someNestedValue: value,
+        timestamp: Date.now()
+      };
+    }
+  }
+}
+```
+
+### 3. 访问文档和全局数据
+
+Setter 可以通过 `field` 访问文档根节点和全局数据：
+
+```tsx
+const CustomSetter = (props: SetterProps) => {
+  const { field } = props;
+
+  // 获取全局变量
+  const globalVariables = field.designer?.currentDocument?.rootNode?.getExtraPropValue('variables');
+
+  // 获取全局方法
+  const globalMethods = field.designer?.currentDocument?.rootNode?.getExtraPropValue('methods');
+
+  // 使用全局数据渲染选项
+  return (
+    <select>
+      {Object.keys(globalVariables || {}).map(key => (
+        <option key={key} value={key}>
+          {key}: {globalVariables[key]}
+        </option>
+      ))}
+    </select>
+  );
 };
 ```
-
-### 最佳实践
-
-1. **简单场景使用字符串方式**：对于开关、颜色选择等简单设置器，直接使用字符串方式。
-
-2. **需要配置选项时使用对象方式**：当设置器需要额外配置（如下拉选项、最大最小值等），使用对象方式。
-
-3. **动态场景使用函数方式**：当设置器的类型或配置需要根据其他字段值动态变化时，使用函数方式。
-
-4. **复用配置**：对于常用的设置器配置，可以抽取为常量复用：
-
-```typescript
-const COMMON_NUMBER_SETTER = {
-  componentName: 'NumberSetter',
-  props: {
-    min: 0,
-    step: 1,
-    suffix: 'px'
-  }
-};
-
-// 在配置中复用
-{
-  name: 'width',
-  title: '宽度',
-  setter: COMMON_NUMBER_SETTER
-}
-```
-
-## 注册设置器
-
-在编辑器初始化时注册设置器：
-
-```typescript
-import { createEasyEditor } from '@easy-editor/core'
-import StringSetter from './setters/string-setter'
-
-const editor = createEasyEditor({
-  setters: {
-    // ...
-    StringSetter,
-  }
-})
-```
-
-## 高级特性
-
-在设置器配置中，`extraProps` 提供了丰富的扩展功能，让我们能够更灵活地控制设置器的行为。
-
-### 1. 基础属性
-
-```typescript
-interface FieldExtraProps {
-  // 是否必填
-  isRequired?: boolean;
-
-  // 默认值
-  defaultValue?: any;
-
-  // 默认是否折叠（用于折叠面板类设置器）
-  defaultCollapsed?: boolean;
-
-  // 是否支持变量配置
-  supportVariable?: boolean;
-}
-```
-
-### 2. 值处理机制
-
-#### getValue
-在获取值时进行转换或处理，常用于单位转换、格式化等场景：
-
-```typescript
-{
-  name: 'text.fontSize',
-  title: '字体大小',
-  setter: {
-    componentName: 'NumberSetter',
-    props: {
-      suffix: 'px'
-    }
-  },
-  extraProps: {
-    defaultValue: 14,
-    getValue: (target: SettingField, value: number) => {
-      // 确保返回值带有单位
-      return value ? `${value}px` : '14px';
-    }
-  }
-}
-```
-
-#### setValue
-在设置值时进行转换或联动处理，可用于多属性关联设置：
-
-```typescript
-{
-  name: 'border',
-  title: '边框',
-  setter: {
-    componentName: 'SelectSetter',
-    props: {
-      options: [
-        { label: '无边框', value: 'none' },
-        { label: '实线边框', value: 'solid' }
-      ]
-    }
-  },
-  extraProps: {
-    setValue: (target: SettingField, value: string) => {
-      if (value === 'solid') {
-        // 设置边框时联动设置其他属性
-        target.parent.setPropValue('border.width', 1);
-        target.parent.setPropValue('border.color', '#000000');
-        target.parent.setPropValue('border.type', 'solid');
-      } else {
-        // 清除边框时联动清除其他属性
-        target.parent.clearPropValue('border.width');
-        target.parent.clearPropValue('border.color');
-        target.parent.clearPropValue('border.type');
-      }
-    }
-  }
-}
-```
-
-#### onChange
-在值变化时执行副作用，适用于需要联动更新其他设置的场景：
-
-```typescript
-{
-  name: 'textDirection',
-  title: '文字方向',
-  setter: {
-    componentName: 'RadioSetter',
-    props: {
-      options: [
-        { label: '横排', value: 'horizontal' },
-        { label: '竖排', value: 'vertical' }
-      ]
-    }
-  },
-  extraProps: {
-    onChange: (target: SettingField, value: string) => {
-      // 当文字方向改变时，调整对齐方式
-      if (value === 'vertical') {
-        target.parent.setPropValue('horizontalAlign', 'center');
-        target.parent.setPropValue('verticalAlign', 'flex-start');
-      }
-    }
-  }
-}
-```
-
-### 3. 条件显示
-
-使用 `condition` 控制设置器的显示逻辑：
-
-```typescript
-{
-  name: 'icon.size',
-  title: '图标大小',
-  setter: {
-    componentName: 'NumberSetter',
-    props: {
-      suffix: 'px'
-    }
-  },
-  extraProps: {
-    // 只有在启用图标时才显示此设置
-    condition: (target: SettingField) => {
-      return target.parent.getPropValue('icon.enable') === true;
-    }
-  }
-}
-```
-
-### 4. 自动执行
-
-使用 `autorun` 监听并响应值的变化：
-
-```typescript
-{
-  name: 'variant',
-  title: '按钮样式',
-  setter: {
-    componentName: 'SelectSetter',
-    props: {
-      options: [
-        { label: '默认', value: 'default' },
-        { label: '主要', value: 'primary' }
-      ]
-    }
-  },
-  extraProps: {
-    autorun: (target: SettingField) => {
-      const variant = target.getValue();
-      // 根据按钮样式自动调整其他属性
-      if (variant === 'primary') {
-        target.parent.setPropValue('background.color', '#1677ff');
-        target.parent.setPropValue('text.color', '#ffffff');
-      } else {
-        target.parent.setPropValue('background.color', '#ffffff');
-        target.parent.setPropValue('text.color', '#000000');
-      }
-    }
-  }
-}
-```
-
-通过合理组合这些特性，可以构建出功能强大、交互友好的设置器配置。
-
 ## 下一步
 
-- 了解更多[设置器配置选项](/api/setter-api)
-- 探索[高级设置器开发](/guide/advanced-setter)
-- 查看[设置器最佳实践](/guide/setter-best-practices)
+- 了解如何[创建自定义插件](/guide/extension/plugin)
+- 学习[数据源配置](/guide/extension/datasource)的实现方法
+- 查看[API 参考](/reference/api)获取更多 Setter 相关的接口定义

@@ -20,10 +20,9 @@ const ExtensionGuides: DefaultTheme.NavItemWithLink[] = [
 // 渲染器开发
 const RendererGuides: DefaultTheme.NavItemWithLink[] = [
   { text: '概述', link: '/guide/renderer/' },
-  { text: '使用编辑态', link: '/guide/renderer/editor' },
+  { text: '使用设计态', link: '/guide/renderer/editor' },
   { text: '使用运行态', link: '/guide/renderer/runtime' },
   { text: '渲染器定制', link: '/guide/renderer/custom' },
-  { text: '主题定制', link: '/guide/renderer/theme' },
 ]
 
 // 场景实践
@@ -34,9 +33,6 @@ const ScenarioGuides: DefaultTheme.SidebarItem[] = [
     items: [
       { text: '介绍', link: '/guide/scenarios/dashboard/' },
       { text: '快速开始', link: '/guide/scenarios/dashboard/getting-started' },
-      { text: '组件配置', link: '/guide/scenarios/dashboard/components' },
-      { text: '主题定制', link: '/guide/scenarios/dashboard/theme' },
-      { text: '最佳实践', link: '/guide/scenarios/dashboard/best-practices' },
     ],
   },
   {
@@ -45,9 +41,6 @@ const ScenarioGuides: DefaultTheme.SidebarItem[] = [
     items: [
       { text: '介绍', link: '/guide/scenarios/form/' },
       { text: '快速开始', link: '/guide/scenarios/form/getting-started' },
-      { text: '字段配置', link: '/guide/scenarios/form/fields' },
-      { text: '校验规则', link: '/guide/scenarios/form/validation' },
-      { text: '最佳实践', link: '/guide/scenarios/form/best-practices' },
     ],
   },
 ]
@@ -106,12 +99,11 @@ const Nav: DefaultTheme.NavItem[] = [
         items: GettingStartedGuides.slice(0, 2),
       },
       {
-        text: '扩展开发',
-        items: ExtensionGuides.slice(0, 2),
-      },
-      {
-        text: '渲染器开发',
-        items: RendererGuides.slice(0, 2),
+        text: '场景实践',
+        items: [
+          { text: '大屏设计', link: '/guide/scenarios/dashboard/' },
+          { text: '表单设计', link: '/guide/scenarios/form/' },
+        ],
       },
     ],
     activeMatch: '^/guide/',

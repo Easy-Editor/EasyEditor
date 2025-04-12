@@ -1,203 +1,296 @@
-# 渲染器定制
+# 自定义渲染器开发
 
-EasyEditor 提供了灵活的渲染器定制能力，允许开发者根据具体需求扩展和定制渲染器。本文档将介绍渲染器的内部实现原理和扩展机制。
+EasyEditor 提供了灵活的渲染器架构，允许开发者创建自定义渲染器以支持不同的框架或特定场景需求。本文将指导你如何开发自定义渲染器。
 
-## 渲染器基础
+## 渲染器原理
 
-### 核心概念
+在 EasyEditor 中，渲染器负责将 Schema 转换为实际的 UI 界面。渲染器遵循以下工作流程：
 
-EasyEditor 的渲染器系统基于以下核心概念：
+1. **解析 Schema** - 将 JSON 描述解析为内部数据结构
+2. **映射组件** - 将组件名称映射到实际组件实现
+3. **属性处理** - 处理组件属性，如事件绑定、样式计算等
+4. **渲染组件** - 将组件渲染到 DOM 中
 
-1. **渲染器类型**
-   - 运行态渲染器（Runtime Renderer）：用于生产环境
-   - 设计态渲染器（Design Renderer）：用于开发环境
+### 渲染器架构
 
-2. **渲染器职责**
-   - 组件渲染
-   - 状态管理
-   - 事件处理
-   - 数据绑定
+EasyEditor 的渲染器架构由以下部分组成：
 
-### 内部实现
-
-#### 渲染器核心
-
-`react-renderer` 包提供了渲染器的核心实现，主要通过基础渲染器工厂方法创建渲染器实例：
-
-```typescript
-// packages/react-renderer/src/renderer-core/base.tsx
-export function baseRendererFactory(): BaseRenderComponent {
-  const { BaseRenderer: customBaseRenderer } = adapter.getRenderers()
-
-  if (customBaseRenderer) {
-    return customBaseRenderer as unknown as BaseRenderComponent
-  }
-
-  return class BaseRenderer extends Component<BaseRendererProps, BaseRendererProps> {
-    // 核心渲染逻辑
-    __createVirtualDom = (
-      originalSchema: NodeData | NodeData[] | undefined,
-      originalScope: any,
-      parentInfo: NodeInfo,
-      idx: string | number = '',
-    ): any => {
-      // Schema 处理逻辑
-      // ...
-    }
-
-    // 组件属性处理
-    __parseProps = (originalProps: any, scope: any, path: string, info: NodeInfo): any => {
-      // 处理属性
-      // ...
-    }
-
-    // 子节点处理
-    __getSchemaChildrenVirtualDom = (schema: NodeSchema | undefined, scope: any, Comp: any, condition = true) => {
-      // 处理子节点
-      // ...
-    }
-
-    // 组件实例化
-    __getHOCWrappedComponent(
-      OriginalComp: any,
-      info: {
-        schema: ComponentHocInfo['schema']
-        scope: ComponentHocInfo['scope']
-        componentInfo?: ComponentHocInfo['componentInfo']
-        baseRenderer?: ComponentHocInfo['baseRenderer']
-      },
-    ) {
-      // HOC 包装组件
-      // ...
-    }
-  }
-}
+```mermaid
+graph TD
+    Schema[Schema] --> Adapter[渲染适配器]
+    Adapter --> Renderers[渲染器集合]
+    Renderers --> BaseRenderer[基础渲染器]
+    Renderers --> PageRenderer[页面渲染器]
+    Renderers --> ComponentRenderer[组件渲染器]
+    BaseRenderer --> HOCs[高阶组件]
+    HOCs --> CompWrapper[组件包装器]
+    HOCs --> LeafWrapper[叶子节点包装器]
+    Components[组件库] --> Renderer[最终渲染引擎]
+    BaseRenderer --> Renderer
+    PageRenderer --> Renderer
+    ComponentRenderer --> Renderer
+    Renderer --> UI[用户界面]
 ```
 
-#### 渲染器工厂方法
+## 创建基本渲染器
 
-EasyEditor 使用工厂模式创建渲染器，可以自定义渲染器行为：
+### 1. 定义渲染器接口
 
-```typescript
-// packages/react-renderer/src/renderer-core/renderer.tsx
-export function rendererFactory() {
-  const { PageRenderer, ComponentRenderer } = adapter.getRenderers()
+首先，我们需要定义渲染器的基本接口：
 
-  return (props: RendererProps) => {
-    const { schema, rendererName, ...restProps } = props
-    if (isPage(schema)) {
-      const renderer = rendererName || 'PageRenderer'
-      return createElement(PageRenderer || pageRendererFactory() as any, {
-        ...restProps,
-        schema,
-        __schema: schema,
-      })
-    }
-    return createElement(ComponentRenderer || componentRendererFactory() as any, {
-      ...restProps,
-      schema,
-      __schema: schema,
-    })
+```tsx
+// 从核心库引入类型
+import type { Schema } from '@easy-editor/core'
+import React from 'react'
+
+// 渲染器属性接口
+export interface RendererProps {
+  // 要渲染的 Schema
+  schema: Schema;
+  // 组件映射表
+  components: Record<string, React.ComponentType<any>>;
+  // 全局属性
+  globalProps?: Record<string, any>;
+  // 组件属性处理器
+  propsReducers?: Array<(props: Record<string, any>) => Record<string, any>>;
+  // 应用辅助对象
+  appHelper?: {
+    utils: Record<string, (...args: any[]) => any>;
+    ctx: Record<string, any>;
+  };
+}
+
+// 视口增强的渲染器属性接口
+interface CustomRendererProps extends RendererProps {
+  viewport?: {
+    width?: number;
+    height?: number;
   }
 }
+
+const CustomRenderer: React.FC<CustomRendererProps> = (props) => {
+  const { schema, components, viewport } = props;
+  const { width = 1920, height = 1080 } = viewport || {};
+
+  // 渲染器实现逻辑
+  return (
+    <div className="easy-editor">
+      <div className="easy-editor-canvas">
+        <div
+          className="easy-editor-viewport"
+          style={{ width, height }}
+        >
+          <div className="easy-editor-content">
+            {/* 核心渲染逻辑 */}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default CustomRenderer;
 ```
 
-#### Schema 处理
+### 2. 构建渲染器工厂函数
 
-渲染器的核心是处理 Schema 并转换为 React 组件：
+参考 EasyEditor 的渲染器模型，我们需要创建工厂函数来生成不同类型的渲染器：
 
-```typescript
-// packages/react-renderer/src/renderer-core/base.tsx (部分实现)
-__createVirtualDom = (
-  originalSchema: NodeData | NodeData[] | undefined,
-  originalScope: any,
-  parentInfo: NodeInfo,
-  idx: string | number = '',
-): any => {
-  if (!originalSchema) {
-    return null
-  }
+```tsx
+import {
+  adapter,
+  rendererFactory,
+  componentRendererFactory,
+  pageRendererFactory,
+  baseRendererFactory
+} from '@easy-editor/react-renderer'
 
-  // 处理 Schema 数组
-  if (Array.isArray(originalSchema)) {
-    return originalSchema.map((item, i) => {
-      return this.__createVirtualDom(item, originalScope, parentInfo, i)
-    })
-  }
-
-  // 获取组件信息
-  const schema = originalSchema as NodeSchema
-  const { componentName } = schema
-
-  // 获取组件
-  const Component = this.__getComponent(componentName)
-
-  // 处理组件属性
-  const props = this.__parseProps(schema.props, originalScope, '${path}.props', info)
-
-  // 处理子节点
-  const children = this.__getSchemaChildrenVirtualDom(schema, originalScope, Component)
-
-  // 创建组件实例
-  return this.__getHOCWrappedComponent(Component, {
-    schema,
-    scope: originalScope,
-    componentInfo: {
-      props,
-      compRef: this.__getRef,
-    },
-    baseRenderer: this,
-  })
-}
-```
-
-## 渲染器扩展
-
-### 扩展机制
-
-渲染器通过继承基础渲染器进行扩展，如 `react-renderer-dashboard` 的实现：
-
-```typescript
-// packages/react-renderer-dashboard/src/renderer-core/renderer/base.ts
-export const dashboardBaseRendererFactory: () => any = () => {
-  const OriginBase = baseRendererFactory()
+// 创建自定义基础渲染器
+export const customBaseRendererFactory = () => {
+  const OriginBase = baseRendererFactory();
 
   return class BaseRenderer extends OriginBase {
-    // 扩展 HOC 处理
-    get __componentHOCs(): ComponentConstruct[] {
+    // 自定义组件高阶组件链
+    get __componentHOCs() {
       if (this.__designModeIsDesign) {
-        return [dashboardWrapper, leafWrapper, compWrapper]
+        // 设计模式下的 HOC 链
+        return [customWrapper, leafWrapper, compWrapper];
       }
-      return [dashboardWrapper, compWrapper]
+      // 运行模式下的 HOC 链
+      return [customWrapper, compWrapper];
     }
   }
 }
+
+// 设置适配器
+adapter.setBaseRenderer(customBaseRendererFactory());
+adapter.setRenderers({
+  PageRenderer: pageRendererFactory(),
+  ComponentRenderer: componentRendererFactory(),
+});
+
+// 导出最终渲染器
+export const CustomRenderer = rendererFactory();
 ```
 
-### HOC 扩展
+### 3. 实现组件包装器 (HOC)
 
-通过 HOC 可以扩展组件的渲染行为，如大屏组件的布局控制：
+为了支持自定义的渲染行为，我们需要实现组件包装器：
 
-```typescript
-// packages/react-renderer-dashboard/src/renderer-core/hoc/dashboard.tsx
-export function dashboardWrapper(Comp: any, { schema, baseRenderer }: ComponentHocInfo) {
-  // 获取设计模式
+```tsx
+import { type ComponentHocInfo, createForwardRefHocElement } from '@easy-editor/react-renderer'
+import React, { Component } from 'react'
+
+export function customWrapper(Comp: any, { schema, baseRenderer, componentInfo }: ComponentHocInfo) {
+  // 获取上下文信息
   const host = baseRenderer.props?.__host
   const isDesignMode = host?.designMode === 'design'
 
-  // 处理大屏样式
+  // 定义包装组件类
+  class Wrapper extends Component<any> {
+    render() {
+      const { forwardRef, children, className, ...rest } = this.props
+
+      // 处理特殊情况
+      if (schema.isRoot) {
+        return (
+          <Comp ref={forwardRef} {...rest}>
+            {children}
+          </Comp>
+        )
+      }
+
+      // 普通组件渲染逻辑
+      return (
+        <div className="custom-component-container">
+          <Comp
+            ref={forwardRef}
+            className={`custom-component ${className || ''}`}
+            {...rest}
+          >
+            {children}
+          </Comp>
+        </div>
+      )
+    }
+  }
+
+  // 设置显示名称
+  (Wrapper as any).displayName = Comp.displayName
+
+  // 创建转发引用的 HOC 元素
+  return createForwardRefHocElement(Wrapper, Comp)
+}
+```
+
+## 特定场景渲染器案例
+
+### 大屏渲染器实现
+
+以下是大屏渲染器的实现案例，展示了如何处理绝对定位组件和坐标系：
+
+```tsx
+import { useRef } from 'react'
+import { LowCodeRenderer } from '../renderer-core/renderer'
+import { useResizeObserver } from '../hooks/useResizeObserver'
+
+// 大屏渲染器属性接口
+interface DashboardRendererProps extends RendererProps {
+  viewport?: {
+    width?: number;
+    height?: number;
+  };
+}
+
+const DashboardRenderer: React.FC<DashboardRendererProps> = props => {
+  const { viewport, ...rendererProps } = props
+  const { width: viewportWidth = 1920, height: viewportHeight = 1080 } = viewport || {}
+
+  // 引用DOM元素
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
+
+  // 监听画布大小变化，自动调整缩放比例
+  useResizeObserver({
+    elem: canvasRef,
+    onResize: entries => {
+      const { width, height } = entries[0].contentRect
+      const ww = width / viewportWidth
+      const wh = height / viewportHeight
+      viewportRef.current!.style.transform = `scale(${Math.min(ww, wh)}) translate(-50%, -50%)`
+    },
+  })
+
+  return (
+    <div className='easy-editor'>
+      {/* 画布容器 */}
+      <div ref={canvasRef} className='easy-editor-canvas'>
+        {/* 视口容器 */}
+        <div
+          ref={viewportRef}
+          className='easy-editor-viewport'
+          style={{
+            width: viewportWidth,
+            height: viewportHeight,
+          }}
+        >
+          {/* 内容区域 */}
+          <div className='easy-editor-content'>
+            {/* 渲染器核心 */}
+            <LowCodeRenderer {...(rendererProps as RendererProps)} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default DashboardRenderer
+```
+
+### 大屏组件包装器实现
+
+大屏场景中的组件需要特殊的定位和坐标系处理：
+
+```tsx
+import type { NodeSchema } from '@easy-editor/core'
+import { type ComponentHocInfo, createForwardRefHocElement } from '@easy-editor/react-renderer'
+import { Component } from 'react'
+
+export function dashboardWrapper(Comp: any, { schema, baseRenderer }: ComponentHocInfo) {
+  // 获取上下文信息
+  const host = baseRenderer.props?.__host
+  const isDesignMode = host?.designMode === 'design'
+  // 大屏配置信息
   let { mask = true } = host?.dashboardStyle || {}
+
+  // 非设计模式下，不显示遮罩
   if (!isDesignMode) {
     mask = false
   }
 
   class Wrapper extends Component<any> {
     render() {
-      const { forwardRef, children, ...rest } = this.props
+      const { forwardRef, children, className, ...rest } = this.props
+      // 计算节点位置和尺寸
       const rect = computeRect(schema)
 
-      // 应用位置和尺寸
+      if (!rect) {
+        return null
+      }
+
+      // 根节点特殊处理
+      if (schema.isRoot) {
+        return (
+          <Comp ref={forwardRef} {...rest}>
+            {children}
+          </Comp>
+        )
+      }
+
+      // 常规节点渲染，包含坐标定位
       return (
+        // 容器层
         <div
           className={`easy-editor-component-container ${mask ? 'mask' : ''}`}
           style={{
@@ -207,137 +300,258 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer }: ComponentH
             height: rect.height,
           }}
         >
-          {/* 组件渲染 */}
-          <Comp {...rest}>{children}</Comp>
+          {/* 重置坐标系 */}
+          <div
+            style={{
+              position: 'absolute',
+              left: -rect.x!,
+              top: -rect.y!,
+            }}
+          >
+            {/* 组件坐标定位 */}
+            <div
+              ref={forwardRef}
+              className='easy-editor-component-mask'
+              style={{
+                left: rect.x!,
+                top: rect.y!,
+                width: rect.width,
+                height: rect.height,
+              }}
+            >
+              {/* 组件渲染 */}
+              <Comp className={`easy-editor-component ${mask ? 'mask' : ''} ${className || ''}`} {...rest}>
+                {children && (
+                  // 再次重置坐标系，用于内部组件定位
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: -rect.x!,
+                      top: -rect.y!,
+                    }}
+                  >
+                    {children}
+                  </div>
+                )}
+              </Comp>
+            </div>
+          </div>
         </div>
       )
     }
   }
+  ;(Wrapper as any).displayName = Comp.displayName
 
   return createForwardRefHocElement(Wrapper, Comp)
 }
-```
 
-## 设计态与运行态
+/**
+ * 计算节点在大屏中的位置信息
+ */
+const computeRect = (node: NodeSchema) => {
+  // 处理非组节点
+  if (!node.isGroup || !node.children || node.children.length === 0) {
+    return node.$dashboard?.rect
+  }
 
-### 运行态渲染器实现
+  // 计算组节点的包围盒
+  let [minX, minY, maxX, maxY] = [
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ]
 
-运行态渲染器专注于高效渲染，不包含设计态功能：
-
-```typescript
-// packages/react-renderer-dashboard/src/renderer-core/renderer.ts
-import { adapter, componentRendererFactory, pageRendererFactory, rendererFactory } from '@easy-editor/react-renderer'
-import { dashboardBaseRendererFactory } from './renderer/base'
-
-// 设置基础渲染器
-adapter.setBaseRenderer(dashboardBaseRendererFactory())
-adapter.setRenderers({
-  PageRenderer: pageRendererFactory(),
-  ComponentRenderer: componentRendererFactory(),
-})
-
-// 导出运行态渲染器
-export const LowCodeRenderer = rendererFactory()
-```
-
-### 设计态渲染器实现
-
-设计态渲染器与模拟器集成，支持拖拽、选择等交互功能：
-
-```typescript
-// packages/react-renderer-dashboard/src/simulator-renderer/RendererView.tsx (部分实现)
-export const Renderer = observer(
-  class Renderer extends Component<{
-    documentInstance: DocumentInstance
-    simulatorRenderer: SimulatorRendererContainer
-  }> {
-    render() {
-      const { documentInstance, simulatorRenderer: renderer } = this.props
-      const { host } = renderer
-      const { container } = documentInstance
-      const { designMode, device } = container
-
-      return (
-        <LowCodeRenderer
-          schema={documentInstance.schema}
-          components={container.components}
-          appHelper={container.context}
-          designMode={designMode}
-          device={device}
-          documentId={document.id}
-          getNode={(id: string) => documentInstance.getNode(id)!}
-          __host={host} // 传递 host 以支持设计态功能
-          __container={container}
-          onCompGetRef={(schema: any, ref: ReactInstance | null) => {
-            // 组件引用处理
-            documentInstance.mountInstance(schema.id, ref)
-          }}
-        />
-      )
+  // 遍历所有子节点
+  for (const child of node.children) {
+    let childRect: any
+    if (child.isGroup) {
+      childRect = computeRect(child)
+    } else {
+      childRect = child.$dashboard?.rect
     }
-  },
-)
-```
+    const x = childRect?.x
+    const y = childRect?.y
+    const width = childRect?.width || 0
+    const height = childRect?.height || 0
 
-### 模拟器与渲染器交互
-
-模拟器负责管理设计态环境，通过 `SimulatorRenderer` 与渲染器通信：
-
-```typescript
-// packages/react-renderer-dashboard/src/simulator-renderer/simulator-renderer.ts (部分实现)
-export class SimulatorRendererContainer implements ISimulatorRenderer {
-  host: Simulator
-
-  // 挂载到模拟器
-  mount(host: Simulator) {
-    this.host = host
-    this.init()
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + width)
+    maxY = Math.max(maxY, y + height)
   }
 
-  // 初始化模拟器环境
-  init() {
-    this.autoRender = this.host.autoRender
-
-    // 连接模拟器
-    this.disposeFunctions.push(
-      this.host.connect(this, () => {
-        runInAction(() => {
-          // 同步配置
-          this._layout = this.host.project.get('config')?.layout
-
-          // 同步组件
-          if (this._componentsMap !== this.host.designer.componentMetaManager.componentsMap) {
-            this._componentsMap = this.host.designer.componentMetaManager.componentsMap
-            this.buildComponents()
-          }
-
-          // 同步设计模式
-          this._designMode = this.host.designMode
-        })
-      }),
-    )
-  }
-
-  // 构建组件映射关系
-  private buildComponents() {
-    this._components = buildComponents(this._libraryMap, this._componentsMap)
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
   }
 }
 ```
 
-## 总结
+## 增强自定义渲染器
 
-EasyEditor 的渲染器系统提供了灵活的扩展机制：
+### 1. 添加错误边界
 
-1. 通过基础渲染器工厂方法提供核心渲染逻辑
-2. 使用 HOC 模式扩展组件渲染行为
-3. 提供运行态和设计态两种渲染模式
-4. 支持通过 Adapter 适配不同的渲染实现
+为了提高渲染器的健壮性，我们可以添加错误边界：
 
-通过这些机制，开发者可以灵活定制渲染器，满足各种场景需求。
+```tsx
+// 错误边界组件
+class ErrorBoundary extends React.Component<
+  { componentName: string; children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error(`Error rendering ${this.props.componentName}:`, error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="easy-editor-error-boundary">
+          <h3>组件渲染错误</h3>
+          <p>组件: {this.props.componentName}</p>
+          <p>错误: {this.state.error?.message}</p>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+// 在渲染组件时使用错误边界
+function renderComponent(
+  schema: Schema,
+  components: Record<string, React.ComponentType<any>>,
+  context: any
+) {
+  const { componentName } = schema;
+  // ...其他代码
+
+  return (
+    <ErrorBoundary componentName={componentName}>
+      {/* 渲染组件的代码 */}
+    </ErrorBoundary>
+  );
+}
+```
+
+### 2. 添加性能优化
+
+使用 React.memo 和其他优化技术提高渲染性能：
+
+```tsx
+import React, { memo, useMemo, useCallback } from 'react';
+
+// 使用 memo 优化渲染器组件
+const OptimizedComponent = memo(
+  ({ schema, components, context }: RenderComponentProps) => {
+    // 使用 useMemo 缓存计算结果
+    const processedProps = useMemo(() => {
+      return processProps(schema.props || {}, context);
+    }, [schema.props, context]);
+
+    // 使用 useCallback 优化事件处理函数
+    const handleEvent = useCallback((eventName: string, ...args: any[]) => {
+      // 事件处理逻辑
+    }, [context]);
+
+    // 渲染逻辑
+    return (/* 组件渲染代码 */);
+  },
+  // 自定义比较函数，避免不必要的重渲染
+  (prevProps, nextProps) => {
+    // 仅当 schema 或关键上下文发生变化时才重渲染
+    return (
+      prevProps.schema === nextProps.schema &&
+      prevProps.components === nextProps.components &&
+      prevProps.context.version === nextProps.context.version
+    );
+  }
+);
+```
+
+### 3. 支持组件通信
+
+实现组件间通信机制：
+
+```tsx
+// 创建事件总线
+class EventBus {
+  private listeners: Record<string, Array<(...args: any[]) => void>> = {};
+
+  // 订阅事件
+  on(event: string, callback: (...args: any[]) => void) {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event].push(callback);
+    return () => this.off(event, callback);
+  }
+
+  // 取消订阅
+  off(event: string, callback: (...args: any[]) => void) {
+    if (!this.listeners[event]) return;
+    this.listeners[event] = this.listeners[event].filter(cb => cb !== callback);
+  }
+
+  // 触发事件
+  emit(event: string, ...args: any[]) {
+    if (!this.listeners[event]) return;
+    this.listeners[event].forEach(callback => {
+      try {
+        callback(...args);
+      } catch (error) {
+        console.error(`Error in event listener for ${event}:`, error);
+      }
+    });
+  }
+}
+
+// 创建上下文
+const createRendererContext = () => {
+  const eventBus = new EventBus();
+
+  return {
+    // 事件系统
+    event: {
+      on: eventBus.on.bind(eventBus),
+      off: eventBus.off.bind(eventBus),
+      emit: eventBus.emit.bind(eventBus)
+    },
+    // 共享状态
+    shared: new Map(),
+    // 设置/获取共享状态
+    setShared: (key: string, value: any) => {
+      context.shared.set(key, value);
+      eventBus.emit(`shared:${key}:change`, value);
+    },
+    getShared: (key: string) => context.shared.get(key)
+  };
+};
+```
+
+## 适配其他框架
+
+:::warning 开发中
+适配其他框架（如 Vue、Angular 等）的功能正在积极开发中。我们计划在未来版本中提供更多框架的支持，让 EasyEditor 能够更好地服务于不同技术栈的项目。
+
+如果你有特定的框架适配需求，欢迎在 GitHub 上提交 Issue 或参与讨论。
+:::
 
 ## 下一步
 
-- [渲染器 API 文档](docs/api/renderer.md)
-- [插件开发指南](docs/guide/plugin.md)
-- [设计态渲染器文档](docs/guide/renderer/editor.md)
+- 了解[运行态渲染器](/guide/renderer/runtime)的使用方法
+- 探索[插件开发](/guide/extension/plugin)以扩展其他功能
+- 查看[API 参考](/reference/renderer)获取更详细的接口定义
