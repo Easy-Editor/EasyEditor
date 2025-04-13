@@ -45,8 +45,8 @@ const ScenarioGuides: DefaultTheme.SidebarItem[] = [
   },
 ]
 
-// Design Guides
-const DesignGuides: DefaultTheme.NavItemWithLink[] = [
+// Design
+const Designs: DefaultTheme.NavItemWithLink[] = [
   { text: 'Architecture Overview', link: '/en/design/overview' },
   { text: 'Protocol Stack', link: '/en/design/specs' },
   { text: 'Editor Module', link: '/en/design/editor' },
@@ -56,11 +56,20 @@ const DesignGuides: DefaultTheme.NavItemWithLink[] = [
 ]
 
 // API References
-const References: DefaultTheme.NavItemWithLink[] = [
+const References: DefaultTheme.SidebarItem[] = [
   { text: 'Overview', link: '/en/reference/overview' },
-  { text: 'Core API', link: '/en/reference/core' },
-  { text: 'Renderer API', link: '/en/reference/renderer' },
-  { text: 'Plugin API', link: '/en/reference/plugin' },
+  {
+    text: 'Core',
+    items: [{ text: 'Editor', link: '/en/reference/core' }],
+  },
+  {
+    text: 'Renderer',
+    items: [{ text: 'Renderer', link: '/en/reference/renderer' }],
+  },
+  {
+    text: 'Plugin',
+    items: [{ text: 'Plugin', link: '/en/reference/plugin' }],
+  },
 ]
 
 const Resources: DefaultTheme.NavItemWithLink[] = [
@@ -114,11 +123,16 @@ const Nav: DefaultTheme.NavItem[] = [
   },
   {
     text: 'Design',
-    items: DesignGuides,
+    items: Designs,
   },
   {
     text: 'Reference',
-    items: References,
+    items: [
+      { text: 'Overview', link: '/en/reference/overview/' },
+      { text: 'Core', link: '/en/reference/core/' },
+      { text: 'Plugin', link: '/en/reference/plugin/' },
+      { text: 'Renderer', link: '/en/reference/renderer/' },
+    ],
     activeMatch: '^/en/reference/',
   },
   {
@@ -148,14 +162,8 @@ const Nav: DefaultTheme.NavItem[] = [
 
 const Sidebar: DefaultTheme.Sidebar = {
   '/en/guide/': SidebarGuide,
-  '/en/design/': DesignGuides,
-  '/en/reference/': [
-    {
-      text: 'API Reference',
-      collapsed: false,
-      items: References,
-    },
-  ],
+  '/en/design/': Designs,
+  '/en/reference/': References,
 }
 
 export const en = defineConfig({
