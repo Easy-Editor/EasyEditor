@@ -46,7 +46,7 @@ const ScenarioGuides: DefaultTheme.SidebarItem[] = [
 ]
 
 // 设计功能
-const DesignGuides: DefaultTheme.NavItemWithLink[] = [
+const Designs: DefaultTheme.NavItemWithLink[] = [
   { text: '架构综述', link: '/design/overview' },
   { text: '协议栈简介', link: '/design/specs' },
   { text: '编排模块', link: '/design/editor' },
@@ -56,11 +56,20 @@ const DesignGuides: DefaultTheme.NavItemWithLink[] = [
 ]
 
 // API 参考
-const References: DefaultTheme.NavItemWithLink[] = [
+const References: DefaultTheme.SidebarItem[] = [
   { text: '总览', link: '/reference/overview' },
-  { text: '核心 API', link: '/reference/core' },
-  { text: '渲染器 API', link: '/reference/renderer' },
-  { text: '插件 API', link: '/reference/plugin' },
+  {
+    text: 'Core',
+    items: [{ text: 'Editor', link: '/reference/core' }],
+  },
+  {
+    text: 'Renderer',
+    items: [{ text: 'Renderer', link: '/reference/renderer' }],
+  },
+  {
+    text: 'Plugin',
+    items: [{ text: 'Plugin', link: '/reference/plugin' }],
+  },
 ]
 
 const SidebarGuide: DefaultTheme.SidebarItem[] = [
@@ -110,11 +119,16 @@ const Nav: DefaultTheme.NavItem[] = [
   },
   {
     text: '原理',
-    items: DesignGuides,
+    items: Designs,
   },
   {
     text: '参考',
-    items: References,
+    items: [
+      { text: '总览', link: '/reference/overview/' },
+      { text: 'Core', link: '/reference/core/' },
+      { text: 'Plugin', link: '/reference/plugin/' },
+      { text: 'Renderer', link: '/reference/renderer/' },
+    ],
     activeMatch: '^/reference/',
   },
   {
@@ -144,14 +158,8 @@ const Nav: DefaultTheme.NavItem[] = [
 
 const Sidebar: DefaultTheme.Sidebar = {
   '/guide/': SidebarGuide,
-  '/design/': DesignGuides,
-  '/reference/': [
-    {
-      text: 'API 参考',
-      collapsed: false,
-      items: References,
-    },
-  ],
+  '/design/': Designs,
+  '/reference/': References,
 }
 
 export const zh = defineConfig({
