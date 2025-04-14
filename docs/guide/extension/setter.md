@@ -2,7 +2,7 @@
 
 属性设置器（Setter）是 EasyEditor 中用于编辑组件属性的交互控件。本指南将帮助你了解如何创建自定义的属性设置器，以满足特定的编辑需求。
 
-## Setter 介绍
+## 概述
 
 Setter 是一种特殊的组件，用于在设计器中为特定类型的属性提供可视化的编辑界面。EasyEditor 内置了一系列基础的 Setter，如文本输入、数字输入、颜色选择器等，但在某些场景下，你可能需要创建自定义的 Setter 来提供更专业或更便捷的编辑体验。
 
@@ -14,20 +14,7 @@ Setter 的主要职责包括：
 - 转换数据格式
 - 提供友好的用户体验
 
-## Setter 生命周期
-
-Setter 组件在 EasyEditor 中的生命周期如下：
-
-1. **注册阶段**：Setter 组件被注册到编辑器的 SetterManager 中
-2. **创建实例**：当属性面板打开时，相应的 Setter 实例被创建
-3. **接收属性值**：Setter 从设计器中接收当前选中节点的属性值
-4. **用户交互**：用户通过 Setter 界面交互修改属性值
-5. **值变更**：Setter 内部状态更新，并调用 onChange 函数
-6. **通知设计器**：设计器接收到属性变更通知
-7. **更新节点**：设计器更新节点的属性值
-8. **设计器刷新**：UI 刷新以反映最新状态
-
-## Setter 结构
+## 目录结构
 
 一个完整的 Setter 项目通常包含以下文件结构：
 
@@ -36,7 +23,7 @@ my-setter/
 ├── index.tsx       # Setter 组件实现
 ```
 
-## Setter 开发
+## 使用
 
 ### 1. 基础 Setter 组件 (index.tsx)
 
@@ -404,9 +391,7 @@ const EventSetter = (props: EventSetterProps) => {
 export default EventSetter
 ```
 
-## 注册与使用
-
-### 注册 Setter
+## 注册 Setter
 
 创建完 Setter 组件后，需要将其注册到 EasyEditor 中：
 
@@ -430,7 +415,7 @@ const editor = createEditor({
 })
 ```
 
-### 在物料中使用
+## 在物料中使用
 
 在组件的属性配置中，可以通过指定 `setter` 字段来使用自定义的 Setter：
 
@@ -540,7 +525,7 @@ const configure: Configure = {
 export default configure
 ```
 
-## Setter 与设计器的交互
+## 与设计器的交互
 
 ### 1. 使用 field 属性
 
@@ -639,8 +624,3 @@ const CustomSetter = (props: SetterProps) => {
   );
 };
 ```
-## 下一步
-
-- 了解如何[创建自定义插件](/guide/extension/plugin)
-- 学习[数据源配置](/guide/extension/datasource)的实现方法
-- 查看[API 参考](/reference/api)获取更多 Setter 相关的接口定义

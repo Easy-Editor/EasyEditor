@@ -2,48 +2,31 @@
 
 物料是 EasyEditor 页面搭建的基础构建单元。本指南将帮助你了解如何开发和集成自定义物料。
 
-## 物料介绍
+## 概述
 
 物料是构建页面的基本原料，按照粒度可分为以下三种类型：
 
 - **组件（Component）**：最小的可复用单元，仅对外暴露配置项，用户无需了解其内部实现。
 
-- **区块（Block）**：符合低代码协议的一小段 schema，内部可以包含一个或多个组件。用户可以将区块拖入设置器后，自由修改其内部内容。
+- **区块（Block）**：符合低代码协议的一小段 schema，内部可以包含一个或多个组件。
 
 - **模板（Template）**：与区块类似，也是符合低代码协议的 schema，通常用于初始化一个页面。
 
 在低代码编辑器中，物料需要经过一定的配置和处理，才能在平台上使用。这个过程涉及到配置文件的创建，称为资产包。资产包文件中定义了每个物料在低代码编辑器中的使用描述。
 
-## 物料生命周期
-
-物料在 EasyEditor 中遵循以下生命周期：
-
-1. **注册阶段**：物料组件和元数据被注册到编辑器中
-2. **初始化阶段**：当用户添加一个组件时，组件实例被创建，并初始化属性
-3. **渲染阶段**：组件被渲染到画布上，展示给用户
-4. **交互阶段**：用户可以选择、配置组件，组件响应各种事件
-5. **销毁阶段**：当组件被删除或文档关闭时，组件实例被销毁
-
-## 物料结构
+## 目录结构
 
 一个完整的物料包含以下文件结构：
 
 ```bash
 my-component/
-├── src/
-│   ├── component.tsx    # 物料组件实现
-│   ├── configure.ts     # 物料配置（属性设置）
-│   ├── meta.ts          # 物料元数据
-│   └── snippets.ts      # 物料预设
-├── assets/
-│   ├── icon.svg         # 组件图标
-│   └── screenshots/     # 预设截图
-│       ├── default.png
-│       └── primary.png
-└── index.ts             # 导出入口
+├── component.tsx    # 物料组件实现
+├── configure.ts     # 物料配置（属性设置）
+├── meta.ts          # 物料元数据
+└── snippets.ts      # 物料预设
 ```
 
-## 物料开发
+## 使用
 
 ### 1. 组件实现 (component.tsx)
 
@@ -121,9 +104,6 @@ const Button = forwardRef((props: ButtonProps, ref: Ref<HTMLButtonElement>) => {
   )
 })
 
-// 设置组件显示名称，用于开发调试
-Button.displayName = 'Button'
-
 export default Button
 ```
 
@@ -131,7 +111,7 @@ export default Button
 
 定义组件在设计器中的可配置属性：
 
-```typescript
+```ts
 import type { Configure } from '@easy-editor/core'
 
 const configure: Configure = {
@@ -146,7 +126,6 @@ const configure: Configure = {
           name: 'content',
           title: '按钮文本',
           setter: 'StringSetter',
-          defaultValue: '按钮'
         },
         {
           type: 'field',
@@ -162,14 +141,12 @@ const configure: Configure = {
               ]
             }
           },
-          defaultValue: 'default'
         },
         {
           type: 'field',
           name: 'disabled',
           title: '是否禁用',
           setter: 'BooleanSetter',
-          defaultValue: false
         }
       ]
     },
@@ -205,9 +182,7 @@ const configure: Configure = {
             componentName: 'FunctionSetter',
             props: {
               placeholder: '点击按钮时触发',
-              defaultValue: `function() {
-  console.log('按钮被点击');
-}`
+              defaultValue: `function() { console.log('按钮被点击'); }`
             }
           }
         }
@@ -223,22 +198,22 @@ export default configure
 
 描述组件的基本信息和分类：
 
-```typescript
+```ts
 import type { ComponentMetadata } from '@easy-editor/core'
 import configure from './configure'
 import snippets from './snippets'
 
 const meta: ComponentMetadata = {
-  componentName: 'Button',        // 组件名称（必填）
-  title: '按钮',                  // 显示标题（必填）
-  category: '通用',               // 组件分类（必填）
-  group: '基础组件',              // 组件分组（可选）
-  icon: 'ButtonIcon',            // 组件图标（必填）
-  description: '常用的操作按钮，支持多种类型和状态', // 组件描述（可选）
-  configure,                     // 属性配置（必填）
-  snippets,                      // 预设模板（可选）
+  componentName: 'Button',        // 组件名称
+  title: '按钮',                  // 显示标题
+  category: '通用',               // 组件分类
+  group: '基础组件',              // 组件分组
+  icon: 'ButtonIcon',            // 组件图标
+  description: '常用的操作按钮，支持多种类型和状态', // 组件描述
+  configure,                     // 属性配置
+  snippets,                      // 预设模板
   advanced: {
-    callbacks: {                 // 组件回调（可选）
+    callbacks: {                 // 组件回调
       onNodeAdd: (dragObject, currentNode) => {
         // 当组件被添加到画布时触发
         console.log('Button added:', currentNode.id)
@@ -250,7 +225,7 @@ const meta: ComponentMetadata = {
         return true              // 返回 true 表示允许移除
       }
     },
-    supports: {                  // 支持的功能（可选）
+    supports: {                  // 支持的功能
       style: true,               // 支持样式配置
       events: ['onClick'],       // 支持的事件列表
       loop: false                // 是否支持循环
@@ -272,7 +247,7 @@ export default meta
 
 定义组件在物料面板中的预设用法：
 
-```typescript
+```ts
 import type { Snippet } from '@easy-editor/core'
 
 const snippets: Snippet[] = [
@@ -329,7 +304,7 @@ export default snippets
 
 汇总导出组件和元数据：
 
-```typescript
+```ts
 import Button from './src/component'
 import meta from './src/meta'
 
@@ -337,122 +312,11 @@ export { Button, meta }
 export default Button
 ```
 
-## 物料与设计器的交互
-
-物料组件与设计器的交互主要通过以下几种方式：
-
-### 1. 设计态与运行态切换
-
-组件可以根据当前的模式调整行为：
-
-```tsx
-import React, { forwardRef } from 'react'
-
-export interface ChartProps {
-  /**
-   * 是否处于设计模式
-   */
-  __designMode?: boolean
-  /**
-   * 图表数据
-   */
-  data?: Array<any>
-  // ...其他属性
-}
-
-const Chart = forwardRef<HTMLDivElement, ChartProps>((props, ref) => {
-  const { __designMode, data = [] } = props
-
-  // 在设计态下显示模拟数据
-  const displayData = __designMode && (!data || data.length === 0)
-    ? [
-        { name: '样例数据A', value: 30 },
-        { name: '样例数据B', value: 50 },
-        { name: '样例数据C', value: 20 }
-      ]
-    : data
-
-  return (
-    <div ref={ref} className="chart-container">
-      {__designMode && (
-        <div className="design-indicator absolute top-0 right-0 bg-blue-500 text-white text-xs px-1">
-          设计模式
-        </div>
-      )}
-      {/* 图表实现 */}
-      <div className="chart-content">
-        {/* ... 渲染图表 ... */}
-        {JSON.stringify(displayData)}
-      </div>
-    </div>
-  )
-})
-```
-
-### 2. 组件回调机制
-
-组件可以通过元数据定义回调，响应设计器中的各种事件：
-
-```typescript
-// 在元数据中定义回调
-const meta: ComponentMetadata = {
-  // ...其他配置
-  advanced: {
-    callbacks: {
-      // 组件选中时
-      onSelectHook: (currentNode) => {
-        console.log('Component selected:', currentNode.id)
-        return true // 返回 true 表示允许选中
-      },
-
-      // 组件属性变更前
-      onNodeAdd: (addedNode, currentNode) => {
-        console.log('Component added:', addedNode?.id)
-        return true // 返回 true 表示允许添加
-      },
-
-      // 初始化时调用
-      onNodeRemove: (removedNode, currentNode) => {
-        console.log('Component removed:', removedNode?.id)
-        return true // 返回 true 表示允许移除
-      }
-    }
-  }
-}
-```
-
-### 3. 嵌套规则配置
-
-通过元数据定义组件的嵌套行为：
-
-```typescript
-const meta: ComponentMetadata = {
-  // ...其他配置
-  advanced: {
-    component: {
-      // 是否为容器组件
-      isContainer: true,
-
-      // 嵌套规则
-      nestingRule: {
-        // 允许作为子组件的组件列表
-        childWhitelist: ['Button', 'Text', 'Image'],
-
-        // 允许作为父组件的组件列表
-        parentWhitelist: ['Page', 'Section', 'Container']
-      }
-    }
-  }
-}
-```
-
-## 注册与使用
-
-### 注册物料
+## 注册物料
 
 在编辑器初始化时注册物料：
 
-```typescript
+```ts
 import { createEditor } from '@easy-editor/core'
 import Button from './materials/button/component'
 import buttonMeta from './materials/button/meta'
@@ -473,7 +337,7 @@ const editor = createEditor({
 })
 ```
 
-### 在渲染器中使用
+## 在渲染器中使用
 
 ```tsx
 import React from 'react'
@@ -533,9 +397,111 @@ function Preview() {
 export default Preview
 ```
 
-## 下一步
+## 设计器的交互
 
-- 了解更多[物料配置选项](/api/material-api)
-- 探索[高级物料开发](/guide/advanced-material)
-- 查看[物料最佳实践示例](/examples/materials)
-- 学习[组件库集成方案](/guide/integration)
+物料组件与设计器的交互主要通过以下几种方式：
+
+### 1. 设计态与运行态切换
+
+组件可以根据当前的模式调整行为：
+
+```tsx
+import React, { forwardRef } from 'react'
+
+export interface ChartProps {
+  /**
+   * 是否处于设计模式
+   */
+  __designMode?: boolean
+  /**
+   * 图表数据
+   */
+  data?: Array<any>
+  // ...其他属性
+}
+
+const Chart = forwardRef<HTMLDivElement, ChartProps>((props, ref) => {
+  const { __designMode, data = [] } = props
+
+  // 在设计态下显示模拟数据
+  const displayData = __designMode && (!data || data.length === 0)
+    ? [
+        { name: '样例数据A', value: 30 },
+        { name: '样例数据B', value: 50 },
+        { name: '样例数据C', value: 20 }
+      ]
+    : data
+
+  return (
+    <div ref={ref} className="chart-container">
+      {__designMode && (
+        <div className="design-indicator absolute top-0 right-0 bg-blue-500 text-white text-xs px-1">
+          设计模式
+        </div>
+      )}
+      {/* 图表实现 */}
+      <div className="chart-content">
+        {/* ... 渲染图表 ... */}
+        {JSON.stringify(displayData)}
+      </div>
+    </div>
+  )
+})
+```
+
+### 2. 组件回调机制
+
+组件可以通过元数据定义回调，响应设计器中的各种事件：
+
+```ts
+// 在元数据中定义回调
+const meta: ComponentMetadata = {
+  // ...其他配置
+  advanced: {
+    callbacks: {
+      // 组件选中时
+      onSelectHook: (currentNode) => {
+        console.log('Component selected:', currentNode.id)
+        return true // 返回 true 表示允许选中
+      },
+
+      // 组件属性变更前
+      onNodeAdd: (addedNode, currentNode) => {
+        console.log('Component added:', addedNode?.id)
+        return true // 返回 true 表示允许添加
+      },
+
+      // 初始化时调用
+      onNodeRemove: (removedNode, currentNode) => {
+        console.log('Component removed:', removedNode?.id)
+        return true // 返回 true 表示允许移除
+      }
+    }
+  }
+}
+```
+
+### 3. 嵌套规则配置
+
+通过元数据定义组件的嵌套行为：
+
+```ts
+const meta: ComponentMetadata = {
+  // ...其他配置
+  advanced: {
+    component: {
+      // 是否为容器组件
+      isContainer: true,
+
+      // 嵌套规则
+      nestingRule: {
+        // 允许作为子组件的组件列表
+        childWhitelist: ['Button', 'Text', 'Image'],
+
+        // 允许作为父组件的组件列表
+        parentWhitelist: ['Page', 'Section', 'Container']
+      }
+    }
+  }
+}
+```

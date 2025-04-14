@@ -25,7 +25,7 @@ export const shared = defineConfig({
     search: {
       provider: 'local',
     },
-
+    outline: [2, 3],
     socialLinks: [{ icon: 'github', link: 'https://github.com/Easy-Editor/EasyEditor' }],
     footer: {
       message: 'Released under the MIT License.',

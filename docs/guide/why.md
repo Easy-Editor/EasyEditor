@@ -1,7 +1,3 @@
----
-outline: deep
----
-
 # 为什么选择 EasyEditor?
 
 ## 什么是 EasyEditor?
