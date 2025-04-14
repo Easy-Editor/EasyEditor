@@ -50,6 +50,10 @@ lowcode-engine 提供的是一整套系统，包括页面、渲染器、配置�
 相比之下，EasyEditor 专注于核心协议规范，旨在实现不同框架和设备之间的互通。通过插件和渲染器，我们可以灵活地实现多种应用类型的渲染，降低用户的使用成本，让用户能够完全掌控页面设计，轻松实现不同的UI。
 ![relationship](/relationship_dark.png){ width="80%" class="mx-auto" }
 
+## 致谢
+
+我们感谢 lowcode-engine 提供的灵活性和协议规范，使我们能够在此基础上探索许多创新特性。同时感谢开源社区的支持和反馈，帮助我们不断改进 EasyEditor。
+
 ## 开始使用
 
 准备好探索 EasyEditor 了吗？
@@ -57,7 +61,3 @@ lowcode-engine 提供的是一整套系统，包括页面、渲染器、配置�
 - [快速开始](/guide/getting-started) - 立即开始使用 EasyEditor
 - [核心概念](/guide/core-concepts) - 了解 EasyEditor 的核心架构
 - [示例项目](https://github.com/Easy-Editor/EasyDashboard) - 查看大屏应用示例
-
-## 致谢
-
-我们感谢 lowcode-engine 提供的灵活性和协议规范，使我们能够在此基础上探索许多创新特性。同时感谢开源社区的支持和反馈，帮助我们不断改进 EasyEditor。

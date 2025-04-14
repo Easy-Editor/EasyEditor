@@ -6,7 +6,7 @@
 
 插件是 EasyEditor 的扩展单元，用于增强编辑器的功能。插件可以：
 
-- 添加新功能和UI组件
+- 添加新功能和物料组件
 - 扩展现有类的方法和属性
 - 监听和响应编辑器事件
 - 与其他插件协作和通信
@@ -19,8 +19,8 @@ EasyEditor 采用了"微内核+插件"的架构设计，大部分功能都是通
 插件遵循以下生命周期：
 
 1. **注册阶段**：插件向编辑器注册，设置插件名称、依赖等基本信息
-2. **初始化阶段**：调用插件的 `init` 方法，设置事件监听，初始化资源
-3. **扩展阶段**：如果存在 `extend` 方法，调用它来扩展核心类
+2. **扩展阶段**：如果存在 `extend` 方法，调用它来扩展核心类
+3. **初始化阶段**：调用插件的 `init` 方法，设置事件监听，初始化资源
 4. **运行阶段**：插件正常工作，响应事件，提供功能
 5. **销毁阶段**：调用插件的 `destroy` 方法，清理资源，移除事件监听
 
@@ -33,10 +33,6 @@ EasyEditor 采用了"微内核+插件"的架构设计，大部分功能都是通
 ```bash
 my-plugin/
 ├── index.ts               # 插件入口
-├── components/            # 插件UI组件
-│   └── PluginPanel.tsx    # 示例面板组件
-├── utils/                 # 工具函数
-│   └── helpers.ts         # 辅助函数
 └── types.ts               # 类型定义
 ```
 
@@ -49,10 +45,10 @@ my-plugin/
 最基本的插件示例：
 
 ```typescript
-import type { Plugin } from '@easy-editor/core'
+import type { PluginCreator } from '@easy-editor/core'
 
 // 插件工厂函数，可接收配置参数
-const MyPlugin = (options = {}): Plugin => {
+const MyPlugin: PluginCreator<Option> = (options = {}) => {
   // 返回插件定义
   return {
     name: 'MyPlugin',              // 插件名称，必须唯一
@@ -88,29 +84,31 @@ export default MyPlugin
 处理编辑器事件的插件示例：
 
 ```typescript
-import type { Plugin } from '@easy-editor/core'
+import { type PluginCreator, DESIGNER_EVENT } from '@easy-editor/core'
 
-const EventHandlerPlugin = (): Plugin => {
+const EventHandlerPlugin: PluginCreator = () => {
   return {
     name: 'EventHandlerPlugin',
     deps: [],
     init(ctx) {
+      const { designer } = ctx
+
       // 监听组件选择事件
-      ctx.event.on('node.select', (nodeId) => {
-        const node = ctx.designer.currentDocument?.getNode(nodeId)
+      designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, (nodeIds) => {
+        const node = designer.currentDocument?.getNode(nodeIds[0])
         if (node) {
           ctx.logger.info('Selected component:', node.componentName)
         }
       })
 
       // 监听属性变更事件
-      ctx.event.on('node.prop.change', ({ node, prop, value }) => {
-        ctx.logger.info(`Property ${prop} of ${node.id} changed to:`, value)
+      designer.onEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, ({ node, prop, newvalue }) => {
+        ctx.logger.info(`Property ${prop} of ${node.id} changed to:`, newvalue)
       })
 
       // 监听拖拽事件
-      ctx.event.on('dragon.drop', (info) => {
-        ctx.logger.info('Component dropped:', info)
+      designer.onEvent(DESIGNER_EVENT.DRAG_END, (e) => {
+        ctx.logger.info('Component dropped:', e)
       })
     }
   }

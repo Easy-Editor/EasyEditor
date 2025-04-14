@@ -12,8 +12,8 @@ description: EasyEditor 的使用
 - [Node.js](https://nodejs.org/) 18 及以上版本。
 - [pnpm](https://pnpm.io/) 9.12.2 及以上版本。
 
-::: info
-强烈建议使用 pnpm 作为包管理器，同时 EasyEditor 的依赖管理仅支持 pnpm 安装。
+::: info 提示
+强烈建议使用 pnpm 作为包管理器，同时 EasyEditor 的依赖管理也限制为仅支持 pnpm 安装。
 :::
 
 ## 安装
@@ -38,7 +38,6 @@ pnpm add @easyeditor/plugin-dashboard @easyeditor/react-renderer-dashboard
 
 ```sh [表单应用]
 # 安装表单设计插件和渲染器（开发中）
-pnpm add @easyeditor/plugin-form @easyeditor/react-renderer-form
 ```
 :::
 
@@ -49,11 +48,11 @@ pnpm add @easyeditor/plugin-form @easyeditor/react-renderer-form
 创建编辑器实例是使用 EasyEditor 的第一步：
 
 ```typescript
-import { createEditor } from '@easyeditor/core'
+import { createEasyEditor } from '@easyeditor/core'
 import DashboardPlugin from '@easyeditor/plugin-dashboard'
 
 // 创建编辑器实例
-export const editor = createEditor({
+export const editor = createEasyEditor({
   // 添加所需插件
   plugins: [DashboardPlugin()],
 
@@ -100,15 +99,17 @@ export const editor = createEditor({
 export const designer = await editor.onceGot('designer')
 
 // Project: 项目管理，负责项目文档的管理
-export const project = await editor.onceGot('project')
+export const project = await editor.onceGot('project')+
 
-// Simulator: 模拟器，负责组件的渲染和预览
+// Simulator: 模拟器，负责连接到渲染器，做两者之间的通信
 export const simulator = await editor.onceGot('simulator')
 ```
 
 ### 3. 使用渲染器
 
 EasyEditor 提供了两种渲染模式：
+
+- 设计态
 
 ```tsx
 // 导入相关渲染器组件
@@ -118,6 +119,13 @@ import { SimulatorRenderer, Renderer } from '@easyeditor/react-renderer-dashboar
 const DesignEditor = () => {
   return <SimulatorRenderer host={simulator} />
 }
+```
+
+- 运行态
+
+```tsx
+// 导入相关渲染器组件
+import { Renderer } from '@easyeditor/react-renderer-dashboard'
 
 // 运行态渲染器 - 用于预览或生产环境
 const RuntimePreview = ({ schema }) => {
@@ -131,9 +139,26 @@ const RuntimePreview = ({ schema }) => {
 }
 ```
 
-## 推荐的项目结构
+## 核心概念
 
-为了更好地组织代码，我们推荐使用如下的目录结构：
+了解以下核心概念将帮助您更好地使用 EasyEditor：
+
+- **编辑器(Editor)**: 整个低代码平台的核心，负责协调各个模块的工作
+- **设计器(Designer)**: 负责页面编排和交互的模块
+- **项目(Project)**: 管理文档和资源的模块
+- **模拟器(Simulator)**: 提供预览和调试能力的模块
+- **插件(Plugins)**: 扩展 EasyEditor 功能的模块
+- **设置器(Setters)**: 用于配置组件属性的 UI 控件
+- **物料(Components)**: 可在设计器中使用的组件库
+- **物料元数据(ComponentMetas)**: 描述组件的配置信息
+
+::: tip 提示
+查看 [核心概念](/guide/core-concepts) 文档深入了解 EasyEditor 的架构设计。
+:::
+
+## 项目结构
+
+为了更好地组织代码，推荐使用如下的目录结构：
 
 ```
 src/
@@ -159,7 +184,7 @@ EasyEditor 支持多种应用场景，每种场景都有其特定的插件和渲
 
 大屏应用场景提供了丰富的可视化组件和布局系统，适用于数据大屏、监控中心等场景。
 
-::: tip
+::: tip 提示
 查看 [大屏应用指南](/guide/scenarios/dashboard) 了解如何构建专业的可视化大屏应用。
 :::
 
@@ -169,23 +194,6 @@ EasyEditor 支持多种应用场景，每种场景都有其特定的插件和渲
 
 ::: info 开发中
 表单应用场景正在积极开发中，敬请期待！查看 [表单应用指南](/guide/scenarios/form) 了解最新进展。
-:::
-
-## 核心概念
-
-了解以下核心概念将帮助您更好地使用 EasyEditor：
-
-- **编辑器(Editor)**: 整个低代码平台的核心，负责协调各个模块的工作
-- **设计器(Designer)**: 负责页面编排和交互的模块
-- **项目(Project)**: 管理文档和资源的模块
-- **模拟器(Simulator)**: 提供预览和调试能力的模块
-- **插件(Plugins)**: 扩展 EasyEditor 功能的模块
-- **设置器(Setters)**: 用于配置组件属性的 UI 控件
-- **物料(Components)**: 可在设计器中使用的组件库
-- **物料元数据(ComponentMetas)**: 描述组件的配置信息
-
-::: tip
-查看 [核心概念](/guide/core-concepts) 文档深入了解 EasyEditor 的架构设计。
 :::
 
 ## 示例项目
