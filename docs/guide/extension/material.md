@@ -28,7 +28,7 @@ my-component/
 
 ## 使用
 
-### 1. 组件实现 (component.tsx)
+### 组件实现 (component.tsx)
 
 组件是物料的核心实现，需要遵循 React 组件规范：
 
@@ -107,7 +107,7 @@ const Button = forwardRef((props: ButtonProps, ref: Ref<HTMLButtonElement>) => {
 export default Button
 ```
 
-### 2. 属性配置 (configure.ts)
+### 属性配置 (configure.ts)
 
 定义组件在设计器中的可配置属性：
 
@@ -194,7 +194,7 @@ const configure: Configure = {
 export default configure
 ```
 
-### 3. 元数据定义 (meta.ts)
+### 元数据定义 (meta.ts)
 
 描述组件的基本信息和分类：
 
@@ -243,7 +243,7 @@ const meta: ComponentMetadata = {
 export default meta
 ```
 
-### 4. 预设模板 (snippets.ts)
+### 预设模板 (snippets.ts)
 
 定义组件在物料面板中的预设用法：
 
@@ -300,7 +300,7 @@ const snippets: Snippet[] = [
 export default snippets
 ```
 
-### 5. 导出入口 (index.ts)
+### 导出入口 (index.ts)
 
 汇总导出组件和元数据：
 
@@ -401,7 +401,7 @@ export default Preview
 
 物料组件与设计器的交互主要通过以下几种方式：
 
-### 1. 设计态与运行态切换
+### 设计态与运行态切换
 
 组件可以根据当前的模式调整行为：
 
@@ -449,7 +449,7 @@ const Chart = forwardRef<HTMLDivElement, ChartProps>((props, ref) => {
 })
 ```
 
-### 2. 组件回调机制
+### 组件回调机制
 
 组件可以通过元数据定义回调，响应设计器中的各种事件：
 
@@ -481,7 +481,7 @@ const meta: ComponentMetadata = {
 }
 ```
 
-### 3. 嵌套规则配置
+### 嵌套规则配置
 
 通过元数据定义组件的嵌套行为：
 

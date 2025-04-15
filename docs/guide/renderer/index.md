@@ -1,6 +1,6 @@
 # 渲染器开发
 
-渲染器是 EasyEditor 的核心组件之一，负责将设计器中的组件配置渲染为实际可见的界面。EasyEditor 支持多种框架的渲染器实现，本指南将帮助你了解渲染器的基本概念和使用方法。
+渲染器是 EasyEditor 的核心架构之一，负责将设计器中的组件配置渲染为实际可见的界面。EasyEditor 支持多种框架的渲染器实现，本指南将帮助你了解渲染器的基本概念和使用方法。
 
 ## 渲染器概述
 
@@ -14,7 +14,7 @@ EasyEditor 的渲染器分为两种模式：
 EasyEditor 目前提供以下内置渲染器：
 
 - `@easyeditor/react-renderer`: 基础 React 渲染器
-- `@easyeditor/react-renderer-dashboard`: 大屏应用 React 渲染器
+- `@easyeditor/react-renderer-dashboard`: 大屏应用 React 渲染器 (基于React 渲染器扩展)
 - `@easyeditor/react-renderer-form`: 表单应用 React 渲染器 (开发中)
 
 ## 渲染器使用
@@ -79,6 +79,8 @@ export const RuntimePreview = ({ schema }) => {
       currentUser: { /* 用户信息 */ }
     }
   }}
+
+  // ...
 />
 ```
 

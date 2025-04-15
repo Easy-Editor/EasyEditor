@@ -40,7 +40,7 @@ my-plugin/
 
 ## 使用
 
-### 1. 基础插件
+### 基础插件
 
 最基本的插件示例：
 
@@ -79,7 +79,7 @@ const MyPlugin: PluginCreator<Option> = (options = {}) => {
 export default MyPlugin
 ```
 
-### 2. 事件处理插件
+### 事件处理插件
 
 处理编辑器事件的插件示例：
 
@@ -117,7 +117,7 @@ const EventHandlerPlugin: PluginCreator = () => {
 export default EventHandlerPlugin
 ```
 
-### 3. 功能扩展插件
+### 功能扩展插件
 
 扩展编辑器核心类的插件示例：
 
@@ -172,7 +172,7 @@ const ExtendPlugin = (): Plugin => {
 export default ExtendPlugin
 ```
 
-### 4. 注册插件
+### 注册插件
 
 在编辑器初始化时注册插件：
 
@@ -202,7 +202,7 @@ editor.pluginManager.register(
 
 插件之间可以通过以下方式进行通信：
 
-### 1. 事件通信
+### 事件通信
 
 通过编辑器的事件系统进行通信：
 
@@ -222,7 +222,7 @@ init(ctx) {
 }
 ```
 
-### 2. 共享上下文
+### 共享上下文
 
 通过插件上下文共享数据和方法：
 
@@ -248,7 +248,7 @@ init(ctx) {
 }
 ```
 
-### 3. 访问扩展方法
+### 访问扩展方法
 
 通过扩展方法进行通信：
 

@@ -25,7 +25,7 @@ my-setter/
 
 ## 使用
 
-### 1. 基础 Setter 组件 (index.tsx)
+### 基础 Setter 组件 (index.tsx)
 
 一个基本的 Setter 组件需要实现 `SetterProps` 接口：
 
@@ -69,7 +69,7 @@ const CustomSetter: React.FC<CustomSetterProps> = (props) => {
 export default CustomSetter;
 ```
 
-### 2. 复合属性 Setter (index.tsx)
+### 复合属性 Setter (index.tsx)
 
 对于包含多个子属性的复合属性，如边距、定位等，可以创建复合 Setter：
 
@@ -164,7 +164,7 @@ const MarginSetter: React.FC<MarginSetterProps> = (props) => {
 export default MarginSetter;
 ```
 
-### 3. 集成第三方库 Setter
+### 集成第三方库 Setter
 
 有时我们需要集成第三方库来提供更专业的编辑体验，如颜色选择器、日期选择器等：
 
@@ -221,7 +221,7 @@ const ColorSetter: React.FC<ColorSetterProps> = (props) => {
 export default ColorSetter;
 ```
 
-### 4. 高级事件 Setter
+### 高级事件 Setter
 
 Setter 可以访问设计器、文档和节点，实现更复杂的功能，如事件绑定：
 
@@ -527,7 +527,7 @@ export default configure
 
 ## 与设计器的交互
 
-### 1. 使用 field 属性
+### 使用 field 属性
 
 Setter 组件可以通过 `field` 属性访问设计器上下文，包括当前文档、选中节点等信息：
 
@@ -565,7 +565,7 @@ const AdvancedSetter: React.FC<SetterProps> = (props) => {
 export default AdvancedSetter;
 ```
 
-### 2. 使用 extraProps 进行高级数据转换
+### 使用 extraProps
 
 通过 `extraProps` 中的 `setValue` 和 `getValue` 方法，可以在值变更前后执行特殊处理：
 
@@ -598,7 +598,7 @@ export default AdvancedSetter;
 }
 ```
 
-### 3. 访问文档和全局数据
+### 访问文档和全局数据
 
 Setter 可以通过 `field` 访问文档根节点和全局数据：
 
