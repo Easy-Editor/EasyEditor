@@ -2,7 +2,7 @@
 
 本指南将帮助你快速上手 EasyEditor，一个用于构建可视化应用平台的插件化跨框架低代码引擎。
 
-## 前置准备
+## 环境准备
 
 - [Node.js](https://nodejs.org/) 18 及以上版本。
 - [pnpm](https://pnpm.io/) 9.12.2 及以上版本。
@@ -11,7 +11,7 @@
 强烈建议使用 pnpm 作为包管理器，同时 EasyEditor 的依赖管理也限制为仅支持 pnpm 安装。
 :::
 
-## 安装
+## 安装依赖
 
 ::: code-group
 ```sh [pnpm]

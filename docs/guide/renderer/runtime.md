@@ -12,29 +12,11 @@
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 ```
 
-### 配置渲染器
+## 配置项
 
-运行态渲染器的基本用法：
+### `schema` (必需)
 
-```tsx
-import { Renderer } from '@easy-editor/react-renderer-dashboard'
-import { components } from '@/materials'
-
-const RuntimePreview = ({ schema }) => {
-  return (
-    <Renderer
-      schema={schema}
-      components={components}
-    />
-  )
-}
-```
-
-## 必要参数
-
-### schema
-
-schema 参数是描述页面结构和组件配置的核心数据：
+定义页面结构和组件配置的核心数据。这是渲染器渲染界面的基础。
 
 ```tsx
 const schema = {
@@ -63,9 +45,9 @@ const schema = {
 <Renderer schema={schema} components={components} />
 ```
 
-### components
+### `components` (必需)
 
-components 参数是组件名称和实际组件实现的映射关系：
+定义组件名称和实际组件实现的映射关系。渲染器通过这个映射找到对应的组件实现。
 
 ```tsx
 import Text from '@/components/Text'
@@ -82,28 +64,26 @@ const components = {
 <Renderer schema={schema} components={components} />
 ```
 
-## 高级配置
+### `viewport` (可选)
 
-运行态渲染器支持多种高级配置项：
+定义渲染器的视口配置，用于控制渲染区域的大小。
 
 ```tsx
 <Renderer
-  // 必须项：组件配置Schema
   schema={schema}
-
-  // 必须项：组件映射
   components={components}
-
-  // 可选项：视口配置
   viewport={{ width: 1920, height: 1080 }}
+/>
+```
 
-  // 可选项：全局属性
-  globalProps={{
-    theme: 'dark',
-    locale: 'zh-CN'
-  }}
+### `appHelper` (可选)
 
-  // 可选项：应用工具和上下文
+定义应用工具和上下文，提供导航、请求、事件等功能。
+
+```tsx
+<Renderer
+  schema={schema}
+  components={components}
   appHelper={{
     utils: {
       // 导航处理
@@ -139,92 +119,4 @@ const components = {
 />
 ```
 
-## 常见场景
-
-### 动态数据加载
-
-结合 useState 和 useEffect 动态加载数据：
-
-```tsx
-import { useState, useEffect } from 'react'
-import { Renderer } from '@easy-editor/react-renderer-dashboard'
-import { components } from '@/materials'
-
-const DynamicDataPage = () => {
-  const [schema, setSchema] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    // 从服务器加载 Schema
-    const fetchSchema = async () => {
-      try {
-        setLoading(true)
-        const response = await fetch('/api/schema')
-        const data = await response.json()
-        setSchema(data)
-      } catch (error) {
-        console.error('Failed to load schema:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchSchema()
-  }, [])
-
-  if (loading) {
-    return <div>加载中...</div>
-  }
-
-  if (!schema) {
-    return <div>加载失败</div>
-  }
-
-  return (
-    <Renderer
-      schema={schema}
-      components={components}
-    />
-  )
-}
-```
-
-### 多页面路由集成
-
-结合 React Router 实现多页面渲染：
-
-```tsx
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { Suspense, lazy } from 'react'
-import { Renderer } from '@easy-editor/react-renderer-dashboard'
-import { components } from '@/materials'
-
-// 懒加载各页面 Schema
-const HomePage = lazy(() => import('@/schemas/home'))
-const DashboardPage = lazy(() => import('@/schemas/dashboard'))
-const ProfilePage = lazy(() => import('@/schemas/profile'))
-
-const PageRenderer = ({ schema }) => (
-  <Renderer schema={schema} components={components} />
-)
-
-const AppRouter = () => {
-  return (
-    <BrowserRouter>
-      <Suspense fallback={<div>页面加载中...</div>}>
-        <Routes>
-          <Route path="/" element={<PageRenderer schema={HomePage} />} />
-          <Route path="/dashboard" element={<PageRenderer schema={DashboardPage} />} />
-          <Route path="/profile" element={<PageRenderer schema={ProfilePage} />} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
-  )
-}
-```
-
-## 下一步
-
-- 了解[编辑态渲染器](/guide/renderer/editor)的使用方法
-- 学习如何[自定义渲染器](/guide/renderer/custom)
-- 查看[渲染器 API 参考](/reference/renderer)获取更详细的信息
+更多详细的 API 说明和用法，请参考 [渲染器 API 文档](/reference/renderer)。

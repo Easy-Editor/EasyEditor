@@ -31,9 +31,7 @@ const DesignEditor = () => {
 
 ## 配置项
 
-### 核心属性
-
-#### `host` (必需)
+### `host` (必需)
 
 设计态渲染器需要连接到simulator实例，通过host属性传入。
 
@@ -41,7 +39,7 @@ const DesignEditor = () => {
 <SimulatorRenderer host={simulator} />
 ```
 
-#### `bemTools` (可选)
+### `bemTools` (可选)
 
 配置BEM工具的行为和显示，可以设置为对象或false。如果设置为false，将完全禁用BEM工具功能。
 
@@ -76,7 +74,7 @@ const DesignEditor = () => {
 />
 ```
 
-#### 自定义辅助工具
+### 自定义辅助工具
 
 你可以通过 `bemTools.extra` 属性来添加自定义的辅助工具：
 
@@ -134,7 +132,7 @@ simulator.set('deviceStyle', {
 })
 ```
 
-## 设计模式与运行模式切换
+## designMode 切换
 
 设计态渲染器会根据 simulator 的 `designMode` 来决定是否展示辅助工具：
 

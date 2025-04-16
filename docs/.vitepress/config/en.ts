@@ -95,11 +95,11 @@ const SidebarGuide: DefaultTheme.SidebarItem[] = [
   },
   {
     text: 'Design Principles',
-    link: '/en/design/',
+    link: '/en/design/overview',
   },
   {
     text: 'API Reference',
-    link: '/en/reference/',
+    link: '/en/reference/overview',
   },
 ]
 
@@ -147,7 +147,7 @@ const Nav: DefaultTheme.NavItem[] = [
         link: 'https://github.com/Easy-Editor/EasyEditor/releases',
       },
       {
-        text: 'Report',
+        text: 'Submit Issue',
         link: 'https://github.com/Easy-Editor/EasyEditor/issues',
       },
       {

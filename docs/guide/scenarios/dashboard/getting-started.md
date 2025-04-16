@@ -6,32 +6,26 @@
 
 确保你的开发环境满足以下要求：
 
-- Node.js >= 18.0.0
-- pnpm >= 9.12.2
+- [Node.js](https://nodejs.org/) 18 及以上版本。
+- [pnpm](https://pnpm.io/) 9.12.2 及以上版本。
 
-## 项目初始化
+::: info 提示
+强烈建议使用 pnpm 作为包管理器，同时 EasyEditor 的依赖管理也限制为仅支持 pnpm 安装。
+:::
+
+## 安装依赖
 
 ```bash
 # 安装核心依赖
-pnpm add @easy-editor/core @easy-editor/plugin-dashboard @easy-editor/react-renderer-dashboard @easy-editor/react-renderer
+pnpm add @easy-editor/core @easy-editor/plugin-dashboard @easy-editor/react-renderer @easy-editor/react-renderer-dashboard
 
 # 安装运行时依赖
 pnpm add mobx mobx-react
 ```
 
-## 核心概念
+## 使用
 
-在使用 EasyEditor 构建大屏应用时，需要了解以下几个核心概念：
-
-1. **编辑器实例** - 负责管理整个应用的状态和生命周期
-2. **设计器** - 提供可视化设计功能
-3. **物料** - 可拖拽的组件和模板
-4. **渲染器** - 分为设计态和运行态两种渲染器
-5. **属性配置** - 用于编辑组件属性的面板
-
-## 基础实现
-
-### 1. 创建编辑器实例
+### 创建编辑器实例
 
 在项目中创建 `src/editor/index.ts` 文件：
 
@@ -51,7 +45,7 @@ export const project = await editor.onceGot('project')
 export const simulator = await editor.onceGot('simulator')
 ```
 
-### 2. 设计态渲染器
+### 设计态渲染器
 
 设计态渲染器用于在编辑器中进行可视化设计：
 
@@ -68,7 +62,7 @@ export const DesignRenderer = () => {
 }
 ```
 
-### 3. 运行态渲染器
+### 运行态渲染器
 
 运行态渲染器用于预览或部署时的渲染：
 
@@ -95,7 +89,7 @@ const Preview = () => {
 }
 ```
 
-### 4. 物料面板
+### 物料面板
 
 物料面板用于展示可拖拽的组件和模板：
 
@@ -140,7 +134,7 @@ export const MaterialList = ({ snippets }) => {
 }
 ```
 
-### 5. 大纲树
+### 大纲树
 
 大纲树用于查看和管理组件结构：
 
@@ -190,7 +184,7 @@ export const OutlineTree = observer(({ node }) => {
 })
 ```
 
-### 6. 属性配置面板
+### 属性配置面板
 
 属性配置面板用于编辑选中组件的属性：
 
@@ -251,11 +245,3 @@ export const customFieldItem: CustomFieldItemProps = {
 3. **大纲树** - 查看和管理组件结构
 4. **页面预览** - 实时预览大屏效果、
 5. ...
-
-## 获取帮助
-
-如果你在使用过程中遇到问题，可以通过以下方式获取帮助：
-
-1. 查看 [文档](https://github.com/Easy-Editor/EasyEditor)
-2. 提交 [Issue](https://github.com/Easy-Editor/EasyEditor/issues)
-3. 加入 [Discussions](https://github.com/Easy-Editor/EasyEditor/discussions)
