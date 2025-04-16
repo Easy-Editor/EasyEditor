@@ -21,8 +21,8 @@ function App() {
 ## components
 
 - 类型: `Record<string, React.ComponentType<any>>`
-- 默认值: `{}`
-- 描述: 注册到渲染器的组件映射表
+
+注册到渲染器的组件映射表
 
 ```tsx
 import Button from './components/Button';
@@ -45,9 +45,10 @@ function App() {
 
 ## designMode
 
-- 类型: `'live' | 'design' | undefined`
-- 默认值: `'live'`
-- 描述: 渲染器的工作模式，`'live'` 表示运行时模式，`'design'` 表示设计时模式
+- 类型: `'live' | 'design'`
+- 默认值: `'design'`
+
+渲染器的工作模式，`'live'` 表示运行态，`'design'` 表示设计态
 
 ```tsx
 function App() {
@@ -64,8 +65,8 @@ function App() {
 ## className
 
 - 类型: `string`
-- 默认值: `undefined`
-- 描述: 渲染器根节点的 CSS 类名
+
+渲染器根节点的 CSS 类名
 
 ```tsx
 function App() {
@@ -82,8 +83,8 @@ function App() {
 ## style
 
 - 类型: `React.CSSProperties`
-- 默认值: `undefined`
-- 描述: 渲染器根节点的样式
+
+渲染器根节点的样式
 
 ```tsx
 function App() {
@@ -100,8 +101,8 @@ function App() {
 ## appHelper
 
 - 类型: `RendererAppHelper`
-- 默认值: `undefined`
-- 描述: 渲染器的全局上下文，可以在组件中通过 `this` 访问
+
+渲染器的全局上下文，可以在组件中通过 `this` 访问
 
 ```tsx
 const appHelper = {
@@ -130,7 +131,8 @@ function App() {
 
 - 类型: `'default' | 'pc' | 'mobile' | string`
 - 默认值: `'default'`
-- 描述: 渲染器的设备类型，用于响应式渲染
+
+渲染器的设备类型，用于响应式渲染
 
 ```tsx
 function App() {
@@ -147,8 +149,8 @@ function App() {
 ## notFoundComponent
 
 - 类型: `React.ComponentType<NotFoundComponentProps>`
-- 默认值: 内置的 NotFoundComponent
-- 描述: 当找不到组件时显示的组件
+
+当找不到组件时显示的组件
 
 ```tsx
 const CustomNotFoundComponent = ({ componentName }) => {
@@ -169,8 +171,8 @@ function App() {
 ## faultComponent
 
 - 类型: `React.ComponentType<FaultComponentProps>`
-- 默认值: 内置的 FaultComponent
-- 描述: 当组件渲染异常时显示的组件
+
+当组件渲染异常时显示的组件
 
 ```tsx
 const CustomFaultComponent = ({ componentName, error }) => {
@@ -196,8 +198,8 @@ function App() {
 ## documentId
 
 - 类型: `string`
-- 默认值: `undefined`
-- 描述: 当前文档的 ID，在多文档模式下使用
+
+当前文档的 ID，在多文档模式下使用
 
 ```tsx
 function App() {
@@ -215,7 +217,8 @@ function App() {
 
 - 类型: `boolean`
 - 默认值: `false`
-- 描述: 渲染模块是否挂起，当设置为 true 时，渲染模块最外层容器的 shouldComponentUpdate 将始终返回 false
+
+渲染模块是否挂起，当设置为 true 时，渲染模块最外层容器的 shouldComponentUpdate 将始终返回 false
 
 ```tsx
 function App() {
@@ -232,8 +235,8 @@ function App() {
 ## onCompGetRef
 
 - 类型: `(schema: NodeSchema, ref: any) => void`
-- 默认值: `undefined`
-- 描述: 组件获取 ref 时触发的钩子
+
+组件获取 ref 时触发的钩子
 
 ```tsx
 function App() {
@@ -254,8 +257,8 @@ function App() {
 ## getSchemaChangedSymbol
 
 - 类型: `() => boolean`
-- 默认值: `undefined`
-- 描述: 获取 schema 是否有变更的标志
+
+获取 schema 是否有变更的标志
 
 ```tsx
 import { useState } from 'react';
@@ -277,8 +280,8 @@ function App() {
 ## setSchemaChangedSymbol
 
 - 类型: `(symbol: boolean) => void`
-- 默认值: `undefined`
-- 描述: 设置 schema 是否有变更的标志
+
+设置 schema 是否有变更的标志
 
 ```tsx
 // 见上方示例
@@ -287,8 +290,8 @@ function App() {
 ## getNode
 
 - 类型: `(id: string) => Node`
-- 默认值: `undefined`
-- 描述: 获取节点的方法
+
+获取节点的方法
 
 ```tsx
 function App() {
@@ -306,8 +309,8 @@ function App() {
 ## enableStrictNotFoundMode
 
 - 类型: `boolean`
-- 默认值: `false`
-- 描述: 当开启组件未找到严格模式时，渲染模块不会默认给一个容器组件
+
+当开启组件未找到严格模式时，渲染模块不会默认给一个容器组件
 
 ```tsx
 function App() {
@@ -324,8 +327,8 @@ function App() {
 ## excuteLifeCycleInDesignMode
 
 - 类型: `boolean`
-- 默认值: `false`
-- 描述: 是否在设计模式下执行生命周期方法
+
+是否在设计模式下执行生命周期方法
 
 ```tsx
 function App() {
@@ -348,10 +351,6 @@ function App() {
 const schema = {
   componentName: 'Button',
   props: {
-    onClick: {
-      type: 'JSExpression',
-      value: 'function() {alert("Hello!")}'
-    },
     disabled: {
       type: 'JSExpression',
       value: 'this.data.loading'
@@ -371,8 +370,9 @@ function App() {
 - `this.constants`: 常量
 - `this.data`: 组件数据
 - `this.state`: 组件状态
+- `this.appHelper`: 对应 `Renderer` 上设置的 `appHelper`
 
-## 事件处理
+## 事件处理 JSFunction
 
 渲染器支持在 schema 中定义事件处理器：
 

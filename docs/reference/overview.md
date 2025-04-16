@@ -45,8 +45,8 @@ EasyEditor 的 API 主要分为以下几个部分：
 
 ## 开始使用
 
-根据您的需求，选择对应的 API 类别深入了解。每个 API 文档都提供了详细的使用示例和最佳实践。
+根据您的需求，选择对应的 API 类别查看详细文档。每个 API 文档都提供了详细的接口说明和使用示例。
 
-- 需要构建自定义编辑器？查看[核心 API](/reference/core)
-- 需要扩展编辑器功能？查看[插件 API](/reference/plugin)
-- 需要自定义渲染方式？查看[渲染器 API](/reference/renderer)
+- 查看编辑器核心功能？查看[核心 API](/reference/core)
+- 查看插件开发指南？查看[插件 API](/reference/plugin)
+- 查看渲染器配置？查看[渲染器 API](/reference/renderer)

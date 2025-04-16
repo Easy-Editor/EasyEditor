@@ -23,7 +23,6 @@ const editor = createEasyEditor({
 ## plugins
 
 - 类型: `Plugin[]`
-- 默认值: `[]`
 
 编辑器插件列表。
 
@@ -39,7 +38,6 @@ const editor = createEasyEditor({
 ## setters
 
 - 类型: `Record<string, Component | Setter>`
-- 默认值: `{}`
 
 编辑器 Setter 列表，用于属性面板。
 
@@ -58,7 +56,6 @@ const editor = createEasyEditor({
 ## components
 
 - 类型: `Record<string, Component>`
-- 默认值: `{}`
 
 编辑器组件列表。
 
@@ -77,7 +74,6 @@ const editor = createEasyEditor({
 ## componentMetas
 
 - 类型: `Record<string, ComponentMetadata>`
-- 默认值: `{}`
 
 组件元数据列表。
 
@@ -102,7 +98,6 @@ const editor = createEasyEditor({
 ## lifeCycles
 
 - 类型: `LifeCyclesConfig`
-- 默认值: `{}`
 
 编辑器生命周期钩子。
 
@@ -125,7 +120,6 @@ const editor = createEasyEditor({
 ## designer
 
 - 类型: `Pick<DesignerProps, 'onDragstart' | 'onDrag' | 'onDragend'>`
-- 默认值: `{}`
 
 Designer 的配置选项。
 
@@ -148,7 +142,6 @@ const editor = createEasyEditor({
 ## hotkeys
 
 - 类型: `HotkeyConfig[]`
-- 默认值: `[]`
 
 编辑器快捷键配置。
 
@@ -176,7 +169,10 @@ const editor = createEasyEditor({
 ## defaultSchema
 
 - 类型: `ProjectSchema`
-- 默认值: `{}`
+- 默认值: `{
+    version: '0.0.1',
+    componentsTree: [],
+  }`
 
 编辑器默认 schema。
 
@@ -194,225 +190,230 @@ const editor = createEasyEditor({
 
 ## get
 
-- **签名**: `get<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType): EditorGetResult<T, KeyOrType> | undefined`
-- **描述**: 从编辑器上下文中获取指定 key 的值
-- **参数**:
+- 类型: `get<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType): EditorGetResult<T, KeyOrType> | undefined`
+- 参数:
   - `keyOrType`: 要获取的值的 key 或类型
-- **返回值**: 指定 key 的值，如果不存在则返回 undefined
-- **示例**:
-  ```ts
-  // 获取设计器实例
-  const designer = editor.get('designer');
 
-  // 使用类型获取
-  const project = editor.get<Project>('project');
-  ```
+从编辑器上下文中获取指定 key 的值
+
+```ts
+// 获取设计器实例
+const designer = editor.get('designer');
+
+// 使用类型获取
+const project = editor.get<Project>('project');
+```
 
 ## set
 
-- **签名**: `set(key: EditorValueKey, data: any): void | Promise`
-- **描述**: 设置编辑器上下文中指定 key 的值
-- **参数**:
+- 类型: `set(key: EditorValueKey, data: any): void | Promise`
+- 参数:
   - `key`: 要设置的值的 key
   - `data`: 要设置的值
-- **返回值**: void 或 Promise
-- **示例**:
-  ```ts
-  // 设置自定义数据
-  editor.set('customData', { value: 'test' });
-  ```
+
+设置编辑器上下文中指定 key 的值
+
+```ts
+// 设置自定义数据
+editor.set('customData', { value: 'test' });
+```
 
 ## has
 
-- **签名**: `has(keyOrType: EditorValueKey): boolean`
-- **描述**: 检查编辑器上下文中是否存在指定 key 的值
-- **参数**:
+- 类型: `has(keyOrType: EditorValueKey): boolean`
+- 参数:
   - `keyOrType`: 要检查的值的 key 或类型
-- **返回值**: 布尔值，表示是否存在
-- **示例**:
-  ```ts
-  // 检查是否存在设计器实例
-  if (editor.has('designer')) {
-    console.log('设计器已初始化');
-  }
-  ```
+
+检查编辑器上下文中是否存在指定 key 的值
+
+```ts
+// 检查是否存在设计器实例
+if (editor.has('designer')) {
+  console.log('设计器已初始化');
+}
+```
 
 ## onceGot
 
-- **签名**: `onceGot<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType): Promise<EditorGetResult<T, KeyOrType>>`
-- **描述**: 获取指定 key 的值，如果当前不存在则等待直到该值被设置
-- **参数**:
+- 类型: `onceGot<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType): Promise<EditorGetResult<T, KeyOrType>>`
+- 参数:
   - `keyOrType`: 要获取的值的 key 或类型
-- **返回值**: Promise，解析为指定 key 的值
-- **示例**:
-  ```ts
-  // 等待设计器实例
-  const designer = await editor.onceGot('designer');
 
-  // 等待项目实例，并指定类型
-  const project = await editor.onceGot<Project>('project');
-  ```
+获取指定 key 的值，如果当前不存在则等待直到该值被设置
+
+```ts
+// 等待设计器实例
+const designer = await editor.onceGot('designer');
+
+// 等待项目实例，并指定类型
+const project = await editor.onceGot<Project>('project');
+```
 
 ## onGot
 
-- **签名**: `onGot<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType, fn: (data: EditorGetResult<T, KeyOrType>) => void): () => void`
-- **描述**: 监听指定 key 的值，当值存在或被设置时调用回调函数
-- **参数**:
+- 类型: `onGot<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType, fn: (data: EditorGetResult<T, KeyOrType>) => void): () => void`
+- 参数:
   - `keyOrType`: 要监听的值的 key 或类型
   - `fn`: 当值存在或被设置时调用的回调函数
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  // 监听设计器实例
-  const dispose = editor.onGot('designer', (designer) => {
-    console.log('设计器已就绪:', designer);
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听指定 key 的值，当值存在或被设置时调用回调函数
+
+```ts
+// 监听设计器实例
+const dispose = editor.onGot('designer', (designer) => {
+  console.log('设计器已就绪:', designer);
+});
+
+// 取消监听
+dispose();
+```
 
 ## onChange
 
-- **签名**: `onChange<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType, fn: (data: EditorGetResult<T, KeyOrType>) => void): () => void`
-- **描述**: 监听指定 key 的值变化，当值变化时调用回调函数
-- **参数**:
+- 类型: `onChange<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType, fn: (data: EditorGetResult<T, KeyOrType>) => void): () => void`
+- 参数:
   - `keyOrType`: 要监听的值的 key 或类型
   - `fn`: 当值变化时调用的回调函数
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  // 监听设计器实例变化
-  const dispose = editor.onChange('designer', (designer) => {
-    console.log('设计器已更新:', designer);
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听指定 key 的值变化，当值变化时调用回调函数
+
+```ts
+// 监听设计器实例变化
+const dispose = editor.onChange('designer', (designer) => {
+  console.log('设计器已更新:', designer);
+});
+
+// 取消监听
+dispose();
+```
 
 ## init
 
-- **签名**: `init(config?: EditorConfig): Promise`
-- **描述**: 初始化编辑器
-- **参数**:
+- 类型: `init(config?: EditorConfig): Promise`
+- 参数:
   - `config`: 可选，编辑器配置
-- **返回值**: Promise
-- **示例**:
-  ```ts
-  // 初始化编辑器
-  await editor.init({
-    plugins: [MyPlugin()],
-    components: myComponents
-  });
-  ```
+
+初始化编辑器
+
+```ts
+// 初始化编辑器
+await editor.init({
+  plugins: [MyPlugin()],
+  components: myComponents
+});
+```
 
 ## destroy
 
-- **签名**: `destroy(): void`
-- **描述**: 销毁编辑器，清理资源
-- **返回值**: void
-- **示例**:
-  ```ts
-  // 销毁编辑器
-  editor.destroy();
-  ```
+- 类型: `destroy(): void`
+
+销毁编辑器，清理资源
+
+```ts
+// 销毁编辑器
+editor.destroy();
+```
 
 ## extend
 
-- **签名**: `extend(pluginManager: PluginManager): Promise`
-- **描述**: 扩展编辑器，执行插件的 extend 方法
-- **参数**:
+- 类型: `extend(pluginManager: PluginManager): Promise`
+- 参数:
   - `pluginManager`: 插件管理器实例
-- **返回值**: Promise
-- **示例**:
-  ```ts
-  // 通常在内部使用，不需要手动调用
-  const pluginManager = editor.get('pluginManager');
-  await editor.extend(pluginManager);
-  ```
+
+扩展编辑器，执行插件的 extend 方法
+
+```ts
+// 通常在内部使用，不需要手动调用
+const pluginManager = editor.get('pluginManager');
+await editor.extend(pluginManager);
+```
 
 ## onBeforeInit
 
-- **签名**: `onBeforeInit(listener: (editor: Editor) => void): () => void`
-- **描述**: 监听编辑器初始化前事件
-- **参数**:
+- 类型: `onBeforeInit(listener: (editor: Editor) => void): () => void`
+- 参数:
   - `listener`: 事件监听器
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  const dispose = editor.onBeforeInit((editor) => {
-    console.log('编辑器即将初始化');
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听编辑器初始化前事件
+
+```ts
+// 监听编辑器初始化前事件
+const dispose = editor.onBeforeInit((editor) => {
+  console.log('编辑器即将初始化');
+});
+
+// 取消监听
+dispose();
+```
 
 ## onAfterInit
 
-- **签名**: `onAfterInit(listener: (editor: Editor) => void): () => void`
-- **描述**: 监听编辑器初始化后事件
-- **参数**:
+- 类型: `onAfterInit(listener: (editor: Editor) => void): () => void`
+- 参数:
   - `listener`: 事件监听器
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  const dispose = editor.onAfterInit((editor) => {
-    console.log('编辑器已初始化完成');
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听编辑器初始化后事件
+
+```ts
+// 监听编辑器初始化后事件
+const dispose = editor.onAfterInit((editor) => {
+  console.log('编辑器已初始化完成');
+});
+
+// 取消监听
+dispose();
+```
 
 ## onDestroy
 
-- **签名**: `onDestroy(listener: (editor: Editor) => void): () => void`
-- **描述**: 监听编辑器销毁事件
-- **参数**:
+- 类型: `onDestroy(listener: (editor: Editor) => void): () => void`
+- 参数:
   - `listener`: 事件监听器
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  const dispose = editor.onDestroy((editor) => {
-    console.log('编辑器已销毁');
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听编辑器销毁事件
+
+```ts
+// 监听编辑器销毁事件
+const dispose = editor.onDestroy((editor) => {
+  console.log('编辑器已销毁');
+});
+
+// 取消监听
+dispose();
+```
 
 ## onBeforeExtend
 
-- **签名**: `onBeforeExtend(listener: (editor: Editor) => void): () => void`
-- **描述**: 监听编辑器扩展前事件
-- **参数**:
+- 类型: `onBeforeExtend(listener: (editor: Editor) => void): () => void`
+- 参数:
   - `listener`: 事件监听器
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  const dispose = editor.onBeforeExtend((editor) => {
-    console.log('编辑器即将扩展');
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听编辑器扩展前事件
+
+```ts
+// 监听编辑器扩展前事件
+const dispose = editor.onBeforeExtend((editor) => {
+  console.log('编辑器即将扩展');
+});
+
+// 取消监听
+dispose();
+```
 
 ## onAfterExtend
 
-- **签名**: `onAfterExtend(listener: (editor: Editor) => void): () => void`
-- **描述**: 监听编辑器扩展后事件
-- **参数**:
+- 类型: `onAfterExtend(listener: (editor: Editor) => void): () => void`
+- 参数:
   - `listener`: 事件监听器
-- **返回值**: 函数，调用它可以取消监听
-- **示例**:
-  ```ts
-  const dispose = editor.onAfterExtend((editor) => {
-    console.log('编辑器已扩展完成');
-  });
 
-  // 取消监听
-  dispose();
-  ```
+监听编辑器扩展后事件
+
+```ts
+// 监听编辑器扩展后事件
+const dispose = editor.onAfterExtend((editor) => {
+  console.log('编辑器已扩展完成');
+});
+
+// 取消监听
+dispose();
+```

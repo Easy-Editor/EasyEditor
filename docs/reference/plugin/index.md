@@ -18,7 +18,8 @@ interface Plugin {
 ## name
 
 - 类型: `string`
-- 描述: 插件的唯一名称标识符
+
+插件的唯一名称标识符
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -32,8 +33,8 @@ const MyPlugin: PluginCreator<Options> = () => {
 ## deps
 
 - 类型: `string[]`
-- 默认值: `[]`
-- 描述: 插件依赖的其他插件名称
+
+插件依赖的其他插件名称
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -48,8 +49,9 @@ const MyPlugin: PluginCreator<Options> = () => {
 ## eventPrefix
 
 - 类型: `string`
-- 默认值: `plugin的name`
-- 描述: 插件事件前缀，用于插件事件命名空间
+- 默认值: 插件的 `name`
+
+插件事件前缀，用于插件事件命名空间
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -63,11 +65,11 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## init
 
-- 签名: `init(ctx: PluginContext): void | void`
-- 描述: 插件初始化方法，在编辑器加载插件时调用
+- 类型: `init(ctx: PluginContext): void`
 - 参数:
   - `ctx`: 插件上下文，提供访问编辑器核心模块的能力
-- 返回值: void 或 Promise
+
+插件初始化方法，在编辑器加载插件时调用
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -83,7 +85,7 @@ const MyPlugin: PluginCreator<Options> = () => {
       });
 
       // 监听设计器事件
-      designer.on('selection.change', selectedIds => {
+      designer.on(DESIGNER_EVENT.SELECTION_CHANGE, selectedIds => {
         logger.log('选择已变更:', selectedIds);
       });
     }
@@ -93,11 +95,11 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## extend
 
-- 签名: `extend(ctx: PluginExtend): void`
-- 描述: 扩展核心类的方法，允许插件扩展编辑器核心模块的功能
+- 类型: `extend(ctx: PluginExtend): void`
 - 参数:
   - `ctx`: 插件扩展上下文，提供扩展核心类的能力
-- 返回值: void
+
+扩展核心类的方法，允许插件扩展编辑器核心模块的功能
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -127,11 +129,11 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## destroy
 
-- 签名: `destroy(ctx: PluginContext): void | void`
-- 描述: 插件销毁方法，在编辑器卸载插件时调用，用于清理资源
+- 类型: `destroy(ctx: PluginContext): void`
 - 参数:
   - `ctx`: 插件上下文
-- 返回值: void 或 Promise
+
+插件销毁方法，在编辑器卸载插件时调用，用于清理资源
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -144,7 +146,7 @@ const MyPlugin: PluginCreator<Options> = () => {
 
       // 存储需要清理的监听器
       disposers.push(
-        designer.on('selection.change', () => {})
+        designer.on(DESIGNER_EVENT.SELECTION_CHANGE, () => {})
       );
     },
     destroy(ctx) {
@@ -220,7 +222,8 @@ interface PluginExtendClass {
 ## PluginCreator
 
 - 类型: `<O = any>(options?: O) => Plugin`
-- 描述: 创建插件的函数类型
+
+创建插件的函数类型
 
 ```ts
 import type { PluginCreator } from '@easy-editor/core';
