@@ -22,7 +22,7 @@ EasyEditor 采用模块化的架构设计，各个模块之间通过清晰的接
 - **hotkeys**：快捷键配置，定义编辑器全局快捷键
 - **defaultSchema**：默认项目结构，初始化项目内容
 
-编辑器引擎提供了一系列方法获取各个模块的实例，如 `onceGot` 方法可以获取设计器、项目管理等核心模块。具体的 Editor API 可以查看 [API 参考](/reference/core) 文档。
+编辑器引擎提供了一系列方法获取各个模块的实例，如 `onceGot` 方法可以获取设计器、项目管理等核心模块。具体的 Editor API 可以查看 [API 参考](../reference/core/index) 文档。
 
 ### 设计器 (Designer)
 
@@ -211,7 +211,7 @@ EasyEditor 提供了多种扩展机制，使开发者可以根据需求定制和
 
 ## 下一步
 
-- 查看 [快速开始](/guide/getting-started) 指南开始使用 EasyEditor
-- 了解 [插件开发](/guide/extension/plugin) 以扩展核心功能
-- 学习 [渲染器开发](/guide/renderer/) 以支持自定义渲染
-- 探索 [物料开发](/guide/extension/material) 以扩充组件库
+- 查看 [快速开始](./getting-started) 指南开始使用 EasyEditor
+- 了解 [插件开发](./extension/plugin) 以扩展核心功能
+- 学习 [渲染器开发](./renderer/) 以支持自定义渲染
+- 探索 [物料开发](./extension/material) 以扩充组件库

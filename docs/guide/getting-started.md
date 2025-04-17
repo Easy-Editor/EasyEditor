@@ -180,7 +180,7 @@ EasyEditor 支持多种应用场景，每种场景都有其特定的插件和渲
 大屏应用场景提供了丰富的可视化组件和布局系统，适用于数据大屏、监控中心等场景。
 
 ::: tip 提示
-查看 [大屏应用指南](/guide/scenarios/dashboard) 了解如何构建专业的可视化大屏应用。
+查看 [大屏应用指南](./scenarios/dashboard/index) 了解如何构建专业的可视化大屏应用。
 :::
 
 ### 表单应用
@@ -188,7 +188,7 @@ EasyEditor 支持多种应用场景，每种场景都有其特定的插件和渲
 表单应用场景提供了强大的表单设计能力，支持复杂的数据录入和验证逻辑。
 
 ::: info 开发中
-表单应用场景正在积极开发中，敬请期待！查看 [表单应用指南](/guide/scenarios/form) 了解最新进展。
+表单应用场景正在积极开发中，敬请期待！查看 [表单应用指南](./scenarios/form/index) 了解最新进展。
 :::
 
 ## 示例项目
@@ -200,8 +200,8 @@ EasyEditor 支持多种应用场景，每种场景都有其特定的插件和渲
 
 ## 下一步
 
-- 了解 [EasyEditor 的设计理念](/guide/why)
-- 探索 [核心概念](/guide/core-concepts) 深入理解架构
-- 学习如何进行 [插件扩展](/guide/extension/plugin)
-- 查看 [大屏应用指南](/guide/scenarios/dashboard) 构建数据可视化应用
-- 参考 [API 文档](/reference/overview) 获取详细的 API 信息
+- 了解 [EasyEditor 的设计理念](./why)
+- 探索 [核心概念](./core-concepts) 深入理解架构
+- 学习如何进行 [插件扩展](./extension/plugin)
+- 查看 [大屏应用指南](./scenarios/dashboard/index) 构建数据可视化应用
+- 参考 [API 文档](../reference/overview) 获取详细的 API 信息

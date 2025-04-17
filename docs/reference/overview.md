@@ -21,7 +21,7 @@ EasyEditor 的 API 主要分为以下几个部分：
 - **组件元数据**：`ComponentMeta`、`Setting` - 组件配置和设置
 - **模拟器**：`Simulator`、`SimulatorRenderer` - 页面渲染和预览
 
-[了解更多核心 API](/reference/core)
+[了解更多核心 API](./core/index)
 
 ### 插件 API（Plugin）
 
@@ -31,7 +31,7 @@ EasyEditor 的 API 主要分为以下几个部分：
 - **插件上下文**：访问编辑器内部功能
 - **扩展点**：在特定位置扩展编辑器功能
 
-[了解更多插件 API](/reference/plugin)
+[了解更多插件 API](./plugin/index)
 
 ### 渲染器 API（Renderer）
 
@@ -41,12 +41,12 @@ EasyEditor 的 API 主要分为以下几个部分：
 - **渲染适配器**：适配不同前端框架
 - **渲染钩子**：自定义渲染过程
 
-[了解更多渲染器 API](/reference/renderer)
+[了解更多渲染器 API](./renderer/index)
 
 ## 开始使用
 
 根据您的需求，选择对应的 API 类别查看详细文档。每个 API 文档都提供了详细的接口说明和使用示例。
 
-- 查看编辑器核心功能？查看[核心 API](/reference/core)
-- 查看插件开发指南？查看[插件 API](/reference/plugin)
-- 查看渲染器配置？查看[渲染器 API](/reference/renderer)
+- 查看编辑器核心功能？查看[核心 API](./core/index)
+- 查看插件开发指南？查看[插件 API](./plugin/index)
+- 查看渲染器配置？查看[渲染器 API](./renderer/index)

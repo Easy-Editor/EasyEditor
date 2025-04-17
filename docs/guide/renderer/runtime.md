@@ -119,4 +119,4 @@ const components = {
 />
 ```
 
-更多详细的 API 说明和用法，请参考 [渲染器 API 文档](/reference/renderer)。
+更多详细的 API 说明和用法，请参考 [渲染器 API 文档](../../reference/renderer/index)。
