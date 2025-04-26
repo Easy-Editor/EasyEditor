@@ -2,6 +2,7 @@ import babel from '@rollup/plugin-babel'
 import nodeResolve from '@rollup/plugin-node-resolve'
 import replace from '@rollup/plugin-replace'
 import cleanup from 'rollup-plugin-cleanup'
+import pkg from './package.json' assert { type: 'json' }
 
 const plugins = [
   nodeResolve({
@@ -31,7 +32,8 @@ const plugins = [
 
 const replaceDev = isDev =>
   replace({
-    '"_EASY_EDITOR_DEV_"': isDev,
+    _EASY_EDITOR_DEV_: isDev,
+    _EASY_EDITOR_VERSION_: pkg.version,
     preventAssignment: true,
     delimiters: ['', ''],
   })
