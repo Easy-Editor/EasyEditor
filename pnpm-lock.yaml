@@ -191,6 +191,22 @@ importers:
         specifier: ^5.0.7
         version: 5.0.8
 
+  packages/datasource-engine:
+    dependencies:
+      '@easy-editor/core':
+        specifier: ^0.0.15
+        version: 0.0.15(mobx@6.13.5)
+      '@easy-editor/react-renderer':
+        specifier: ^0.0.17
+        version: 0.0.17(@easy-editor/core@0.0.15(mobx@6.13.5))(@types/react-dom@19.0.3(@types/react@19.0.8))(@types/react@19.0.8)(mobx-react@9.2.0(mobx@6.13.5)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      lodash-es:
+        specifier: ^4.17.21
+        version: 4.17.21
+    devDependencies:
+      '@types/lodash-es':
+        specifier: ^4.17.12
+        version: 4.17.12
+
   packages/plugin-dashboard:
     dependencies:
       '@types/react':
@@ -215,6 +231,9 @@ importers:
 
   packages/react-renderer:
     dependencies:
+      '@easy-editor/core':
+        specifier: ^0.0.15
+        version: 0.0.15(mobx@6.13.5)
       '@types/react':
         specifier: ^18 || ^19
         version: 19.0.8
@@ -240,9 +259,6 @@ importers:
         specifier: ^18.3.1
         version: 18.3.1
     devDependencies:
-      '@easy-editor/core':
-        specifier: workspace:*
-        version: link:../core
       '@types/lodash-es':
         specifier: ^4.17.12
         version: 4.17.12
@@ -1161,6 +1177,21 @@ packages:
         optional: true
       search-insights:
         optional: true
+
+  '@easy-editor/core@0.0.15':
+    resolution: {integrity: sha512-qMCef/9yFeS+S0inUhdjQSHGVvu+3dQSP6LPw2cgOCmErE/X8GxEfeXqKQsVQzibmdiPg8HHIbYF5oPq/uIbBg==}
+    peerDependencies:
+      mobx: ^6.13.5
+
+  '@easy-editor/react-renderer@0.0.17':
+    resolution: {integrity: sha512-IdiyDKCtGTAemV4/em8oHZntiwgpRBCLQIVw/O4YvWEDq31ajm7KWut483udSWeVIfe/kfqrYdsHHvmFDKmK1g==}
+    peerDependencies:
+      '@easy-editor/core': ^0.0.15
+      '@types/react': ^18 || ^19
+      '@types/react-dom': ^18 || ^19
+      mobx-react: ^9.2.0
+      react: ^18 || ^19
+      react-dom: ^18 || ^19
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -6201,6 +6232,23 @@ snapshots:
       search-insights: 2.17.3
     transitivePeerDependencies:
       - '@algolia/client-search'
+
+  '@easy-editor/core@0.0.15(mobx@6.13.5)':
+    dependencies:
+      mobx: 6.13.5
+      nanoid: 5.0.8
+
+  '@easy-editor/react-renderer@0.0.17(@easy-editor/core@0.0.15(mobx@6.13.5))(@types/react-dom@19.0.3(@types/react@19.0.8))(@types/react@19.0.8)(mobx-react@9.2.0(mobx@6.13.5)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))(react-dom@19.0.0(react@19.0.0))(react@19.0.0)':
+    dependencies:
+      '@easy-editor/core': 0.0.15(mobx@6.13.5)
+      '@types/react': 19.0.8
+      '@types/react-dom': 19.0.3(@types/react@19.0.8)
+      lodash-es: 4.17.21
+      mobx-react: 9.2.0(mobx@6.13.5)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      prop-types: 15.8.1
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      react-is: 18.3.1
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true

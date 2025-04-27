@@ -1,4 +1,5 @@
 import { type NodeSchema, isJSExpression } from '@easy-editor/core'
+import { forEach } from 'lodash-es'
 // import { default as factoryWithTypeCheckers } from 'prop-types/factoryWithTypeCheckers'
 // import { default as ReactPropTypesSecret } from 'prop-types/lib/ReactPropTypesSecret'
 import { Component, type ComponentClass, type ComponentType } from 'react'
@@ -263,4 +264,24 @@ export const isReactClass = (obj: any): obj is ComponentClass<any> => {
 
 export function isReactComponent(obj: any): obj is ComponentType<any> {
   return obj && (isReactClass(obj) || typeof obj === 'function')
+}
+
+/**
+ * process params for using in a url query
+ * @param obj params to be processed
+ * @returns string
+ */
+export function serializeParams(obj: any) {
+  const result: any = []
+  forEach(obj, (val: any, key: any) => {
+    if (val === null || val === undefined || val === '') {
+      return
+    }
+    if (typeof val === 'object') {
+      result.push(`${key}=${encodeURIComponent(JSON.stringify(val))}`)
+    } else {
+      result.push(`${key}=${encodeURIComponent(val)}`)
+    }
+  })
+  return result.join('&')
 }

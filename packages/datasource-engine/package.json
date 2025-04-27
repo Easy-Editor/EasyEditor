@@ -1,7 +1,7 @@
 {
-  "name": "@easy-editor/react-renderer",
-  "version": "0.0.17",
-  "description": "React Renderer package for EasyEditor.",
+  "name": "@easy-editor/datasource-engine",
+  "version": "0.0.1",
+  "description": "DataSource Engine for EasyEditor",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -26,22 +26,12 @@
   "homepage": "https://github.com/Easy-Editor/EasyEditor",
   "license": "MIT",
   "author": "JinSo <kimjinso@qq.com>",
-  "contributors": [
-    {
-      "name": "NoahCodeGG",
-      "email": "noahcodegg@gmail.com",
-      "url": "https://github.com/NoahCodeGG"
-    }
-  ],
   "keywords": [
     "@easy-editor",
     "easyeditor",
     "low-code",
     "editor",
-    "engine",
-    "dashboard",
-    "react",
-    "renderer"
+    "engine"
   ],
   "repository": {
     "type": "git",
@@ -51,7 +41,6 @@
     "url": "https://github.com/Easy-Editor/EasyEditor/issues"
   },
   "scripts": {
-    "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
     "lint": "biome check .",
     "build": "npm-run-all -nl build:*",
@@ -63,20 +52,12 @@
   },
   "peerDependencies": {
     "@easy-editor/core": "^0.0.15",
-    "mobx-react": "^9.2.0",
-    "react": "^18 || ^19",
-    "react-dom": "^18 || ^19",
-    "@types/react": "^18 || ^19",
-    "@types/react-dom": "^18 || ^19"
+    "@easy-editor/react-renderer": "^0.0.17"
   },
   "dependencies": {
-    "lodash-es": "^4.17.21",
-    "prop-types": "^15.8.1",
-    "react-is": "^18.3.1"
+    "lodash-es": "^4.17.21"
   },
   "devDependencies": {
-    "@types/lodash-es": "^4.17.12",
-    "@types/prop-types": "^15.7.14",
-    "@types/react-is": "^18.3.0"
+    "@types/lodash-es": "^4.17.12"
   }
 }
