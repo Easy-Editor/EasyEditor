@@ -309,22 +309,11 @@ export function baseRendererFactory(): BaseRenderComponent {
         this.__dataHelper = new DataHelper(this, dataSource, appHelper, (config: any) => this.__parseData(config))
         this.dataSourceMap = this.__dataHelper.dataSourceMap
         this.reloadDataSource = () =>
-          new Promise((resolve, reject) => {
+          new Promise(resolve => {
             logger.log('reload data source')
-            if (!this.__dataHelper) {
-              return resolve({})
-            }
-            this.__dataHelper
-              .getInitData()
-              .then((res: any) => {
-                if (isEmpty(res)) {
-                  return resolve({})
-                }
-                this.setState(res, resolve as () => void)
-              })
-              .catch((err: Error) => {
-                reject(err)
-              })
+            this.__dataHelper.reloadDataSource().then(() => {
+              resolve({})
+            })
           })
       }
     }

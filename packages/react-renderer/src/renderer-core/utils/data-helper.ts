@@ -1,6 +1,7 @@
-import { isJSFunction } from '@easy-editor/core'
-import type { DataSource, DataSourceItem, RendererAppHelper } from '../types'
-import { transformArrayToMap, transformStringToFunction } from './common'
+import { type DataSource, type DataSourceItem, isJSFunction } from '@easy-editor/core'
+import { isEmpty } from 'lodash-es'
+import type { RendererAppHelper } from '../types'
+import { parseExpression, transformArrayToMap, transformStringToFunction } from './common'
 import { logger } from './logger'
 import { get, post, request } from './request'
 
@@ -71,6 +72,14 @@ export class DataHelper {
    */
   ajaxList: any[]
 
+  /**
+   * dataHandler
+   *
+   * @type {*}
+   * @memberof DataHelper
+   */
+  dataHandler: any
+
   ajaxMap: any
 
   dataSourceMap: any
@@ -85,6 +94,7 @@ export class DataHelper {
     this.ajaxMap = transformArrayToMap(this.ajaxList, 'id')
     this.dataSourceMap = this.generateDataSourceMap()
     this.appHelper = appHelper
+    this.dataHandler = config?.dataHandler ? parseExpression(config?.dataHandler, comp, true) : undefined
   }
 
   // 更新config，只会更新配置，状态保存；
@@ -166,6 +176,21 @@ export class DataHelper {
       const { dataHandler } = this.config
       return this.handleData(null, dataHandler, res, null)
     })
+  }
+
+  async reloadDataSource() {
+    const dataSourceMap = await this.getInitData()
+
+    if (isEmpty(dataSourceMap)) {
+      return
+    }
+
+    this.host.setState(dataSourceMap)
+
+    // 所有的初始化请求都结束之后，调用钩子函数
+    if (this.dataHandler) {
+      this.dataHandler(dataSourceMap)
+    }
   }
 
   getDataSource(id: string, params: any, otherOptions: any, callback: any) {

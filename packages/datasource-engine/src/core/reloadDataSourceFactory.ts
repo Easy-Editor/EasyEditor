@@ -56,7 +56,6 @@ export const reloadDataSourceFactory = (
     await promiseSettled(allAsyncLoadings)
 
     // 所有的初始化请求都结束之后，调用钩子函数
-
     if (dataHandler) {
       dataHandler(dataSourceMap)
     }
