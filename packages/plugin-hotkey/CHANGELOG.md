@@ -1,5 +1,14 @@
 # @easy-editor/plugin-hotkey
 
+## 0.0.14
+
+### Patch Changes
+
+- c94cef8: feat: add datasource
+- Updated dependencies [25fdeea]
+- Updated dependencies [c94cef8]
+  - @easy-editor/core@0.0.16
+
 ## 0.0.13
 
 ### Patch Changes
