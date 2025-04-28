@@ -124,12 +124,49 @@ export interface RendererComponentInstance extends Component<RendererProps, Rend
   getFaultComponent(): any
 }
 
+/**
+ * duck-typed History
+ *
+ * @see https://github.com/ReactTraining/history/tree/master/docs/api-reference.md
+ */
+interface IHistoryLike {
+  readonly action: any
+  readonly location: ILocationLike
+  createHref: (to: any) => string
+  push: (to: any, state?: any) => void
+  replace: (to: any, state?: any) => void
+  go: (delta: any) => void
+  back: () => void
+  forward: () => void
+  listen: (listener: any) => () => void
+  block: (blocker: any) => () => void
+}
+
+/**
+ * duck-typed History.Location
+ *
+ * @see https://github.com/remix-run/history/blob/dev/docs/api-reference.md#location
+ */
+export interface ILocationLike {
+  pathname: any
+  search: any
+  state: any
+  hash: any
+  key?: any
+}
+
 export interface RendererAppHelper {
   /** 全局公共函数 */
   utils?: Record<string, any>
 
   /** 全局常量 */
   constants?: Record<string, any>
+
+  /** react-router 的 location 实例 */
+  location?: ILocationLike
+
+  /** react-router 的 history 实例 */
+  history?: IHistoryLike
 
   /** @experimental 内部使用 */
   requestHandlersMap?: Record<string, any>

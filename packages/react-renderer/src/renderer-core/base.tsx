@@ -7,12 +7,13 @@ import {
   isJSExpression,
   isJSFunction,
 } from '@easy-editor/core'
+import { createInterpret as createDataSourceEngine } from '@easy-editor/datasource-engine'
 import { forEach, isEmpty } from 'lodash-es'
 import { Component } from 'react'
 import { adapter } from './adapter'
 import { RendererContext } from './context'
 import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrapper } from './hoc'
-import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, NodeInfo } from './types'
+import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, DataSource, NodeInfo } from './types'
 import {
   checkPropTypes,
   classnames,
@@ -26,6 +27,7 @@ import {
   transformArrayToMap,
   transformStringToFunction,
 } from './utils'
+import { DataHelper } from './utils/data-helper'
 
 /**
  * execute method in schema.lifeCycles with context
@@ -270,60 +272,60 @@ export function baseRendererFactory(): BaseRenderComponent {
       if (!props) {
         return
       }
-      // TODO: 数据源引擎方案
-      // const schema = props.__schema || {}
-      // const defaultDataSource: DataSource = {
-      //   list: [],
-      // }
-      // const dataSource = schema.dataSource || defaultDataSource
-      // // requestHandlersMap 存在才走数据源引擎方案
-      // // TODO: 下面if else 抽成独立函数
-      // const useDataSourceEngine = !!props.__appHelper?.requestHandlersMap
-      // if (useDataSourceEngine) {
-      //   this.__dataHelper = {
-      //     updateConfig: (updateDataSource: any) => {
-      //       const { dataSourceMap, reloadDataSource } = createDataSourceEngine(
-      //         updateDataSource ?? {},
-      //         this,
-      //         props.__appHelper.requestHandlersMap
-      //           ? { requestHandlersMap: props.__appHelper.requestHandlersMap }
-      //           : undefined,
-      //       )
 
-      //       this.reloadDataSource = () =>
-      //         new Promise(resolve => {
-      //           logger.log('reload data source')
-      //           reloadDataSource().then(() => {
-      //             resolve({})
-      //           })
-      //         })
-      //       return dataSourceMap
-      //     },
-      //   }
-      //   this.dataSourceMap = this.__dataHelper.updateConfig(dataSource)
-      // } else {
-      //   const appHelper = props.__appHelper
-      //   this.__dataHelper = new DataHelper(this, dataSource, appHelper, (config: any) => this.__parseData(config))
-      //   this.dataSourceMap = this.__dataHelper.dataSourceMap
-      //   this.reloadDataSource = () =>
-      //     new Promise((resolve, reject) => {
-      //       logger.log('reload data source')
-      //       if (!this.__dataHelper) {
-      //         return resolve({})
-      //       }
-      //       this.__dataHelper
-      //         .getInitData()
-      //         .then((res: any) => {
-      //           if (isEmpty(res)) {
-      //             return resolve({})
-      //           }
-      //           this.setState(res, resolve as () => void)
-      //         })
-      //         .catch((err: Error) => {
-      //           reject(err)
-      //         })
-      //     })
-      // }
+      const schema = props.__schema || {}
+      const defaultDataSource: DataSource = {
+        list: [],
+      }
+      const dataSource = schema.dataSource || defaultDataSource
+      // requestHandlersMap 存在才走数据源引擎方案
+      // TODO: 下面if else 抽成独立函数
+      const useDataSourceEngine = !!props.__appHelper?.requestHandlersMap
+      if (useDataSourceEngine) {
+        this.__dataHelper = {
+          updateConfig: (updateDataSource: any) => {
+            const { dataSourceMap, reloadDataSource } = createDataSourceEngine(
+              updateDataSource ?? {},
+              this,
+              props.__appHelper?.requestHandlersMap
+                ? { requestHandlersMap: props.__appHelper.requestHandlersMap }
+                : undefined,
+            )
+
+            this.reloadDataSource = () =>
+              new Promise(resolve => {
+                logger.log('reload data source')
+                reloadDataSource().then(() => {
+                  resolve({})
+                })
+              })
+            return dataSourceMap
+          },
+        }
+        this.dataSourceMap = this.__dataHelper.updateConfig(dataSource)
+      } else {
+        const appHelper = props.__appHelper
+        this.__dataHelper = new DataHelper(this, dataSource, appHelper, (config: any) => this.__parseData(config))
+        this.dataSourceMap = this.__dataHelper.dataSourceMap
+        this.reloadDataSource = () =>
+          new Promise((resolve, reject) => {
+            logger.log('reload data source')
+            if (!this.__dataHelper) {
+              return resolve({})
+            }
+            this.__dataHelper
+              .getInitData()
+              .then((res: any) => {
+                if (isEmpty(res)) {
+                  return resolve({})
+                }
+                this.setState(res, resolve as () => void)
+              })
+              .catch((err: Error) => {
+                reject(err)
+              })
+          })
+      }
     }
 
     /**

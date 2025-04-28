@@ -3,7 +3,7 @@ import { observer } from 'mobx-react'
 import type React from 'react'
 import { Component, type ReactInstance, createElement } from 'react'
 import { unstable_HistoryRouter as HistoryRouter, Route, Routes } from 'react-router'
-import { LowCodeRenderer } from '../renderer-core/renderer'
+import LowCodeRenderer from '../renderer-core'
 import type { DocumentInstance } from './document-instance'
 import type { SimulatorRendererContainer } from './simulator-renderer'
 

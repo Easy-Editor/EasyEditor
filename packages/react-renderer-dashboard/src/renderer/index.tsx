@@ -1,6 +1,6 @@
 import type { RendererProps } from '@easy-editor/react-renderer'
 import { useRef } from 'react'
-import { LowCodeRenderer } from '../renderer-core/renderer'
+import LowCodeRenderer from '../renderer-core'
 import { useResizeObserver } from '../simulator-renderer/SimulatorRenderer/hooks/useResizeObserver'
 
 interface PureRendererProps extends RendererProps {

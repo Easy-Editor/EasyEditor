@@ -258,24 +258,43 @@ export const defaultRootSchema: RootSchema = {
   ],
   dataSource: {
     list: [
+      // {
+      //   id: 'urlParams',
+      //   type: 'urlParams',
+      // },
       {
+        id: 'sentences',
         type: 'fetch',
-        isInit: true,
         options: {
-          params: {},
           method: 'GET',
-          isCors: true,
-          timeout: 5000,
-          headers: {},
-          uri: 'mock/info.json',
+          uri: 'https://api.apiopen.top/api/sentences',
+          isSync: true,
         },
-        id: 'info',
-        shouldFetch: {
-          type: 'JSFunction',
-          value: "function() { \n  console.log('should fetch.....');\n  return true; \n}",
+        dataHandler: {
+          type: 'JSExpression',
+          value:
+            'function (response) {\nif (response.data.code !== 200){\n    throw new Error(response.data.message);\n  }\n  return response.data.result;\n}',
+        },
+      },
+      {
+        id: 'miniVideo',
+        type: 'fetch',
+        options: {
+          method: 'GET',
+          uri: 'https://api.apiopen.top/api/getMiniVideo?page=0&size=10',
+          isSync: true,
+        },
+        dataHandler: {
+          type: 'JSExpression',
+          value:
+            'function (response) {\nif (response.data.code !== 200){\n    throw new Error(response.data.message);\n  }\n  return response.data.result;\n}',
         },
       },
     ],
+    dataHandler: {
+      type: 'JSExpression',
+      value: 'function (dataMap) {\n  console.info("All datasources loaded:", dataMap);\n}',
+    },
   },
   state: {
     text: {
