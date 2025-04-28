@@ -1,5 +1,12 @@
 # @easy-editor/core
 
+## 0.0.16
+
+### Patch Changes
+
+- 25fdeea: feat: add core version
+- c94cef8: feat: add datasource
+
 ## 0.0.15
 
 ### Patch Changes
