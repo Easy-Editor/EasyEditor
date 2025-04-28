@@ -83,7 +83,7 @@ export function baseRendererFactory(): BaseRenderComponent {
   const DEFAULT_LOOP_ARG_INDEX = 'index'
   // const scopeIdx = 0
 
-  return class BaseRenderer extends Component<BaseRendererProps, BaseRendererProps> {
+  return class BaseRenderer extends Component<BaseRendererProps, Record<string, any>> {
     [key: string]: any
 
     static displayName = 'BaseRenderer'
@@ -305,7 +305,7 @@ export function baseRendererFactory(): BaseRenderComponent {
         }
         this.dataSourceMap = this.__dataHelper.updateConfig(dataSource)
       } else {
-        const appHelper = props.__appHelper
+        const appHelper = props.__appHelper || {}
         this.__dataHelper = new DataHelper(this, dataSource, appHelper, (config: any) => this.__parseData(config))
         this.dataSourceMap = this.__dataHelper.dataSourceMap
         this.reloadDataSource = () =>

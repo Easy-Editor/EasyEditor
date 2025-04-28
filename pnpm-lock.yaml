@@ -177,7 +177,7 @@ importers:
         version: 8.16.0(eslint@9.16.0(jiti@1.21.6))(typescript@5.6.3)
       unocss:
         specifier: ^0.64.1
-        version: 0.64.1(postcss@8.4.49)(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3))
+        version: 0.64.1(postcss@8.4.49)(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.7.2))
       vite:
         specifier: ^6.0.1
         version: 6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1)
@@ -276,9 +276,18 @@ importers:
 
   packages/react-renderer-dashboard:
     dependencies:
+      '@easy-editor/core':
+        specifier: workspace:^
+        version: link:../core
       '@easy-editor/datasource-engine':
         specifier: workspace:^
         version: link:../datasource-engine
+      '@easy-editor/plugin-dashboard':
+        specifier: workspace:^
+        version: link:../plugin-dashboard
+      '@easy-editor/react-renderer':
+        specifier: workspace:^
+        version: link:../react-renderer
       '@types/react':
         specifier: ^18 || ^19
         version: 19.0.8
@@ -307,15 +316,6 @@ importers:
         specifier: ^7.4.0
         version: 7.4.0(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
     devDependencies:
-      '@easy-editor/core':
-        specifier: workspace:*
-        version: link:../core
-      '@easy-editor/plugin-dashboard':
-        specifier: workspace:*
-        version: link:../plugin-dashboard
-      '@easy-editor/react-renderer':
-        specifier: workspace:*
-        version: link:../react-renderer
       '@types/lodash-es':
         specifier: ^4.17.12
         version: 4.17.12
@@ -6983,18 +6983,6 @@ snapshots:
 
   '@uni/env@1.1.1': {}
 
-  '@unocss/astro@0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3))':
-    dependencies:
-      '@unocss/core': 0.64.1
-      '@unocss/reset': 0.64.1
-      '@unocss/vite': 0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3))
-    optionalDependencies:
-      vite: 6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1)
-    transitivePeerDependencies:
-      - rollup
-      - supports-color
-      - vue
-
   '@unocss/astro@0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.7.2))':
     dependencies:
       '@unocss/core': 0.64.1
@@ -7038,16 +7026,6 @@ snapshots:
   '@unocss/extractor-arbitrary-variants@0.64.1':
     dependencies:
       '@unocss/core': 0.64.1
-
-  '@unocss/inspector@0.64.1(vue@3.5.13(typescript@5.6.3))':
-    dependencies:
-      '@unocss/core': 0.64.1
-      '@unocss/rule-utils': 0.64.1
-      gzip-size: 6.0.0
-      sirv: 2.0.4
-      vue-flow-layout: 0.1.1(vue@3.5.13(typescript@5.6.3))
-    transitivePeerDependencies:
-      - vue
 
   '@unocss/inspector@0.64.1(vue@3.5.13(typescript@5.7.2))':
     dependencies:
@@ -7139,22 +7117,6 @@ snapshots:
   '@unocss/transformer-variant-group@0.64.1':
     dependencies:
       '@unocss/core': 0.64.1
-
-  '@unocss/vite@0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3))':
-    dependencies:
-      '@ampproject/remapping': 2.3.0
-      '@rollup/pluginutils': 5.1.3(rollup@4.28.1)
-      '@unocss/config': 0.64.1
-      '@unocss/core': 0.64.1
-      '@unocss/inspector': 0.64.1(vue@3.5.13(typescript@5.6.3))
-      chokidar: 3.6.0
-      magic-string: 0.30.14
-      tinyglobby: 0.2.10
-      vite: 6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1)
-    transitivePeerDependencies:
-      - rollup
-      - supports-color
-      - vue
 
   '@unocss/vite@0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.7.2))':
     dependencies:
@@ -7251,12 +7213,6 @@ snapshots:
       '@vue/runtime-core': 3.5.13
       '@vue/shared': 3.5.13
       csstype: 3.1.3
-
-  '@vue/server-renderer@3.5.13(vue@3.5.13(typescript@5.6.3))':
-    dependencies:
-      '@vue/compiler-ssr': 3.5.13
-      '@vue/shared': 3.5.13
-      vue: 3.5.13(typescript@5.6.3)
 
   '@vue/server-renderer@3.5.13(vue@3.5.13(typescript@5.7.2))':
     dependencies:
@@ -9997,33 +9953,6 @@ snapshots:
 
   universalify@0.1.2: {}
 
-  unocss@0.64.1(postcss@8.4.49)(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3)):
-    dependencies:
-      '@unocss/astro': 0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3))
-      '@unocss/cli': 0.64.1(rollup@4.28.1)
-      '@unocss/core': 0.64.1
-      '@unocss/postcss': 0.64.1(postcss@8.4.49)
-      '@unocss/preset-attributify': 0.64.1
-      '@unocss/preset-icons': 0.64.1
-      '@unocss/preset-mini': 0.64.1
-      '@unocss/preset-tagify': 0.64.1
-      '@unocss/preset-typography': 0.64.1
-      '@unocss/preset-uno': 0.64.1
-      '@unocss/preset-web-fonts': 0.64.1
-      '@unocss/preset-wind': 0.64.1
-      '@unocss/transformer-attributify-jsx': 0.64.1
-      '@unocss/transformer-compile-class': 0.64.1
-      '@unocss/transformer-directives': 0.64.1
-      '@unocss/transformer-variant-group': 0.64.1
-      '@unocss/vite': 0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.6.3))
-    optionalDependencies:
-      vite: 6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1)
-    transitivePeerDependencies:
-      - postcss
-      - rollup
-      - supports-color
-      - vue
-
   unocss@0.64.1(postcss@8.4.49)(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.7.2)):
     dependencies:
       '@unocss/astro': 0.64.1(rollup@4.28.1)(vite@6.0.2(@types/node@22.10.1)(jiti@1.21.6)(tsx@4.19.2)(yaml@2.5.1))(vue@3.5.13(typescript@5.7.2))
@@ -10166,23 +10095,9 @@ snapshots:
       - typescript
       - universal-cookie
 
-  vue-flow-layout@0.1.1(vue@3.5.13(typescript@5.6.3)):
-    dependencies:
-      vue: 3.5.13(typescript@5.6.3)
-
   vue-flow-layout@0.1.1(vue@3.5.13(typescript@5.7.2)):
     dependencies:
       vue: 3.5.13(typescript@5.7.2)
-
-  vue@3.5.13(typescript@5.6.3):
-    dependencies:
-      '@vue/compiler-dom': 3.5.13
-      '@vue/compiler-sfc': 3.5.13
-      '@vue/runtime-dom': 3.5.13
-      '@vue/server-renderer': 3.5.13(vue@3.5.13(typescript@5.6.3))
-      '@vue/shared': 3.5.13
-    optionalDependencies:
-      typescript: 5.6.3
 
   vue@3.5.13(typescript@5.7.2):
     dependencies:

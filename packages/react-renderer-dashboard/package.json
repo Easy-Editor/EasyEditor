@@ -73,9 +73,6 @@
     "react-router": "^7.4.0"
   },
   "devDependencies": {
-    "@easy-editor/core": "workspace:*",
-    "@easy-editor/plugin-dashboard": "workspace:*",
-    "@easy-editor/react-renderer": "workspace:*",
     "@types/lodash-es": "^4.17.12"
   }
 }

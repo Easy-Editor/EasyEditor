@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/datasource-engine",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "description": "DataSource Engine for EasyEditor",
   "type": "module",
   "main": "src/index.ts",
@@ -9,6 +9,10 @@
     "LICENSE",
     "README.md"
   ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./handlers/fetch": "./src/handlers/fetch.ts"
+  },
   "publishConfig": {
     "access": "public",
     "main": "dist/index.js",
@@ -20,11 +24,6 @@
         "import": "./dist/index.js",
         "require": "./dist/cjs/index.js",
         "default": "./dist/index.js"
-      },
-      "./handlers": {
-        "import": "./dist/handlers.js",
-        "require": "./dist/cjs/handlers.js",
-        "default": "./dist/handlers.js"
       },
       "./handlers/fetch": {
         "import": "./dist/handlers/fetch.js",

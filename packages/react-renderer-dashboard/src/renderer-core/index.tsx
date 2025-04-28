@@ -1,4 +1,4 @@
-import { createFetchHandler } from '@easy-editor/datasource-engine'
+import { createFetchHandler } from '@easy-editor/datasource-engine/handlers/fetch'
 import type { RendererProps } from '@easy-editor/react-renderer'
 import { LowCodeRenderer as Renderer } from './renderer'
 

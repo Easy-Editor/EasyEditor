@@ -51,6 +51,5 @@ export default [
   createConfig('src/index.ts', 'index'),
   createConfig('src/runtime/index.ts', 'runtime'),
   createConfig('src/interpret/index.ts', 'interpret'),
-  createConfig('src/handlers/index.ts', 'handlers'),
   createConfig('src/handlers/fetch.ts', 'handlers/fetch'),
 ]
