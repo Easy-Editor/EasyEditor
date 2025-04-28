@@ -1,5 +1,6 @@
 import {
   type CompositeValue,
+  type DataSource,
   type JSONValue,
   type NodeData,
   type NodeSchema,
@@ -13,7 +14,7 @@ import { Component } from 'react'
 import { adapter } from './adapter'
 import { RendererContext } from './context'
 import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrapper } from './hoc'
-import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, DataSource, NodeInfo } from './types'
+import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, NodeInfo } from './types'
 import {
   checkPropTypes,
   classnames,

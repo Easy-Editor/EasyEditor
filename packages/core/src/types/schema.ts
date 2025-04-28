@@ -1,4 +1,5 @@
 import type { CompositeValue, JSExpression, JSFunction, JSONObject, PropsMap } from '../document'
+import type { DataSource } from './data-source'
 
 export interface ProjectSchema<T = RootSchema> {
   id?: string
@@ -57,6 +58,11 @@ export interface RootSchema extends NodeSchema {
    * 样式文件
    */
   css?: string
+
+  /**
+   * 异步数据源配置
+   */
+  dataSource?: DataSource
 }
 
 export interface NodeSchema {

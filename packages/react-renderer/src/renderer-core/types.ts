@@ -1,12 +1,4 @@
-import type {
-  DesignMode,
-  JSONObject,
-  Node,
-  NodeSchema,
-  RootSchema,
-  Simulator,
-  SimulatorRenderer,
-} from '@easy-editor/core'
+import type { DesignMode, Node, NodeSchema, RootSchema, Simulator, SimulatorRenderer } from '@easy-editor/core'
 import type { Component } from 'react'
 import type { FaultComponentProps } from './components/FaultComponent'
 import type { NotFoundComponentProps } from './components/NotFoundComponent'
@@ -184,27 +176,6 @@ export interface JSExpression {
   value: string
 }
 
-export interface DataSourceItem {
-  id: string
-  isInit?: boolean | JSExpression
-  type?: string
-  options?: {
-    uri: string | JSExpression
-    params?: JSONObject | JSExpression
-    method?: string | JSExpression
-    shouldFetch?: string
-    willFetch?: string
-    fit?: string
-    didFetch?: string
-  }
-  dataHandler?: JSExpression
-}
-
-export interface DataSource {
-  list?: DataSourceItem[]
-  dataHandler?: JSExpression
-}
-
 export interface BaseRendererProps extends RendererProps {
   __appHelper?: RendererAppHelper
   __components: Record<string, React.ComponentType>
@@ -272,25 +243,4 @@ export type BaseRendererInstance = Component<BaseRendererProps, Record<string, a
 
 export interface BaseRenderComponent {
   new (props: BaseRendererProps): BaseRendererInstance
-}
-
-export interface DataSourceItem {
-  id: string
-  isInit?: boolean | JSExpression
-  type?: string
-  options?: {
-    uri: string | JSExpression
-    params?: JSONObject | JSExpression
-    method?: string | JSExpression
-    shouldFetch?: string
-    willFetch?: string
-    fit?: string
-    didFetch?: string
-  }
-  dataHandler?: JSExpression
-}
-
-export interface DataSource {
-  list?: DataSourceItem[]
-  dataHandler?: JSExpression
 }

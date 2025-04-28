@@ -54,9 +54,6 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "^0.0.15"
-  },
-  "devDependencies": {
-    "@easy-editor/core": "workspace:*"
+    "@easy-editor/core": "workspace:^"
   }
 }

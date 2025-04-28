@@ -62,7 +62,7 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "^0.0.15",
+    "@easy-editor/core": "workspace:^",
     "mobx-react": "^9.2.0",
     "react": "^18 || ^19",
     "react-dom": "^18 || ^19",
