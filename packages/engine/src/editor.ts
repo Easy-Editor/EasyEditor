@@ -1,14 +1,23 @@
-import type { Component, ComponentMetadata } from './designer'
-import type { Plugin, PluginContextApiAssembler } from './plugin'
-import type { Setter } from './setter-manager'
-import type { ProjectSchema } from './types'
-
+import {
+  type Component,
+  ComponentMetaManager,
+  type ComponentMetadata,
+  Designer,
+  type DesignerProps,
+  Hotkey,
+  type HotkeyConfig,
+  type Plugin,
+  type PluginContextApiAssembler,
+  PluginManager,
+  type ProjectSchema,
+  type Setter,
+  SetterManager,
+  Simulator,
+  createEventBus,
+  createLogger,
+  logger,
+} from '@easy-editor/core'
 import { action, observable } from 'mobx'
-import { ComponentMetaManager, Designer, type DesignerProps } from './designer'
-import { PluginManager } from './plugin'
-import { SetterManager } from './setter-manager'
-import { Simulator } from './simulator'
-import { Hotkey, type HotkeyConfig, createEventBus, createLogger, logger } from './utils'
 
 export type EditorValueKey = string | symbol
 

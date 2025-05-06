@@ -210,6 +210,15 @@ importers:
         specifier: ^4.17.12
         version: 4.17.12
 
+  packages/engine:
+    dependencies:
+      '@easy-editor/core':
+        specifier: workspace:^
+        version: link:../core
+      mobx:
+        specifier: ^6.13.5
+        version: 6.13.5
+
   packages/plugin-dashboard:
     dependencies:
       '@easy-editor/core':
