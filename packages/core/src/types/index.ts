@@ -1,4 +1,5 @@
 export * from './common'
 export * from './data-source'
+export * from './editor'
 export * from './event'
 export * from './schema'

@@ -1,6 +1,6 @@
 import type { ComponentMeta, Designer, FieldExtraProps, Node, PropKey } from '../..'
-import type { Editor } from '../../editor'
 import type { SetterManager } from '../../setter-manager'
+import type { Editor } from '../../types'
 import type { SettingEntry } from './setting-entry'
 import type { SetValueOptions, SettingField } from './setting-field'
 import type { SettingTopEntry } from './setting-top-entry'

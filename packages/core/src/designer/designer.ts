@@ -1,13 +1,12 @@
 import type { Node, PropsMap } from '../document'
-import type { Editor } from '../editor'
-import type { ProjectSchema, TRANSFORM_STAGE } from '../types'
+import type { Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
 import type { ComponentMetaManager } from './component-meta'
 import type { DragObject } from './dragon'
 import type { LocateEvent, LocationData } from './location'
 
 import { insertChildren, isNodeSchema } from '../document'
 import { Project } from '../project'
-import { createEventBus, logger } from '../utils'
+import { createEventBus, createLogger } from '../utils'
 import { ActiveTracker } from './active-tracker'
 import { Detecting } from './detecting'
 import { Dragon, isDragNodeDataObject, isDragNodeObject } from './dragon'
@@ -17,6 +16,8 @@ import { type Scrollable, Scroller } from './scroller'
 import { Selection } from './selection'
 import { SettingsManager } from './setting'
 import { SettingTopEntry } from './setting/setting-top-entry'
+
+const logger = createLogger('Designer')
 
 export type PropsTransducer = (
   props: PropsMap,

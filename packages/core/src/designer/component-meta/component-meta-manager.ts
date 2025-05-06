@@ -1,4 +1,4 @@
-import type { Editor } from '../../editor'
+import type { Editor } from '../../types'
 import type { Designer } from '../designer'
 import type { Component, ComponentMetadata } from './meta'
 

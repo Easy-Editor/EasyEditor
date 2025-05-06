@@ -25,7 +25,7 @@ import {
 } from '../designer'
 import type { Scroller } from '../designer/scroller'
 import { getClosestClickableNode, getClosestNode } from '../document'
-import { createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
+import { type Hotkey, createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
 import { Viewport } from './viewport'
 
 export interface DropContainer {
@@ -256,6 +256,8 @@ export class Simulator {
     this.setupEvents()
 
     // bind hotkey & clipboard
+    const hotkey = this.editor.get<Hotkey>('hotkey')
+    hotkey.mount(this._contentWindow)
     clipboard.injectCopyPaster(this._contentDocument!)
   }
 
