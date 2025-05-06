@@ -1,4 +1,5 @@
 import type { Document as IDocument, Node as INode } from '../document'
+import { isDocumentNode } from '../utils'
 import type { DragObject } from './dragon'
 import type { Sensor } from './sensor'
 
@@ -100,20 +101,8 @@ export const isLocationChildrenDetail = (obj: any): obj is LocationChildrenDetai
   return obj && obj.type === LocationDetailType.Children
 }
 
-export const isText = (elem: any): elem is Text => {
-  return elem.nodeType === Node.TEXT_NODE
-}
-
-export const isElement = (node: any): node is Element => {
-  return node.nodeType === Node.ELEMENT_NODE
-}
-
-export const isDocumentElem = (elem: any): elem is Document => {
-  return elem.nodeType === Node.DOCUMENT_NODE
-}
-
 export const getWindow = (elem: Element | Document): Window => {
-  return (isDocumentElem(elem) ? elem : elem.ownerDocument!).defaultView!
+  return (isDocumentNode(elem) ? elem : elem.ownerDocument!).defaultView!
 }
 
 export class DropLocation {

@@ -23,8 +23,9 @@ import {
   isLocationData,
   isShaken,
 } from '../designer'
+import type { Scroller } from '../designer/scroller'
 import { getClosestClickableNode, getClosestNode } from '../document'
-import { createEventBus } from '../utils'
+import { createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
 import { Viewport } from './viewport'
 
 export interface DropContainer {
@@ -68,6 +69,8 @@ export class Simulator {
   readonly designer: Designer
 
   readonly viewport: Viewport
+
+  readonly scroller: Scroller
 
   iframe?: HTMLElement
 
@@ -166,6 +169,7 @@ export class Simulator {
     this.designer = designer
     this.project = designer.project
     this.viewport = new Viewport(designer)
+    this.scroller = this.designer.createScroller(this.viewport)
   }
 
   @action
@@ -531,6 +535,22 @@ export class Simulator {
     // return null;
   }
 
+  findDOMNodes(instance: ComponentInstance, selector?: string): Array<Element | Text> | null {
+    const elements = this._renderer?.findDOMNodes(instance)
+    if (!elements) {
+      return null
+    }
+
+    if (selector) {
+      const matched = getMatched(elements, selector)
+      if (!matched) {
+        return null
+      }
+      return [matched]
+    }
+    return elements
+  }
+
   getNodeInstanceFromElement(target: Element | null): NodeInstance<ComponentInstance, Node> | null {
     if (!target) {
       return null
@@ -546,6 +566,32 @@ export class Simulator {
     return {
       ...nodeInstance,
       node,
+    }
+  }
+
+  scrollToNode(node: Node, detail?: any) {
+    if (this.sensing) {
+      // active sensor
+      return
+    }
+
+    const opt: any = {}
+    let scroll = false
+
+    const componentInstance = this.getComponentInstances(detail?.near?.node || node)?.[0]
+    if (!componentInstance) return
+    const domNode = this.findDOMNodes(componentInstance)?.[0] as Element
+    if (!domNode) return
+    if (isElementNode(domNode) && !isDOMNodeVisible(domNode, this.viewport)) {
+      const { left, top } = domNode.getBoundingClientRect()
+      const { scrollTop = 0, scrollLeft = 0 } = this.contentDocument?.documentElement || {}
+      opt.left = left + scrollLeft
+      opt.top = top + scrollTop
+      scroll = true
+    }
+
+    if (scroll && this.scroller) {
+      this.scroller.scrollTo(opt)
     }
   }
 
@@ -589,6 +635,7 @@ export class Simulator {
 
   deactiveSensor() {
     this.sensing = false
+    this.scroller.cancel()
   }
 
   locate(e: LocateEvent): any {
@@ -625,6 +672,7 @@ export class Simulator {
     }
 
     this.sensing = true
+    this.scroller.scrolling(e)
     const document = this.project.currentDocument
     if (!document) {
       return null
@@ -783,4 +831,20 @@ export class Simulator {
 
 export const isSimulator = (obj: any): obj is Simulator => {
   return obj && obj.isSimulator
+}
+
+const getMatched = (elements: Array<Element | Text>, selector: string): Element | null => {
+  let firstQueried: Element | null = null
+  for (const elem of elements) {
+    if (isElementNode(elem)) {
+      if (elem.matches(selector)) {
+        return elem
+      }
+
+      if (!firstQueried) {
+        firstQueried = elem.querySelector(selector)
+      }
+    }
+  }
+  return firstQueried
 }

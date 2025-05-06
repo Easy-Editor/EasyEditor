@@ -8,10 +8,12 @@ import type { LocateEvent, LocationData } from './location'
 import { insertChildren, isNodeSchema } from '../document'
 import { Project } from '../project'
 import { createEventBus, logger } from '../utils'
+import { ActiveTracker } from './active-tracker'
 import { Detecting } from './detecting'
 import { Dragon, isDragNodeDataObject, isDragNodeObject } from './dragon'
 import { DropLocation, isLocationChildrenDetail } from './location'
 import { type NodeSelector, type OffsetObserver, createOffsetObserver } from './offset-observer'
+import { type Scrollable, Scroller } from './scroller'
 import { Selection } from './selection'
 import { SettingsManager } from './setting'
 import { SettingTopEntry } from './setting/setting-top-entry'
@@ -69,6 +71,8 @@ export enum DESIGNER_EVENT {
 
 export class Designer {
   private emitter = createEventBus('Designer')
+
+  readonly activeTracker = new ActiveTracker()
 
   readonly editor: Editor
 
@@ -164,6 +168,10 @@ export class Designer {
       this.postEvent(DESIGNER_EVENT.DRAG_END, e)
     })
 
+    this.activeTracker.onChange(({ node, detail }) => {
+      node.document?.simulator?.scrollToNode(node, detail)
+    })
+
     let historyDispose: undefined | (() => void)
     const setupHistory = () => {
       if (historyDispose) {
@@ -246,6 +254,10 @@ export class Designer {
     }
     this.postEvent(DESIGNER_EVENT.DROP_LOCATION_CHANGE, undefined)
     this._dropLocation = undefined
+  }
+
+  createScroller(scrollable: Scrollable) {
+    return new Scroller(scrollable)
   }
 
   createOffsetObserver(nodeInstance: NodeSelector): OffsetObserver | null {

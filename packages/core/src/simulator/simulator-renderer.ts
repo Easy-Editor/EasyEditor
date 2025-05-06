@@ -30,6 +30,11 @@ export interface SimulatorRenderer {
   getClosestNodeInstance(from: ComponentInstance, nodeId?: string): NodeInstance<ComponentInstance, Node> | null
 
   /**
+   * 获取组件的 DOM 节点
+   */
+  findDOMNodes(instance: ComponentInstance): Array<Element | Text> | null
+
+  /**
    * 获取元素的 Rect 信息
    */
   getClientRects(element: Element | Text): DOMRect[]
