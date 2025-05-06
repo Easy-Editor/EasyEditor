@@ -1,5 +1,6 @@
 import { action, computed, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type Point } from '../designer'
+import { ScrollTarget } from '../designer/scroller'
 
 export type AutoFit = '100%'
 export const AutoFit: AutoFit = '100%'
@@ -119,6 +120,54 @@ export class Viewport {
 
   set contentWidth(val: number | AutoFit) {
     this._contentWidth = val
+  }
+
+  @observable.ref private accessor _scrollX = 0
+
+  @observable.ref private accessor _scrollY = 0
+
+  get scrollX() {
+    return this._scrollX
+  }
+
+  get scrollY() {
+    return this._scrollY
+  }
+
+  private _scrollTarget?: ScrollTarget
+
+  /**
+   * 滚动对象
+   */
+  get scrollTarget() {
+    return this._scrollTarget
+  }
+
+  @observable private accessor _scrolling = false
+
+  get scrolling() {
+    return this._scrolling
+  }
+
+  setScrollTarget(target: Window) {
+    const scrollTarget = new ScrollTarget(target)
+    this._scrollX = scrollTarget.left
+    this._scrollY = scrollTarget.top
+
+    let scrollTimer: any
+    target.addEventListener('scroll', () => {
+      this._scrollX = scrollTarget.left
+      this._scrollY = scrollTarget.top
+      this._scrolling = true
+      if (scrollTimer) {
+        clearTimeout(scrollTimer)
+      }
+      scrollTimer = setTimeout(() => {
+        this._scrolling = false
+      }, 80)
+    })
+    target.addEventListener('resize', () => this.touch())
+    this._scrollTarget = scrollTarget
   }
 
   toGlobalPoint(point: Point): Point {

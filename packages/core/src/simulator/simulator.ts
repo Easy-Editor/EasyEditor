@@ -248,9 +248,14 @@ export class Simulator {
       this._contentWindow = iframe.ownerDocument.defaultView!
     }
 
+    // ready & render
     this._renderer?.run()
+
+    // init events, overlays
+    this.viewport.setScrollTarget(this._contentWindow)
     this.setupEvents()
 
+    // bind hotkey & clipboard
     clipboard.injectCopyPaster(this._contentDocument!)
   }
 

@@ -58,3 +58,7 @@ export interface SimulatorRenderer {
   // load(asset: Asset): Promise<any>;
   // loadAsyncLibrary(asyncMap: { [index: string]: any }): void
 }
+
+export const isSimulatorRenderer = (obj: any): obj is SimulatorRenderer => {
+  return obj && obj.isSimulatorRenderer
+}
