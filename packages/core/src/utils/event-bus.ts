@@ -1,47 +1,12 @@
+import { EventEmitter } from 'node:events'
 import { createLogger } from './logger'
 
-type EventType = string | symbol
-type Events = Record<EventType, unknown>
-type Handler = (event: Events[keyof Events]) => void
-
-class EventEmitter {
-  all = new Map<EventType, Array<Handler>>()
-
-  on<Key extends keyof Events>(type: Key, handler: Handler) {
-    const handlers: Array<Handler> | undefined = this.all!.get(type)
-    if (handlers) {
-      handlers.push(handler)
-    } else {
-      this.all!.set(type, [handler])
-    }
-  }
-
-  off<Key extends keyof Events>(type: Key, handler?: Handler) {
-    const handlers: Array<Handler> | undefined = this.all!.get(type)
-    if (handlers) {
-      if (handler) {
-        handlers.splice(handlers.indexOf(handler) >>> 0, 1)
-      } else {
-        this.all!.set(type, [])
-      }
-    }
-  }
-
-  emit<Key extends keyof Events>(type: Key, evt?: Events[Key]) {
-    const handlers = this.all!.get(type)
-    if (handlers) {
-      handlers.slice().map(handler => {
-        handler(evt!)
-      })
-    }
-  }
-}
+const logger = createLogger('event-bus')
+const moduleLogger = createLogger('module-event-bus')
 
 export class EventBus {
   private readonly eventEmitter: EventEmitter
   private readonly name?: string
-
-  private logger = createLogger('EventBus')
 
   /**
    * 内核触发的事件名
@@ -56,10 +21,18 @@ export class EventBus {
   private getMsgPrefix(type: string): string {
     if (this.name && this.name.length > 0) {
       return `[${this.name}][event-${type}]`
+    } else {
+      return `[*][event-${type}]`
     }
-    return `[*][event-${type}]`
   }
 
+  private getLogger() {
+    if (this.name && this.name.length > 0) {
+      return moduleLogger
+    } else {
+      return logger
+    }
+  }
   /**
    * 监听事件
    * @param event 事件名称
@@ -67,7 +40,15 @@ export class EventBus {
    */
   on(event: string, listener: (...args: any[]) => void): () => void {
     this.eventEmitter.on(event, listener)
-    this.logger.log(`${this.getMsgPrefix('on')} ${event}`)
+    this.getLogger().debug(`${this.getMsgPrefix('on')} ${event}`)
+    return () => {
+      this.off(event, listener)
+    }
+  }
+
+  prependListener(event: string, listener: (...args: any[]) => void) {
+    this.eventEmitter.prependListener(event, listener)
+    this.getLogger().debug(`${this.getMsgPrefix('prependListener')} ${event}`)
     return () => {
       this.off(event, listener)
     }
@@ -80,7 +61,7 @@ export class EventBus {
    */
   off(event: string, listener: (...args: any[]) => void) {
     this.eventEmitter.off(event, listener)
-    this.logger.log(`${this.getMsgPrefix('off')} ${event}`)
+    this.getLogger().debug(`${this.getMsgPrefix('off')} ${event}`)
   }
 
   /**
@@ -91,7 +72,23 @@ export class EventBus {
    */
   emit(event: string, ...args: any[]) {
     this.eventEmitter.emit(event, ...args)
-    this.logger.log(`${this.getMsgPrefix('emit')} name: ${event}, args: `, ...args)
+    this.getLogger().debug(`${this.getMsgPrefix('emit')} name: ${event}, args: `, ...args)
+  }
+
+  removeListener(event: string | symbol, listener: (...args: any[]) => void) {
+    return this.eventEmitter.removeListener(event, listener)
+  }
+
+  addListener(event: string | symbol, listener: (...args: any[]) => void) {
+    return this.eventEmitter.addListener(event, listener)
+  }
+
+  setMaxListeners(n: number) {
+    return this.eventEmitter.setMaxListeners(n)
+  }
+
+  removeAllListeners(event?: string | symbol) {
+    return this.eventEmitter.removeAllListeners(event)
   }
 }
 
@@ -99,7 +96,10 @@ export class EventBus {
  * 创建一个独立模块事件总线
  * @param name 模块名称
  */
-export const createEventBus = (name: string): EventBus => {
+export const createEventBus = (name: string, maxListeners?: number) => {
   const emitter = new EventEmitter()
+  if (maxListeners) {
+    emitter.setMaxListeners(maxListeners)
+  }
   return new EventBus(emitter, name)
 }
