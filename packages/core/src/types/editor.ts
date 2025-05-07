@@ -1,8 +1,7 @@
-import type { Component, ComponentMetadata, DesignerProps } from '../designer'
+import type { EventEmitter } from 'node:events'
+import type { Component } from '../designer'
 import type { Plugin, PluginManager } from '../plugin'
-import type { Setter } from '../setter-manager'
-import type { EventBus, HotkeyConfig } from '../utils'
-import type { ProjectSchema } from './schema'
+import type { EventBus } from '../utils'
 
 export type EditorValueKey = string | symbol
 
@@ -15,46 +14,40 @@ export type EditorGetResult<T, ClsType> = T extends undefined
   : T
 
 export interface EditorConfig {
-  /**
-   * 插件 Plugin
-   */
-  plugins?: Plugin[]
-
-  /**
-   * 设置器 Setter
-   */
-  setters?: Record<string, Component | Setter>
-
-  /**
-   * 组件 Component
-   */
-  components?: Record<string, Component>
-
-  /**
-   * 组件元数据 ComponentMetadata
-   */
-  componentMetas?: Record<string, ComponentMetadata>
-
-  /**
-   * 生命周期
-   */
+  plugins?: PluginConfig
+  hooks?: HooksConfig
+  shortCuts?: ShortCutsConfig
+  utils?: UtilsConfig
+  constants?: ConstantsConfig
   lifeCycles?: LifeCyclesConfig
-
-  /**
-   * designer props
-   */
-  designer?: Pick<DesignerProps, 'onDragstart' | 'onDrag' | 'onDragend'>
-
-  /**
-   * 默认项目 Schema
-   */
-  defaultSchema?: ProjectSchema
-
-  /**
-   * 快捷键
-   */
-  hotkeys?: HotkeyConfig[]
 }
+
+export type PluginConfig = Plugin[]
+
+export type HooksConfig = HookConfig[]
+
+export interface HookConfig {
+  message: string
+  type: 'on' | 'once'
+  handler: (this: Editor, editor: Editor, ...args: any[]) => void
+}
+
+export type ShortCutsConfig = ShortCutConfig[]
+
+export interface ShortCutConfig {
+  keyboard: string
+  handler: (editor: Editor, ev: Event, keymaster: any) => void
+}
+
+export type UtilsConfig = UtilConfig[]
+
+export interface UtilConfig {
+  name: string
+  type: 'function'
+  content: (...args: []) => any
+}
+
+export type ConstantsConfig = Record<string, unknown>
 
 export interface LifeCyclesConfig {
   init?: (editor: Editor) => any
@@ -70,9 +63,10 @@ export enum EDITOR_EVENT {
   AFTER_EXTEND = 'editor:afterExtend',
 }
 
-export interface Editor {
+export interface Editor extends EventEmitter {
   config?: EditorConfig
   eventBus: EventBus
+  components?: Record<string, Component>
 
   get<T = undefined, KeyOrType extends EditorValueKey = any>(
     keyOrType: KeyOrType,
@@ -106,7 +100,7 @@ export interface Editor {
   ): () => void
 
   extend(pluginManager: PluginManager): Promise<void>
-  init(config?: EditorConfig): Promise<void>
+  init(config?: EditorConfig, components?: Editor['components']): Promise<void>
   destroy(): void
 
   onBeforeExtend(listener: (editor: Editor) => void): () => void

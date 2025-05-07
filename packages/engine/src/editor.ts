@@ -1,96 +1,29 @@
 import {
-  type Component,
-  ComponentMetaManager,
-  type ComponentMetadata,
-  Designer,
-  type DesignerProps,
-  Hotkey,
-  type HotkeyConfig,
-  type Plugin,
-  type PluginContextApiAssembler,
-  PluginManager,
-  type ProjectSchema,
-  type Setter,
-  SetterManager,
-  Simulator,
-  createEventBus,
+  EDITOR_EVENT,
+  type EditorConfig,
+  type EditorGetResult,
+  type EditorValueKey,
+  EventBus,
+  type HookConfig,
+  type Editor as IEditor,
+  type PluginManager,
   createLogger,
-  logger,
 } from '@easy-editor/core'
 import { action, observable } from 'mobx'
+import { EventEmitter } from 'node:events'
 
-export type EditorValueKey = string | symbol
+const logger = createLogger('Editor')
 
-export type EditorGetResult<T, ClsType> = T extends undefined
-  ? ClsType extends {
-      prototype: infer R
-    }
-    ? R
-    : any
-  : T
-
-export interface EditorConfig {
-  /**
-   * 插件 Plugin
-   */
-  plugins?: Plugin[]
-
-  /**
-   * 设置器 Setter
-   */
-  setters?: Record<string, Component | Setter>
-
-  /**
-   * 组件 Component
-   */
-  components?: Record<string, Component>
-
-  /**
-   * 组件元数据 ComponentMetadata
-   */
-  componentMetas?: Record<string, ComponentMetadata>
-
-  /**
-   * 生命周期
-   */
-  lifeCycles?: LifeCyclesConfig
-
-  /**
-   * designer props
-   */
-  designer?: Pick<DesignerProps, 'onDragstart' | 'onDrag' | 'onDragend'>
-
-  /**
-   * 默认项目 Schema
-   */
-  defaultSchema?: ProjectSchema
-
-  /**
-   * 快捷键
-   */
-  hotkeys?: HotkeyConfig[]
-}
-
-export interface LifeCyclesConfig {
-  init?: (editor: Editor) => any
-  destroy?: (editor: Editor) => any
-  extend?: (editor: Editor) => any
-}
-
-export enum EDITOR_EVENT {
-  BEFORE_INIT = 'editor:beforeInit',
-  AFTER_INIT = 'editor:afterInit',
-  DESTROY = 'editor:destroy',
-  BEFORE_EXTEND = 'editor:beforeExtend',
-  AFTER_EXTEND = 'editor:afterExtend',
-}
-
-export class Editor {
+export class Editor extends EventEmitter implements IEditor {
   @observable.shallow private accessor context = new Map<EditorValueKey, any>()
 
   config?: EditorConfig
 
-  eventBus = createEventBus('EasyEditor')
+  eventBus: EventBus
+
+  components?: IEditor['components']
+
+  private hooks: HookConfig[] = []
 
   private waits = new Map<
     EditorValueKey,
@@ -101,6 +34,11 @@ export class Editor {
   >()
 
   constructor(config?: EditorConfig) {
+    super()
+    // set global emitter maxListeners
+    this.setMaxListeners(200)
+    this.eventBus = new EventBus(this)
+
     if (config) {
       this.init(config)
     }
@@ -169,90 +107,116 @@ export class Editor {
     }
   }
 
-  async init(config?: EditorConfig) {
+  register(data: any, key?: EditorValueKey): void {
+    this.context.set(key || data, data)
+    this.notifyGot(key || data)
+  }
+
+  // async init(config?: EditorConfig, components?: Editor['components']) {
+  //   this.config = config || {}
+  //   this.components = components || {}
+  //   const {
+  //     lifeCycles,
+  //     plugins,
+  //     setters,
+  //     componentMetas,
+  //     hotkeys,
+  //     designer: designerProps,
+  //     defaultSchema,
+  //   } = this.config
+
+  //   // 1. register plugins
+  //   const pluginManager = new PluginManager()
+  //   if (plugins) {
+  //     pluginManager.registerPlugins(plugins)
+  //   }
+
+  //   // 2. plugins.extend()
+  //   await this.extend(pluginManager)
+
+  //   // 3. init
+  //   this.eventBus.emit(EDITOR_EVENT.BEFORE_INIT)
+
+  //   const hotkey = new Hotkey()
+  //   const setterManager = new SetterManager()
+  //   const componentMetaManager = new ComponentMetaManager(this)
+  //   const designer = new Designer({
+  //     editor: this,
+  //     setterManager,
+  //     componentMetaManager,
+  //     ...designerProps,
+  //     defaultSchema,
+  //   })
+  //   const project = designer.project
+  //   const simulator = new Simulator(designer)
+  //   project.mountSimulator(simulator)
+
+  //   // pluginEvent is a unified eventBus for all plugins
+  //   const pluginEvent = createEventBus('plugin')
+  //   const contextApiAssembler: PluginContextApiAssembler = {
+  //     assembleApis: (context, pluginName, meta) => {
+  //       context.editor = this
+  //       context.simulator = simulator
+  //       context.designer = designer
+  //       context.project = project
+  //       context.setterManager = setterManager
+  //       context.componentMetaManager = componentMetaManager
+  //       context.event = pluginEvent
+  //       context.hotkey = hotkey
+  //       context.logger = createLogger(`plugin:${pluginName}`)
+  //     },
+  //   }
+  //   pluginManager.setContextApiAssembler(contextApiAssembler)
+
+  //   this.set('setterManager', setterManager)
+  //   this.set('componentMetaManager', componentMetaManager)
+  //   this.set('designer', designer)
+  //   this.set('project', project)
+  //   this.set('simulator', simulator)
+  //   this.set('pluginManager', pluginManager)
+
+  //   if (setters) {
+  //     setterManager.buildSettersMap(setters)
+  //   }
+  //   if (components) {
+  //     simulator.buildComponentMap(components)
+  //   }
+  //   if (componentMetas) {
+  //     componentMetaManager.buildComponentMetasMap(componentMetas)
+  //   }
+  //   if (hotkeys) {
+  //     hotkey.batchBind(hotkeys)
+  //   }
+
+  //   try {
+  //     await pluginManager.init()
+  //     await lifeCycles?.init?.(this)
+  //   } catch (err) {
+  //     logger.error(err)
+  //   }
+
+  //   this.eventBus.emit(EDITOR_EVENT.AFTER_INIT)
+  // }
+
+  async init(config?: EditorConfig, components?: Editor['components']): Promise<any> {
     this.config = config || {}
-    const {
-      lifeCycles,
-      plugins,
-      setters,
-      components,
-      componentMetas,
-      hotkeys,
-      designer: designerProps,
-      defaultSchema,
-    } = this.config
+    this.components = components || {}
+    const { hooks = [], lifeCycles } = this.config
 
-    // 1. register plugins
-    const pluginManager = new PluginManager()
-    if (plugins) {
-      pluginManager.registerPlugins(plugins)
-    }
-
-    // 2. plugins.extend()
-    await this.extend(pluginManager)
-
-    // 3. init
-    this.eventBus.emit(EDITOR_EVENT.BEFORE_INIT)
-
-    const hotkey = new Hotkey()
-    const setterManager = new SetterManager()
-    const componentMetaManager = new ComponentMetaManager(this)
-    const designer = new Designer({
-      editor: this,
-      setterManager,
-      componentMetaManager,
-      ...designerProps,
-      defaultSchema,
-    })
-    const project = designer.project
-    const simulator = new Simulator(designer)
-    project.mountSimulator(simulator)
-
-    // pluginEvent is a unified eventBus for all plugins
-    const pluginEvent = createEventBus('plugin')
-    const contextApiAssembler: PluginContextApiAssembler = {
-      assembleApis: (context, pluginName, meta) => {
-        context.editor = this
-        context.simulator = simulator
-        context.designer = designer
-        context.project = project
-        context.setterManager = setterManager
-        context.componentMetaManager = componentMetaManager
-        context.event = pluginEvent
-        context.hotkey = hotkey
-        context.logger = createLogger(`plugin:${pluginName}`)
-      },
-    }
-    pluginManager.setContextApiAssembler(contextApiAssembler)
-
-    this.set('setterManager', setterManager)
-    this.set('componentMetaManager', componentMetaManager)
-    this.set('designer', designer)
-    this.set('project', project)
-    this.set('simulator', simulator)
-    this.set('pluginManager', pluginManager)
-
-    if (setters) {
-      setterManager.buildSettersMap(setters)
-    }
-    if (components) {
-      simulator.buildComponentMap(components)
-    }
-    if (componentMetas) {
-      componentMetaManager.buildComponentMetasMap(componentMetas)
-    }
-    if (hotkeys) {
-      hotkey.batchBind(hotkeys)
-    }
+    this.emit(EDITOR_EVENT.BEFORE_INIT)
+    const init = (lifeCycles && lifeCycles.init) || ((): void => {})
 
     try {
-      await pluginManager.init()
-      await lifeCycles?.init?.(this)
+      await init(this)
+      // 注册快捷键
+      // 注册 hooks
+      this.registerHooks(hooks)
+      this.emit(EDITOR_EVENT.AFTER_INIT)
+
+      return true
     } catch (err) {
       logger.error(err)
     }
-
-    this.eventBus.emit(EDITOR_EVENT.AFTER_INIT)
   }
 
   destroy() {
@@ -262,6 +226,7 @@ export class Editor {
 
     try {
       const { lifeCycles = {} } = this.config
+      this.unregisterHooks()
       lifeCycles?.destroy?.(this)
     } catch (err) {
       logger.warn(err)
@@ -282,6 +247,30 @@ export class Editor {
     }
 
     this.eventBus.emit(EDITOR_EVENT.AFTER_EXTEND)
+  }
+
+  initHooks = (hooks: HookConfig[]) => {
+    this.hooks = hooks.map(hook => ({
+      ...hook,
+      // 指定第一个参数为 editor
+      handler: hook.handler.bind(this, this),
+    }))
+
+    return this.hooks
+  }
+
+  registerHooks = (hooks: HookConfig[]) => {
+    this.initHooks(hooks).forEach(({ message, type, handler }) => {
+      if (['on', 'once'].indexOf(type) !== -1) {
+        this[type](message as any, handler)
+      }
+    })
+  }
+
+  unregisterHooks = () => {
+    this.hooks.forEach(({ message, handler }) => {
+      this.removeListener(message, handler)
+    })
   }
 
   /**
