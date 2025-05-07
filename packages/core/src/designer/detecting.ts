@@ -1,7 +1,6 @@
+import { action, observable } from 'mobx'
 import type { Designer } from '..'
 import type { Document, Node } from '../document'
-
-import { action, observable } from 'mobx'
 import { createEventBus } from '../utils'
 
 export enum DETECTING_EVENT {

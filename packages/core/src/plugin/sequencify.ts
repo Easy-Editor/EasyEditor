@@ -6,7 +6,7 @@ type Tasks = Record<
   }
 >
 
-export function sequence({
+export const sequence = ({
   tasks,
   names,
   results,
@@ -22,7 +22,7 @@ export function sequence({
   recursive: string[][]
   nest: string[]
   parentName: string
-}) {
+}) => {
   names.forEach(name => {
     if (results.indexOf(name) !== -1) {
       return // de-dup results
@@ -53,7 +53,7 @@ export function sequence({
 
 // tasks: object with keys as task names
 // names: array of task names
-export default function (tasks: Tasks, names: string[]) {
+export const sequencify = (tasks: Tasks, names: string[]) => {
   let results: string[] = [] // the final sequence
   const missing: string[] = [] // missing tasks
   const recursive: string[][] = [] // recursive task dependencies

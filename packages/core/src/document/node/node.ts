@@ -1,11 +1,9 @@
-import type { NodeSchema } from '../../types'
-import type { Document } from '../document'
-import type { PropValue, PropsMap } from '../prop/prop'
-
 import { action, computed, observable, runInAction } from 'mobx'
 import { DESIGNER_EVENT, type SettingTopEntry, isJSExpression, isObject } from '../..'
-import { TRANSFORM_STAGE } from '../../types'
+import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { createEventBus, uniqueId } from '../../utils'
+import type { Document } from '../document'
+import type { PropValue, PropsMap } from '../prop/prop'
 import { Props, getConvertedExtraKey } from '../prop/props'
 import { NodeChildren } from './node-children'
 

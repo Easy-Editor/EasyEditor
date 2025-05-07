@@ -1,9 +1,8 @@
-import type { DynamicSetter, FieldConfig, FieldExtraProps, SetterType } from '../component-meta'
-import type { SettingTopEntry } from './setting-top-entry'
-
 import { action, computed, observable, untracked } from 'mobx'
 import { cloneDeep, isJSExpression } from '../..'
+import type { DynamicSetter, FieldConfig, FieldExtraProps, SetterType } from '../component-meta'
 import { SettingPropEntry } from './setting-prop-entry'
+import type { SettingTopEntry } from './setting-top-entry'
 
 export interface SetValueOptions {
   disableMutator?: boolean

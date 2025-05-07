@@ -1,10 +1,7 @@
-import type { NodeSchema } from '../../types'
-import type { Node } from './node'
-
 import { action, computed, observable } from 'mobx'
-import { TRANSFORM_STAGE } from '../../types'
+import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { createEventBus } from '../../utils'
-import { NODE_EVENT, isNodeSchema } from './node'
+import { NODE_EVENT, type Node, isNodeSchema } from './node'
 
 export enum NODE_CHILDREN_EVENT {
   CHANGE = 'nodeChildren:change',

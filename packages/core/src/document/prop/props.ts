@@ -1,10 +1,8 @@
-import type { Node } from '../node/node'
-import type { PropKey, PropValue, PropsMap } from './prop'
-
 import { action, computed, observable } from 'mobx'
 import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
-import { Prop, UNSET, splitPath } from './prop'
+import type { Node } from '../node/node'
+import { Prop, type PropKey, type PropValue, type PropsMap, UNSET, splitPath } from './prop'
 
 const EXTRA_KEY_PREFIX = '___'
 

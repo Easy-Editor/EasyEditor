@@ -1,16 +1,13 @@
-import type { Node, PropsMap } from '../document'
-import type { Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
-import type { ComponentMetaManager } from './component-meta'
-import type { DragObject } from './dragon'
-import type { LocateEvent, LocationData } from './location'
-
-import { insertChildren, isNodeSchema } from '../document'
+import { type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
 import { Project } from '../project'
+import type { Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
 import { createEventBus, createLogger } from '../utils'
 import { ActiveTracker } from './active-tracker'
+import type { ComponentMetaManager } from './component-meta'
 import { Detecting } from './detecting'
+import type { DragObject } from './dragon'
 import { Dragon, isDragNodeDataObject, isDragNodeObject } from './dragon'
-import { DropLocation, isLocationChildrenDetail } from './location'
+import { DropLocation, type LocateEvent, type LocationData, isLocationChildrenDetail } from './location'
 import { type NodeSelector, type OffsetObserver, createOffsetObserver } from './offset-observer'
 import { type Scrollable, Scroller } from './scroller'
 import { Selection } from './selection'
@@ -40,20 +37,18 @@ export interface DesignerProps {
 
 export enum DESIGNER_EVENT {
   INIT = 'designer:init',
-
   DRAG_START = 'designer:dragstart',
   DRAG = 'designer:drag',
   DRAG_END = 'designer:dragend',
+  DROP_LOCATION_CHANGE = 'designer:dropLocation.change',
+  DOCUMENT_DROP_LOCATION_CHANGE = 'designer:document.dropLocation.change',
+  SETTING_TOP_ENTRY_VALUE_CHANGE = 'designer:setting.top-entry.value.change',
+  SELECTION_CHANGE = 'designer:selection.change',
 
   CURRENT_DOCUMENT_CHANGE = 'designer:current-document.change',
   CURRENT_HISTORY_CHANGE = 'designer:current-history.change',
-
-  DROP_LOCATION_CHANGE = 'designer:dropLocation.change',
-  DOCUMENT_DROP_LOCATION_CHANGE = 'designer:document.dropLocation.change',
-
   INSERT_NODE_BEFORE = 'designer:node.insert.before',
   INSERT_NODE_AFTER = 'designer:node.insert.after',
-
   NODE_VISIBLE_CHANGE = 'designer:node.visible.change',
   NODE_LOCK_CHANGE = 'designer:node.lock.change',
   NODE_CHILDREN_CHANGE = 'designer:node.children.change',
@@ -61,12 +56,7 @@ export enum DESIGNER_EVENT {
   NODE_REMOVE = 'designer:node.remove',
   NODE_RENDER = 'designer:node.render',
 
-  SETTING_TOP_ENTRY_VALUE_CHANGE = 'designer:setting.top-entry.value.change',
-
-  SELECTION_CHANGE = 'designer:selection.change',
-
   SIMULATOR_SELECT = 'designer:simulator.select',
-
   VIEWPORT_MOUNT = 'simulator:viewport.mount',
 }
 

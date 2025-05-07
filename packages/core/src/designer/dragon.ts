@@ -1,19 +1,18 @@
+import { action, observable, runInAction } from 'mobx'
 import type { Designer } from '.'
 import type { Node } from '../document'
 import type { Simulator } from '../simulator'
+import { isSimulator } from '../simulator'
 import type { NodeSchema } from '../types'
+import { createEventBus } from '../utils'
 import type { ComponentInstance } from './component-meta'
 import type { LocateEvent } from './location'
 import type { Sensor } from './sensor'
 
-import { action, observable, runInAction } from 'mobx'
-import { isSimulator } from '../simulator'
-import { createEventBus } from '../utils'
-
 export enum DRAGON_EVENT {
-  DRAGSTART = 'dragstart',
-  DRAG = 'drag',
-  DRAGEND = 'dragend',
+  DRAGSTART = 'dragon:dragstart',
+  DRAG = 'dragon:drag',
+  DRAGEND = 'dragon:dragend',
 }
 
 export enum DragObjectType {

@@ -1,8 +1,9 @@
+import { action } from 'mobx'
 import type { Node } from '..'
 import type { Component, SettingField } from '../designer'
+import { createLogger } from '../utils'
 
-import { action } from 'mobx'
-import { logger } from '../utils'
+const logger = createLogger('SetterManager')
 
 /**
  * for setter component props

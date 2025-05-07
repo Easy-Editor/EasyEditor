@@ -1,11 +1,9 @@
-import type { NodeSchema } from '../../types'
-import type { Node } from '../node/node'
-import type { Props } from './props'
-
 import { action, computed, isObservableArray, observable, set, untracked } from 'mobx'
 import { DESIGNER_EVENT } from '../../designer'
-import { TRANSFORM_STAGE } from '../../types'
+import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { isObject, isPlainObject, uniqueId } from '../../utils'
+import type { Node } from '../node/node'
+import type { Props } from './props'
 import { valueToSource } from './value-to-source'
 
 export const UNSET = Symbol.for('unset')

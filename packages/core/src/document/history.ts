@@ -1,8 +1,9 @@
+import { reaction, untracked } from 'mobx'
 import type { RootSchema } from '../types'
+import { createEventBus, createLogger } from '../utils'
 import type { Document } from './document'
 
-import { reaction, untracked } from 'mobx'
-import { createEventBus, logger } from '../utils'
+const logger = createLogger('History')
 
 export interface Serialization<K = RootSchema, T = string> {
   serialize(data: K): T

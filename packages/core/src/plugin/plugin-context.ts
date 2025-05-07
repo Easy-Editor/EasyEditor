@@ -1,8 +1,6 @@
 import type { ComponentMetaManager, Designer, Editor, Project, SetterManager, Simulator } from '..'
-import type { EventBus, Hotkey, Logger } from '../utils'
+import { type EventBus, type Hotkey, type Logger, createEventBus } from '../utils'
 import type { PluginContextApiAssembler, PluginMeta } from './plugin-manager'
-
-import { createEventBus } from '../utils'
 
 export interface PluginContextOptions {
   pluginName: string

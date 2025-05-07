@@ -1,12 +1,11 @@
-import type { ComponentsMap, Designer } from '../designer'
-import type { Simulator } from '../simulator'
-import type { ProjectSchema, RootSchema } from '../types'
-
 import { action, computed, observable } from 'mobx'
-import { isLowCodeComponentType, isProCodeComponentType } from '../designer'
+import { type ComponentsMap, type Designer, isLowCodeComponentType, isProCodeComponentType } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
-import { TRANSFORM_STAGE } from '../types'
-import { createEventBus, logger } from '../utils'
+import type { Simulator } from '../simulator'
+import { type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
+import { createEventBus, createLogger } from '../utils'
+
+const logger = createLogger('Project')
 
 const defaultSchema: ProjectSchema = {
   // TODO: version

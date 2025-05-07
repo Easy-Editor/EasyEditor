@@ -1,9 +1,7 @@
-import type { Node } from '../document'
-import type { Designer } from './designer'
-
 import { action, observable } from 'mobx'
-import { PositionNO, comparePosition } from '../document'
+import { type Node, PositionNO, comparePosition } from '../document'
 import { createEventBus } from '../utils'
+import type { Designer } from './designer'
 
 export enum SELECTION_EVENT {
   CHANGE = 'selection:change',

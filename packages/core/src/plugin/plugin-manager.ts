@@ -1,6 +1,3 @@
-import type { PluginContextOptions } from './plugin-context'
-import { type PluginExtend, type PluginExtendClass, extend } from './plugin-extend'
-
 import {
   ComponentMeta,
   ComponentMetaManager,
@@ -21,10 +18,14 @@ import {
   Simulator,
   Viewport,
 } from '..'
-import { logger } from '../utils'
+import { createLogger } from '../utils'
+import type { PluginContextOptions } from './plugin-context'
 import { PluginContext } from './plugin-context'
+import { type PluginExtend, type PluginExtendClass, extend } from './plugin-extend'
 import { PluginRuntime } from './plugin-runtime'
-import sequencify from './sequencify'
+import { sequencify } from './sequencify'
+
+const logger = createLogger('PluginManager')
 
 export interface Plugin {
   name: string

@@ -1,4 +1,5 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
+import { action, autorun, computed, observable, reaction } from 'mobx'
 import type {
   Component,
   ComponentInstance,
@@ -9,11 +10,6 @@ import type {
   NodeInstance,
   Snippet,
 } from '../designer'
-import type { Node } from '../document'
-import type { Project } from '../project'
-import type { SimulatorRenderer } from './simulator-renderer'
-
-import { action, autorun, computed, observable, reaction } from 'mobx'
 import {
   DESIGNER_EVENT,
   DragObjectType,
@@ -24,8 +20,10 @@ import {
   isShaken,
 } from '../designer'
 import type { Scroller } from '../designer/scroller'
-import { getClosestClickableNode, getClosestNode } from '../document'
+import { type Node, getClosestClickableNode, getClosestNode } from '../document'
+import type { Project } from '../project'
 import { type Hotkey, createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
+import type { SimulatorRenderer } from './simulator-renderer'
 import { Viewport } from './viewport'
 
 export interface DropContainer {
@@ -257,7 +255,7 @@ export class Simulator {
 
     // bind hotkey & clipboard
     const hotkey = this.editor.get<Hotkey>('hotkey')
-    hotkey.mount(this._contentWindow)
+    hotkey?.mount(this._contentWindow)
     clipboard.injectCopyPaster(this._contentDocument!)
   }
 

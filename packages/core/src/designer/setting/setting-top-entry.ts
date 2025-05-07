@@ -1,7 +1,14 @@
-import type { ComponentMeta, Designer, Editor, Node, PropKey, SetterManager } from '../..'
+import {
+  type ComponentMeta,
+  DESIGNER_EVENT,
+  type Designer,
+  type Editor,
+  type Node,
+  type PropKey,
+  type SetterManager,
+  createEventBus,
+} from '../..'
 import type { SettingEntry } from './setting-entry'
-
-import { DESIGNER_EVENT, createEventBus } from '../..'
 import { SettingField } from './setting-field'
 
 export const generateSessionId = (nodes: Node[]) => {
