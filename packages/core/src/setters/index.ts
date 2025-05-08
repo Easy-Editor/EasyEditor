@@ -1,1 +1,1 @@
-export * from './setter-manager'
+export * from './setters'

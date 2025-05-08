@@ -1,7 +1,7 @@
 import { observable } from 'mobx'
 import { type Node, isNode } from '../document'
+import type { ComponentInstance } from '../types'
 import { createEventBus } from '../utils'
-import type { ComponentInstance } from './component-meta'
 import type { LocationDetail } from './location'
 
 export interface ActiveTarget {

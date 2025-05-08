@@ -10,7 +10,7 @@ import {
   isJSExpression,
   uniqueId,
 } from '../..'
-import type { SetterManager } from '../../setter-manager'
+import type { Setters } from '../../setters'
 import type { Editor } from '../../types'
 import type { SettingEntry } from './setting-entry'
 import type { SetValueOptions, SettingField } from './setting-field'
@@ -25,7 +25,7 @@ export class SettingPropEntry implements SettingEntry {
 
   readonly isSingle: boolean
 
-  readonly setters: SetterManager
+  readonly setters: Setters
 
   readonly nodes: Node[]
 
