@@ -1,7 +1,8 @@
-import type { Node, PropKey } from '../../document'
-import type { NodeSchema } from '../../types'
-import { isObject } from '../../utils'
-import type { SettingField, SettingPropEntry } from '../setting'
+import type { SettingField } from '../designer'
+import type { Node, PropKey } from '../document'
+import type { ComponentType } from './component'
+import type { NodeSchema } from './schema'
+import type { DynamicSetter, SetterType } from './setter'
 
 export interface ComponentMetadata {
   componentName: string
@@ -284,99 +285,4 @@ export interface Callbacks {
     },
     currentNode: Node,
   ) => void
-}
-
-// export type SetterType = SetterConfig | SetterConfig[] | string
-export type SetterType = SetterConfig | string
-
-export type DynamicSetterProps = (target: SettingField) => Record<string, unknown>
-
-export interface SetterConfig {
-  /**
-   * the name of the setter
-   */
-  componentName: string
-
-  /**
-   * the props pass to Setter Component
-   */
-  props?: Record<string, unknown> | DynamicSetterProps
-
-  /**
-   * is required
-   */
-  isRequired?: boolean
-
-  /**
-   * Setter initial value
-   */
-  // initialValue?: any | ((target: SettingField) => any)
-
-  /**
-   * Setter default value
-   */
-  defaultValue?: any
-
-  /**
-   *  judge which one to be selected
-   */
-  // condition?: (target: SettingField) => boolean
-}
-
-export const isSetterConfig = (obj: any): obj is SetterConfig => {
-  if (!isObject(obj)) {
-    return false
-  }
-  return 'componentName' in obj
-}
-
-export type DynamicSetter = (target: SettingPropEntry) => string | SetterConfig | Component
-
-// export type ComponentInstance = Element
-export type ComponentInstance = any
-
-// export type ComponentType<T> = React.ComponentType<T>
-export type ComponentType<T> = any
-
-/**
- * component type
- */
-export type Component = ComponentType<any> | object
-
-export interface LowCodeComponent {
-  /**
-   * 研发模式
-   */
-  devMode: 'lowCode'
-  /**
-   * 组件名称
-   */
-  componentName: string
-}
-
-// export type ProCodeComponent = TypeNpmInfo;
-export interface ProCodeComponent {
-  /**
-   * 研发模式
-   */
-  devMode: 'proCode'
-  /**
-   * 组件名称
-   */
-  componentName: string
-}
-
-export type ComponentMap = ProCodeComponent | LowCodeComponent
-
-export type ComponentsMap = ComponentMap[]
-
-export function isProCodeComponentType(desc: ComponentMap): desc is ProCodeComponent {
-  if (!isObject(desc)) {
-    return false
-  }
-  return 'package' in desc
-}
-
-export function isLowCodeComponentType(desc: ComponentMap): desc is LowCodeComponent {
-  return !isProCodeComponentType(desc)
 }

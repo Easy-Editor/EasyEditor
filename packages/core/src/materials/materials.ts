@@ -1,10 +1,9 @@
 import { action, computed, observable } from 'mobx'
-import type { Editor } from '../../types'
 import type { Designer } from '../designer'
+import type { Component, ComponentMetadata, Editor } from '../types'
 import { ComponentMeta, isComponentMeta } from './component-meta'
-import type { Component, ComponentMetadata } from './meta'
 
-export class ComponentMetaManager {
+export class Materials {
   @observable.ref private accessor _componentMetasMap = new Map<string, ComponentMeta>()
 
   private _lostComponentMetasMap = new Map<string, ComponentMeta>()
@@ -71,6 +70,10 @@ export class ComponentMetaManager {
     return Array.from(this._componentMetasMap.values()).flatMap(meta => meta.snippets)
   }
 
+  getComponentMetasMap() {
+    return this._componentMetasMap
+  }
+
   @computed
   get componentMetasMap() {
     const maps: Record<string, ComponentMetadata> = {}
@@ -100,8 +103,11 @@ export class ComponentMetaManager {
     return maps
   }
 
-  getComponentMetasMap() {
-    return this._componentMetasMap
+  /**
+   * 刷新 componentMetasMap，可间接触发模拟器里的 buildComponents
+   */
+  refreshComponentMetasMap() {
+    this._componentMetasMap = new Map(this._componentMetasMap)
   }
 
   isComponentMeta(obj: any) {

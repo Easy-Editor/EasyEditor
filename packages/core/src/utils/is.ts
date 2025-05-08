@@ -1,4 +1,5 @@
 import type { Viewport } from '../simulator/viewport'
+import type { ComponentMap, LowCodeComponent, ProCodeComponent, SetterConfig } from '../types'
 
 export const isObject = (value: any): value is Record<string, unknown> => {
   return value !== null && typeof value === 'object'
@@ -35,4 +36,22 @@ export function isDOMNodeVisible(domNode: Element, viewport: Viewport) {
   const { width, height } = viewport.contentBounds
   const { left, right, top, bottom, width: nodeWidth, height: nodeHeight } = domNodeRect
   return left >= -nodeWidth && top >= -nodeHeight && bottom <= height + nodeHeight && right <= width + nodeWidth
+}
+
+export const isProCodeComponentType = (desc: ComponentMap): desc is ProCodeComponent => {
+  if (!isObject(desc)) {
+    return false
+  }
+  return 'package' in desc
+}
+
+export const isLowCodeComponentType = (desc: ComponentMap): desc is LowCodeComponent => {
+  return !isProCodeComponentType(desc)
+}
+
+export const isSetterConfig = (obj: any): obj is SetterConfig => {
+  if (!isObject(obj)) {
+    return false
+  }
+  return 'componentName' in obj
 }
