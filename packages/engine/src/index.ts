@@ -1,5 +1,8 @@
+import { version } from './engine'
+
+export * from './engine'
+
 export const DEV = '_EASY_EDITOR_DEV_'
-export const version = '_EASY_EDITOR_ENGINE_VERSION_'
 
 console.log(
   `%c EasyEditor Engine %c v${version} `,

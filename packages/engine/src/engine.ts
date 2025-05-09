@@ -1,4 +1,5 @@
 import {
+  type ConfigOptions,
   Designer,
   Event,
   Hotkey,
@@ -15,10 +16,8 @@ import {
 import { Editor } from './editor'
 
 const editor = new Editor()
-
 const designer = new Designer({ editor })
 const { project } = designer
-
 const hotkey = new Hotkey()
 const setters = new Setters()
 const material = new Materials(editor)
@@ -56,3 +55,25 @@ export { config, event, hotkey, logger, material, plugins, project, setters }
 
 export const version = '_EASY_EDITOR_ENGINE_VERSION_'
 config.set('ENGINE_VERSION', version)
+
+export const init = async (options?: ConfigOptions) => {
+  // await destroy()
+
+  if (options) {
+    config.setEngineOptions(options)
+  }
+
+  await plugins.extend()
+
+  await plugins.init()
+}
+
+export const destroy = async () => {
+  // remove all documents
+  const { documents } = project
+  if (Array.isArray(documents) && documents.length > 0) {
+    documents.forEach(doc => project.removeDocument(doc))
+  }
+
+  await plugins.destroy()
+}
