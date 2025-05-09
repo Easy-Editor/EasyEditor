@@ -537,7 +537,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   isValidComponent() {
-    const allComponents = this.document.designer.componentMetaManager.componentsMap
+    const allComponents = this.document.designer.materials.componentsMap
     if (allComponents && allComponents[this.componentName]) {
       return true
     }

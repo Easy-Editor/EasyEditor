@@ -1,4 +1,4 @@
-import type { Editor, Node, SetterManager } from '../..'
+import type { Editor, Node, Setters } from '../..'
 import type { Designer } from '../designer'
 import type { SettingField } from './setting-field'
 
@@ -27,7 +27,7 @@ export interface SettingEntry {
    */
   readonly editor: Editor
 
-  readonly setters: SetterManager
+  readonly setters: Setters
 
   /**
    * 取得子项

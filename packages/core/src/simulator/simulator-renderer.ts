@@ -1,5 +1,5 @@
-import type { Node } from '..'
-import type { Component, ComponentInstance, NodeInstance } from '../designer'
+import type { Component, ComponentInstance, Node } from '..'
+import type { NodeInstance } from '../designer'
 
 export interface SimulatorRenderer {
   readonly isSimulatorRenderer: true

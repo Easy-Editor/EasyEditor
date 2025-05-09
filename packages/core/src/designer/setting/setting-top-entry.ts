@@ -5,7 +5,7 @@ import {
   type Editor,
   type Node,
   type PropKey,
-  type SetterManager,
+  type Setters,
   createEventBus,
 } from '../..'
 import type { SettingEntry } from './setting-entry'
@@ -74,7 +74,7 @@ export class SettingTopEntry implements SettingEntry {
 
   readonly designer: Designer | undefined
 
-  readonly setters: SetterManager
+  readonly setters: Setters
 
   disposeFunctions: any[] = []
 
@@ -88,7 +88,7 @@ export class SettingTopEntry implements SettingEntry {
     this.id = generateSessionId(nodes)
     this.first = nodes[0]
     this.designer = this.first.document?.designer
-    this.setters = editor.get<SetterManager>('setterManager')!
+    this.setters = editor.get<Setters>('setterManager')!
 
     // setups
     this.setupComponentMeta()

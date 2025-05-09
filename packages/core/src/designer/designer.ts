@@ -1,6 +1,7 @@
 import { type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
+import type { Materials } from '../materials'
 import { Project } from '../project'
-import type { ComponentMetaManager, Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
+import type { Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
 import { createEventBus, createLogger } from '../utils'
 import { ActiveTracker } from './active-tracker'
 import { Detecting } from './detecting'
@@ -78,8 +79,8 @@ export class Designer {
 
   private _dropLocation?: DropLocation
 
-  get componentMetaManager() {
-    return this.editor.get<ComponentMetaManager>('componentMetaManager')!
+  get materials() {
+    return this.editor.get<Materials>('Materials')!
   }
 
   private props?: DesignerProps

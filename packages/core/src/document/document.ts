@@ -1,8 +1,8 @@
 import { action, observable } from 'mobx'
-import { type ComponentsMap, DESIGNER_EVENT, type Designer, type DropLocation } from '../designer'
+import { DESIGNER_EVENT, type Designer, type DropLocation } from '../designer'
 import type { Project } from '../project'
 import type { Simulator } from '../simulator'
-import { type NodeSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
+import { type ComponentsMap, type NodeSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
 import { createEventBus, uniqueId } from '../utils'
 import { History } from './history'
 import { NODE_EVENT, Node, insertChild, insertChildren } from './node/node'
@@ -372,7 +372,7 @@ export class Document {
   }
 
   getComponentMeta(componentName: string) {
-    return this.designer.componentMetaManager.getComponentMeta(componentName)
+    return this.designer.materials.getComponentMeta(componentName)
   }
 
   toData(extraComps?: string[]) {

@@ -1,6 +1,6 @@
 import { type Logger, createLogger } from '../utils'
 import type { PluginExtend } from './plugin-extend'
-import type { Plugin, PluginMeta, Plugins } from './plugin-manager'
+import type { Plugin, PluginMeta, Plugins } from './plugins'
 
 export class PluginRuntime {
   config: Plugin

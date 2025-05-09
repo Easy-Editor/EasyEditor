@@ -1,5 +1,4 @@
 export * from './clipboard'
-export * from './component-meta'
 export * from './designer'
 export * from './detecting'
 export * from './dragon'

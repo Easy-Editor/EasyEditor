@@ -148,7 +148,8 @@ export interface ConfigOptions {
   /**
    * 数据源引擎的请求处理器映射
    */
-  requestHandlersMap?: RequestHandlersMap
+  // requestHandlersMap?: RequestHandlersMap
+  requestHandlersMap?: any
 
   /**
    * @default true

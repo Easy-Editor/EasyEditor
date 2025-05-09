@@ -1,9 +1,9 @@
 import { action, computed, observable } from 'mobx'
-import { type ComponentsMap, type Designer, isLowCodeComponentType, isProCodeComponentType } from '../designer'
+import type { Designer } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
 import type { Simulator } from '../simulator'
-import { type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
-import { createEventBus, createLogger } from '../utils'
+import { type ComponentsMap, type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
+import { createEventBus, createLogger, isLowCodeComponentType, isProCodeComponentType } from '../utils'
 
 const logger = createLogger('Project')
 
