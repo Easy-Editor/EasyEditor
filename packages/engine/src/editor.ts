@@ -6,7 +6,7 @@ import {
   EventBus,
   type HookConfig,
   type Editor as IEditor,
-  type PluginManager,
+  type Plugins,
   createLogger,
 } from '@easy-editor/core'
 import { action, observable } from 'mobx'
@@ -235,7 +235,7 @@ export class Editor extends EventEmitter implements IEditor {
     this.eventBus.emit(EDITOR_EVENT.DESTROY)
   }
 
-  async extend(pluginManager: PluginManager) {
+  async extend(pluginManager: Plugins) {
     this.eventBus.emit(EDITOR_EVENT.BEFORE_EXTEND)
 
     try {

@@ -1,4 +1,5 @@
 export * from './common'
+export * from './event'
 export * from './event-bus'
 export * from './hotkey'
 export * from './is'

@@ -1,12 +1,12 @@
 import type {
   ComponentMeta,
-  ComponentMetaManager,
   Designer,
   Detecting,
   Document,
   Dragon,
   DropLocation,
   History,
+  Materials,
   Node,
   NodeChildren,
   OffsetObserver,
@@ -14,7 +14,7 @@ import type {
   Prop,
   Props,
   Selection,
-  SetterManager,
+  Setters,
   Simulator,
   Viewport,
 } from '..'
@@ -47,8 +47,8 @@ export interface PluginExtendClass {
   Props: typeof Props
   Prop: typeof Prop
 
-  ComponentMetaManager: typeof ComponentMetaManager
-  SetterManager: typeof SetterManager
+  Materials: typeof Materials
+  Setters: typeof Setters
   ComponentMeta: typeof ComponentMeta
 }
 

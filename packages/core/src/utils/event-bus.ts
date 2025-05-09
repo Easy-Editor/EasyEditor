@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import type { Disposable } from './hotkey'
 import { createLogger } from './logger'
 
 const logger = createLogger('event-bus')
@@ -38,7 +39,7 @@ export class EventBus {
    * @param event 事件名称
    * @param listener 事件回调
    */
-  on(event: string, listener: (...args: any[]) => void): () => void {
+  on(event: string, listener: (...args: any[]) => void): Disposable {
     this.eventEmitter.on(event, listener)
     this.getLogger().debug(`${this.getMsgPrefix('on')} ${event}`)
     return () => {
@@ -103,3 +104,5 @@ export const createEventBus = (name: string, maxListeners?: number) => {
   }
   return new EventBus(emitter, name)
 }
+
+export const commonEvent = new EventBus(new EventEmitter())

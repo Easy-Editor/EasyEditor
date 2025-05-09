@@ -1,3 +1,3 @@
 export * from './plugin-context'
-export * from './plugin-manager'
 export * from './plugin-runtime'
+export * from './plugins'

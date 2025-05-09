@@ -1,6 +1,6 @@
 import type { EventEmitter } from 'node:events'
 import type { Component } from '../designer'
-import type { Plugin, PluginManager } from '../plugin'
+import type { Plugin, Plugins } from '../plugin'
 import type { EventBus } from '../utils'
 
 export type EditorValueKey = string | symbol
@@ -99,7 +99,7 @@ export interface Editor extends EventEmitter {
     fn: (data: EditorGetResult<T, KeyOrType>) => void,
   ): () => void
 
-  extend(pluginManager: PluginManager): Promise<void>
+  extend(pluginManager: Plugins): Promise<void>
   init(config?: EditorConfig, components?: Editor['components']): Promise<void>
   destroy(): void
 

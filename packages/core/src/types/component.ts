@@ -2,7 +2,7 @@
 export type ComponentInstance = any
 
 // export type ComponentType<T> = React.ComponentType<T>
-export type ComponentType<T> = any
+export type ComponentType<T = any> = any
 
 /**
  * component type

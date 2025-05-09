@@ -1,4 +1,17 @@
-import { Designer, Hotkey, Materials, Setters } from '@easy-editor/core'
+import {
+  Designer,
+  Event,
+  Hotkey,
+  Materials,
+  type PluginContext,
+  type PluginContextApiAssembler,
+  type PluginMeta,
+  Plugins,
+  Setters,
+  commonEvent,
+  config,
+  createLogger,
+} from '@easy-editor/core'
 import { Editor } from './editor'
 
 const editor = new Editor()
@@ -15,3 +28,31 @@ editor.set('project', project)
 editor.set('setters', setters)
 editor.set('materials', material)
 editor.set('hotkey', hotkey)
+
+const event = new Event(commonEvent, { prefix: 'common' })
+const logger = createLogger('common')
+let plugins: Plugins
+
+const pluginContextApiAssembler: PluginContextApiAssembler = {
+  assembleApis: (context: PluginContext, pluginName: string, meta: PluginMeta) => {
+    context.hotkey = hotkey
+    context.project = project
+    context.setters = setters
+    context.material = material
+    const eventPrefix = meta?.eventPrefix || 'common'
+    context.event = new Event(commonEvent, { prefix: eventPrefix })
+    context.config = config
+    context.plugins = plugins
+    context.logger = createLogger(`plugin:${pluginName}`)
+  },
+}
+
+const innerPlugins = new Plugins(pluginContextApiAssembler)
+plugins = innerPlugins.toProxy()
+editor.set('innerPlugins', innerPlugins)
+editor.set('plugins', plugins)
+
+export { config, event, hotkey, logger, material, plugins, project, setters }
+
+export const version = '_EASY_EDITOR_ENGINE_VERSION_'
+config.set('ENGINE_VERSION', version)

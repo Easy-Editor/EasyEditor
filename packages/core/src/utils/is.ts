@@ -55,3 +55,12 @@ export const isSetterConfig = (obj: any): obj is SetterConfig => {
   }
   return 'componentName' in obj
 }
+
+export const isPluginEventName = (eventName: string): boolean => {
+  if (!eventName) {
+    return false
+  }
+
+  const eventSegments = eventName.split(':')
+  return eventSegments.length > 1 && eventSegments[0].length > 0
+}

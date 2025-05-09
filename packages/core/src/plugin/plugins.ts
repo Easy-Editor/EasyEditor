@@ -1,12 +1,12 @@
 import {
   ComponentMeta,
-  ComponentMetaManager,
   Designer,
   Detecting,
   Document,
   Dragon,
   DropLocation,
   History,
+  Materials,
   Node,
   NodeChildren,
   OffsetObserver,
@@ -14,7 +14,7 @@ import {
   Prop,
   Props,
   Selection,
-  SetterManager,
+  Setters,
   Simulator,
   Viewport,
 } from '..'
@@ -34,6 +34,7 @@ export interface Plugin {
   init(ctx: PluginContext): Promise<void> | void
   destroy?(ctx: PluginContext): Promise<void> | void
   extend?(ctx: PluginExtend): void
+  exports?(): Record<string, any>
 }
 
 export interface PluginMeta {
@@ -71,7 +72,7 @@ export interface PluginContextApiAssembler {
   assembleApis(context: PluginContext, pluginName: string, meta: PluginMeta): void
 }
 
-export class PluginManager {
+export class Plugins {
   private plugins: PluginRuntime[] = []
 
   pluginsMap: Map<string, PluginRuntime> = new Map()
@@ -225,8 +226,8 @@ export class PluginManager {
       Props,
       Prop,
 
-      ComponentMetaManager,
-      SetterManager,
+      Materials,
+      Setters,
       ComponentMeta,
     }
     const extendMap: Record<keyof PluginExtendClass, PluginExtendClass[keyof PluginExtendClass]> = extendClass
@@ -256,6 +257,21 @@ export class PluginManager {
     await this.destroy()
     this.plugins = []
     this.pluginsMap.clear()
+  }
+
+  toProxy() {
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        if (target.pluginsMap.has(prop as string)) {
+          // 禁用态的插件，直接返回 undefined
+          if (target.pluginsMap.get(prop as string)!.disabled) {
+            return undefined
+          }
+          return target.pluginsMap.get(prop as string)?.toProxy()
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    })
   }
 }
 

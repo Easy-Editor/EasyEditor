@@ -1,6 +1,7 @@
-import type { ComponentMetaManager, Designer, Editor, Project, SetterManager, Simulator } from '..'
+import type { Designer, Editor, Event, Materials, Project, Setters, Simulator } from '..'
+import type { Config } from '../config'
 import { type EventBus, type Hotkey, type Logger, createEventBus } from '../utils'
-import type { PluginContextApiAssembler, PluginMeta } from './plugin-manager'
+import type { PluginContextApiAssembler, PluginMeta, Plugins } from './plugins'
 
 export interface PluginContextOptions {
   pluginName: string
@@ -12,12 +13,14 @@ export class PluginContext {
   simulator: Simulator
   designer: Designer
   project: Project
-  setterManager: SetterManager
-  componentMetaManager: ComponentMetaManager
+  setters: Setters
+  material: Materials
   logger: Logger
-  event: EventBus
+  event: Event
   pluginEvent: EventBus
   hotkey: Hotkey
+  config: Config
+  plugins: Plugins
 
   constructor(options: PluginContextOptions, contextApiAssembler: PluginContextApiAssembler) {
     const { pluginName = 'anonymous', meta = {} } = options

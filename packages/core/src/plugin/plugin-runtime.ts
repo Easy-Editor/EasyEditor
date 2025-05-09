@@ -1,13 +1,13 @@
 import { type Logger, createLogger } from '../utils'
 import type { PluginExtend } from './plugin-extend'
-import type { Plugin, PluginManager, PluginMeta } from './plugin-manager'
+import type { Plugin, PluginMeta, Plugins } from './plugin-manager'
 
 export class PluginRuntime {
   config: Plugin
 
   logger: Logger
 
-  private manager: PluginManager
+  private manager: Plugins
 
   private _inited: boolean
 
@@ -26,7 +26,7 @@ export class PluginRuntime {
     return this.manager.getPluginContext({ pluginName: this.pluginName, meta: this.meta })
   }
 
-  constructor(pluginName: string, manager: PluginManager, config: Plugin) {
+  constructor(pluginName: string, manager: Plugins, config: Plugin) {
     this.manager = manager
     this.config = config
     this.pluginName = pluginName
@@ -88,5 +88,21 @@ export class PluginRuntime {
 
   async dispose() {
     await this.manager.delete(this.name)
+  }
+
+  toProxy() {
+    if (!this._inited) {
+      this.logger.warn('Could not call toProxy before init')
+    }
+
+    const exports = this.config.exports?.()
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        if ({}.hasOwnProperty.call(exports, prop)) {
+          return exports?.[prop as string]
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    })
   }
 }
