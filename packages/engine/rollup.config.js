@@ -33,7 +33,7 @@ const plugins = [
 const replaceDev = isDev =>
   replace({
     _EASY_EDITOR_DEV_: isDev,
-    _EASY_EDITOR_VERSION_: pkg.version,
+    _EASY_EDITOR_ENGINE_VERSION_: pkg.version,
     preventAssignment: true,
     delimiters: ['', ''],
   })

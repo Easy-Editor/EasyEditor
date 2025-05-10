@@ -51,8 +51,6 @@ plugins = innerPlugins.toProxy()
 editor.set('innerPlugins', innerPlugins)
 editor.set('plugins', plugins)
 
-export { config, event, hotkey, logger, material, plugins, project, setters }
-
 export const version = '_EASY_EDITOR_ENGINE_VERSION_'
 config.set('ENGINE_VERSION', version)
 
@@ -77,3 +75,5 @@ export const destroy = async () => {
 
   await plugins.destroy()
 }
+
+export { config, event, hotkey, logger, material, plugins, project, setters }

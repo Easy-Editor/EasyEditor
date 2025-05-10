@@ -1,9 +1,10 @@
 import { action, computed, isObservableArray, observable, set, untracked } from 'mobx'
+import { config } from '../..'
 import { DESIGNER_EVENT } from '../../designer'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { isObject, isPlainObject, uniqueId } from '../../utils'
 import type { Node } from '../node/node'
-import type { Props } from './props'
+import { type Props, getConvertedExtraKey } from './props'
 import { valueToSource } from './value-to-source'
 
 export const UNSET = Symbol.for('unset')
@@ -296,6 +297,14 @@ export class Prop {
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): PropValue {
     const type = this._type
+
+    if (stage === TRANSFORM_STAGE.RENDER && this.key === getConvertedExtraKey('condition')) {
+      // 在设计器里，所有组件默认需要展示，除非开启了 enableCondition 配置
+      if (config?.get('enableCondition') !== true) {
+        return true
+      }
+      return this._value as boolean
+    }
 
     if (type === 'unset') {
       return undefined

@@ -7,12 +7,26 @@ import {
   type HookConfig,
   type Editor as IEditor,
   type Plugins,
+  config,
   createLogger,
 } from '@easy-editor/core'
 import { action, observable } from 'mobx'
 import { EventEmitter } from 'node:events'
 
 const logger = createLogger('Editor')
+
+// inner instance keys which should not be stored in config
+const keyBlacklist = [
+  'designer',
+  'skeleton',
+  'currentDocument',
+  'simulator',
+  'plugins',
+  'setters',
+  'material',
+  'innerHotkey',
+  'innerPlugins',
+]
 
 export class Editor extends EventEmitter implements IEditor {
   @observable.shallow private accessor context = new Map<EditorValueKey, any>()
@@ -56,6 +70,10 @@ export class Editor extends EventEmitter implements IEditor {
 
   @action
   set(key: EditorValueKey, data: any): void | Promise<void> {
+    // store the data to engineConfig while invoking editor.set()
+    if (!keyBlacklist.includes(key as string)) {
+      config.set(key as any, data)
+    }
     this.context.set(key, data)
     this.notifyGot(key)
   }

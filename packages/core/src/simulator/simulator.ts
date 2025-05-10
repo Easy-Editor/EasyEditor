@@ -1,5 +1,6 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
 import { action, autorun, computed, observable, reaction } from 'mobx'
+import { config } from '..'
 import type { Designer, LocateEvent, LocationChildrenDetail, LocationData, NodeInstance } from '../designer'
 import {
   DESIGNER_EVENT,
@@ -80,19 +81,19 @@ export class Simulator {
   }
 
   get enableStrictNotFoundMode(): any {
-    return this.editor.get('enableStrictNotFoundMode') ?? false
+    return config.get('enableStrictNotFoundMode') ?? false
   }
 
   get excuteLifeCycleInDesignMode(): any {
-    return this.editor.get('excuteLifeCycleInDesignMode') ?? false
+    return config.get('excuteLifeCycleInDesignMode') ?? false
   }
 
   get notFoundComponent(): any {
-    return this.editor.get('notFoundComponent') ?? null
+    return config.get('notFoundComponent') ?? null
   }
 
   get faultComponent(): any {
-    return this.editor.get('faultComponent') ?? null
+    return config.get('faultComponent') ?? null
   }
 
   @computed
@@ -123,6 +124,9 @@ export class Simulator {
     return this._contentDocument
   }
 
+  @observable.ref private accessor _appHelper: any
+
+  // TODO: remove
   @observable.ref private accessor _components: Record<string, Component> = {}
 
   /**
@@ -160,6 +164,13 @@ export class Simulator {
     this.project = designer.project
     this.viewport = new Viewport(designer)
     this.scroller = this.designer.createScroller(this.viewport)
+    this.autoRender = !config.get('disableAutoRender', false)
+    this._appHelper = config.get('appHelper')
+
+    config.onGot('appHelper', data => {
+      // appHelper被config.set修改后触发injectionConsumer.consume回调
+      this._appHelper = data
+    })
   }
 
   @action
@@ -386,7 +397,7 @@ export class Simulator {
       } else {
         detecting.capture(null)
       }
-      if (dragon.dragging) {
+      if (!config.get('enableMouseEventPropagationInCanvas', false) || dragon.dragging) {
         e.stopPropagation()
       }
     }
@@ -401,7 +412,7 @@ export class Simulator {
     doc.addEventListener(
       'mousemove',
       (e: Event) => {
-        if (dragon.dragging) {
+        if (!config.get('enableMouseEventPropagationInCanvas', false) || dragon.dragging) {
           e.stopPropagation()
         }
       },
