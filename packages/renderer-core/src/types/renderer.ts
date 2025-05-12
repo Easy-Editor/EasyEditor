@@ -1,7 +1,15 @@
-import type { DesignMode, Node, NodeSchema, RootSchema, Simulator, SimulatorRenderer } from '@easy-editor/core'
-import type { Component } from 'react'
-import type { FaultComponentProps } from './components/FaultComponent'
-import type { NotFoundComponentProps } from './components/NotFoundComponent'
+import type {
+  ComponentType,
+  DesignMode,
+  JSExpression,
+  JSONObject,
+  Node,
+  NodeSchema,
+  RootSchema,
+  Simulator,
+  SimulatorRenderer,
+} from '@easy-editor/core'
+import type { FaultComponentProps, GeneralComponent, NotFoundComponentProps } from './components'
 
 export type Schema = NodeSchema | RootSchema
 
@@ -15,7 +23,7 @@ export interface RendererProps {
   schema: RootSchema | NodeSchema
 
   /** 组件依赖的实例 */
-  components: Record<string, React.ComponentType<any>>
+  components: Record<string, ComponentType<any>>
 
   /** CSS 类名 */
   className?: string
@@ -65,10 +73,10 @@ export interface RendererProps {
   rendererName?: 'LowCodeRenderer' | 'PageRenderer' | string
 
   /** 当找不到组件时，显示的组件 */
-  notFoundComponent?: React.ComponentType<NotFoundComponentProps>
+  notFoundComponent?: ComponentType<NotFoundComponentProps>
 
   /** 当组件渲染异常时，显示的组件 */
-  faultComponent?: React.ComponentType<FaultComponentProps>
+  faultComponent?: ComponentType<FaultComponentProps>
 
   /** 设备信息 */
   device?: 'default' | 'pc' | 'mobile' | string
@@ -102,16 +110,15 @@ export interface RenderComponent {
   new (props: RendererProps): RendererComponentInstance
 }
 
-export interface RendererComponentInstance extends Component<RendererProps, RendererState> {
-  [x: string]: any
+export interface RendererComponentInstance extends GeneralComponent<RendererProps, RendererState> {
   __getRef: (ref: any) => void
   componentDidMount(): Promise<void> | void
   componentDidUpdate(): Promise<void> | void
   componentWillUnmount(): Promise<void> | void
   componentDidCatch(e: any): Promise<void> | void
   shouldComponentUpdate(nextProps: RendererProps): boolean
-  isValidComponent(SetComponent: any): any
-  createElement(SetComponent: any, props: any, children?: any): any
+  isValidComponent(Component: any): boolean
+  createElement(Component: any, props: any, children?: any): any
   getNotFoundComponent(): any
   getFaultComponent(): any
 }
@@ -121,9 +128,9 @@ export interface RendererComponentInstance extends Component<RendererProps, Rend
  *
  * @see https://github.com/ReactTraining/history/tree/master/docs/api-reference.md
  */
-interface IHistoryLike {
+interface HistoryLike {
   readonly action: any
-  readonly location: ILocationLike
+  readonly location: LocationLike
   createHref: (to: any) => string
   push: (to: any, state?: any) => void
   replace: (to: any, state?: any) => void
@@ -139,7 +146,7 @@ interface IHistoryLike {
  *
  * @see https://github.com/remix-run/history/blob/dev/docs/api-reference.md#location
  */
-export interface ILocationLike {
+export interface LocationLike {
   pathname: any
   search: any
   state: any
@@ -155,10 +162,10 @@ export interface RendererAppHelper {
   constants?: Record<string, any>
 
   /** react-router 的 location 实例 */
-  location?: ILocationLike
+  location?: LocationLike
 
   /** react-router 的 history 实例 */
-  history?: IHistoryLike
+  history?: HistoryLike
 
   /** @experimental 内部使用 */
   requestHandlersMap?: Record<string, any>
@@ -171,14 +178,30 @@ export interface NodeInfo {
   componentChildren?: any
 }
 
-export interface JSExpression {
-  type: string
-  value: string
+export interface DataSourceItem {
+  id: string
+  isInit?: boolean | JSExpression
+  type?: string
+  options?: {
+    uri: string | JSExpression
+    params?: JSONObject | JSExpression
+    method?: string | JSExpression
+    shouldFetch?: string
+    willFetch?: string
+    fit?: string
+    didFetch?: string
+  }
+  dataHandler?: JSExpression
+}
+
+export interface DataSource {
+  list?: DataSourceItem[]
+  dataHandler?: JSExpression
 }
 
 export interface BaseRendererProps extends RendererProps {
   __appHelper?: RendererAppHelper
-  __components: Record<string, React.ComponentType>
+  __components: Record<string, ComponentType<any>>
   __ctx?: Record<string, any>
   __schema: RootSchema
   __designMode?: DesignMode
@@ -203,20 +226,19 @@ export interface BaseRendererProps extends RendererProps {
 
 export interface BaseRendererContext {
   appHelper: RendererAppHelper
-  components: Record<string, React.ComponentType>
-  // engine: Record<string, any>
+  components: Record<string, ComponentType<any>>
   engine: RendererComponentInstance
   pageContext?: BaseRenderComponent
   compContext?: BaseRenderComponent
 }
 
-export type BaseRendererInstance = Component<BaseRendererProps, Record<string, any>, any> & {
+export type BaseRendererInstance = GeneralComponent<BaseRendererProps, Record<string, any>, any> & {
   reloadDataSource(): Promise<any>
   __beforeInit(props: BaseRendererProps): void
   __init(props: BaseRendererProps): void
   __afterInit(props: BaseRendererProps): void
   __executeLifeCycleMethod(method: string, args?: any[]): void
-  __getComponentView(): React.ComponentType | undefined
+  __getComponentView(): ComponentType<any> | undefined
   __bindCustomMethods(props: BaseRendererProps): void
   __generateCtx(ctx: Record<string, any>): void
   __parseData(data: any, ctx?: any): any
@@ -236,7 +258,6 @@ export type BaseRendererInstance = Component<BaseRendererProps, Record<string, a
   __checkSchema(schema: NodeSchema | undefined, extraComponents?: string | string[]): any
   __renderComp(Comp: any, ctxProps: object): any
   $(id: string, instance?: any): any
-
   context: BaseRendererContext
   __designModeIsDesign?: boolean
 }

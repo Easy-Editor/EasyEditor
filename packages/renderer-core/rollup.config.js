@@ -1,20 +1,31 @@
 import babel from '@rollup/plugin-babel'
+import commonjs from '@rollup/plugin-commonjs'
 import nodeResolve from '@rollup/plugin-node-resolve'
 import replace from '@rollup/plugin-replace'
 import cleanup from 'rollup-plugin-cleanup'
-import pkg from './package.json' with { type: 'json' }
+import pkg from './package.json' assert { type: 'json' }
+
+const external = [...Object.keys(pkg.peerDependencies)]
 
 const plugins = [
   nodeResolve({
-    extensions: ['.js', '.ts'],
-    browser: true,
+    extensions: ['.js', '.ts', '.jsx', '.tsx'],
   }),
+  commonjs(),
   babel({
-    extensions: ['.js', '.ts'],
+    extensions: ['.js', '.ts', '.jsx', '.tsx'],
     exclude: 'node_modules/**',
     babelrc: false,
     babelHelpers: 'bundled',
-    presets: ['@babel/preset-typescript'],
+    presets: [
+      ['@babel/preset-react', { runtime: 'automatic' }],
+      [
+        '@babel/preset-typescript',
+        {
+          allowDeclareFields: true,
+        },
+      ],
+    ],
     plugins: [
       [
         '@babel/plugin-proposal-decorators',
@@ -32,7 +43,6 @@ const plugins = [
 
 const replaceDev = isDev =>
   replace({
-    _EASY_EDITOR_VERSION_: pkg.version,
     preventAssignment: true,
     delimiters: ['', ''],
   })
@@ -57,5 +67,6 @@ export default [
       },
     ],
     plugins: [replaceDev(false)].concat(plugins),
+    external,
   },
 ]
