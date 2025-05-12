@@ -10,7 +10,6 @@ import {
 } from '@easy-editor/core'
 import { createInterpret as createDataSourceEngine } from '@easy-editor/datasource-engine'
 import {
-  type BaseRendererContext,
   type BaseRendererProps,
   DataHelper,
   type NodeInfo,
@@ -31,7 +30,7 @@ import { Component } from 'react'
 import { adapter } from './adapter'
 import { RendererContext } from './context'
 import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrapper } from './hoc'
-import type { BaseRendererComponent } from './types'
+import type { BaseRendererComponent, BaseRendererContext } from './types'
 
 /**
  * execute method in schema.lifeCycles with context

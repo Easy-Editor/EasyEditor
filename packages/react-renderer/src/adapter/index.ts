@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import type { ComponentType } from '@easy-editor/core'
 import type { BaseRendererComponent } from '../types'
 
 export interface RendererModules {
