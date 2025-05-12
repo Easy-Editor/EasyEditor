@@ -1,8 +1,9 @@
 import { DESIGNER_EVENT, type Node, type NodeSchema, TRANSFORM_STAGE } from '@easy-editor/core'
+import { type Schema, logger } from '@easy-editor/renderer-core'
 import { debounce } from 'lodash-es'
 import { Component, type ComponentType } from 'react'
-import type { BaseRendererInstance, Schema } from '../types'
-import { createForwardRefHocElement, logger } from '../utils'
+import type { BaseRendererInstance } from '../types'
+import { createForwardRefHocElement } from '../utils'
 
 export interface ComponentHocInfo {
   schema: Schema
@@ -547,7 +548,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
         ref: forwardRef,
       }
 
-      delete compProps.__inner__
+      compProps.__inner__ = undefined
 
       if (this.hasChildren) {
         return engine.createElement(Comp, compProps, this.children)

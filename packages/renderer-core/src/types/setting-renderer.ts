@@ -1,6 +1,6 @@
 import type { Component, Editor, Setters, SettingField } from '@easy-editor/core'
 
-export interface SettingRenderer {
+export interface SettingRendererProps {
   editor: Editor
 
   setters: Setters

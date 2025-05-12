@@ -14,7 +14,7 @@ export class PluginContext {
   designer: Designer
   project: Project
   setters: Setters
-  material: Materials
+  materials: Materials
   logger: Logger
   event: Event
   pluginEvent: EventBus

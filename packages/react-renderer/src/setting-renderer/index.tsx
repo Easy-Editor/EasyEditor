@@ -1,4 +1,5 @@
-import type { Designer, SetterManager, SettingField } from '@easy-editor/core'
+import type { Designer, Setters, SettingField } from '@easy-editor/core'
+import type { SettingRendererProps } from '@easy-editor/renderer-core'
 import { observer } from 'mobx-react'
 import { useMemo } from 'react'
 import { SettingSetter } from './SettingSetter'
@@ -61,12 +62,10 @@ export const SettingFieldView: React.FC<SettingFieldProps> = ({ field }) => {
   }
 }
 
-interface SettingRenderProps extends SettingRendererContext {}
-
-export const SettingRender = observer<React.FC<SettingRenderProps>>(props => {
+export const SettingRenderer = observer<React.FC<SettingRendererProps>>(props => {
   const { editor, customFieldItem, customFieldGroup } = props
   const designer = editor.get<Designer>('designer')!
-  const setterManager = editor.get<SetterManager>('setterManager')!
+  const setterManager = editor.get<Setters>('setterManager')!
   const { settingsManager } = designer
   const { settings } = settingsManager
   const items = settings?.items

@@ -1,5 +1,5 @@
+import type { RendererProps } from '@easy-editor/renderer-core'
 import { Component, PureComponent, createElement } from 'react'
-import type { RendererProps } from '../types'
 import { createForwardRefHocElement } from '../utils'
 import type { ComponentConstruct, ComponentHocInfo } from './leaf'
 

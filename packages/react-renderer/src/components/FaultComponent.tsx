@@ -1,10 +1,5 @@
-import type { NodeSchema } from '@easy-editor/core'
+import { type FaultComponentProps, logger } from '@easy-editor/renderer-core'
 import type { FC } from 'react'
-import { logger } from '../utils'
-
-export interface FaultComponentProps extends NodeSchema {
-  error?: Error | string
-}
 
 const FaultComponent: FC<FaultComponentProps> = ({ componentName = '', error }) => {
   logger.error(`${componentName} 组件渲染异常, 异常原因: ${(error as Error)?.message || error || '未知'}`)

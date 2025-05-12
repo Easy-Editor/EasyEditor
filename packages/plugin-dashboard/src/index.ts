@@ -40,7 +40,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
     name: 'DashboardPlugin',
     deps: [],
     init(ctx) {
-      const { designer, simulator, componentMetaManager, hotkey, logger } = ctx
+      const { designer, simulator, materials, hotkey, logger } = ctx
       const { viewport } = simulator
 
       // test hotkey
@@ -55,7 +55,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       })
 
       // add componentMeta
-      componentMetaManager.createComponentMeta(GroupComponentMeta)
+      materials.createComponentMeta(GroupComponentMeta)
       simulator.addComponent('Group', GroupComponent)
 
       /* ---------------------------- NodeData to Node ---------------------------- */

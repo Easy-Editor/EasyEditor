@@ -1,10 +1,5 @@
-import type { NodeSchema } from '@easy-editor/core'
+import { type NotFoundComponentProps, logger } from '@easy-editor/renderer-core'
 import type { FC } from 'react'
-import { logger } from '../utils'
-
-export interface NotFoundComponentProps extends NodeSchema {
-  enableStrictNotFoundMode?: boolean
-}
 
 const NotFoundComponent: FC<NotFoundComponentProps> = ({ componentName = '', enableStrictNotFoundMode, children }) => {
   logger.warn(`Component ${componentName} not found`)

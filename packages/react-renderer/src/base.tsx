@@ -9,13 +9,11 @@ import {
   isJSFunction,
 } from '@easy-editor/core'
 import { createInterpret as createDataSourceEngine } from '@easy-editor/datasource-engine'
-import { forEach, isEmpty } from 'lodash-es'
-import { Component } from 'react'
-import { adapter } from './adapter'
-import { RendererContext } from './context'
-import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrapper } from './hoc'
-import type { BaseRenderComponent, BaseRendererContext, BaseRendererProps, NodeInfo } from './types'
 import {
+  type BaseRendererContext,
+  type BaseRendererProps,
+  DataHelper,
+  type NodeInfo,
   checkPropTypes,
   classnames,
   getFileCssName,
@@ -27,8 +25,13 @@ import {
   parseExpression,
   transformArrayToMap,
   transformStringToFunction,
-} from './utils'
-import { DataHelper } from './utils/data-helper'
+} from '@easy-editor/renderer-core'
+import { forEach, isEmpty } from 'lodash-es'
+import { Component } from 'react'
+import { adapter } from './adapter'
+import { RendererContext } from './context'
+import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrapper } from './hoc'
+import type { BaseRendererComponent } from './types'
 
 /**
  * execute method in schema.lifeCycles with context
@@ -72,11 +75,11 @@ export function getSchemaChildren(schema: NodeSchema | undefined) {
   return schema.children
 }
 
-export function baseRendererFactory(): BaseRenderComponent {
+export function baseRendererFactory(): BaseRendererComponent {
   const { BaseRenderer: customBaseRenderer } = adapter.getRenderers()
 
   if (customBaseRenderer) {
-    return customBaseRenderer as unknown as BaseRenderComponent
+    return customBaseRenderer as unknown as BaseRendererComponent
   }
 
   const DEFAULT_LOOP_ARG_ITEM = 'item'
