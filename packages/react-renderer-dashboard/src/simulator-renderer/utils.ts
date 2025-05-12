@@ -1,5 +1,6 @@
-import { type ProjectSchema, isElement } from '@easy-editor/core'
-import type { ComponentType } from 'react'
+import { type ProjectSchema, isElementNode } from '@easy-editor/core'
+import type { ComponentType, ReactInstance } from 'react'
+import { findDOMNode } from 'react-dom'
 
 export type Component = ComponentType<any> | object
 
@@ -49,7 +50,7 @@ export const buildComponents = (
 const cycleRange = document.createRange()
 
 export function getClientRects(node: Element | Text) {
-  if (isElement(node)) {
+  if (isElementNode(node)) {
     return [node.getBoundingClientRect()]
   }
 
@@ -83,4 +84,45 @@ export function withQueryParams(url: string, params?: object) {
   const hash = urlSplit[1] ? `#${urlSplit[1]}` : ''
   const urlWithoutHash = urlSplit[0]
   return `${urlWithoutHash}${~urlWithoutHash.indexOf('?') ? '&' : '?'}${queryStr}${hash}`
+}
+
+export function isDOMNode(node: any): node is Element | Text {
+  return node.nodeType && (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE)
+}
+
+export const getReactInternalFiber = (el: any) => {
+  return el._reactInternals || el._reactInternalFiber
+}
+
+function elementsFromFiber(fiber: any, elements: Array<Element | Text>) {
+  if (fiber) {
+    if (fiber.stateNode && isDOMNode(fiber.stateNode)) {
+      elements.push(fiber.stateNode)
+    } else if (fiber.child) {
+      // deep fiberNode.child
+      elementsFromFiber(fiber.child, elements)
+    }
+
+    if (fiber.sibling) {
+      elementsFromFiber(fiber.sibling, elements)
+    }
+  }
+}
+
+export function reactFindDOMNodes(elem: ReactInstance | null): Array<Element | Text> | null {
+  if (!elem) {
+    return null
+  }
+  if (isElementNode(elem)) {
+    return [elem]
+  }
+  const elements: Array<Element | Text> = []
+  const fiberNode = getReactInternalFiber(elem)
+  elementsFromFiber(fiberNode?.child, elements)
+  if (elements.length > 0) return elements
+  try {
+    return [findDOMNode(elem)]
+  } catch (e) {
+    return null
+  }
 }

@@ -258,7 +258,7 @@ export type BaseRendererInstance<C = GeneralComponent<BaseRendererProps, Record<
   __checkSchema(schema: NodeSchema | undefined, extraComponents?: string | string[]): any
   __renderComp(Comp: any, ctxProps: object): any
   $(id: string, instance?: any): any
-  context: BaseRendererContext
+  context: BaseRendererContext<C>
   __designModeIsDesign?: boolean
 }
 

@@ -2,7 +2,7 @@ import {
   type SimulatorRenderer as ISimulatorRenderer,
   type NodeInstance,
   type Simulator,
-  isElement,
+  isElementNode,
 } from '@easy-editor/core'
 import type { RendererProps } from '@easy-editor/react-renderer'
 import { type MemoryHistory, createMemoryHistory } from 'history'
@@ -12,7 +12,7 @@ import { type ReactInstance, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { SimulatorRendererView } from './RendererView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
-import { buildComponents, getClientRects, withQueryParams } from './utils'
+import { buildComponents, getClientRects, reactFindDOMNodes, withQueryParams } from './utils'
 
 export class SimulatorRendererContainer implements ISimulatorRenderer {
   readonly isSimulatorRenderer = true
@@ -98,8 +98,8 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
           // if (this._libraryMap !== host.libraryMap) {
           //   this._libraryMap = host.libraryMap || {}
           // }
-          if (this._componentsMap !== this.host.designer.componentMetaManager.componentsMap) {
-            this._componentsMap = this.host.designer.componentMetaManager.componentsMap
+          if (this._componentsMap !== this.host.designer.materials.componentsMap) {
+            this._componentsMap = this.host.designer.materials.componentsMap
             this.buildComponents()
           }
 
@@ -205,6 +205,10 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
   getClosestNodeInstance(from: ReactInstance, nodeId?: string): NodeInstance<ReactInstance> | null {
     return getClosestNodeInstance(from, nodeId)
+  }
+
+  findDOMNodes(instance: ReactInstance): Array<Element | Text> | null {
+    return reactFindDOMNodes(instance)
   }
 
   getClientRects(element: Element | Text) {
@@ -325,7 +329,7 @@ export const getReactInternalFiber = (el: any) => {
 const getClosestNodeInstance = (from: ReactInstance, specId?: string): NodeInstance<ReactInstance> | null => {
   let el: any = from
   if (el) {
-    if (isElement(el)) {
+    if (isElementNode(el)) {
       el = cacheReactKey(el)
     } else {
       return getNodeInstance(getReactInternalFiber(el), specId)

@@ -1,4 +1,4 @@
-import { type Document, type Node, TRANSFORM_STAGE, isElement } from '@easy-editor/core'
+import { type Document, type Node, TRANSFORM_STAGE, isElementNode } from '@easy-editor/core'
 import type { RendererProps } from '@easy-editor/react-renderer'
 import { computed, observable } from 'mobx'
 import type { ReactInstance } from 'react'
@@ -116,7 +116,7 @@ export class DocumentInstance {
       // 另外一个节点的 instance 在此被复用了，需要从原来地方卸载
       unmountInstance(origId, instance)
     }
-    if (isElement(instance)) {
+    if (isElementNode(instance)) {
       cacheReactKey(instance)
     } else if (origId !== id) {
       // 涵盖 origId == null || origId !== id 的情况
@@ -181,7 +181,7 @@ export const cacheReactKey = (el: Element): Element => {
 }
 
 const checkInstanceMounted = (instance: any): boolean => {
-  if (isElement(instance)) {
+  if (isElementNode(instance)) {
     // 检查元素是否仍在文档中
     return document.contains(instance)
   }
