@@ -11,7 +11,5 @@ export * from './simulator'
 export * from './types'
 export * from './utils'
 
-export const DEV = '_EASY_EDITOR_DEV_'
-
 export const version = '_EASY_EDITOR_VERSION_'
 config.set('CORE_VERSION', version)

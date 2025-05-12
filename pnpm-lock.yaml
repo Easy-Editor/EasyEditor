@@ -329,6 +329,22 @@ importers:
         specifier: ^4.17.12
         version: 4.17.12
 
+  packages/renderer-core:
+    dependencies:
+      '@easy-editor/core':
+        specifier: workspace:^
+        version: link:../core
+      '@easy-editor/datasource-engine':
+        specifier: workspace:^
+        version: link:../datasource-engine
+      lodash-es:
+        specifier: ^4.17.21
+        version: 4.17.21
+    devDependencies:
+      '@types/lodash-es':
+        specifier: ^4.17.12
+        version: 4.17.12
+
 packages:
 
   '@algolia/autocomplete-core@1.17.7':

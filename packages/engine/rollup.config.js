@@ -32,7 +32,6 @@ const plugins = [
 
 const replaceDev = isDev =>
   replace({
-    _EASY_EDITOR_DEV_: isDev,
     _EASY_EDITOR_ENGINE_VERSION_: pkg.version,
     preventAssignment: true,
     delimiters: ['', ''],
@@ -48,17 +47,7 @@ export default [
         sourcemap: true,
       },
       {
-        file: 'dist/cjs/index.production.js',
-        format: 'cjs',
-        sourcemap: true,
-      },
-      {
         file: 'dist/esm/index.js',
-        format: 'es',
-        sourcemap: true,
-      },
-      {
-        file: 'dist/esm/index.production.js',
         format: 'es',
         sourcemap: true,
       },
@@ -68,21 +57,5 @@ export default [
       },
     ],
     plugins: [replaceDev(false)].concat(plugins),
-  },
-  {
-    input: 'src/index.ts',
-    output: [
-      {
-        file: 'dist/cjs/index.development.js',
-        format: 'cjs',
-        sourcemap: true,
-      },
-      {
-        file: 'dist/esm/index.development.js',
-        format: 'es',
-        sourcemap: true,
-      },
-    ],
-    plugins: [replaceDev(true)].concat(plugins),
   },
 ]
