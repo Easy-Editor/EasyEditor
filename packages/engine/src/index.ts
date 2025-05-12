@@ -2,8 +2,6 @@ import { version } from './engine'
 
 export * from './engine'
 
-export const DEV = '_EASY_EDITOR_DEV_'
-
 console.log(
   `%c EasyEditor Engine %c v${version} `,
   'padding: 2px 1px; border-radius: 3px 0 0 3px; color: #fff; background: #606060; font-weight: bold;',

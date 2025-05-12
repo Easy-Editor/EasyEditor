@@ -1,8 +1,8 @@
+import { type BaseRendererProps, logger } from '@easy-editor/renderer-core'
 import { baseRendererFactory } from './base'
-import type { BaseRenderComponent, BaseRendererProps } from './types'
-import { logger } from './utils'
+import type { BaseRendererComponent } from './types'
 
-export function pageRendererFactory(): BaseRenderComponent {
+export function pageRendererFactory(): BaseRendererComponent {
   const BaseRenderer = baseRendererFactory()
 
   return class PageRenderer extends BaseRenderer {

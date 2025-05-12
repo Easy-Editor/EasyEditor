@@ -103,14 +103,14 @@ export interface RendererProps {
   excuteLifeCycleInDesignMode?: boolean
 }
 
-export interface RenderComponent {
+export interface RendererComponent<C = GeneralComponent<RendererProps, RendererState>> {
   displayName: string
   defaultProps: RendererProps
 
-  new (props: RendererProps): RendererComponentInstance
+  new (props: RendererProps): RendererComponentInstance<C>
 }
 
-export interface RendererComponentInstance extends GeneralComponent<RendererProps, RendererState> {
+export type RendererComponentInstance<C = GeneralComponent<RendererProps, RendererState>> = C & {
   __getRef: (ref: any) => void
   componentDidMount(): Promise<void> | void
   componentDidUpdate(): Promise<void> | void
@@ -224,15 +224,15 @@ export interface BaseRendererProps extends RendererProps {
   componentName?: string
 }
 
-export interface BaseRendererContext {
+export interface BaseRendererContext<C = GeneralComponent<BaseRendererProps, Record<string, any>, any>> {
   appHelper: RendererAppHelper
   components: Record<string, ComponentType<any>>
-  engine: RendererComponentInstance
-  pageContext?: BaseRenderComponent
-  compContext?: BaseRenderComponent
+  engine: RendererComponentInstance<C>
+  pageContext?: BaseRendererComponent<C>
+  compContext?: BaseRendererComponent<C>
 }
 
-export type BaseRendererInstance = GeneralComponent<BaseRendererProps, Record<string, any>, any> & {
+export type BaseRendererInstance<C = GeneralComponent<BaseRendererProps, Record<string, any>, any>> = C & {
   reloadDataSource(): Promise<any>
   __beforeInit(props: BaseRendererProps): void
   __init(props: BaseRendererProps): void
@@ -262,6 +262,6 @@ export type BaseRendererInstance = GeneralComponent<BaseRendererProps, Record<st
   __designModeIsDesign?: boolean
 }
 
-export interface BaseRenderComponent {
-  new (props: BaseRendererProps): BaseRendererInstance
+export interface BaseRendererComponent<C = GeneralComponent<BaseRendererProps, Record<string, any>, any>> {
+  new (props: BaseRendererProps): BaseRendererInstance<C>
 }

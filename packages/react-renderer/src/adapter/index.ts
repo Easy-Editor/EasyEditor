@@ -1,10 +1,10 @@
 import type { ComponentType } from 'react'
-import type { BaseRenderComponent } from '../types'
+import type { BaseRendererComponent } from '../types'
 
 export interface RendererModules {
-  BaseRenderer?: BaseRenderComponent
-  PageRenderer: BaseRenderComponent
-  ComponentRenderer: BaseRenderComponent
+  BaseRenderer?: BaseRendererComponent
+  PageRenderer: BaseRendererComponent
+  ComponentRenderer: BaseRendererComponent
 }
 
 class Adapter {
@@ -15,15 +15,15 @@ class Adapter {
     this.renderers = renderers
   }
 
-  setBaseRenderer(BaseRenderer: BaseRenderComponent) {
+  setBaseRenderer(BaseRenderer: BaseRendererComponent) {
     this.renderers.BaseRenderer = BaseRenderer
   }
 
-  setPageRenderer(PageRenderer: BaseRenderComponent) {
+  setPageRenderer(PageRenderer: BaseRendererComponent) {
     this.renderers.PageRenderer = PageRenderer
   }
 
-  setComponentRenderer(ComponentRenderer: BaseRenderComponent) {
+  setComponentRenderer(ComponentRenderer: BaseRendererComponent) {
     this.renderers.ComponentRenderer = ComponentRenderer
   }
 

@@ -20,12 +20,12 @@ const designer = new Designer({ editor })
 const { project } = designer
 const hotkey = new Hotkey()
 const setters = new Setters()
-const material = new Materials(editor)
+const materials = new Materials(editor)
 
 editor.set('designer', designer)
 editor.set('project', project)
 editor.set('setters', setters)
-editor.set('materials', material)
+editor.set('materials', materials)
 editor.set('hotkey', hotkey)
 
 const event = new Event(commonEvent, { prefix: 'common' })
@@ -37,7 +37,7 @@ const pluginContextApiAssembler: PluginContextApiAssembler = {
     context.hotkey = hotkey
     context.project = project
     context.setters = setters
-    context.material = material
+    context.materials = materials
     const eventPrefix = meta?.eventPrefix || 'common'
     context.event = new Event(commonEvent, { prefix: eventPrefix })
     context.config = config
@@ -76,4 +76,4 @@ export const destroy = async () => {
   await plugins.destroy()
 }
 
-export { config, event, hotkey, logger, material, plugins, project, setters }
+export { config, event, hotkey, logger, materials, plugins, project, setters }
