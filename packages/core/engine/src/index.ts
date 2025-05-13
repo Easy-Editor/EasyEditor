@@ -1,6 +1,9 @@
-import { version } from './engine'
+import { config } from '@easy-editor/core'
 
 export * from './engine'
+
+export const version = '_EASY_EDITOR_ENGINE_VERSION_'
+config.set('ENGINE_VERSION', version)
 
 console.log(
   `%c EasyEditor Engine %c v${version} `,

@@ -51,29 +51,39 @@ plugins = innerPlugins.toProxy()
 editor.set('innerPlugins', innerPlugins)
 editor.set('plugins', plugins)
 
-export const version = '_EASY_EDITOR_ENGINE_VERSION_'
-config.set('ENGINE_VERSION', version)
+let isInit = false
 
 export const init = async (options?: ConfigOptions) => {
-  // await destroy()
+  await destroy()
 
   if (options) {
     config.setEngineOptions(options)
   }
 
+  logger.info('plugins extending...')
   await plugins.extend()
 
+  logger.info('plugins initing...')
   await plugins.init()
+
+  isInit = true
+  logger.info('Engine initialization successfully')
 }
 
 export const destroy = async () => {
+  if (!isInit) return
+
   // remove all documents
   const { documents } = project
   if (Array.isArray(documents) && documents.length > 0) {
     documents.forEach(doc => project.removeDocument(doc))
   }
 
+  logger.info('plugins destroying...')
   await plugins.destroy()
+
+  isInit = false
+  logger.info('Engine destruction successfully')
 }
 
 export { config, event, hotkey, logger, materials, plugins, project, setters }
