@@ -1,4 +1,4 @@
-import type { ComponentType } from './types'
+import type { Component } from './types'
 import { createLogger, isPlainObject } from './utils'
 
 const logger = createLogger('Config')
@@ -6,24 +6,18 @@ const logger = createLogger('Config')
 export interface ConfigOptions {
   /**
    * 是否开启 condition 的能力，默认在设计器中不管 condition 是啥都正常展示
-   * when this is true, node that configured as conditional not renderring
-   * will not display in canvas.
    * @default false
    */
   enableCondition?: boolean
 
   /**
-   * TODO: designMode 无法映射到文档渲染模块
-   *
-   * 设计模式，live 模式将会实时展示变量值，默认值：'design'
-   *
+   * 设计模式，live 模式将会实时展示变量值
    * @default 'design'
-   * @experimental
    */
   designMode?: 'design' | 'live'
 
   /**
-   * 设备类型，默认值：'default'
+   * 设备类型
    * @default 'default'
    */
   device?: 'default' | 'mobile' | string
@@ -34,312 +28,64 @@ export interface ConfigOptions {
   deviceClassName?: string
 
   /**
-   * 语言，默认值：'zh-CN'
+   * 语言
    * @default 'zh-CN'
    */
   locale?: string
 
   /**
-   * 渲染器类型，默认值：'react'
+   * 渲染器类型
    */
-  renderEnv?: 'react' | 'rax' | string
+  renderEnv?: 'react' | 'vue' | string
 
   /**
-   * 设备类型映射器，处理设计器与渲染器中 device 的映射
-   */
-  deviceMapper?: {
-    transform: (originalDevice: string) => string
-  }
-
-  /**
-   * 开启严格插件模式，默认值：STRICT_PLUGIN_MODE_DEFAULT , 严格模式下，插件将无法通过 engineOptions 传递自定义配置项
-   * enable strict plugin mode, default value: false
-   * under strict mode, customed engineOption is not accepted.
-   */
-  enableStrictPluginMode?: boolean
-
-  /**
-   * 开启拖拽组件时，即将被放入的容器是否有视觉反馈，默认值：false
-   */
-  enableReactiveContainer?: boolean
-
-  /**
-   * 关闭画布自动渲染，在资产包多重异步加载的场景有效，默认值：false
+   * 关闭画布自动渲染
+   * @default false
    */
   disableAutoRender?: boolean
 
   /**
-   * 关闭拖拽组件时的虚线响应，性能考虑，默认值：false
-   */
-  disableDetecting?: boolean
-
-  /**
-   * 定制画布中点击被忽略的 selectors，默认值：undefined
-   */
-  customizeIgnoreSelectors?: (defaultIgnoreSelectors: string[], e: MouseEvent) => string[]
-
-  /**
-   * 禁止默认的设置面板，默认值：false
-   */
-  disableDefaultSettingPanel?: boolean
-
-  /**
-   * 禁止默认的设置器，默认值：false
-   */
-  disableDefaultSetters?: boolean
-
-  /**
-   * 打开画布的锁定操作，默认值：false
-   */
-  enableCanvasLock?: boolean
-
-  /**
-   * 容器锁定后，容器本身是否可以设置属性，仅当画布锁定特性开启时生效，默认值为：false
+   * 容器锁定后，容器本身是否可以设置属性，仅当画布锁定特性开启时生效
+   * @default false
+   * @todo
    */
   enableLockedNodeSetting?: boolean
 
   /**
-   * 当选中节点切换时，是否停留在相同的设置 tab 上，默认值：false
-   */
-  stayOnTheSameSettingTab?: boolean
-
-  /**
-   * 是否在只有一个 item 的时候隐藏设置 tabs，默认值：false
-   */
-  hideSettingsTabsWhenOnlyOneItem?: boolean
-
-  /**
-   * 自定义 loading 组件
-   */
-  loadingComponent?: ComponentType
-
-  /**
-   * 设置所有属性支持变量配置，默认值：false
-   */
-  supportVariableGlobally?: boolean
-
-  /**
-   * 设置 simulator 相关的 url，默认值：undefined
-   */
-  simulatorUrl?: string[]
-
-  /**
-   * Vision-polyfill settings
-   * @deprecated this exists for some legacy reasons
-   */
-  visionSettings?: {
-    // 是否禁用降级 reducer，默认值：false
-    disableCompatibleReducer?: boolean
-    // 是否开启在 render 阶段开启 filter reducer，默认值：false
-    enableFilterReducerInRenderStage?: boolean
-  }
-
-  /**
-   * 与 react-renderer 的 appHelper 一致，https://lowcode-engine.cn/site/docs/guide/expand/runtime/renderer#apphelper
+   * 与 renderer 的 appHelper 一致
    */
   appHelper?: {
-    /** 全局公共函数 */
     utils?: Record<string, any>
-
-    /** 全局常量 */
     constants?: Record<string, any>
+    [key: string]: any
   }
 
   /**
    * 数据源引擎的请求处理器映射
    */
-  // requestHandlersMap?: RequestHandlersMap
   requestHandlersMap?: any
 
   /**
-   * @default true
-   * JSExpression 是否只支持使用 this 来访问上下文变量，假如需要兼容原来的 'state.xxx'，则设置为 false
-   */
-  thisRequiredInJSE?: boolean
-
-  /**
-   * @default false
    * 当开启组件未找到严格模式时，渲染模块不会默认给一个容器组件
+   * @default false
    */
   enableStrictNotFoundMode?: boolean
 
   /**
-   * 配置指定节点为根组件
+   * 是否在设计态中执行生命周期，默认只在运行态执行
+   * @default false
    */
-  focusNodeSelector?: (rootNode: Node) => Node
+  excuteLifeCycleInDesignMode?: boolean
 
   /**
-   * 开启应用级设计模式
+   * 当找不到组件时显示的组件
    */
-  enableWorkspaceMode?: boolean
+  notFoundComponent?: Component
 
   /**
-   * @default true
-   * 应用级设计模式下，自动打开第一个窗口
+   * 当组件渲染异常时显示的组件
    */
-  enableAutoOpenFirstWindow?: boolean
-}
-
-// this default behavior will be different later
-const STRICT_PLUGIN_MODE_DEFAULT = true
-
-// used in strict mode, when only options in this VALID_ENGINE_OPTIONS can be accepted
-// type and description are only used for developer`s assistance, won`t affect runtime
-const VALID_ENGINE_OPTIONS = {
-  enableCondition: {
-    type: 'boolean',
-    description: '是否开启 condition 的能力，默认在设计器中不管 condition 是啥都正常展示',
-  },
-  designMode: {
-    type: 'string',
-    enum: ['design', 'live'],
-    default: 'design',
-    description: '设计模式，live 模式将会实时展示变量值',
-  },
-  device: {
-    type: 'string',
-    enum: ['default', 'mobile', 'any string value'],
-    default: 'default',
-    description: '设备类型',
-  },
-  deviceClassName: {
-    type: 'string',
-    default: undefined,
-    description: '指定初始化的 deviceClassName，挂载到画布的顶层节点上',
-  },
-  locale: {
-    type: 'string',
-    default: 'zh-CN',
-    description: '语言',
-  },
-  renderEnv: {
-    type: 'string',
-    enum: ['react', 'rax', 'any string value'],
-    default: 'react',
-    description: '渲染器类型',
-  },
-  deviceMapper: {
-    type: 'object',
-    description: '设备类型映射器，处理设计器与渲染器中 device 的映射',
-  },
-  enableStrictPluginMode: {
-    type: 'boolean',
-    default: STRICT_PLUGIN_MODE_DEFAULT,
-    description:
-      '开启严格插件模式，默认值：STRICT_PLUGIN_MODE_DEFAULT , 严格模式下，插件将无法通过 engineOptions 传递自定义配置项',
-  },
-  enableReactiveContainer: {
-    type: 'boolean',
-    default: false,
-    description: '开启拖拽组件时，即将被放入的容器是否有视觉反馈',
-  },
-  disableAutoRender: {
-    type: 'boolean',
-    default: false,
-    description: '关闭画布自动渲染，在资产包多重异步加载的场景有效',
-  },
-  disableDetecting: {
-    type: 'boolean',
-    default: false,
-    description: '关闭拖拽组件时的虚线响应，性能考虑',
-  },
-  customizeIgnoreSelectors: {
-    type: 'function',
-    default: undefined,
-    description: '定制画布中点击被忽略的 selectors, eg. (defaultIgnoreSelectors: string[], e: MouseEvent) => string[]',
-  },
-  disableDefaultSettingPanel: {
-    type: 'boolean',
-    default: false,
-    description: '禁止默认的设置面板',
-  },
-  disableDefaultSetters: {
-    type: 'boolean',
-    default: false,
-    description: '禁止默认的设置器',
-  },
-  enableCanvasLock: {
-    type: 'boolean',
-    default: false,
-    description: '打开画布的锁定操作',
-  },
-  enableLockedNodeSetting: {
-    type: 'boolean',
-    default: false,
-    description: '容器锁定后，容器本身是否可以设置属性，仅当画布锁定特性开启时生效',
-  },
-  stayOnTheSameSettingTab: {
-    type: 'boolean',
-    default: false,
-    description: '当选中节点切换时，是否停留在相同的设置 tab 上',
-  },
-  hideSettingsTabsWhenOnlyOneItem: {
-    type: 'boolean',
-    description: '是否在只有一个 item 的时候隐藏设置 tabs',
-  },
-  loadingComponent: {
-    type: 'ComponentType',
-    default: undefined,
-    description: '自定义 loading 组件',
-  },
-  supportVariableGlobally: {
-    type: 'boolean',
-    default: false,
-    description: '设置所有属性支持变量配置',
-  },
-  visionSettings: {
-    type: 'object',
-    description: 'Vision-polyfill settings',
-  },
-  simulatorUrl: {
-    type: 'array',
-    description: '自定义 simulatorUrl 的地址',
-  },
-  // 与 react-renderer 的 appHelper 一致，https://lowcode-engine.cn/site/docs/guide/expand/runtime/renderer#apphelper
-  appHelper: {
-    type: 'object',
-    description: '定义 utils 和 constants 等对象',
-  },
-  requestHandlersMap: {
-    type: 'object',
-    description: '数据源引擎的请求处理器映射',
-  },
-  thisRequiredInJSE: {
-    type: 'boolean',
-    description: 'JSExpression 是否只支持使用 this 来访问上下文变量',
-  },
-  enableStrictNotFoundMode: {
-    type: 'boolean',
-    description: '当开启组件未找到严格模式时，渲染模块不会默认给一个容器组件',
-  },
-  focusNodeSelector: {
-    type: 'function',
-    description: '配置指定节点为根组件',
-  },
-  enableAutoOpenFirstWindow: {
-    type: 'boolean',
-    description: '应用级设计模式下，自动打开第一个窗口',
-    default: true,
-  },
-  enableWorkspaceMode: {
-    type: 'boolean',
-    description: '是否开启应用级设计模式',
-    default: false,
-  },
-  workspaceEmptyComponent: {
-    type: 'function',
-    description: '应用级设计模式下，窗口为空时展示的占位组件',
-  },
-}
-
-const getStrictModeValue = (engineOptions: ConfigOptions, defaultValue: boolean): boolean => {
-  if (!engineOptions || !isPlainObject(engineOptions)) {
-    return defaultValue
-  }
-  if (engineOptions.enableStrictPluginMode === undefined || engineOptions.enableStrictPluginMode === null) {
-    return defaultValue
-  }
-  return engineOptions.enableStrictPluginMode
+  faultComponent?: Component
 }
 
 export class Config {
@@ -405,25 +151,7 @@ export class Config {
     if (!engineOptions || !isPlainObject(engineOptions)) {
       return
     }
-    const strictMode = getStrictModeValue(engineOptions, STRICT_PLUGIN_MODE_DEFAULT) === true
-    if (strictMode) {
-      const isValidKey = (key: string) => {
-        const result = (VALID_ENGINE_OPTIONS as any)[key]
-        return !(result === undefined || result === null)
-      }
-      Object.keys(engineOptions).forEach(key => {
-        if (isValidKey(key)) {
-          this.set(key, (engineOptions as any)[key])
-        } else {
-          logger.warn(
-            `failed to config ${key} to engineConfig, only predefined options can be set under strict mode, predefined options: `,
-            VALID_ENGINE_OPTIONS,
-          )
-        }
-      })
-    } else {
-      this.setConfig(engineOptions as any)
-    }
+    this.setConfig(engineOptions as any)
   }
 
   /**

@@ -71,11 +71,34 @@ export class Simulator {
     return this.designer.editor
   }
 
-  @computed get device(): string {
+  @computed
+  get renderEnv(): string {
+    return this.get('renderEnv') || 'default'
+  }
+
+  @computed
+  get device(): string {
     return this.get('device') || 'default'
   }
 
-  @computed get requestHandlersMap(): any {
+  @computed
+  get locale(): string {
+    return this.get('locale')
+  }
+
+  @computed
+  get deviceClassName(): string | undefined {
+    return this.get('deviceClassName')
+  }
+
+  @computed
+  get designMode(): DesignMode {
+    // renderer 依赖
+    return this.get('designMode') || 'design'
+  }
+
+  @computed
+  get requestHandlersMap(): any {
     // renderer 依赖
     return this.get('requestHandlersMap') || null
   }
@@ -97,15 +120,12 @@ export class Simulator {
   }
 
   @computed
-  get designMode(): DesignMode {
-    return this.get('designMode') || 'design'
-  }
-
-  @computed get deviceStyle(): DeviceStyleProps | undefined {
+  get deviceStyle(): DeviceStyleProps | undefined {
     return this.get('deviceStyle')
   }
 
-  @computed get componentsMap() {
+  @computed
+  get componentsMap() {
     // renderer 依赖
     return this.designer.materials.componentsMap
   }
@@ -397,7 +417,7 @@ export class Simulator {
       } else {
         detecting.capture(null)
       }
-      if (!config.get('enableMouseEventPropagationInCanvas', false) || dragon.dragging) {
+      if (dragon.dragging) {
         e.stopPropagation()
       }
     }
@@ -412,7 +432,7 @@ export class Simulator {
     doc.addEventListener(
       'mousemove',
       (e: Event) => {
-        if (!config.get('enableMouseEventPropagationInCanvas', false) || dragon.dragging) {
+        if (dragon.dragging) {
           e.stopPropagation()
         }
       },
