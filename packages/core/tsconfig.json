@@ -1,4 +1,9 @@
 {
   "extends": "./tsconfig.build.json",
-  "include": ["./src", "./test"],
+  "include": ["./src", "./test", "./engine"],
+  "compilerOptions": {
+    "paths": {
+      "@easy-editor/core": ["./src"]
+    }
+  }
 }

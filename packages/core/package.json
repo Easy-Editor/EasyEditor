@@ -18,8 +18,13 @@
     "exports": {
       ".": {
         "import": "./dist/index.js",
-        "require": "./dist/cjs/index.js",
+        "require": "./dist/index.cjs",
         "default": "./dist/index.js"
+      },
+      "./engine": {
+        "import": "./dist/engine/index.js",
+        "require": "./dist/engine/index.cjs",
+        "default": "./dist/engine/index.js"
       }
     }
   },
@@ -63,5 +68,8 @@
   },
   "dependencies": {
     "nanoid": "^5.0.7"
+  },
+  "devDependencies": {
+    "@rollup/plugin-alias": "^5.1.1"
   }
 }
