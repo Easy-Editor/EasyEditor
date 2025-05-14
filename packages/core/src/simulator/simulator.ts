@@ -179,9 +179,9 @@ export class Simulator {
     return this.project.currentDocument
   }
 
-  constructor(designer: Designer) {
+  constructor(project: Project, designer: Designer) {
     this.designer = designer
-    this.project = designer.project
+    this.project = project
     this.viewport = new Viewport(designer)
     this.scroller = this.designer.createScroller(this.viewport)
     this.autoRender = !config.get('disableAutoRender', false)
