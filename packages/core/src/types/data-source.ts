@@ -20,3 +20,15 @@ export interface DataSource {
   list?: DataSourceItem[]
   dataHandler?: JSExpression
 }
+
+export interface DataSourceEngine {
+  createDataSourceEngine: (
+    dataSource: DataSource,
+    engine: any,
+  ) => {
+    dataSourceMap: Record<string, any>
+    reloadDataSource: () => Promise<void>
+  }
+
+  [key: string]: any
+}
