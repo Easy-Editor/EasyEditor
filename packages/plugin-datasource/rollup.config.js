@@ -25,31 +25,20 @@ const plugins = [
   }),
 ]
 
-const createConfig = (input, outputName) => ({
-  input,
-  output: [
-    {
-      file: `dist/cjs/${outputName}.js`,
-      format: 'cjs',
-      sourcemap: true,
-    },
-    {
-      file: `dist/esm/${outputName}.js`,
-      format: 'es',
-      sourcemap: true,
-    },
-    {
-      file: `dist/${outputName}.js`,
-      format: 'es',
-    },
-  ],
-  plugins,
-  external,
-})
-
 export default [
-  createConfig('src/index.ts', 'index'),
-  createConfig('src/runtime/index.ts', 'runtime'),
-  createConfig('src/interpret/index.ts', 'interpret'),
-  createConfig('src/handlers/fetch.ts', 'handlers/fetch'),
+  {
+    input: 'src/index.ts',
+    output: [
+      {
+        file: 'dist/index.js',
+        format: 'es',
+      },
+      {
+        file: 'dist/index.cjs',
+        format: 'cjs',
+      },
+    ],
+    plugins,
+    external,
+  },
 ]
