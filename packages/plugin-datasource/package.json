@@ -1,7 +1,7 @@
 {
-  "name": "@easy-editor/datasource-engine",
-  "version": "0.0.1",
-  "description": "DataSource Engine for EasyEditor",
+  "name": "@easy-editor/plugin-datasource",
+  "version": "0.0.0",
+  "description": "DataSource plugin for EasyEditor",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -9,10 +9,6 @@
     "LICENSE",
     "README.md"
   ],
-  "exports": {
-    ".": "./src/index.ts",
-    "./handlers/fetch": "./src/handlers/fetch.ts"
-  },
   "publishConfig": {
     "access": "public",
     "main": "dist/index.js",
@@ -22,13 +18,8 @@
     "exports": {
       ".": {
         "import": "./dist/index.js",
-        "require": "./dist/cjs/index.js",
+        "require": "./dist/index.js",
         "default": "./dist/index.js"
-      },
-      "./handlers/fetch": {
-        "import": "./dist/handlers/fetch.js",
-        "require": "./dist/cjs/handlers/fetch.js",
-        "default": "./dist/handlers/fetch.js"
       }
     }
   },
@@ -39,8 +30,8 @@
     "@easy-editor",
     "easyeditor",
     "low-code",
-    "editor",
-    "engine"
+    "plugin",
+    "datasource"
   ],
   "repository": {
     "type": "git",
@@ -60,8 +51,7 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "workspace:^",
-    "@easy-editor/react-renderer": "workspace:^"
+    "@easy-editor/core": "workspace:^"
   },
   "dependencies": {
     "lodash-es": "^4.17.21",
