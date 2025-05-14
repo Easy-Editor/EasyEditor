@@ -1,4 +1,5 @@
 import {
+  type ComponentMetadata,
   DESIGNER_EVENT,
   type Designer,
   type Document,
@@ -12,51 +13,57 @@ import {
   getConvertedExtraKey,
 } from '@easy-editor/core'
 import { GuideLine } from './designer/guideline'
-import { GroupComponent, GroupComponentMeta } from './materials/group'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
 export * from './type'
 
 interface DashboardPluginOptions {
-  group?: {
-    schema?: NodeSchema
+  /**
+   * 分组组件，用于大屏设计。允许将多个组件组合在一起，便于整体管理和移动。
+   */
+  group: {
+    /**
+     * 分组元数据
+     */
+    meta: ComponentMetadata
+
+    /**
+     * 创建分组时的初始化 schema
+     * @example
+     * ```ts
+     * {
+     *   componentName: 'Group',
+     *   title: '分组',
+     *   isGroup: true,
+     * }
+     * ```
+     */
+    initSchema: NodeSchema
   }
-
-  // TODO: 配置分组内容(schema、meta)
-  xxx?: string
-}
-
-const defaultGroupSchema = {
-  componentName: 'Group',
-  title: '分组',
-  isGroup: true,
 }
 
 const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
-  const { group = {} } = options || {}
-  const { schema: groupSchema = defaultGroupSchema } = group || {}
+  const { group } = options || {}
+  const { meta: groupMeta, initSchema: groupInitSchema } = group || {}
+
+  if (!groupMeta || !groupInitSchema) {
+    throw new Error('group meta and group init schema are required')
+  }
 
   return {
     name: 'DashboardPlugin',
     deps: [],
     init(ctx) {
-      const { designer, simulator, materials, hotkey, logger } = ctx
+      const { designer, simulator, materials } = ctx
       const { viewport } = simulator
 
-      // test hotkey
-      hotkey.bind('ctrl+d', e => {
-        e.preventDefault()
-        logger.log('ctrl+d')
-      })
+      // add group componentMeta
+      materials.createComponentMeta(groupMeta)
 
       // add guideline
       designer.onEvent(DESIGNER_EVENT.INIT, (designer: Designer) => {
         designer.guideline = new GuideLine(designer)
       })
-
-      // add componentMeta
-      materials.createComponentMeta(GroupComponentMeta)
-      simulator.addComponent('Group', GroupComponent)
 
       /* ---------------------------- NodeData to Node ---------------------------- */
       const startOffsetNodeData = { x: 0, y: 0 }
@@ -221,6 +228,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       })
 
       /* -------------------------------- Document -------------------------------- */
+      // TODO: group 和 ungroup 优化
       extend('Document', {
         group: {
           value(this: Document, nodeIdList: Node[] | string[]) {
@@ -231,7 +239,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
               nodeList = (nodeIdList as string[]).map(id => this.getNode(id)!)
             }
 
-            const groupNode = this.createNode(groupSchema)
+            const groupNode = this.createNode(groupInitSchema)
 
             // 计算所有节点的 index，确定分组的插入位置
             let maxZIndex = Number.POSITIVE_INFINITY
@@ -497,47 +505,6 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
           },
         },
       })
-      /* -------------------------------- Viewport -------------------------------- */
-      /**
-       * 这里需要对坐标转换的偏移做额外的处理，因为在大屏的使用中，外层画布容器使用到了 translate(-50%, -50%) 进行居中定位，但是
-       * 在计算坐标的时候，需要减去这个偏移量，否则会导致坐标转换不准确
-       */
-      // Object.defineProperties(Viewport.prototype, {
-      //   // 局部坐标 -> 缩放(×scale) -> 加上视口偏移(+rect.left/top) -> 减去居中偏移(-centerOffset) -> 全局坐标
-      //   toGlobalPoint: {
-      //     value(this: Viewport, point: Point) {
-      //       if (!this.viewportElement) {
-      //         return point
-      //       }
-
-      //       const rect = this.bounds
-      //       const centerOffsetX = rect.width * 0.5
-      //       const centerOffsetY = rect.height * 0.5
-
-      //       return {
-      //         clientX: point.clientX * this.scale + rect.left - centerOffsetX,
-      //         clientY: point.clientY * this.scale + rect.top - centerOffsetY,
-      //       }
-      //     },
-      //   },
-      //   // 全局坐标 -> 减去视口偏移(-rect.left/top) -> 加上居中偏移(+centerOffset) -> 缩放还原(/scale) -> 局部坐标
-      //   toLocalPoint: {
-      //     value(this: Viewport, point: Point): Point {
-      //       if (!this.viewportElement) {
-      //         return point
-      //       }
-
-      //       const rect = this.bounds
-      //       const centerOffsetX = rect.width * 0.5
-      //       const centerOffsetY = rect.height * 0.5
-
-      //       return {
-      //         clientX: (point.clientX - rect.left + centerOffsetX) / this.scale,
-      //         clientY: (point.clientY - rect.top + centerOffsetY) / this.scale,
-      //       }
-      //     },
-      //   },
-      // })
     },
   }
 }

@@ -1,30 +1,21 @@
 import babel from '@rollup/plugin-babel'
-import commonjs from '@rollup/plugin-commonjs'
 import nodeResolve from '@rollup/plugin-node-resolve'
 import cleanup from 'rollup-plugin-cleanup'
 import pkg from './package.json' assert { type: 'json' }
 
-const external = [...Object.keys(pkg.peerDependencies), 'react/jsx-runtime']
+const external = [...Object.keys(pkg.peerDependencies)]
 
 const plugins = [
   nodeResolve({
-    extensions: ['.js', '.ts', '.jsx', '.tsx'],
+    extensions: ['.js', '.ts'],
+    browser: true,
   }),
-  commonjs(),
   babel({
-    extensions: ['.js', '.ts', '.jsx', '.tsx'],
+    extensions: ['.js', '.ts'],
     exclude: 'node_modules/**',
     babelrc: false,
     babelHelpers: 'bundled',
-    presets: [
-      ['@babel/preset-react', { runtime: 'automatic' }],
-      [
-        '@babel/preset-typescript',
-        {
-          allowDeclareFields: true,
-        },
-      ],
-    ],
+    presets: [['@babel/preset-typescript']],
     plugins: [
       [
         '@babel/plugin-proposal-decorators',
