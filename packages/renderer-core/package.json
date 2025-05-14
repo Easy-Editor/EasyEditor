@@ -1,7 +1,7 @@
 {
   "name": "@easy-editor/renderer-core",
   "version": "0.0.0",
-  "description": "Renderer Core package for EasyEditor.",
+  "description": "Renderer Core package for EasyEditor",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -18,7 +18,7 @@
     "exports": {
       ".": {
         "import": "./dist/index.js",
-        "require": "./dist/cjs/index.js",
+        "require": "./dist/index.cjs",
         "default": "./dist/index.js"
       }
     }

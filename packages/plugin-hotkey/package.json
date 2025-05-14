@@ -1,7 +1,7 @@
 {
   "name": "@easy-editor/plugin-hotkey",
   "version": "0.0.14",
-  "description": "Hotkey plugin for EasyEditor.",
+  "description": "Hotkey plugin for EasyEditor",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -18,7 +18,7 @@
     "exports": {
       ".": {
         "import": "./dist/index.js",
-        "require": "./dist/cjs/index.js",
+        "require": "./dist/index.cjs",
         "default": "./dist/index.js"
       }
     }
@@ -33,7 +33,7 @@
     "editor",
     "engine",
     "plugin",
-    "dashboard"
+    "hotkey"
   ],
   "repository": {
     "type": "git",

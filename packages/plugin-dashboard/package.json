@@ -1,7 +1,7 @@
 {
   "name": "@easy-editor/plugin-dashboard",
   "version": "0.0.17",
-  "description": "Dashboard plugin for EasyEditor.",
+  "description": "Dashboard plugin for EasyEditor",
   "type": "module",
   "main": "src/index.ts",
   "files": [
@@ -18,7 +18,7 @@
     "exports": {
       ".": {
         "import": "./dist/index.js",
-        "require": "./dist/cjs/index.js",
+        "require": "./dist/index.cjs",
         "default": "./dist/index.js"
       }
     }
