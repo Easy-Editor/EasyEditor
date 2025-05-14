@@ -14,7 +14,7 @@ import {
 import type { Scroller } from '../designer/scroller'
 import { type Node, getClosestClickableNode, getClosestNode } from '../document'
 import type { Project } from '../project'
-import type { Component, ComponentInstance, DataSourceEngine, Snippet } from '../types'
+import type { ComponentInstance, DataSourceEngine, Snippet } from '../types'
 import { type Hotkey, createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
 import type { SimulatorRenderer } from './simulator-renderer'
 import { Viewport } from './viewport'
@@ -145,17 +145,6 @@ export class Simulator {
   }
 
   @observable.ref private accessor _appHelper: any
-
-  // TODO: remove
-  @observable.ref private accessor _components: Record<string, Component> = {}
-
-  /**
-   * material to component map
-   */
-  @computed
-  get components() {
-    return this._components
-  }
 
   @observable private accessor instancesMap: {
     [docId: string]: Map<string, ComponentInstance[]>
@@ -438,20 +427,6 @@ export class Simulator {
       },
       true,
     )
-  }
-
-  @action
-  buildComponentMap(components: Record<string, Component>) {
-    this._components = components
-  }
-
-  @action
-  addComponent(name: string, component: Component, override = false) {
-    if (this._components[name] && !override) {
-      return
-    }
-
-    this._components[name] = component
   }
 
   @action
