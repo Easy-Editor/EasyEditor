@@ -34,11 +34,11 @@ export class DocumentInstance {
     return this._designMode
   }
 
-  @observable.ref private accessor _requestHandlersMap: any = null
+  @observable.ref private accessor _dataSourceEngine: any = null
 
   @computed
-  get requestHandlersMap() {
-    return this._requestHandlersMap
+  get dataSourceEngine() {
+    return this._dataSourceEngine
   }
 
   @observable.ref private accessor _device: NonNullable<RendererProps['device']> = 'default'

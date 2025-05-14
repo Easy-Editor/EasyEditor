@@ -17,7 +17,7 @@ import { buildComponents, getClientRects, reactFindDOMNodes, withQueryParams } f
 export class SimulatorRendererContainer implements ISimulatorRenderer {
   readonly isSimulatorRenderer = true
 
-  private _requestHandlersMap: any
+  private _dataSourceEngine: any
 
   private disposeFunctions: Array<() => void> = []
 
@@ -106,8 +106,8 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
           // sync designMode
           this._designMode = this.host.designMode
 
-          // sync requestHandlersMap
-          this._requestHandlersMap = this.host.requestHandlersMap
+          // sync dataSourceEngine
+          this._dataSourceEngine = this.host.dataSourceEngine
 
           // sync device
           this._device = this.host.device
@@ -159,7 +159,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
         },
       },
       constants: {},
-      requestHandlersMap: this._requestHandlersMap,
+      dataSourceEngine: this._dataSourceEngine,
     }
   }
 

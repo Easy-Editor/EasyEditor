@@ -8,7 +8,6 @@ import {
   isJSExpression,
   isJSFunction,
 } from '@easy-editor/core'
-import { createInterpret as createDataSourceEngine } from '@easy-editor/datasource-engine'
 import {
   type BaseRendererProps,
   DataHelper,
@@ -281,19 +280,19 @@ export function baseRendererFactory(): BaseRendererComponent {
         list: [],
       }
       const dataSource = schema.dataSource || defaultDataSource
-      // requestHandlersMap 存在才走数据源引擎方案
-      // TODO: 下面if else 抽成独立函数
-      const useDataSourceEngine = !!props.__appHelper?.requestHandlersMap
+      const useDataSourceEngine = !!props.__appHelper?.dataSourceEngine
       if (useDataSourceEngine) {
+        const dataSourceEngine = props.__appHelper?.dataSourceEngine
+        // TODO: 优化
+        if (!dataSourceEngine || !dataSourceEngine.createDataSourceEngine) {
+          logger.error('dataSourceEngine is not found in appHelper, please check your configuration')
+          return
+        }
+
+        const { createDataSourceEngine } = dataSourceEngine
         this.__dataHelper = {
           updateConfig: (updateDataSource: any) => {
-            const { dataSourceMap, reloadDataSource } = createDataSourceEngine(
-              updateDataSource ?? {},
-              this,
-              props.__appHelper?.requestHandlersMap
-                ? { requestHandlersMap: props.__appHelper.requestHandlersMap }
-                : undefined,
-            )
+            const { dataSourceMap, reloadDataSource } = createDataSourceEngine(updateDataSource ?? {}, this)
 
             this.reloadDataSource = () =>
               new Promise(resolve => {
@@ -938,8 +937,8 @@ export function baseRendererFactory(): BaseRendererComponent {
       return this.props.__appHelper
     }
 
-    get requestHandlersMap() {
-      return this.appHelper?.requestHandlersMap
+    get dataSourceEngine() {
+      return this.appHelper?.dataSourceEngine
     }
 
     get utils() {

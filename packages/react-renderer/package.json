@@ -70,7 +70,6 @@
     "@types/react-dom": "^18 || ^19"
   },
   "dependencies": {
-    "@easy-editor/datasource-engine": "workspace:^",
     "lodash-es": "^4.17.21"
   },
   "devDependencies": {

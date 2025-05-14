@@ -167,8 +167,18 @@ export interface RendererAppHelper {
   /** react-router 的 history 实例 */
   history?: HistoryLike
 
-  /** @experimental 内部使用 */
-  requestHandlersMap?: Record<string, any>
+  /** 数据源引擎 */
+  dataSourceEngine?: {
+    createDataSourceEngine: (
+      dataSource: DataSource,
+      engine: any,
+    ) => {
+      dataSourceMap: Record<string, any>
+      reloadDataSource: () => Promise<void>
+    }
+
+    [key: string]: any
+  }
 }
 
 export interface NodeInfo {
