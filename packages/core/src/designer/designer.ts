@@ -1,7 +1,8 @@
+import { computed, observable } from 'mobx'
 import { type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
 import type { Materials } from '../materials'
 import { Project } from '../project'
-import type { Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
+import type { ComponentMetadata, Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
 import { createEventBus, createLogger } from '../utils'
 import { ActiveTracker } from './active-tracker'
 import { Detecting } from './detecting'
@@ -27,7 +28,12 @@ export type PropsTransducer = (
 export interface DesignerProps {
   editor: Editor
   defaultSchema?: ProjectSchema
+  hotkeys?: object
+  simulatorProps?: Record<string, any> | ((project: Project) => object)
+  suspended?: boolean
+  componentMetadatas?: ComponentMetadata[]
 
+  onMount?: (designer: Designer) => void
   onDragstart?: (e: LocateEvent) => void
   onDrag?: (e: LocateEvent) => void
   onDragend?: (e: { dragObject: DragObject; copy: boolean }, loc?: DropLocation) => void
@@ -88,6 +94,10 @@ export class Designer {
   private propsReducers = new Map<TRANSFORM_STAGE, PropsTransducer[]>()
 
   private oobxList: OffsetObserver[] = []
+
+  @observable.ref private accessor _simulatorProps: Record<string, any> | ((project: Project) => object)
+
+  @observable.ref private accessor _suspended = false
 
   get currentDocument() {
     return this.project.currentDocument
@@ -207,6 +217,29 @@ export class Designer {
 
   setProps(nextProps: DesignerProps) {
     const props = this.props ? { ...this.props, ...nextProps } : nextProps
+
+    if (this.props) {
+      if (props.simulatorProps && props.simulatorProps !== this.props.simulatorProps) {
+        this._simulatorProps = props.simulatorProps
+      }
+      if (props.suspended && props.suspended !== this.props.suspended) {
+        this._suspended = props.suspended
+      }
+      if (props.componentMetadatas && props.componentMetadatas !== this.props.componentMetadatas) {
+        this.materials.buildComponentMetasMap(props.componentMetadatas)
+      }
+    } else {
+      if (props.simulatorProps) {
+        this._simulatorProps = props.simulatorProps
+      }
+      if (props.suspended != null) {
+        this._suspended = props.suspended
+      }
+      if (props.componentMetadatas != null) {
+        this.materials.buildComponentMetasMap(props.componentMetadatas)
+      }
+    }
+
     this.props = props
   }
 
@@ -282,6 +315,42 @@ export class Designer {
 
   get schema() {
     return this.project.export()
+  }
+
+  @computed
+  get simulatorProps(): Record<string, any> {
+    if (typeof this._simulatorProps === 'function') {
+      return this._simulatorProps(this.project)
+    }
+    return this._simulatorProps || {}
+  }
+
+  /**
+   * 提供给模拟器的参数
+   */
+  @computed
+  get projectSimulatorProps(): any {
+    return {
+      ...this.simulatorProps,
+      project: this.project,
+      designer: this,
+      onMount: (simulator: any) => {
+        this.project.mountSimulator(simulator)
+        this.editor.set('simulator', simulator)
+      },
+    }
+  }
+
+  get suspended(): boolean {
+    return this._suspended
+  }
+
+  set suspended(flag: boolean) {
+    this._suspended = flag
+    // Todo afterwards...
+    if (flag) {
+      // this.project.suspensed = true?
+    }
   }
 
   setSchema(schema: ProjectSchema) {

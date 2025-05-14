@@ -14,8 +14,8 @@ export class Materials {
 
   constructor(readonly editor: Editor) {}
 
-  buildComponentMetasMap = (metas: Record<string, ComponentMetadata>) => {
-    for (const meta of Object.values(metas)) {
+  buildComponentMetasMap = (metas: ComponentMetadata[]) => {
+    for (const meta of metas) {
       this.createComponentMeta(meta)
     }
   }
