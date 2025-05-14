@@ -1,7 +1,6 @@
 import babel from '@rollup/plugin-babel'
 import commonjs from '@rollup/plugin-commonjs'
 import nodeResolve from '@rollup/plugin-node-resolve'
-import replace from '@rollup/plugin-replace'
 import cleanup from 'rollup-plugin-cleanup'
 import pkg from './package.json' assert { type: 'json' }
 
@@ -41,32 +40,20 @@ const plugins = [
   }),
 ]
 
-const replaceDev = isDev =>
-  replace({
-    preventAssignment: true,
-    delimiters: ['', ''],
-  })
-
 export default [
   {
     input: 'src/index.ts',
     output: [
       {
-        file: 'dist/cjs/index.js',
-        format: 'cjs',
-        sourcemap: true,
-      },
-      {
-        file: 'dist/esm/index.js',
-        format: 'es',
-        sourcemap: true,
-      },
-      {
         file: 'dist/index.js',
         format: 'es',
       },
+      {
+        file: 'dist/index.cjs',
+        format: 'cjs',
+      },
     ],
-    plugins: [replaceDev(false)].concat(plugins),
+    plugins,
     external,
   },
 ]
