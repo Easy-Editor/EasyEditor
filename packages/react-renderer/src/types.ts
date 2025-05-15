@@ -10,8 +10,6 @@ import type {
 } from '@easy-editor/renderer-core'
 import type { Component } from 'react'
 
-export * from '@easy-editor/renderer-core'
-
 export type RendererComponent = IRendererComponent<Component<RendererProps, RendererState>>
 
 export type RendererComponentInstance = IRendererComponentInstance<Component<BaseRendererProps, RendererState>>

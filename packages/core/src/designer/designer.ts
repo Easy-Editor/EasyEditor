@@ -42,6 +42,7 @@ export interface DesignerProps {
 }
 
 export enum DESIGNER_EVENT {
+  MOUNT = 'designer:mount',
   INIT = 'designer:init',
   DRAG_START = 'designer:dragstart',
   DRAG = 'designer:drag',
@@ -215,7 +216,7 @@ export class Designer {
    */
   init() {}
 
-  setProps(nextProps: DesignerProps) {
+  setProps(nextProps: Partial<DesignerProps>) {
     const props = this.props ? { ...this.props, ...nextProps } : nextProps
 
     if (this.props) {
@@ -240,7 +241,7 @@ export class Designer {
       }
     }
 
-    this.props = props
+    this.props = props as DesignerProps
   }
 
   get(key: string) {
@@ -393,5 +394,13 @@ export class Designer {
 
   createSettingEntry(nodes: Node[]) {
     return new SettingTopEntry(this.editor, nodes)
+  }
+
+  purge() {
+    // TODO
+    this.props = undefined
+    this.propsReducers.clear()
+    this.oobxList.forEach(item => item.purge())
+    this.oobxList = []
   }
 }

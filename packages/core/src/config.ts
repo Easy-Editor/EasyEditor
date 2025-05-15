@@ -86,6 +86,11 @@ export interface ConfigOptions {
    * 当组件渲染异常时显示的组件
    */
   faultComponent?: Component
+
+  /**
+   * 项目进行初始化加载时显示的组件
+   */
+  loadingComponent?: Component
 }
 
 export class Config {

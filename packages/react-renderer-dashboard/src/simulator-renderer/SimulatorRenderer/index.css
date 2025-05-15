@@ -1,13 +1,109 @@
-/* TODO */
-.easy-editor-device-default-canvas {
-  top: var(--simulator-top-distance, 16px);
-  right: var(--simulator-right-distance, 16px);
-  bottom: var(--simulator-bottom-distance, 16px);
-  left: var(--simulator-left-distance, 16px);
-  width: auto;
+.lc-designer {
+  position: relative;
+  font-family: var(--font-family);
+  font-size: var(--font-size-text);
+  box-sizing: border-box;
+
+  * {
+    box-sizing: border-box;
+  }
 }
 
-/* TODO */
-.easy-editor-device-default-viewport {
-  box-shadow: 0 1px 40px 0 var(--color-block-background-shallow, rgba(31, 50, 88, 0.125));
+.lc-project {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+
+  .lc-simulator-shell {
+    width: 100%;
+    height: 100%;
+  }
+
+  .lc-simulator {
+    background-color: var(--color-background, rgb(237, 239, 243));
+  }
+}
+
+#engine-loading-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+.lc-simulator {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+
+  &-canvas {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    overflow: hidden;
+
+    &-viewport {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+
+      left: 50%;
+      top: 50%;
+      transform-origin: 0px 0px;
+      transform: scale(1) translate(-50%, -50%);
+    }
+  }
+
+  &-content {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    overflow: hidden;
+
+    &-frame {
+      border: none;
+      transform-origin: 0 0;
+      height: 100%;
+      width: 100%;
+    }
+  }
+
+  &-device-default {
+    top: var(--simulator-top-distance, 16px);
+    right: var(--simulator-right-distance, 16px);
+    bottom: var(--simulator-bottom-distance, 16px);
+    left: var(--simulator-left-distance, 16px);
+    width: auto;
+    box-shadow: 0 1px 4px 0 var(--color-block-background-shallow, rgba(31, 50, 88, 0.125));
+  }
+}
+
+.lc-component {
+  &.mask {
+    pointer-events: none;
+  }
+
+  &-container {
+    position: absolute;
+    border: none;
+    user-select: none;
+    touch-action: none;
+    pointer-events: auto;
+
+    &.mask {
+      cursor: move !important;
+    }
+  }
+
+  &-mask {
+    position: absolute;
+  }
 }

@@ -1,4 +1,4 @@
-import type { RendererProps } from '@easy-editor/react-renderer'
+import type { RendererProps } from '@easy-editor/renderer-core'
 import { LowCodeRenderer as Renderer } from './renderer'
 
 const LowCodeRenderer = (props: RendererProps) => {
