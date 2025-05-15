@@ -58,6 +58,7 @@
   "peerDependencies": {
     "@easy-editor/core": "workspace:^",
     "@easy-editor/plugin-dashboard": "workspace:^",
+    "@easy-editor/renderer-core": "workspace:^",
     "@easy-editor/react-renderer": "workspace:^",
     "@types/react": "^18 || ^19",
     "@types/react-dom": "^18 || ^19",

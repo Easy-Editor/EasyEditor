@@ -1,5 +1,6 @@
 import type { NodeSchema } from '@easy-editor/core'
 import { type ComponentHocInfo, createForwardRefHocElement } from '@easy-editor/react-renderer'
+import { classnames } from '@easy-editor/renderer-core'
 import { Component } from 'react'
 
 export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInfo, scope }: ComponentHocInfo) {
@@ -35,7 +36,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
       return (
         // mask 层
         <div
-          className={`easy-editor-component-container ${mask ? 'mask' : ''}`}
+          className={classnames('lc-component-container', mask && 'mask')}
           style={{
             left: rect.x,
             top: rect.y,
@@ -54,7 +55,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
             {/* 组件坐标定位 */}
             <div
               ref={forwardRef}
-              className='easy-editor-component-mask'
+              className='lc-component-mask'
               style={{
                 left: rect.x!,
                 top: rect.y!,
@@ -63,7 +64,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
               }}
             >
               {/* 组件渲染 */}
-              <Comp className={`easy-editor-component ${mask ? 'mask' : ''} ${className}`} {...rest}>
+              <Comp className={classnames('lc-component', mask && 'mask', className)} {...rest}>
                 {children && (
                   // 再次重置坐标系，用于内部组件定位
                   <div
