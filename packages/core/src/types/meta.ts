@@ -236,8 +236,7 @@ export interface Advanced {
   initialChildren?: NodeSchema[] | ((target: Node) => NodeSchema[])
 
   /**
-   * TODO: 补充文档
-   * @experimental not in spec yet
+   * 物料组件
    */
   view?: ComponentType<any>
 }
