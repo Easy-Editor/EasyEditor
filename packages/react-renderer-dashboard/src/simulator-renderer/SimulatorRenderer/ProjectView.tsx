@@ -1,7 +1,10 @@
 import { type Designer, config } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import { useEffect, useState } from 'react'
+import Logo from '../../assets/logo.svg'
 import { SimulatorView } from './SimulatorView'
+
+import './loading.css'
 
 interface ProjectViewProps {
   designer: Designer
@@ -32,12 +35,10 @@ export const ProjectView: React.FC<ProjectViewProps> = observer(props => {
 export const BuiltinLoading = () => {
   return (
     <div id='engine-loading-wrapper'>
-      <img
-        width='154'
-        height='100'
-        src='https://img.alicdn.com/tfs/TB1CmVgayERMeJjy0FcXXc7opXa-308-200.gif'
-        alt='loading'
-      />
+      <div className='loading-logo-container'>
+        <Logo className='breathing-logo' />
+        <div className='loading-text'>LOADING</div>
+      </div>
     </div>
   )
 }
