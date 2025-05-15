@@ -1,7 +1,9 @@
-import type { RendererProps } from '@easy-editor/react-renderer'
+import type { RendererProps } from '@easy-editor/renderer-core'
 import { useRef } from 'react'
 import LowCodeRenderer from '../renderer-core'
 import { useResizeObserver } from '../simulator-renderer/SimulatorRenderer/hooks/useResizeObserver'
+
+import './index.css'
 
 interface PureRendererProps extends RendererProps {
   /**
@@ -39,22 +41,20 @@ const PureRenderer: React.FC<PureRendererProps> = props => {
   })
 
   return (
-    <div className='easy-editor'>
-      {/* Canvas */}
-      <div ref={canvasRef} className='easy-editor-canvas'>
-        {/* viewport */}
+    <div className='lc-editor'>
+      <div ref={canvasRef} className='lc-editor-canvas'>
         <div
           ref={viewportRef}
-          className='easy-editor-viewport'
+          className='lc-editor-canvas-viewport'
           style={{
             width: viewportWidth,
             height: viewportHeight,
           }}
         >
-          {/* Content */}
-          <div className='easy-editor-content'>
-            {/* Renderer */}
-            <LowCodeRenderer {...(rendererProps as RendererProps)} />
+          <div className='lc-editor-content'>
+            <div className='lc-editor-content-frame'>
+              <LowCodeRenderer {...(rendererProps as RendererProps)} />
+            </div>
           </div>
         </div>
       </div>
