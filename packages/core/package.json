@@ -3,6 +3,13 @@
   "version": "0.0.16",
   "description": "A cross-framework low-code engine with scale-out design",
   "type": "module",
+  "main": "./src/index.ts",
+  "unpkg": "./src/index.ts",
+  "types": "types/index.d.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./engine": "./engine/src/index.ts"
+  },
   "files": [
     "dist",
     "engine/dist",
