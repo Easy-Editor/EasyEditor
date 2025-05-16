@@ -1,4 +1,4 @@
-import type { EventEmitter } from 'node:events'
+import type EventEmitter from 'events'
 import type { Plugin, Plugins } from '../plugin'
 import type { EventBus } from '../utils'
 import type { Component } from './component'

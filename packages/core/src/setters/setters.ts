@@ -42,7 +42,7 @@ export class Setters {
   @action
   registerSetter(
     typeOrMaps: string | { [key: string]: Component | Setter },
-    setter: Component | Setter,
+    setter?: Component | Setter,
     option?: RegisterSetterOption,
   ) {
     if (typeof typeOrMaps === 'object') {

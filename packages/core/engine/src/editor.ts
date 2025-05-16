@@ -10,8 +10,8 @@ import {
   config,
   createLogger,
 } from '@easy-editor/core'
+import EventEmitter from 'events'
 import { action, observable } from 'mobx'
-import { EventEmitter } from 'node:events'
 
 const logger = createLogger('Editor')
 

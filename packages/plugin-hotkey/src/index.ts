@@ -24,7 +24,8 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = (options = {} as Hotkey
     name: 'HotkeyPlugin',
     deps: [],
     init(ctx) {
-      const { hotkey, project, logger, designer } = ctx
+      const { hotkey, project, logger } = ctx
+      const { designer } = project
 
       // Define the default handler functions
       const handlers = {

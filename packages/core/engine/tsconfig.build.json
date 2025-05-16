@@ -1,0 +1,11 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "strictPropertyInitialization": false,
+    "outDir": "./dist",
+    "paths": {
+      "@easy-editor/core": ["../src"]
+    }
+  },
+  "include": ["./src"]
+}

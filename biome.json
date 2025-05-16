@@ -31,7 +31,8 @@
         "noUselessElse": "off",
         "noInferrableTypes": "error",
         "noNegationElse": "error",
-        "noParameterAssign": "off"
+        "noParameterAssign": "off",
+        "useNodejsImportProtocol": "off"
       },
       "correctness": {
         "useExhaustiveDependencies": "warn"
