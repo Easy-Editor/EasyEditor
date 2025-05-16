@@ -11,7 +11,7 @@ export interface ActiveTarget {
 }
 
 export class ActiveTracker {
-  @observable.ref private _target?: ActiveTarget | Node
+  @observable.ref private accessor _target: ActiveTarget | Node
 
   private emitter = createEventBus('ActiveTracker')
 

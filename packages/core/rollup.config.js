@@ -62,17 +62,19 @@ export default [
     input: 'engine/src/index.ts',
     output: [
       {
-        file: 'dist/engine/index.js',
+        file: 'engine/dist/index.js',
         format: 'es',
         paths: {
-          '../..': '../index.js',
+          '../..': '../../dist/index.js',
+          '@easy-editor/core': '../../dist/index.js',
         },
       },
       {
-        file: 'dist/engine/index.cjs',
+        file: 'engine/dist/index.cjs',
         format: 'cjs',
         paths: {
-          '../..': '../index.cjs',
+          '../..': '../../dist/index.cjs',
+          '@easy-editor/core': '../../dist/index.cjs',
         },
       },
     ],

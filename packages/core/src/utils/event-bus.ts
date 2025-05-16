@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events'
+import EventEmitter from 'events'
 import type { Disposable } from './hotkey'
 import { createLogger } from './logger'
 

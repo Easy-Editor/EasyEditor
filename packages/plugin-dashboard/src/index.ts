@@ -54,8 +54,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
     name: 'DashboardPlugin',
     deps: [],
     init(ctx) {
-      const { designer, simulator, materials } = ctx
-      const { viewport } = simulator
+      const { materials, project } = ctx
+      const { designer } = project
 
       // add group componentMeta
       materials.createComponentMeta(groupMeta)
@@ -70,6 +70,9 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
       designer.dragon.onDragstart(e => {
         if (!e.shell) return
+        const { simulator } = project
+        if (!simulator) return
+        const { viewport } = simulator
 
         const { dragObject } = e
         const shellRect = simulator.computeComponentInstanceRect(e.shell)
@@ -188,6 +191,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       })
 
       designer.dragon.onDragend(e => {
+        const { simulator } = project
+        if (!simulator) return
         const { dragObject, esc } = e
 
         if (dragObject && dragObject.type === DragObjectType.Node) {

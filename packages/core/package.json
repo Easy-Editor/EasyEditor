@@ -3,9 +3,9 @@
   "version": "0.0.16",
   "description": "A cross-framework low-code engine with scale-out design",
   "type": "module",
-  "main": "src/index.ts",
   "files": [
     "dist",
+    "engine/dist",
     "LICENSE",
     "README.md"
   ],
@@ -17,14 +17,14 @@
     "module": "dist/index.js",
     "exports": {
       ".": {
+        "types": "./dist/index.d.ts",
         "import": "./dist/index.js",
-        "require": "./dist/index.cjs",
-        "default": "./dist/index.js"
+        "require": "./dist/index.cjs"
       },
       "./engine": {
-        "import": "./dist/engine/index.js",
-        "require": "./dist/engine/index.cjs",
-        "default": "./dist/engine/index.js"
+        "types": "./engine/dist/index.d.ts",
+        "import": "./engine/dist/index.js",
+        "require": "./engine/dist/index.cjs"
       }
     }
   },
@@ -57,16 +57,18 @@
     "format": "biome format --write .",
     "lint": "biome check .",
     "build": "npm-run-all -nl build:*",
-    "build:clean": "rimraf dist/",
+    "build:clean": "rimraf dist/ engine/dist/",
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
     "types:src": "tsc --project tsconfig.build.json",
+    "types:engine": "tsc --project ./engine/tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
     "mobx": "^6.13.5"
   },
   "dependencies": {
+    "events": "^3.3.0",
     "nanoid": "^5.0.7"
   },
   "devDependencies": {

@@ -225,7 +225,6 @@ export class Simulator {
 
   @action
   purge() {
-    this._components = {}
     this._renderer = undefined
     this._contentDocument = undefined
     this._contentWindow = undefined
@@ -269,10 +268,6 @@ export class Simulator {
     const hotkey = this.editor.get<Hotkey>('hotkey')
     hotkey?.mount(this._contentWindow)
     clipboard.injectCopyPaster(this._contentDocument!)
-  }
-
-  getComponent(componentName: string) {
-    return this._components[componentName]
   }
 
   postEvent(eventName: string, ...data: any[]) {

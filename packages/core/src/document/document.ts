@@ -367,10 +367,6 @@ export class Document {
     return componentsMap
   }
 
-  getComponent(componentName: string) {
-    return this.simulator!.getComponent(componentName)
-  }
-
   getComponentMeta(componentName: string) {
     return this.designer.materials.getComponentMeta(componentName)
   }
