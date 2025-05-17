@@ -4,7 +4,7 @@
   width: 100%;
   overflow: auto;
 
-  &-canvas {
+  .lc-editor-canvas {
     position: absolute;
     top: 0;
     bottom: 0;
@@ -12,7 +12,7 @@
     width: 100%;
     overflow: hidden;
 
-    &-viewport {
+    .lc-editor-canvas-viewport {
       position: absolute;
       top: 0;
       bottom: 0;
@@ -26,14 +26,14 @@
     }
   }
 
-  &-content {
+  .lc-editor-content {
     position: absolute;
     top: 0;
     bottom: 0;
     left: 0;
     overflow: hidden;
 
-    &-frame {
+    .lc-editor-content-frame {
       border: none;
       transform-origin: 0 0;
       height: 100%;
@@ -42,24 +42,24 @@
   }
 }
 
-.lc-component {
+.lc-component-container {
+  position: absolute;
+  border: none;
+  user-select: none;
+  touch-action: none;
+  pointer-events: auto;
+
   &.mask {
-    pointer-events: none;
+    cursor: move !important;
   }
 
-  &-container {
+  .lc-component-mask {
     position: absolute;
-    border: none;
-    user-select: none;
-    touch-action: none;
-    pointer-events: auto;
+  }
 
+  .lc-component {
     &.mask {
-      cursor: move !important;
+      pointer-events: none;
     }
-  }
-
-  &-mask {
-    position: absolute;
   }
 }

@@ -2,7 +2,6 @@ import Renderer from './renderer'
 import { LowCodeRenderer } from './renderer-core/renderer'
 import { SimulatorRenderer, simulatorRenderer } from './simulator-renderer'
 
-import './css/editor.css'
 import './css/theme.css'
 
 export {

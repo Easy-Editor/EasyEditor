@@ -11,6 +11,7 @@ import {
 } from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import { defaultRootSchema } from './const'
 import { formatMapFromESModule } from './utils'
 
 const setterMap = formatMapFromESModule<Setter>(await import('./setters'))
@@ -47,6 +48,7 @@ const { designer } = project
 
 project.onSimulatorReady((simulator: Simulator) => {
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
+  project.open(defaultRootSchema)
 })
 
 export { designer, materials, plugins, project, setters }

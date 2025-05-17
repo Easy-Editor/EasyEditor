@@ -87,7 +87,7 @@ export class Designer {
   private _dropLocation?: DropLocation
 
   get materials() {
-    return this.editor.get<Materials>('Materials')!
+    return this.editor.get<Materials>('materials')!
   }
 
   private props?: DesignerProps

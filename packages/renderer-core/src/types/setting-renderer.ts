@@ -1,9 +1,7 @@
-import type { Component, Editor, Setters, SettingField } from '@easy-editor/core'
+import type { Component, Designer, SettingField } from '@easy-editor/core'
 
 export interface SettingRendererProps {
-  editor: Editor
-
-  setters: Setters
+  designer: Designer
 
   /** 自定义渲染 Field Item */
   customFieldItem?: (field: SettingField, setter: Component) => Component

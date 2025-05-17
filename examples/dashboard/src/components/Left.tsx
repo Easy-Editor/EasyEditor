@@ -1,5 +1,4 @@
-import { designer, simulator } from '@/editor'
-import type { Snippet as ISnippet } from '@easy-editor/core'
+import { type Snippet as ISnippet, materials, project } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import { useEffect, useRef } from 'react'
 
@@ -7,9 +6,9 @@ const Snippet = ({ snippet }: { snippet: ISnippet }) => {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const unlink = simulator.linkSnippet(ref.current!, snippet)
+    const unlink = project.simulator?.linkSnippet(ref.current!, snippet)
     return () => {
-      unlink()
+      unlink?.()
     }
   }, [snippet])
 
@@ -21,7 +20,7 @@ const Snippet = ({ snippet }: { snippet: ISnippet }) => {
 }
 
 const Left = observer(() => {
-  const snippets = designer.componentMetaManager.getComponentSnippets()
+  const snippets = materials.getComponentSnippets()
 
   return (
     <div className='w-64 bg-white border-r border-gray-200 flex flex-col'>
