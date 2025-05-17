@@ -18,7 +18,7 @@ export const GuideLine: React.FC<GuideLineProps> = observer(({ host }) => {
       {Array.from(adsorptionLines.verticalLines.values()).map(pos => (
         <div
           key={pos}
-          className='easy-editor-guideline vertical'
+          className='lc-guideline vertical'
           style={{
             left: pos,
           }}
@@ -27,7 +27,7 @@ export const GuideLine: React.FC<GuideLineProps> = observer(({ host }) => {
       {Array.from(adsorptionLines.horizontalLines.values()).map(pos => (
         <div
           key={pos}
-          className='easy-editor-guideline horizontal'
+          className='lc-guideline horizontal'
           style={{
             top: pos,
           }}
