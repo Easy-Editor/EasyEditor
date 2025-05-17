@@ -6,8 +6,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./engine": "./engine/src/index.ts"
+    ".": "./src/index.ts"
   },
   "files": [
     "dist",
@@ -26,11 +25,6 @@
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js",
         "require": "./dist/index.cjs"
-      },
-      "./engine": {
-        "types": "./engine/dist/index.d.ts",
-        "import": "./engine/dist/index.js",
-        "require": "./engine/dist/index.cjs"
       }
     }
   },
@@ -67,7 +61,6 @@
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
     "types:src": "tsc --project tsconfig.build.json",
-    "types:engine": "tsc --project ./engine/tsconfig.build.json",
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {

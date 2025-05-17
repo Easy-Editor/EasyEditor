@@ -1,3 +1,5 @@
+import EventEmitter from 'events'
+import { action, observable } from 'mobx'
 import {
   EDITOR_EVENT,
   type EditorConfig,
@@ -9,9 +11,7 @@ import {
   type Plugins,
   config,
   createLogger,
-} from '@easy-editor/core'
-import EventEmitter from 'events'
-import { action, observable } from 'mobx'
+} from '..'
 
 const logger = createLogger('Editor')
 

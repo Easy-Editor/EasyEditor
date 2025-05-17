@@ -1,5 +1,14 @@
-import type { ComponentMetadata, Setter } from '@easy-editor/core'
-import { init, logger, materials, plugins, project, setters } from '@easy-editor/core/engine'
+import {
+  type ComponentMetadata,
+  type Setter,
+  type Simulator,
+  init,
+  logger,
+  materials,
+  plugins,
+  project,
+  setters,
+} from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { formatMapFromESModule } from './utils'
@@ -23,7 +32,7 @@ plugins.registerPlugins([
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
 setters.registerSetter(setterMap)
 
-init({
+await init({
   designMode: 'design',
   appHelper: {
     utils: {
@@ -32,7 +41,15 @@ init({
   },
 })
 
-logger.info('project', project)
+logger.warn('project', project)
+
+const { designer } = project
+
+project.onSimulatorReady((simulator: Simulator) => {
+  simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
+})
+
+export { designer, materials, plugins, project, setters }
 
 // export const editor = createEasyEditor({
 //   lifeCycles: {
