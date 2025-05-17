@@ -4,8 +4,7 @@
   "description": "A cross-framework low-code engine with scale-out design",
   "type": "module",
   "main": "./src/index.ts",
-  "unpkg": "./src/index.ts",
-  "types": "types/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./engine": "./engine/src/index.ts"
@@ -19,9 +18,9 @@
   "publishConfig": {
     "access": "public",
     "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "typings": "dist/index.d.ts",
     "module": "dist/index.js",
+    "unpkg": "dist/index.js",
+    "types": "dist/index.d.ts",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
