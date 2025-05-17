@@ -1,7 +1,6 @@
 import {
   type ComponentMetadata,
   DESIGNER_EVENT,
-  type Designer,
   type Document,
   DragObjectType,
   type DropLocation,
@@ -59,11 +58,6 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
       // add group componentMeta
       materials.createComponentMeta(groupMeta)
-
-      // add guideline
-      designer.onEvent(DESIGNER_EVENT.INIT, (designer: Designer) => {
-        designer.guideline = new GuideLine(designer)
-      })
 
       /* ---------------------------- NodeData to Node ---------------------------- */
       const startOffsetNodeData = { x: 0, y: 0 }
@@ -218,16 +212,17 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       })
     },
     extend({ extendClass, extend }) {
-      const { Node, Designer } = extendClass
+      const { Node } = extendClass
 
       /* -------------------------------- Designer -------------------------------- */
-      const originalInit = Designer.prototype.init
+      let guideline: GuideLine | null = null
       extend('Designer', {
-        init: {
-          value(this: Designer) {
-            originalInit.call(this)
-
-            this.guideline = new GuideLine(this)
+        guideline: {
+          get() {
+            if (!guideline) {
+              guideline = new GuideLine(this)
+            }
+            return guideline
           },
         },
       })

@@ -1,4 +1,4 @@
-import type { Designer, Setters, SettingField } from '@easy-editor/core'
+import type { Setters, SettingField } from '@easy-editor/core'
 import type { SettingRendererProps } from '@easy-editor/renderer-core'
 import { observer } from 'mobx-react'
 import { useMemo } from 'react'
@@ -63,22 +63,21 @@ export const SettingFieldView: React.FC<SettingFieldProps> = ({ field }) => {
 }
 
 export const SettingRenderer = observer<React.FC<SettingRendererProps>>(props => {
-  const { editor, customFieldItem, customFieldGroup } = props
-  const designer = editor.get<Designer>('designer')!
-  const setterManager = editor.get<Setters>('setterManager')!
+  const { designer, customFieldItem, customFieldGroup } = props
+  const setters = designer.editor.get<Setters>('setters')!
   const { settingsManager } = designer
   const { settings } = settingsManager
   const items = settings?.items
 
   const ctx = useMemo(() => {
     const ctx = {} as SettingRendererContext
-    ctx.setterManager = setterManager
+    ctx.setters = setters
     ctx.settingsManager = settingsManager
     ctx.customFieldItem = customFieldItem
     ctx.customFieldGroup = customFieldGroup
 
     return ctx
-  }, [setterManager, settingsManager, customFieldItem, customFieldGroup])
+  }, [setters, settingsManager, customFieldItem, customFieldGroup])
 
   if (!settings) {
     // 未选中节点，提示选中 或者 显示根节点设置

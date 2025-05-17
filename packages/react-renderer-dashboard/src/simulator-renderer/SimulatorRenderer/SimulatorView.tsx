@@ -56,7 +56,7 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const { viewport } = host
   const canvasRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
-  const { canvas: canvasStyle = {}, viewport: viewportStyle = {} } = host.deviceStyle || {}
+  const { canvas: canvasStyle = {}, viewport: viewportStyle } = host.deviceStyle || {}
   const { width: viewportWidth, height: viewportHeight } = (viewportStyle as any) || defaultDeviceStyle.viewport
 
   useResizeObserver({
@@ -91,20 +91,20 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
 export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const { viewport } = host
   const frameRef = useRef<HTMLDivElement>(null)
+  const { viewport: viewportStyle } = host.deviceStyle || {}
+  const { width: viewportWidth, height: viewportHeight } = (viewportStyle as any) || defaultDeviceStyle.viewport
 
   const frameStyle: React.CSSProperties = {
-    position: 'absolute',
-    transformOrigin: '0px 0px',
-    left: '50%',
-    top: '50%',
-    transform: `scale(${viewport.scale})  translate(-50%, -50%)`,
-    height: viewport.contentHeight,
-    width: viewport.contentWidth,
+    transform: `scale(${viewport.scale})`,
+    height: viewportHeight,
+    width: viewportWidth,
   }
 
   useEffect(() => {
-    host.mountContentFrame(frameRef.current)
-  }, [])
+    if (host.renderer) {
+      host.mountContentFrame(frameRef.current)
+    }
+  }, [host.renderer])
 
   return (
     <div className='lc-simulator-content'>

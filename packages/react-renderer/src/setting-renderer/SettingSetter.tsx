@@ -64,7 +64,7 @@ interface SettingSetterProps extends PropsWithChildren {
 }
 
 export const SettingSetter = observer(({ field, children }: SettingSetterProps) => {
-  const { setterManager } = useSettingRendererContext()
+  const { setters } = useSettingRendererContext()
   const { extraProps } = field
   const visible =
     extraProps?.condition && typeof extraProps.condition === 'function' ? extraProps.condition(field) !== false : true
@@ -76,10 +76,7 @@ export const SettingSetter = observer(({ field, children }: SettingSetterProps) 
   const { setterProps = {}, setterType, initialValue = null } = getSetterInfo(field)
   const onChange = extraProps?.onChange
   const value = field.valueState === -1 ? null : field.getValue()
-  const { component: SetterComponent, props: mixedSetterProps } = setterManager.createSetterContent(
-    setterType,
-    setterProps,
-  )
+  const { component: SetterComponent, props: mixedSetterProps } = setters.createSetterContent(setterType, setterProps)
 
   return (
     <SetterComponent
