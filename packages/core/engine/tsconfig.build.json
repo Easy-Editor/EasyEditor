@@ -3,15 +3,10 @@
   "compilerOptions": {
     "strictPropertyInitialization": false,
     "outDir": "./dist",
-    "declaration": true,
     "skipLibCheck": true,
-    "stripInternal": true,
-    "baseUrl": ".",
-    "rootDir": "./src",
     "paths": {
-      "@easy-editor/core": ["../src"]
+      "@easy-editor/core": ["../../src"]
     }
   },
-  "include": ["./src/**/*"],
-  "exclude": ["../src/**/*", "node_modules"]
+  "include": ["./src"]
 }
