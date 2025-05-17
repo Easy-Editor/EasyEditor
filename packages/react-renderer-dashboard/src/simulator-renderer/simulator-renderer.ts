@@ -4,7 +4,7 @@ import {
   type Simulator,
   isElementNode,
 } from '@easy-editor/core'
-import type { RendererProps } from '@easy-editor/react-renderer'
+import type { RendererProps } from '@easy-editor/renderer-core'
 import { type MemoryHistory, createMemoryHistory } from 'history'
 import { isPlainObject } from 'lodash-es'
 import { action, computed, observable, runInAction, untracked } from 'mobx'
