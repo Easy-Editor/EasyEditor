@@ -7,12 +7,6 @@ import { createEventBus, createLogger, isLowCodeComponentType, isProCodeComponen
 
 const logger = createLogger('Project')
 
-const defaultSchema: ProjectSchema = {
-  // TODO: version
-  version: '0.0.1',
-  componentsTree: [],
-}
-
 export enum PROJECT_EVENT {
   RENDERER_READY = 'renderer:ready',
   SIMULATOR_READY = 'simulator:ready',
@@ -21,7 +15,11 @@ export enum PROJECT_EVENT {
 export class Project {
   private emitter = createEventBus('Project')
 
-  private data: ProjectSchema = defaultSchema
+  private data: ProjectSchema = {
+    version: '0.0.1',
+    componentsMap: [],
+    componentsTree: [],
+  }
 
   @observable.shallow accessor documents: Document[] = []
 
@@ -104,7 +102,7 @@ export class Project {
     this.unload()
 
     this.data = {
-      ...defaultSchema,
+      ...this.data,
       ...schema,
     }
     this._config = schema?.config ?? this.config
