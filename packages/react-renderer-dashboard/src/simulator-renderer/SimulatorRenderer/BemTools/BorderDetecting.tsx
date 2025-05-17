@@ -22,7 +22,7 @@ const BorderDetectingInstance: React.FC<BorderDetectingInstanceProps> = memo(({ 
   }
 
   return (
-    <div className='easy-editor-borders easy-editor-borders-detecting' style={style}>
+    <div className='lc-borders lc-borders-detecting' style={style}>
       {/* <Title title={title} className='lc-borders-title' />
       {isLocked ? <Title title={intl('locked')} className='lc-borders-status' /> : null} */}
     </div>

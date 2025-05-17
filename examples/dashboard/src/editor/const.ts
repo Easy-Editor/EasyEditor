@@ -11,10 +11,11 @@ export const defaultRootSchema: RootSchema = {
     rect: {
       x: 0,
       y: 0,
-      // width: '100%',
-      // height: '100%',
+      width: 1920,
+      height: 1080,
     },
   },
+  isRoot: true,
   children: [
     {
       componentName: 'Button',

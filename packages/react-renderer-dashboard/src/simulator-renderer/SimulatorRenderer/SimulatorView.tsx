@@ -59,6 +59,16 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const { canvas: canvasStyle = {}, viewport: viewportStyle } = host.deviceStyle || {}
   const { width: viewportWidth, height: viewportHeight } = (viewportStyle as any) || defaultDeviceStyle.viewport
 
+  const viewportFrameStyle: any = {
+    position: 'absolute',
+    transformOrigin: '0px 0px',
+    left: '50%',
+    top: '50%',
+    transform: `scale(${viewport.scale}) translate(-50%, -50%)`,
+    width: viewportWidth,
+    height: viewportHeight,
+  }
+
   useResizeObserver({
     elem: canvasRef,
     onResize: entries => {
@@ -80,7 +90,11 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
       className={classnames('lc-simulator-canvas', `lc-simulator-device-${host.device}`, host.deviceClassName)}
       style={canvasStyle}
     >
-      <div ref={viewportRef} className='lc-simulator-canvas-viewport' style={viewportStyle}>
+      <div
+        ref={viewportRef}
+        className='lc-simulator-canvas-viewport'
+        style={{ ...viewportStyle, ...viewportFrameStyle }}
+      >
         <BemTools host={host} />
         <Content host={host} />
       </div>
@@ -91,13 +105,11 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
 export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const { viewport } = host
   const frameRef = useRef<HTMLDivElement>(null)
-  const { viewport: viewportStyle } = host.deviceStyle || {}
-  const { width: viewportWidth, height: viewportHeight } = (viewportStyle as any) || defaultDeviceStyle.viewport
 
   const frameStyle: React.CSSProperties = {
-    transform: `scale(${viewport.scale})`,
-    height: viewportHeight,
-    width: viewportWidth,
+    height:
+      typeof viewport.contentHeight === 'number' ? viewport.contentHeight * viewport.scale : viewport.contentHeight,
+    width: typeof viewport.contentWidth === 'number' ? viewport.contentWidth * viewport.scale : viewport.contentWidth,
   }
 
   useEffect(() => {
