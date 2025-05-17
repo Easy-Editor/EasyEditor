@@ -1,6 +1,5 @@
 import { type ProjectSchema, isElementNode } from '@easy-editor/core'
 import type { ComponentType, ReactInstance } from 'react'
-import { findDOMNode } from 'react-dom'
 
 export type Component = ComponentType<any> | object
 
@@ -121,7 +120,9 @@ export function reactFindDOMNodes(elem: ReactInstance | null): Array<Element | T
   elementsFromFiber(fiberNode?.child, elements)
   if (elements.length > 0) return elements
   try {
-    return [findDOMNode(elem)]
+    // TODO: findDOM
+    // return [findDOMNode(elem)]
+    return null
   } catch (e) {
     return null
   }
