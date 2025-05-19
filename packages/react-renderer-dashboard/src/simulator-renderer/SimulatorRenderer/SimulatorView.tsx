@@ -107,9 +107,12 @@ export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const frameRef = useRef<HTMLDivElement>(null)
 
   const frameStyle: React.CSSProperties = {
-    height:
-      typeof viewport.contentHeight === 'number' ? viewport.contentHeight * viewport.scale : viewport.contentHeight,
-    width: typeof viewport.contentWidth === 'number' ? viewport.contentWidth * viewport.scale : viewport.contentWidth,
+    // 用于 Content 更新
+    width: viewport.contentWidth,
+    height: viewport.contentHeight,
+    // 覆盖
+    width: '100%',
+    height: '100%',
   }
 
   useEffect(() => {
