@@ -32,6 +32,8 @@
     bottom: 0;
     left: 0;
     overflow: hidden;
+    height: 100%;
+    width: 100%;
 
     .lc-editor-content-frame {
       border: none;
