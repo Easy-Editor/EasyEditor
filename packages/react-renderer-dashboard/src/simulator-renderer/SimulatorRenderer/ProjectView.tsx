@@ -35,7 +35,14 @@ export const BuiltinLoading = () => {
   return (
     <div id='engine-loading-wrapper'>
       <div className='loading-logo-container'>
-        <svg aria-label='loading' viewBox='0 0 140 120' width='140' height='120' xmlns='http://www.w3.org/2000/svg'>
+        <svg
+          className='breathing-logo'
+          aria-label='loading'
+          viewBox='0 0 140 120'
+          width='140'
+          height='120'
+          xmlns='http://www.w3.org/2000/svg'
+        >
           <title>Logo</title>
           <defs id='SvgjsDefs1001' />
           <g
