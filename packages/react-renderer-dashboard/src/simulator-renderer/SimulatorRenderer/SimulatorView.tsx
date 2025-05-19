@@ -107,11 +107,14 @@ export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const frameRef = useRef<HTMLDivElement>(null)
 
   const frameStyle: React.CSSProperties = {
+    // @ts-ignore
     // 用于 Content 更新
     width: viewport.contentWidth,
     height: viewport.contentHeight,
     // 覆盖
+    // @ts-ignore
     width: '100%',
+    // @ts-ignore
     height: '100%',
   }
 
