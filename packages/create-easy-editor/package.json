@@ -1,0 +1,49 @@
+{
+  "name": "@easy-editor/create",
+  "version": "0.0.0",
+  "description": "Create a new EasyEditor project",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": "./src/index.ts",
+  "files": [
+    "dist",
+    "template",
+    "README.md"
+  ],
+  "bin": {
+    "@easy-editor/create": "./dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "module": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": "./dist/index.js"
+  },
+  "homepage": "https://github.com/Easy-Editor/EasyEditor",
+  "license": "MIT",
+  "author": "JinSo <kimjinso@qq.com>",
+  "keywords": [
+    "@easy-editor",
+    "easyeditor",
+    "low-code",
+    "cli"
+  ],
+  "scripts": {
+    "dev": "deno run --watch ./src/index.ts",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "build": "npm-run-all -nl build:*",
+    "build:clean": "rimraf dist/",
+    "build:js": "rollup -c",
+    "types": "npm-run-all -nl types:*",
+    "types:src": "tsc"
+  },
+  "devDependencies": {
+    "@clack/prompts": "^0.10.1",
+    "cross-spawn": "^7.0.6",
+    "mri": "^1.2.0",
+    "picocolors": "^1.1.1",
+    "unbuild": "^3.5.0"
+  }
+}
