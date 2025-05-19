@@ -1,5 +1,12 @@
 # @easy-editor/react-renderer-dashboard
 
+## 1.0.1
+
+### Patch Changes
+
+- 0ce5c36: fix: frame style error
+- 943f4c9: style: loading animate
+
 ## 1.0.0
 
 ### Major Changes
