@@ -3,9 +3,16 @@ import mri from 'mri'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import colors from 'picocolors'
-
-const { blue, cyan, gray } = colors
+import { APPLICATIONS, FRAMEWORKS, SCENARIOS, TEMPLATES, defaultTargetDir, helpMessage, renameFiles } from './const.ts'
+import {
+  copy,
+  emptyDir,
+  formatTargetDir,
+  isEmpty,
+  isValidPackageName,
+  pkgFromUserAgent,
+  toValidPackageName,
+} from './utils.ts'
 
 const argv = mri<{
   scenarios?: string
@@ -19,87 +26,7 @@ const argv = mri<{
 })
 const cwd = process.cwd()
 
-const helpMessage = `\
-Usage:
-  npm init @easy-editor [OPTION]... [DIRECTORY]
-  npx @easy-editor/create [OPTION]... [DIRECTORY]
-
-Create a new Easy Editor project in JavaScript or TypeScript.
-With no arguments, start the CLI in interactive mode.
-
-Options:
-  -s, --scenarios NAME       use a specific scenario
-  -t, --template NAME        use a specific template
-  -h, --help                 display this help message
-  --overwrite                overwrite target directory if it exists
-
-Available templates:
-${cyan('react-dashboard')}`
-
-type ColorFunc = (str: string | number) => string
-type Framework = {
-  name: string
-  display: string
-  color: ColorFunc
-  variants: FrameworkVariant[]
-}
-type FrameworkVariant = {
-  name: string
-  display: string
-  color: ColorFunc
-}
-
-const FRAMEWORKS: Framework[] = [
-  {
-    name: 'react',
-    display: 'React',
-    color: cyan,
-    variants: [
-      {
-        name: 'react',
-        display: 'React',
-        color: blue,
-      },
-    ],
-  },
-  {
-    name: 'vue',
-    display: 'Vue (Developing)',
-    color: gray,
-    variants: [
-      {
-        name: 'vue',
-        display: 'Vue (Developing)',
-        color: gray,
-      },
-    ],
-  },
-]
-
-const TEMPLATES = FRAMEWORKS.map(f => f.variants.map(v => v.name)).reduce((a, b) => a.concat(b), [])
-
-const SCENARIOS: FrameworkVariant[] = [
-  {
-    name: 'dashboard',
-    display: 'Dashboard',
-    color: blue,
-  },
-  {
-    name: 'form',
-    display: 'Form (Developing)',
-    color: gray,
-  },
-]
-
-const APPLICATIONS = SCENARIOS.map(s => s.name)
-
-const renameFiles: Record<string, string | undefined> = {
-  _gitignore: '.gitignore',
-}
-
-const defaultTargetDir = 'easy-editor'
-
-async function init() {
+const init = async () => {
   const argTargetDir = argv._[0] ? formatTargetDir(String(argv._[0])) : undefined
   const argTemplate = argv.template
   const argScenarios = argv.scenarios
@@ -241,7 +168,7 @@ async function init() {
   fs.mkdirSync(root, { recursive: true })
 
   // 6. determine template
-  const pkgManager = pkgInfo ? pkgInfo.name : 'npm'
+  const pkgManager = pkgInfo ? pkgInfo.name : 'pnpm'
 
   prompts.log.step(`Scaffolding project in ${root}...`)
 
@@ -282,13 +209,13 @@ async function init() {
     doneMessage += `\n  cd ${cdProjectName.includes(' ') ? `"${cdProjectName}"` : cdProjectName}`
   }
   switch (pkgManager) {
-    case 'yarn':
-      doneMessage += '\n  yarn'
-      doneMessage += '\n  yarn dev'
-      break
     case 'pnpm':
       doneMessage += '\n  pnpm'
       doneMessage += '\n  pnpm dev'
+      break
+    case 'yarn':
+      doneMessage += '\n  yarn'
+      doneMessage += '\n  yarn dev'
       break
     default:
       doneMessage += `\n  ${pkgManager} install`
@@ -296,73 +223,6 @@ async function init() {
       break
   }
   prompts.outro(doneMessage)
-}
-
-function formatTargetDir(targetDir: string) {
-  return targetDir.trim().replace(/\/+$/g, '')
-}
-
-function copy(src: string, dest: string) {
-  const stat = fs.statSync(src)
-  if (stat.isDirectory()) {
-    copyDir(src, dest)
-  } else {
-    fs.copyFileSync(src, dest)
-  }
-}
-
-function isValidPackageName(projectName: string) {
-  return /^(?:@[a-z\d\-*~][a-z\d\-*._~]*\/)?[a-z\d\-~][a-z\d\-._~]*$/.test(projectName)
-}
-
-function toValidPackageName(projectName: string) {
-  return projectName
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/^[._]/, '')
-    .replace(/[^a-z\d\-~]+/g, '-')
-}
-
-function copyDir(srcDir: string, destDir: string) {
-  fs.mkdirSync(destDir, { recursive: true })
-  for (const file of fs.readdirSync(srcDir)) {
-    const srcFile = path.resolve(srcDir, file)
-    const destFile = path.resolve(destDir, file)
-    copy(srcFile, destFile)
-  }
-}
-
-function isEmpty(path: string) {
-  const files = fs.readdirSync(path)
-  return files.length === 0 || (files.length === 1 && files[0] === '.git')
-}
-
-function emptyDir(dir: string) {
-  if (!fs.existsSync(dir)) {
-    return
-  }
-  for (const file of fs.readdirSync(dir)) {
-    if (file === '.git') {
-      continue
-    }
-    fs.rmSync(path.resolve(dir, file), { recursive: true, force: true })
-  }
-}
-
-interface PkgInfo {
-  name: string
-  version: string
-}
-
-function pkgFromUserAgent(userAgent: string | undefined): PkgInfo | undefined {
-  if (!userAgent) return undefined
-  const pkgSpec = userAgent.split(' ')[0]
-  const pkgSpecArr = pkgSpec.split('/')
-  return {
-    name: pkgSpecArr[0],
-    version: pkgSpecArr[1],
-  }
 }
 
 init().catch(e => {
