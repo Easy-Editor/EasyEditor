@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import colors from 'picocolors'
 
-const { blue, blueBright, cyan, green, greenBright, magenta, red, redBright, reset, yellow, gray } = colors
+const { blue, cyan, gray } = colors
 
 const argv = mri<{
   scenarios?: string
@@ -19,18 +19,22 @@ const argv = mri<{
 })
 const cwd = process.cwd()
 
-// prettier-ignore
 const helpMessage = `\
-Usage: create-vite [OPTION]... [DIRECTORY]
+Usage:
+  npm init @easy-editor [OPTION]... [DIRECTORY]
+  npx @easy-editor/create [OPTION]... [DIRECTORY]
 
-Create a new Vite project in JavaScript or TypeScript.
+Create a new Easy Editor project in JavaScript or TypeScript.
 With no arguments, start the CLI in interactive mode.
 
 Options:
+  -s, --scenarios NAME       use a specific scenario
   -t, --template NAME        use a specific template
+  -h, --help                 display this help message
+  --overwrite                overwrite target directory if it exists
 
 Available templates:
-${cyan('react-dashboard       react')}`
+${cyan('react-dashboard')}`
 
 type ColorFunc = (str: string | number) => string
 type Framework = {
