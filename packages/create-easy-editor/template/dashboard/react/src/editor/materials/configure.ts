@@ -66,10 +66,10 @@ export const generalAdvancedConfigure: FieldConfig[] = [
         extraProps: {
           supportVariable: true,
           getValue(target) {
-            return target.getNode().getExtraPropValue('condition')
+            return target.getExtraPropValue('condition')
           },
           setValue(target, value: boolean) {
-            target.getNode().setExtraProp('condition', value)
+            target.setExtraPropValue('condition', value)
           },
         },
       },

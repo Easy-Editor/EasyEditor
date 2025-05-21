@@ -31,18 +31,7 @@ const Preview = () => {
   return (
     <div className='h-full w-full'>
       {schema ? (
-        <Renderer
-          schema={schema}
-          components={components}
-          viewport={{ width: 1920, height: 1080 }}
-          appHelper={{
-            utils: {
-              navigate: (e: Event, path: string, param?: object & { replace?: boolean }) => {
-                navigate(path)
-              },
-            },
-          }}
-        />
+        <Renderer schema={schema} components={components} viewport={{ width: 1920, height: 1080 }} />
       ) : (
         <div className='flex h-full w-full items-center justify-center'>
           <div className='text-sm text-muted-foreground'>loading...</div>

@@ -1,9 +1,9 @@
 import { project } from '@easy-editor/core'
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
 import { observer } from 'mobx-react'
-import { RendererContextMenu } from './layouts/ContextMenu'
+import { RendererContextMenu } from './ContextMenu'
 
-const Renderer = observer(() => {
+export const Renderer = observer(() => {
   const isEmpty = project.documents.length === 0
 
   if (isEmpty) {
@@ -73,5 +73,3 @@ const Renderer = observer(() => {
     </RendererContextMenu>
   )
 })
-
-export default Renderer

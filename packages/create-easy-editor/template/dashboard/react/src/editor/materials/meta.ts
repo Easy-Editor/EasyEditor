@@ -16,16 +16,12 @@ import PieChart from './chart/pie-chart/meta'
 import RadarChart from './chart/radar-chart/meta'
 import RadialChart from './chart/radial-chart/meta'
 
-// Interaction
-import Button from './interaction/button/meta'
-
 /**
  * 物料元数据
  */
 export const componentMetaMap = {
   AreaChart,
   BarChart,
-  Button,
   Image,
   LineChart,
   PieChart,

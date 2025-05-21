@@ -50,18 +50,20 @@ export const ComponentSidebar = observer(() => {
   return (
     <div className='flex flex-col overflow-y-auto px-4'>
       <Accordion type='single' collapsible>
-        {Array.from(sortedComponentGroupMap.entries()).map(([group, components]) => (
-          <AccordionItem key={group} value={group}>
-            <AccordionTrigger>{group}</AccordionTrigger>
-            <AccordionContent className='transition-all data-[state=closed]:animate-[accordion-up_300ms_ease-out] data-[state=open]:animate-[accordion-down_400ms_ease-out]'>
-              <div className='grid grid-cols-2 gap-2 p-2'>
-                {components.map(component =>
-                  component.getMetadata().snippets?.map(snippet => <Snippet key={snippet.title} snippet={snippet} />),
-                )}
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        ))}
+        {Array.from(sortedComponentGroupMap.entries())
+          .filter(([group]) => group.toLowerCase() !== 'inner')
+          .map(([group, components]) => (
+            <AccordionItem key={group} value={group}>
+              <AccordionTrigger>{group}</AccordionTrigger>
+              <AccordionContent className='transition-all data-[state=closed]:animate-[accordion-up_300ms_ease-out] data-[state=open]:animate-[accordion-down_400ms_ease-out]'>
+                <div className='grid grid-cols-2 gap-2 p-2'>
+                  {components.map(component =>
+                    component.getMetadata().snippets?.map(snippet => <Snippet key={snippet.title} snippet={snippet} />),
+                  )}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          ))}
       </Accordion>
     </div>
   )
