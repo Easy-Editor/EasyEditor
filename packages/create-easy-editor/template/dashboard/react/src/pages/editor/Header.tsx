@@ -1,11 +1,11 @@
+import BannerImg from '@/assets/banner.png'
 import { Button } from '@/components/ui/button'
 import { savePageInfoToLocalStorage, savePageSchemaToLocalStorage, saveProjectSchemaToLocalStorage } from '@/lib/schema'
 import { cn } from '@/lib/utils'
 import { TRANSFORM_STAGE, project } from '@easy-editor/core'
 import { toast } from 'sonner'
-import { MainNav } from './Nav'
 
-export function AppHeader({ className }: { className?: string }) {
+export const AppHeader = ({ className }: { className?: string }) => {
   const save = (kind: 'project' | 'page' = 'page') => {
     if (kind === 'project') {
       saveProjectSchemaToLocalStorage(project.export(TRANSFORM_STAGE.SAVE))
@@ -34,7 +34,12 @@ export function AppHeader({ className }: { className?: string }) {
     >
       <div className='border-border/70 dark:border-border w-full border-dashed'>
         <div className='flex h-14 items-center px-4'>
-          <MainNav />
+          <div className='mr-4 hidden md:flex'>
+            <div className='mr-4 flex items-center gap-2 lg:mr-6'>
+              <img src={BannerImg} alt='banner' className='h-6' />
+            </div>
+            <nav className='flex items-center gap-4 text-sm xl:gap-6' />
+          </div>
           <div className='flex flex-1 items-center justify-between gap-2 md:justify-end'>
             <div className='w-full flex-1 md:w-auto md:flex-none' />
             <div className='flex items-center gap-2'>

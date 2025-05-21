@@ -33,7 +33,7 @@ const nav = [
   },
 ]
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export const AppSidebar = ({ ...props }: React.ComponentProps<typeof Sidebar>) => {
   const [activeItem, setActiveItem] = React.useState(nav[0])
   const { open, setOpen, fixed, toggleFixedSidebar } = useSidebar()
 

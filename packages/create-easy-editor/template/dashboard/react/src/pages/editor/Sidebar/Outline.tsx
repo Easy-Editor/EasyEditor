@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { type Node, type NodeSchema, project } from '@easy-editor/core'
 import { ChevronRight, Eye, EyeOff, LockKeyhole, LockKeyholeOpen } from 'lucide-react'
 import { observer } from 'mobx-react'
-import { type Key, useState } from 'react'
+import { useState } from 'react'
 import { RendererContextMenu } from '../ContextMenu'
 
 export const OutlineSidebar = observer(() => {
@@ -111,8 +111,8 @@ const OutlineTree = observer(({ node }: { node: Node<NodeSchema> }) => {
         </div>
         <CollapsibleContent>
           <SidebarMenuSub className='mr-0 pr-0'>
-            {node.childrenNodes?.map((childrenNode: Node<NodeSchema>, index: Key | null | undefined) => (
-              <OutlineTree key={index} node={childrenNode} />
+            {node.childrenNodes?.map((childrenNode: Node<NodeSchema>) => (
+              <OutlineTree key={childrenNode.id} node={childrenNode} />
             ))}
           </SidebarMenuSub>
         </CollapsibleContent>
