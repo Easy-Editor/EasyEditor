@@ -23,10 +23,12 @@ export default [
       {
         file: 'dist/index.js',
         format: 'es',
+        banner: '#!/usr/bin/env node',
       },
       {
         file: 'dist/index.cjs',
         format: 'cjs',
+        banner: '#!/usr/bin/env node',
       },
     ],
     plugins,
