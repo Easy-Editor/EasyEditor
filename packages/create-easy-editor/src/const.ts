@@ -27,47 +27,24 @@ ${cyan('react-dashboard')}`
 
 type ColorFunc = (str: string | number) => string
 
-type Framework = {
-  name: string
-  display: string
-  color: ColorFunc
-  variants: Variant[]
-}
-
 type Variant = {
   name: string
   display: string
   color: ColorFunc
 }
 
-export const FRAMEWORKS: Framework[] = [
+export const FRAMEWORKS: Variant[] = [
   {
     name: 'react',
     display: 'React',
-    color: cyan,
-    variants: [
-      {
-        name: 'react',
-        display: 'React',
-        color: blue,
-      },
-    ],
+    color: blue,
   },
   {
     name: 'vue',
     display: 'Vue (Developing)',
     color: gray,
-    variants: [
-      {
-        name: 'vue',
-        display: 'Vue (Developing)',
-        color: gray,
-      },
-    ],
   },
 ]
-
-export const TEMPLATES = FRAMEWORKS.map(f => f.variants.map(v => v.name)).reduce((a, b) => a.concat(b), [])
 
 export const SCENARIOS: Variant[] = [
   {
@@ -81,5 +58,3 @@ export const SCENARIOS: Variant[] = [
     color: gray,
   },
 ]
-
-export const APPLICATIONS = SCENARIOS.map(s => s.name)

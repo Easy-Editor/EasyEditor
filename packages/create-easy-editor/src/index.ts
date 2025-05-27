@@ -3,7 +3,7 @@ import mri from 'mri'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APPLICATIONS, FRAMEWORKS, SCENARIOS, TEMPLATES, defaultTargetDir, helpMessage, renameFiles } from './const.ts'
+import { FRAMEWORKS, SCENARIOS, defaultTargetDir, helpMessage, renameFiles } from './const.ts'
 import {
   copy,
   emptyDir,
@@ -105,12 +105,12 @@ const init = async () => {
   // 4. Choose a application scenario
   let scenarios = argScenarios
   let hasInvalidArgScenarios = false
-  if (argScenarios && !APPLICATIONS.includes(argScenarios)) {
+  if (argScenarios && !SCENARIOS.findIndex(scenario => scenario.name === argScenarios)) {
     scenarios = undefined
     hasInvalidArgScenarios = true
   }
   if (!scenarios) {
-    const application = await prompts.select({
+    const _scenarios = await prompts.select({
       message: hasInvalidArgScenarios
         ? `"${argScenarios}" isn't a valid scenario. Please choose from below: `
         : 'Select a scenario:',
@@ -122,20 +122,20 @@ const init = async () => {
         }
       }),
     })
-    if (prompts.isCancel(application)) return cancel()
+    if (prompts.isCancel(_scenarios)) return cancel()
 
-    scenarios = application
+    scenarios = _scenarios
   }
 
   // 5. Choose a framework and variant
-  let template = argTemplate
+  let framework = argTemplate
   let hasInvalidArgTemplate = false
-  if (argTemplate && !TEMPLATES.includes(argTemplate)) {
-    template = undefined
+  if (argTemplate && !FRAMEWORKS.findIndex(framework => framework.name === argTemplate)) {
+    framework = undefined
     hasInvalidArgTemplate = true
   }
-  if (!template) {
-    const framework = await prompts.select({
+  if (!framework) {
+    const _framework = await prompts.select({
       message: hasInvalidArgTemplate
         ? `"${argTemplate}" isn't a valid template. Please choose from below: `
         : 'Select a framework:',
@@ -143,25 +143,13 @@ const init = async () => {
         const frameworkColor = framework.color
         return {
           label: frameworkColor(framework.display || framework.name),
-          value: framework,
+          value: framework.name,
         }
       }),
     })
-    if (prompts.isCancel(framework)) return cancel()
+    if (prompts.isCancel(_framework)) return cancel()
 
-    const variant = await prompts.select({
-      message: 'Select a variant:',
-      options: framework.variants.map(variant => {
-        const variantColor = variant.color
-        return {
-          label: variantColor(variant.display || variant.name),
-          value: variant.name,
-        }
-      }),
-    })
-    if (prompts.isCancel(variant)) return cancel()
-
-    template = variant
+    framework = _framework
   }
 
   const root = path.join(cwd, targetDir)
@@ -172,7 +160,7 @@ const init = async () => {
 
   prompts.log.step(`Scaffolding project in ${root}...`)
 
-  const templateDir = path.resolve(fileURLToPath(import.meta.url), '../..', `template/${scenarios}/${template}`)
+  const templateDir = path.resolve(fileURLToPath(import.meta.url), '../..', `template/${scenarios}/${framework}`)
 
   const write = (file: string, content?: string) => {
     const targetPath = path.join(root, renameFiles[file] ?? file)
@@ -187,7 +175,7 @@ const init = async () => {
   try {
     files = fs.readdirSync(templateDir)
   } catch (error) {
-    prompts.log.warn(`Template for "${scenarios}/${template}" is not yet supported.`)
+    prompts.log.warn(`Template for "${scenarios}/${framework}" is not yet supported.`)
     prompts.log.info(`We're working on adding more templates. Please check back later or contribute to our repository!`)
     return
   }
@@ -210,7 +198,7 @@ const init = async () => {
   }
   switch (pkgManager) {
     case 'pnpm':
-      doneMessage += '\n  pnpm'
+      doneMessage += '\n  pnpm i'
       doneMessage += '\n  pnpm dev'
       break
     case 'yarn':
