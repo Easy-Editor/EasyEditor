@@ -3,7 +3,7 @@ import mri from 'mri'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { FRAMEWORKS, SCENARIOS, defaultTargetDir, helpMessage, renameFiles } from './const.ts'
+import { FRAMEWORKS, SCENARIOS, defaultTargetDir, helpMessage, renameFiles } from './const'
 import {
   copy,
   emptyDir,
@@ -12,7 +12,7 @@ import {
   isValidPackageName,
   pkgFromUserAgent,
   toValidPackageName,
-} from './utils.ts'
+} from './utils'
 
 const argv = mri<{
   scenarios?: string

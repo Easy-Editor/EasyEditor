@@ -1,6 +1,12 @@
 import babel from '@rollup/plugin-babel'
+import commonjs from '@rollup/plugin-commonjs'
+import resolve from '@rollup/plugin-node-resolve'
 
 const plugins = [
+  resolve({
+    extensions: ['.js', '.ts'],
+  }),
+  commonjs(),
   babel({
     extensions: ['.js', '.ts'],
     exclude: 'node_modules/**',
