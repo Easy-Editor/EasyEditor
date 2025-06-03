@@ -1,23 +1,46 @@
 import type { CompositeValue, JSExpression, JSFunction, JSONObject, PropsMap } from '../document'
-import type { DataSource } from './data-source'
 
 export interface ProjectSchema<T = RootSchema> {
   id?: string
 
+  /**
+   * 协议版本号
+   */
   version: string
 
+  /**
+   * 组件映射关系
+   */
   componentsMap?: any
 
+  /**
+   * 组件树
+   */
   componentsTree: T[]
 
+  /**
+   * 工具类
+   */
   utils?: Record<string, any>
 
+  /**
+   * 全局常量
+   */
   constants?: JSONObject
 
+  /**
+   * 全局样式
+   */
   css?: string
 
+  /**
+   * 配置信息
+   */
   config?: Record<string, any>
 
+  /**
+   * 元数据信息
+   */
   meta?: Record<string, any>
 
   [key: string]: any
@@ -58,11 +81,6 @@ export interface RootSchema extends NodeSchema {
    * 样式文件
    */
   css?: string
-
-  /**
-   * 异步数据源配置
-   */
-  dataSource?: DataSource
 }
 
 export interface NodeSchema {
