@@ -3,15 +3,15 @@ import {
   type Setter,
   type Simulator,
   init,
-  logger,
   materials,
   plugins,
   project,
   setters,
 } from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import DataSourcePlugin from '@easy-editor/plugin-datasource'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
-import { defaultRootSchema } from './const'
+import { defaultProjectSchema } from './const'
 import { formatMapFromESModule } from './utils'
 
 const setterMap = formatMapFromESModule<Setter>(await import('./setters'))
@@ -28,6 +28,7 @@ plugins.registerPlugins([
       },
     },
   }),
+  DataSourcePlugin(),
   HotkeyPlugin(),
 ])
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
@@ -42,13 +43,11 @@ await init({
   },
 })
 
-logger.warn('project', project)
-
 const { designer } = project
 
 project.onSimulatorReady((simulator: Simulator) => {
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
-  project.open(defaultRootSchema)
+  project.load(defaultProjectSchema, true)
 })
 
 export { designer, materials, plugins, project, setters }

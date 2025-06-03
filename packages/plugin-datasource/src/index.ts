@@ -2,10 +2,17 @@ import type { PluginCreator } from '@easy-editor/core'
 import { createFetchHandler } from './handlers/fetch'
 import createInterpret from './interpret/DataSourceEngineFactory'
 import createRuntime from './runtime/RuntimeDataSourceEngineFactory'
-import type { DataHandler, IDataSourceRuntimeContext, InterpretDataSource, RequestHandlersMap } from './types'
+import type {
+  DataHandler,
+  DataSource,
+  IDataSourceRuntimeContext,
+  InterpretDataSource,
+  RequestHandlersMap,
+} from './types'
 
 export { createInterpret, createRuntime }
 
+export * from './type'
 export * from './types'
 
 const defaultRequestHandlersMap = {
@@ -42,6 +49,26 @@ const DataSourcePlugin: PluginCreator<DataSourcePluginOptions> = options => {
         createInterpret,
         createDataSourceEngine: (dataSource: InterpretDataSource, engine: IDataSourceRuntimeContext) => {
           return createInterpret(dataSource, engine, { requestHandlersMap, defaultDataHandler })
+        },
+      })
+    },
+    extend({ extend }) {
+      extend('Project', {
+        dataSource: {
+          get() {
+            return this.get('dataSource')
+          },
+          set(value: DataSource) {
+            this.set('dataSource', value)
+          },
+        },
+      })
+
+      extend('Simulator', {
+        dataSourceEngine: {
+          get() {
+            return this.get('dataSourceEngine')
+          },
         },
       })
     },

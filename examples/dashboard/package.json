@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@easy-editor/core": "workspace:*",
+    "@easy-editor/plugin-datasource": "workspace:*",
     "@easy-editor/plugin-dashboard": "workspace:*",
     "@easy-editor/plugin-hotkey": "workspace:*",
     "@easy-editor/renderer-core": "workspace:*",

@@ -57,7 +57,8 @@
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {
-    "@easy-editor/core": "workspace:^"
+    "@easy-editor/core": "workspace:^",
+    "mobx": "^6.13.5"
   },
   "dependencies": {
     "lodash-es": "^4.17.21",
