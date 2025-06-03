@@ -1,4 +1,4 @@
-import type { Component, DataSourceEngine } from './types'
+import type { Component } from './types'
 import { createLogger, isPlainObject } from './utils'
 
 const logger = createLogger('Config')
@@ -59,11 +59,6 @@ export interface ConfigOptions {
     constants?: Record<string, any>
     [key: string]: any
   }
-
-  /**
-   * 数据源引擎
-   */
-  dataSourceEngine?: DataSourceEngine
 
   /**
    * 当开启组件未找到严格模式时，渲染模块不会默认给一个容器组件
