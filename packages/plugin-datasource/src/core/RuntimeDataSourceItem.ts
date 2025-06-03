@@ -1,13 +1,13 @@
 import { merge } from 'lodash-es'
-import type {
-  IDataSourceRuntimeContext,
-  IRuntimeDataSource,
-  RequestHandler,
-  RuntimeDataSourceConfig,
-  RuntimeOptionsConfig,
-  UrlParamsHandler,
+import {
+  type IDataSourceRuntimeContext,
+  type IRuntimeDataSource,
+  type RequestHandler,
+  type RuntimeDataSourceConfig,
+  RuntimeDataSourceStatus,
+  type RuntimeOptionsConfig,
+  type UrlParamsHandler,
 } from '../types'
-import { RuntimeDataSourceStatus } from '../types'
 
 class RuntimeDataSourceItem<TParams extends Record<string, unknown> = Record<string, unknown>, TResultData = unknown>
   implements IRuntimeDataSource<TParams, TResultData>
