@@ -1,5 +1,14 @@
 # @easy-editor/plugin-dashboard
 
+## 1.0.1
+
+### Patch Changes
+
+- Updated dependencies [7ffae3c]
+- Updated dependencies [90c6910]
+- Updated dependencies [49ef13e]
+  - @easy-editor/core@1.0.1
+
 ## 1.0.0
 
 ### Patch Changes

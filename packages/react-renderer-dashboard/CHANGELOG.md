@@ -1,5 +1,19 @@
 # @easy-editor/react-renderer-dashboard
 
+## 1.0.2
+
+### Patch Changes
+
+- 7ffae3c: perf: core provide DataSource interface
+- fd492f5: perf: dataSouce load logic
+- Updated dependencies [7ffae3c]
+- Updated dependencies [90c6910]
+- Updated dependencies [49ef13e]
+  - @easy-editor/core@1.0.1
+  - @easy-editor/plugin-dashboard@1.0.1
+  - @easy-editor/react-renderer@1.0.1
+  - @easy-editor/renderer-core@1.0.1
+
 ## 1.0.1
 
 ### Patch Changes
