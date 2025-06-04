@@ -1,5 +1,13 @@
 # @easy-editor/core
 
+## 1.0.1
+
+### Patch Changes
+
+- 7ffae3c: perf: core provide DataSource interface
+- 90c6910: perf: plugin extend mobx
+- 49ef13e: perf: detach dataSource
+
 ## 1.0.0
 
 ### Major Changes
