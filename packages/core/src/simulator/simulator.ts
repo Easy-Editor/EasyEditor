@@ -14,7 +14,7 @@ import {
 import type { Scroller } from '../designer/scroller'
 import { type Node, getClosestClickableNode, getClosestNode } from '../document'
 import type { Project } from '../project'
-import type { ComponentInstance, Snippet } from '../types'
+import type { ComponentInstance, DataSourceEngine, Snippet } from '../types'
 import { type Hotkey, createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
 import type { SimulatorRenderer } from './simulator-renderer'
 import { Viewport } from './viewport'
@@ -32,6 +32,7 @@ export interface SimulatorProps {
   designMode?: DesignMode
   device?: Device
   deviceClassName?: string
+  dataSourceEngine?: DataSourceEngine
 
   // TODO
   // library?: LibraryItem[];
@@ -94,6 +95,12 @@ export class Simulator {
   get designMode(): DesignMode {
     // renderer 依赖
     return this.get('designMode') || 'design'
+  }
+
+  @computed
+  get dataSourceEngine(): DataSourceEngine | undefined {
+    // renderer 依赖
+    return this.get('dataSourceEngine')
   }
 
   get enableStrictNotFoundMode(): any {
