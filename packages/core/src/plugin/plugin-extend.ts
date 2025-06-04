@@ -18,12 +18,16 @@ import type {
   Simulator,
   Viewport,
 } from '..'
+import { type MobxExtendDescriptor, addMobxExtendProperty, isMobxExtendProperty } from './plugin-extend-mobx'
 
 export interface PluginExtend {
   extendClass: PluginExtendClass
   extend: <T extends keyof PluginExtendClass>(
     extendClass: T,
-    properties: Record<PropertyKey, () => any> | (PropertyDescriptorMap & ThisType<InstanceType<PluginExtendClass[T]>>),
+    properties:
+      | Record<PropertyKey, () => any>
+      | (PropertyDescriptorMap & ThisType<InstanceType<PluginExtendClass[T]>>)
+      | Record<PropertyKey, MobxExtendDescriptor>,
   ) => void
 }
 
@@ -61,18 +65,30 @@ export interface PluginExtendClass {
 export const extend = <T extends keyof PluginExtendClass>(
   extendMap: Record<T, PluginExtendClass[T]>,
   extendClass: T,
-  properties: Record<PropertyKey, () => any> | (PropertyDescriptorMap & ThisType<InstanceType<PluginExtendClass[T]>>),
+  properties: Record<PropertyKey, any> | (PropertyDescriptorMap & ThisType<InstanceType<PluginExtendClass[T]>>),
 ) => {
   const newProperties: PropertyDescriptorMap & ThisType<InstanceType<PluginExtendClass[T]>> = {}
+  const prototype = extendMap[extendClass].prototype
+  let hasMobXProperties = false
+
   for (const key in properties) {
-    if (typeof properties[key] === 'function') {
+    const property = properties[key]
+
+    // 检查是否为 MobX 扩展属性
+    if (isMobxExtendProperty(property)) {
+      addMobxExtendProperty(prototype, key, property.config)
+      hasMobXProperties = true
+      continue
+    }
+
+    if (typeof property === 'function') {
       newProperties[key] = {
-        value: properties[key],
+        value: property,
       }
     } else {
-      newProperties[key] = properties[key]
+      newProperties[key] = property
     }
   }
 
-  Object.defineProperties(extendMap[extendClass].prototype, newProperties)
+  Object.defineProperties(prototype, newProperties)
 }

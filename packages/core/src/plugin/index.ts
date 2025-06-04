@@ -1,3 +1,5 @@
 export * from './plugin-context'
+export * from './plugin-extend'
+export * from './plugin-extend-mobx'
 export * from './plugin-runtime'
 export * from './plugins'
