@@ -1,5 +1,6 @@
 export * from './common'
 export * from './component'
+export * from './data-source'
 export * from './editor'
 export * from './event'
 export * from './meta'

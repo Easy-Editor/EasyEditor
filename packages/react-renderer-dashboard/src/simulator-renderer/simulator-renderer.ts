@@ -2,7 +2,6 @@ import {
   type SimulatorRenderer as ISimulatorRenderer,
   type NodeInstance,
   type Simulator,
-  config,
   isElementNode,
 } from '@easy-editor/core'
 import type { RendererProps } from '@easy-editor/renderer-core'
@@ -107,11 +106,8 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
           // sync designMode
           this._designMode = this.host.designMode
 
-          if (config.get('dataSourceEngine')) {
-            // sync dataSourceEngine
-            // @ts-ignore
-            this._dataSourceEngine = this.host.dataSourceEngine
-          }
+          // sync dataSourceEngine
+          this._dataSourceEngine = this.host.dataSourceEngine
 
           // sync device
           this._device = this.host.device

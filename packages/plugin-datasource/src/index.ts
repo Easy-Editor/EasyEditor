@@ -1,5 +1,4 @@
 import type { PluginCreator } from '@easy-editor/core'
-import { mobxExtendAction } from '@easy-editor/core'
 import { createFetchHandler } from './handlers/fetch'
 import createInterpret from './interpret/DataSourceEngineFactory'
 import createRuntime from './runtime/RuntimeDataSourceEngineFactory'
@@ -54,12 +53,6 @@ const DataSourcePlugin: PluginCreator<DataSourcePluginOptions> = options => {
             return this.get('dataSource')
           },
         },
-      })
-
-      extend('Simulator', {
-        dataSourceEngine: mobxExtendAction(function () {
-          return this.get('dataSourceEngine')
-        }),
       })
     },
   }

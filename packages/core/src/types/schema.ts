@@ -1,4 +1,5 @@
 import type { CompositeValue, JSExpression, JSFunction, JSONObject, PropsMap } from '../document'
+import type { DataSource } from './data-source'
 
 export interface ProjectSchema<T = RootSchema> {
   id?: string
@@ -42,6 +43,11 @@ export interface ProjectSchema<T = RootSchema> {
    * 元数据信息
    */
   meta?: Record<string, any>
+
+  /**
+   * 异步数据源配置
+   */
+  dataSource?: DataSource
 
   [key: string]: any
 }
