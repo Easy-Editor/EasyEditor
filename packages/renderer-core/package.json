@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/renderer-core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Renderer Core package for EasyEditor",
   "type": "module",
   "main": "src/index.ts",

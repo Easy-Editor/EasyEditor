@@ -1,5 +1,17 @@
 # @easy-editor/plugin-datasource
 
+## 1.0.1
+
+### Patch Changes
+
+- 8b51e73: perf: detach dataSource
+- 7ffae3c: perf: core provide DataSource interface
+- 90c6910: perf: plugin extend mobx
+- Updated dependencies [7ffae3c]
+- Updated dependencies [90c6910]
+- Updated dependencies [49ef13e]
+  - @easy-editor/core@1.0.1
+
 ## 1.0.0
 
 ### Patch Changes
