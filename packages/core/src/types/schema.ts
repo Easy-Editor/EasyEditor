@@ -87,6 +87,11 @@ export interface RootSchema extends NodeSchema {
    * 样式文件
    */
   css?: string
+
+  /**
+   * 异步数据源配置
+   */
+  dataSource?: DataSource
 }
 
 export interface NodeSchema {
