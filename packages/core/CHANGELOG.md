@@ -1,5 +1,12 @@
 # @easy-editor/core
 
+## 1.0.2
+
+### Patch Changes
+
+- 638425a: types: perform DataSource
+- 5afd68c: fix: dataSourceEngine miss
+
 ## 1.0.1
 
 ### Patch Changes

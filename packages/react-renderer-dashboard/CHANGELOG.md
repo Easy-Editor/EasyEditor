@@ -1,5 +1,17 @@
 # @easy-editor/react-renderer-dashboard
 
+## 1.0.3
+
+### Patch Changes
+
+- 5afd68c: fix: dataSourceEngine miss
+- Updated dependencies [638425a]
+- Updated dependencies [5afd68c]
+  - @easy-editor/core@1.0.2
+  - @easy-editor/plugin-dashboard@1.0.2
+  - @easy-editor/react-renderer@1.0.2
+  - @easy-editor/renderer-core@1.0.2
+
 ## 1.0.2
 
 ### Patch Changes
