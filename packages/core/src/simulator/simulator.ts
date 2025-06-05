@@ -32,7 +32,6 @@ export interface SimulatorProps {
   designMode?: DesignMode
   device?: Device
   deviceClassName?: string
-  dataSourceEngine?: DataSourceEngine
 
   // TODO
   // library?: LibraryItem[];
@@ -100,7 +99,7 @@ export class Simulator {
   @computed
   get dataSourceEngine(): DataSourceEngine | undefined {
     // renderer 依赖
-    return this.get('dataSourceEngine')
+    return config.get('dataSourceEngine')
   }
 
   get enableStrictNotFoundMode(): any {

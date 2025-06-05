@@ -108,6 +108,10 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
           // sync dataSourceEngine
           this._dataSourceEngine = this.host.dataSourceEngine
+          this._appContext = {
+            ...this._appContext,
+            dataSourceEngine: this._dataSourceEngine,
+          }
 
           // sync device
           this._device = this.host.device
