@@ -1,5 +1,14 @@
 # @easy-editor/plugin-datasource
 
+## 1.0.2
+
+### Patch Changes
+
+- 638425a: types: perform DataSource
+- Updated dependencies [638425a]
+- Updated dependencies [5afd68c]
+  - @easy-editor/core@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes
