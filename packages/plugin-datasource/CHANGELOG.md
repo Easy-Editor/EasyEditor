@@ -1,5 +1,11 @@
 # @easy-editor/plugin-datasource
 
+## 1.0.4
+
+### Patch Changes
+
+- 39d7240: fix: datasource options miss
+
 ## 1.0.3
 
 ### Patch Changes
