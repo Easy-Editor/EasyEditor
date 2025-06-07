@@ -1,5 +1,11 @@
 # @easy-editor/plugin-datasource
 
+## 1.0.3
+
+### Patch Changes
+
+- 8786383: perf: export createDataSourceEngine
+
 ## 1.0.2
 
 ### Patch Changes
