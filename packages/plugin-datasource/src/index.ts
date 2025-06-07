@@ -9,8 +9,25 @@ export { createInterpret, createRuntime }
 export * from './type'
 export * from './types'
 
-const defaultRequestHandlersMap = {
+export const defaultRequestHandlersMap = {
   fetch: createFetchHandler(),
+}
+
+export const createDataSourceEngine = (
+  dataSource: InterpretDataSource,
+  engine: IDataSourceRuntimeContext,
+  options?: DataSourcePluginOptions,
+) => {
+  return createInterpret(
+    dataSource,
+    engine,
+    options
+      ? {
+          requestHandlersMap: options.requestHandlersMap || defaultRequestHandlersMap,
+          defaultDataHandler: options.defaultDataHandler,
+        }
+      : undefined,
+  )
 }
 
 interface DataSourcePluginOptions {
@@ -42,7 +59,7 @@ const DataSourcePlugin: PluginCreator<DataSourcePluginOptions> = options => {
         createRuntime,
         createInterpret,
         createDataSourceEngine: (dataSource: InterpretDataSource, engine: IDataSourceRuntimeContext) => {
-          return createInterpret(dataSource, engine, { requestHandlersMap, defaultDataHandler })
+          return createDataSourceEngine(dataSource, engine, options)
         },
       })
     },
