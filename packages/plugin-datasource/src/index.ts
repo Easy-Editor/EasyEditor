@@ -18,16 +18,10 @@ export const createDataSourceEngine = (
   engine: IDataSourceRuntimeContext,
   options?: DataSourcePluginOptions,
 ) => {
-  return createInterpret(
-    dataSource,
-    engine,
-    options
-      ? {
-          requestHandlersMap: options.requestHandlersMap || defaultRequestHandlersMap,
-          defaultDataHandler: options.defaultDataHandler,
-        }
-      : undefined,
-  )
+  return createInterpret(dataSource, engine, {
+    ...options,
+    requestHandlersMap: options?.requestHandlersMap || defaultRequestHandlersMap,
+  })
 }
 
 interface DataSourcePluginOptions {
@@ -47,8 +41,6 @@ interface DataSourcePluginOptions {
 }
 
 const DataSourcePlugin: PluginCreator<DataSourcePluginOptions> = options => {
-  const { requestHandlersMap = defaultRequestHandlersMap, defaultDataHandler } = options || {}
-
   return {
     name: 'DataSourcePlugin',
     deps: [],
