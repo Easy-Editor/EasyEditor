@@ -13,32 +13,32 @@ hero:
   actions:
     - theme: brand
       text: What is EasyEditor?
-      link: /guide/why
+      link: /en/guide/why
     - theme: alt
       text: Getting Started
-      link: /guide/getting-started
+      link: /en/guide/getting-started
     - theme: alt
-      text: Reference
-      link: /reference/overview
+      text: API Reference
+      link: /en/reference/overview
 
 features:
-  - title: Decoupling Design
+  - title: Decoupled Design
     icon: 🔌
-    details: Engine core is framework-independent, supporting multiple framework rendering extensions
+    details: Framework-agnostic engine core with support for multiple framework rendering extensions
   - title: Plugin Architecture
     icon: 🧩
-    details: Flexible plugin system design, lifecycle management, hotkey binding, class extension mechanism, dependency injection...
-  - title: Renderer Engine
+    details: Flexible plugin system design with lifecycle management, hotkey binding, class extension mechanisms, dependency injection...
+  - title: Rendering Engine
     icon: ⚡
-    details: Multi-framework support, real-time preview, Schema driven, component isolation sandbox
+    details: Multi-framework support, real-time preview, Schema-driven, component isolation sandbox
   - title: Visual Design
     icon: 🎨
-    details: Complete implementation of the designer, drag-and-drop layout, snapping alignment, multi-device preview, undo/redo stack...
-  - title: Enterprise-level Capabilities
+    details: Complete designer implementation with drag-and-drop layout, snap alignment, multi-device preview, undo/redo stack...
+  - title: Enterprise-Grade Capabilities
     icon: 🏢
     details: Data source management, multi-language support, version control, online collaboration
   - title: Component Ecosystem
     icon: 📦
-    details: Built-in material market, component packaging specifications, material development tools, component version management...
+    details: Built-in material marketplace, component packaging standards, material development tools, component version management...
 ---
 
