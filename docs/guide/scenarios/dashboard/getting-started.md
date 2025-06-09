@@ -25,24 +25,48 @@ pnpm add mobx mobx-react
 
 ## 使用
 
-### 创建编辑器实例
+### 初始化编辑器
 
 在项目中创建 `src/editor/index.ts` 文件：
 
 ```ts
-import { createEditor } from '@easy-editor/core'
+import {
+  init,
+  materials,
+  plugins,
+  project,
+  setters,
+} from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 
-// 创建编辑器实例
-export const editor = createEditor({
-  plugins: [DashboardPlugin()],
-  // 配置组件物料与元数据
+// 注册插件
+plugins.registerPlugins([
+  DashboardPlugin({
+    group: {
+      meta: groupMeta,
+      initSchema: {
+        componentName: 'Group',
+        title: '分组',
+        isGroup: true,
+      },
+    },
+  }),
+])
+
+// 构建组件元数据
+materials.buildComponentMetasMap(Object.values(componentMetaMap))
+
+// 注册设置器
+setters.registerSetter(setterMap)
+
+// 初始化引擎
+await init({
+  designMode: 'design',
 })
 
-// 获取核心模块
-export const designer = await editor.onceGot('designer')
-export const project = await editor.onceGot('project')
-export const simulator = await editor.onceGot('simulator')
+// 导出核心模块
+export { project, materials, plugins, setters }
+export const { designer } = project
 ```
 
 ### 设计态渲染器
@@ -51,12 +75,12 @@ export const simulator = await editor.onceGot('simulator')
 
 ```tsx
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
-import { simulator } from '@/editor'
+import { designer } from '@/editor'
 
 export const DesignRenderer = () => {
   return (
     <div className='h-full w-full'>
-      <SimulatorRenderer host={simulator} />
+      <SimulatorRenderer designer={designer} />
     </div>
   )
 }
@@ -94,7 +118,7 @@ const Preview = () => {
 物料面板用于展示可拖拽的组件和模板：
 
 ```tsx
-import { simulator } from '@/editor'
+import { project } from '@/editor'
 import type { Snippet } from '@easy-editor/core'
 import { useEffect, useRef } from 'react'
 
@@ -104,8 +128,8 @@ const SnippetItem = ({ snippet }: { snippet: Snippet }) => {
 
   useEffect(() => {
     // 将物料与 DOM 元素关联，使其可拖拽
-    const unlink = simulator.linkSnippet(ref.current!, snippet)
-    return () => unlink()
+    const unlink = project.simulator?.linkSnippet(ref.current!, snippet)
+    return () => unlink?.()
   }, [snippet])
 
   return (
@@ -139,11 +163,12 @@ export const MaterialList = ({ snippets }) => {
 大纲树用于查看和管理组件结构：
 
 ```tsx
-import { designer, project } from '@/editor'
+import { project } from '@/editor'
 import type { Node } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 
 export const OutlineTree = observer(({ node }) => {
+  const { designer } = project
   const selected = designer.selection.getTopNodes(true)
 
   const handleSelect = () => {
@@ -189,7 +214,7 @@ export const OutlineTree = observer(({ node }) => {
 属性配置面板用于编辑选中组件的属性：
 
 ```tsx
-import { editor } from '@/editor'
+import { project } from '@/editor'
 import { customFieldItem } from '@/editor/setters'
 import { SettingRender } from '@easy-editor/react-renderer'
 import { observer } from 'mobx-react'
@@ -199,7 +224,7 @@ export const ConfigurePanel = observer(() => {
     <div className="h-full w-full">
       <div className="p-2 font-medium border-b">属性配置</div>
       <div className="p-2">
-        <SettingRender editor={editor} customFieldItem={customFieldItem} />
+        <SettingRender designer={project.designer} customFieldItem={customFieldItem} />
       </div>
     </div>
   )

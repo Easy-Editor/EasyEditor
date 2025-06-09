@@ -13,9 +13,9 @@ EasyEditor 的渲染器分为两种模式：
 
 EasyEditor 目前提供以下内置渲染器：
 
-- `@easyeditor/react-renderer`: 基础 React 渲染器
-- `@easyeditor/react-renderer-dashboard`: 大屏应用 React 渲染器 (基于React 渲染器扩展)
-- `@easyeditor/react-renderer-form`: 表单应用 React 渲染器 (开发中)
+- `@easy-editor/react-renderer`: 基础 React 渲染器
+- `@easy-editor/react-renderer-dashboard`: 大屏应用 React 渲染器 (基于React 渲染器扩展)
+- `@easy-editor/react-renderer-form`: 表单应用 React 渲染器 (开发中)
 
 ## 渲染器使用
 
@@ -24,11 +24,12 @@ EasyEditor 目前提供以下内置渲染器：
 设计态渲染器通常通过 `SimulatorRenderer` 组件实现：
 
 ```tsx
-import { SimulatorRenderer } from '@easyeditor/react-renderer-dashboard'
-import { simulator } from './editor'
+import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
+import { project } from './editor'
 
 export const DesignEditor = () => {
-  return <SimulatorRenderer host={simulator} />
+  const { designer } = project
+  return <SimulatorRenderer designer={designer} />
 }
 ```
 
@@ -37,7 +38,7 @@ export const DesignEditor = () => {
 运行态渲染器通过 `Renderer` 组件实现：
 
 ```tsx
-import { Renderer } from '@easyeditor/react-renderer-dashboard'
+import { Renderer } from '@easy-editor/react-renderer-dashboard'
 import { components } from './materials'
 
 export const RuntimePreview = ({ schema }) => {

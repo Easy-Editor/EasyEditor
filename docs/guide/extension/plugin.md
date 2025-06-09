@@ -174,28 +174,33 @@ export default ExtendPlugin
 
 ### 注册插件
 
-在编辑器初始化时注册插件：
+在引擎初始化时注册插件：
 
 ```ts
-import { createEditor } from '@easy-editor/core'
+import {
+  init,
+  plugins,
+} from '@easy-editor/core'
 import MyPlugin from './plugins/my-plugin'
 import EventHandlerPlugin from './plugins/event-handler-plugin'
 import ExtendPlugin from './plugins/extend-plugin'
 
-const editor = createEditor({
-  // ...其他配置
-  plugins: [
-    MyPlugin({ debug: true }),
-    EventHandlerPlugin(),
-    ExtendPlugin()
-  ]
+// 注册插件
+plugins.registerPlugins([
+  MyPlugin({ debug: true }),
+  EventHandlerPlugin(),
+  ExtendPlugin()
+])
+
+// 初始化引擎
+await init({
+  designMode: 'design',
 })
 
-// 也可以在编辑器创建后动态注册插件
-editor.pluginManager.register(
-  MyNewPlugin(),
-  { autoInit: true }  // 立即初始化
-)
+// 也可以在初始化后动态注册插件
+plugins.registerPlugins([
+  MyNewPlugin()
+])
 ```
 
 ## 通信模式
