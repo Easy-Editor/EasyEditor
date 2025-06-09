@@ -4,25 +4,56 @@
 
 ## 架构概览
 
-EasyEditor 采用模块化的架构设计，各个模块之间通过清晰的接口进行通信，形成一个灵活且可扩展的低代码引擎系统。核心架构由编辑器引擎(Editor)、设计器(Designer)、项目管理(Project)和模拟器(Simulator)四大部分组成，通过插件系统实现功能扩展。
+EasyEditor 采用模块化的架构设计，各个模块之间通过清晰的接口进行通信，形成一个灵活且可扩展的低代码引擎系统。核心架构由引擎(Engine)、设计器(Designer)、项目管理(Project)和模拟器(Simulator)四大部分组成，通过插件系统实现功能扩展。
 
 ## 介绍
 
-### 编辑器引擎 (Editor)
+### 引擎 (Engine)
 
-编辑器引擎是整个系统的核心，负责协调各个模块的工作并管理插件的生命周期。它提供了统一的事件系统和状态管理能力，是连接各个模块的枢纽。
+引擎是整个系统的核心，负责协调各个模块的工作并管理插件的生命周期。它提供了统一的事件系统和状态管理能力，是连接各个模块的枢纽。
 
-编辑器引擎通过 `createEasyEditor` 函数创建，可接收多种配置选项，包括：
+```typescript
+import {
+  init,
+  materials,
+  plugins,
+  project,
+  setters,
+} from '@easy-editor/core'
+import DashboardPlugin from '@easy-editor/plugin-dashboard'
 
-- **plugins**：要加载的插件列表，用于扩展核心功能
-- **setters**：属性设置器注册表，用于组件属性编辑
-- **components**：物料组件注册表，可用于页面设计
-- **componentMetas**：组件元数据，定义组件的配置信息
-- **lifeCycles**：生命周期钩子，用于控制编辑器初始化过程
-- **hotkeys**：快捷键配置，定义编辑器全局快捷键
-- **defaultSchema**：默认项目结构，初始化项目内容
+// 注册插件
+plugins.registerPlugins([
+  DashboardPlugin({
+    group: {
+      meta: groupMeta,
+      initSchema: {
+        componentName: 'Group',
+        title: '分组',
+        isGroup: true,
+      },
+    },
+  }),
+])
 
-编辑器引擎提供了一系列方法获取各个模块的实例，如 `onceGot` 方法可以获取设计器、项目管理等核心模块。具体的 Editor API 可以查看 [API 参考](../reference/core/index) 文档。
+// 构建组件元数据
+materials.buildComponentMetasMap(Object.values(componentMetaMap))
+
+// 注册设置器
+setters.registerSetter(setterMap)
+
+// 初始化引擎
+await init({
+  designMode: 'design',
+  appHelper: {
+    utils: {
+      // 自定义工具函数
+    },
+  },
+})
+```
+
+引擎提供了各个核心模块的直接访问，如 `project`、`materials`、`setters` 等，使开发者能够轻松获取和操作这些模块。具体的 Engine API 可以查看 [API 参考](../reference/core/index) 文档。
 
 ### 设计器 (Designer)
 

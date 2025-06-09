@@ -314,26 +314,31 @@ export default Button
 
 ## 注册物料
 
-在编辑器初始化时注册物料：
+在引擎初始化时注册物料：
 
 ```ts
-import { createEditor } from '@easy-editor/core'
+import {
+  init,
+  materials,
+  setters,
+} from '@easy-editor/core'
 import Button from './materials/button/component'
 import buttonMeta from './materials/button/meta'
 import Card from './materials/card/component'
 import cardMeta from './materials/card/meta'
 
-const editor = createEditor({
-  // 注册组件实现
-  components: {
-    Button,
-    Card
-  },
-  // 注册组件元数据
-  componentMetas: {
-    Button: buttonMeta,
-    Card: cardMeta
-  }
+// 构建组件元数据映射
+materials.buildComponentMetasMap([buttonMeta, cardMeta])
+
+// 在渲染器中使用时，需要提供组件映射
+export const components = {
+  Button,
+  Card
+}
+
+// 初始化引擎
+await init({
+  designMode: 'design',
 })
 ```
 
@@ -341,7 +346,7 @@ const editor = createEditor({
 
 ```tsx
 import React from 'react'
-import { ReactRenderer } from '@easyeditor/react-renderer-dashboard'
+import { Renderer } from '@easy-editor/react-renderer-dashboard'
 import Button from './materials/button/component'
 
 // 组件映射表
@@ -380,13 +385,13 @@ function Preview() {
   return (
     <div className="preview-container">
       <h2>简单组件</h2>
-      <ReactRenderer
+      <Renderer
         components={components}
         schema={simpleSchema}
       />
 
       <h2 className="mt-4">复杂组件</h2>
-      <ReactRenderer
+      <Renderer
         components={components}
         schema={complexSchema}
       />

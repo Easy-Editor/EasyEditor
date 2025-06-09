@@ -1,419 +1,390 @@
-# Editor
+# 核心 API
 
-Editor 是 EasyEditor 的核心引擎，负责管理整个编辑器的生命周期、插件系统、事件处理和核心模块的协调。它提供了一套完整的上下文管理机制，使各个模块之间能够进行有效通信和协作。
+Engine 是 EasyEditor 的核心引擎，负责管理整个编辑器的生命周期、插件系统、事件处理和核心模块的协调。它提供了一套完整的上下文管理机制，使各个模块之间能够进行有效通信和协作。
 
-## Overview
-
-```ts
-import { createEasyEditor } from '@easyeditor/core';
-
-// 创建编辑器实例
-const editor = createEasyEditor({
-  // 配置选项
-  plugins: [], // 插件列表
-  setters: {}, // setter 列表
-  components: {}, // 组件列表
-  componentMetas: {}, // 组件元数据列表
-  lifeCycles: {}, // 生命周期钩子
-  hotkeys: [], // 快捷键配置
-  defaultSchema: {} // 默认 schema
-});
-```
-
-## plugins
-
-- 类型: `Plugin[]`
-
-编辑器插件列表。
+## 概览
 
 ```ts
-import ExamplePlugin from './plugins/example-plugin';
-import CustomPlugin from './plugins/custom-plugin';
+import {
+  init,
+  materials,
+  plugins,
+  project,
+  setters,
+} from '@easy-editor/core';
 
-const editor = createEasyEditor({
-  plugins: [ExamplePlugin(), CustomPlugin()]
-});
-```
+// 注册插件
+plugins.registerPlugins([
+  DashboardPlugin(),
+  DataSourcePlugin(),
+]);
 
-## setters
+// 构建组件元数据
+materials.buildComponentMetasMap(componentMetas);
 
-- 类型: `Record<string, Component | Setter>`
+// 注册设置器
+setters.registerSetter(setterMap);
 
-编辑器 Setter 列表，用于属性面板。
-
-```ts
-import StringSetter from './setters/string-setter';
-import SelectSetter from './setters/select-setter';
-
-const editor = createEasyEditor({
-  setters: {
-    StringSetter,
-    SelectSetter
-  }
-});
-```
-
-## components
-
-- 类型: `Record<string, Component>`
-
-编辑器组件列表。
-
-```ts
-import Button from './components/button';
-import Input from './components/input';
-
-const editor = createEasyEditor({
-  components: {
-    Button,
-    Input
-  }
-});
-```
-
-## componentMetas
-
-- 类型: `Record<string, ComponentMetadata>`
-
-组件元数据列表。
-
-```ts
-const editor = createEasyEditor({
-  componentMetas: {
-    Button: {
-      componentName: 'Button',
-      title: '按钮',
-      props: [
-        {
-          name: 'text',
-          title: '文本',
-          setter: 'StringSetter'
-        }
-      ]
-    }
-  }
-});
-```
-
-## lifeCycles
-
-- 类型: `LifeCyclesConfig`
-
-编辑器生命周期钩子。
-
-```ts
-const editor = createEasyEditor({
-  lifeCycles: {
-    init: (editor) => {
-      console.log('编辑器初始化');
+// 初始化引擎
+await init({
+  designMode: 'design',
+  appHelper: {
+    utils: {
+      // 自定义工具函数
     },
-    destroy: (editor) => {
-      console.log('编辑器销毁');
-    },
-    extend: (editor) => {
-      console.log('编辑器扩展');
-    }
-  }
+  },
 });
 ```
 
-## designer
+## 核心模块
 
-- 类型: `Pick<DesignerProps, 'onDragstart' | 'onDrag' | 'onDragend'>`
+### init()
 
-Designer 的配置选项。
+引擎初始化函数，用于启动 EasyEditor 引擎。
+
+**类型：** `(options?: ConfigOptions) => Promise<void>`
+
+**参数：**
+- `options` - 可选的配置选项
 
 ```ts
-const editor = createEasyEditor({
-  designer: {
-    onDragstart: (e) => {
-      console.log('拖拽开始', e);
+import { init } from '@easy-editor/core'
+
+await init({
+  designMode: 'design',
+  appHelper: {
+    utils: {
+      formatDate: (date) => date.toLocaleDateString(),
     },
-    onDrag: (e) => {
-      console.log('拖拽中', e);
-    },
-    onDragend: (e) => {
-      console.log('拖拽结束', e);
-    }
-  }
-});
+  },
+})
 ```
 
-## hotkeys
+**配置选项：**
 
-- 类型: `HotkeyConfig[]`
+- `designMode` - 设计模式，可选值：`'design'` | `'preview'`
+- `appHelper` - 应用助手，提供工具函数和上下文
 
-编辑器快捷键配置。
+### plugins
+
+插件管理模块，用于注册和管理插件。
 
 ```ts
-const editor = createEasyEditor({
-  hotkeys: [
-    {
-      key: 'ctrl+s',
-      callback: (e) => {
-        e.preventDefault();
-        console.log('保存操作');
-      }
+import { plugins } from '@easy-editor/core'
+import DashboardPlugin from '@easy-editor/plugin-dashboard'
+
+// 注册插件
+plugins.registerPlugins([
+  DashboardPlugin({
+    group: {
+      meta: groupMeta,
+      initSchema: {
+        componentName: 'Group',
+        title: '分组',
+        isGroup: true,
+      },
     },
-    {
-      key: 'ctrl+z',
-      callback: (e) => {
-        e.preventDefault();
-        console.log('撤销操作');
-      }
-    }
-  ]
-});
+  }),
+])
 ```
 
-## defaultSchema
+**主要方法：**
 
-- 类型: `ProjectSchema`
-- 默认值: `{
-    version: '0.0.1',
-    componentsTree: [],
-  }`
+- `registerPlugins(pluginList: Plugin[])` - 注册插件列表
 
-编辑器默认 schema。
+### materials
+
+物料管理模块，用于管理组件物料和元数据。
 
 ```ts
-const editor = createEasyEditor({
-  defaultSchema: {
-    componentName: "Page",
-    props: {
-      title: "新页面"
-    },
-    children: []
-  }
-});
+import { materials } from '@easy-editor/core'
+
+// 构建组件元数据映射
+materials.buildComponentMetasMap(Object.values(componentMetaMap))
+
+// 获取组件元数据
+const buttonMeta = materials.getComponentMeta('Button')
 ```
 
-## get
+**主要方法：**
 
-- 类型: `get<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType): EditorGetResult<T, KeyOrType> | undefined`
-- 参数:
-  - `keyOrType`: 要获取的值的 key 或类型
+- `buildComponentMetasMap(metas: ComponentMetadata[])` - 构建组件元数据映射
+- `getComponentMeta(componentName: string)` - 获取指定组件的元数据
+- `registerComponentMeta(meta: ComponentMetadata)` - 注册单个组件元数据
 
-从编辑器上下文中获取指定 key 的值
+### setters
+
+设置器管理模块，用于管理属性设置器。
 
 ```ts
+import { setters } from '@easy-editor/core'
+
+// 注册设置器
+setters.registerSetter({
+  StringSetter: StringSetterComponent,
+  NumberSetter: NumberSetterComponent,
+  BooleanSetter: BooleanSetterComponent,
+})
+
+// 获取设置器
+const stringSetter = setters.getSetter('StringSetter')
+```
+
+**主要方法：**
+
+- `registerSetter(setterMap: Record<string, Setter>)` - 注册设置器映射
+- `getSetter(name: string)` - 获取指定设置器
+- `getSettersMap()` - 获取所有设置器映射
+
+### project
+
+项目管理模块，负责文档和资源的管理。
+
+```ts
+import { project } from '@easy-editor/core'
+
 // 获取设计器实例
-const designer = editor.get('designer');
+const { designer } = project
 
-// 使用类型获取
-const project = editor.get<Project>('project');
+// 监听模拟器就绪
+project.onSimulatorReady((simulator) => {
+  simulator.set('deviceStyle', {
+    viewport: { width: 1920, height: 1080 }
+  })
+
+  // 加载项目数据
+  project.load(projectSchema, true)
+})
+
+// 获取当前文档
+const currentDocument = project.currentDocument
+
+// 导出项目 Schema
+const schema = project.exportSchema()
 ```
 
-## set
+**主要属性：**
 
-- 类型: `set(key: EditorValueKey, data: any): void | Promise`
-- 参数:
-  - `key`: 要设置的值的 key
-  - `data`: 要设置的值
+- `designer` - 设计器实例
+- `simulator` - 模拟器实例
+- `currentDocument` - 当前活动文档
 
-设置编辑器上下文中指定 key 的值
+**主要方法：**
+
+- `onSimulatorReady(callback: (simulator: Simulator) => void)` - 监听模拟器就绪
+- `load(schema: ProjectSchema, autoOpen?: boolean)` - 加载项目数据
+- `exportSchema()` - 导出项目 Schema
+- `openDocument(doc: DocumentModel)` - 打开指定文档
+- `removeDocument(doc: DocumentModel)` - 移除文档
+
+## Designer API
+
+设计器是用户进行可视化编辑的核心模块，通过 `project.designer` 访问。
 
 ```ts
-// 设置自定义数据
-editor.set('customData', { value: 'test' });
+import { project } from '@easy-editor/core'
+
+const { designer } = project
+
+// 监听选择变化
+designer.onEvent('selection.change', (nodeIds) => {
+  console.log('选中的组件:', nodeIds)
+})
+
+// 获取当前选中的节点
+const selectedNodes = designer.selection.selected
+
+// 选中指定节点
+designer.selection.select('node_id')
 ```
 
-## has
+**主要属性：**
 
-- 类型: `has(keyOrType: EditorValueKey): boolean`
-- 参数:
-  - `keyOrType`: 要检查的值的 key 或类型
+- `selection` - 选区管理器
+- `dragon` - 拖拽管理器
+- `currentDocument` - 当前文档
+- `simulatorProps` - 模拟器属性
 
-检查编辑器上下文中是否存在指定 key 的值
+**事件系统：**
+
+设计器提供了丰富的事件系统，支持监听各种编辑操作：
 
 ```ts
-// 检查是否存在设计器实例
-if (editor.has('designer')) {
-  console.log('设计器已初始化');
+import { DESIGNER_EVENT } from '@easy-editor/core'
+
+// 监听组件选择事件
+designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, (nodeIds) => {
+  // 处理选择变化
+})
+
+// 监听属性变更事件
+designer.onEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, ({ node, prop, newValue }) => {
+  // 处理属性变化
+})
+
+// 监听拖拽事件
+designer.onEvent(DESIGNER_EVENT.DRAG_END, (e) => {
+  // 处理拖拽结束
+})
+```
+
+## Document API
+
+文档模型表示一个可编辑的页面，包含组件树和相关配置。
+
+```ts
+// 获取当前文档
+const doc = project.currentDocument
+
+// 根据 ID 获取节点
+const node = doc.getNode('node_id')
+
+// 获取根节点
+const rootNode = doc.root
+
+// 创建新节点
+const newNode = doc.createNode({
+  componentName: 'Button',
+  props: {
+    text: '按钮',
+    type: 'primary',
+  }
+})
+
+// 导出文档为 Schema
+const schema = doc.export()
+```
+
+**主要方法：**
+
+- `getNode(id: string)` - 根据 ID 获取节点
+- `createNode(schema: NodeSchema, parent?: Node, index?: number)` - 创建节点
+- `removeNode(node: Node)` - 删除节点
+- `export()` - 导出文档 Schema
+- `import(schema: DocumentSchema)` - 导入文档 Schema
+
+## Node API
+
+节点表示组件树中的一个组件实例。
+
+```ts
+// 获取节点
+const node = doc.getNode('node_id')
+
+// 基本信息
+console.log(node.id)              // 节点 ID
+console.log(node.componentName)   // 组件名称
+console.log(node.title)           // 节点标题
+
+// 层级关系
+console.log(node.parent)          // 父节点
+console.log(node.children)        // 子节点列表
+console.log(node.index)           // 在父节点中的索引
+
+// 属性操作
+node.setPropValue('text', '新文本')  // 设置属性
+const text = node.getPropValue('text')  // 获取属性
+
+// 状态控制
+node.select()                     // 选中节点
+node.hover()                      // 悬停节点
+node.lock(true)                   // 锁定节点
+node.hide(true)                   // 隐藏节点
+
+// 节点操作
+node.remove()                     // 删除节点
+const newNode = node.replaceWith(newSchema)  // 替换节点
+```
+
+**主要属性：**
+
+- `id` - 节点唯一标识
+- `componentName` - 组件名称
+- `title` - 显示名称
+- `parent` - 父节点
+- `children` - 子节点数组
+- `props` - 属性对象
+- `isRoot` - 是否为根节点
+- `isLocked` - 是否被锁定
+- `isHidden` - 是否被隐藏
+
+**主要方法：**
+
+- `getPropValue(path: string)` - 获取属性值
+- `setPropValue(path: string, value: any)` - 设置属性值
+- `select()` - 选中节点
+- `remove()` - 删除节点
+- `insertBefore(newNode: Node)` - 在当前节点前插入
+- `insertAfter(newNode: Node)` - 在当前节点后插入
+
+## 类型定义
+
+### ConfigOptions
+
+```ts
+interface ConfigOptions {
+  designMode?: 'design' | 'preview'
+  appHelper?: {
+    utils?: Record<string, any>
+    [key: string]: any
+  }
 }
 ```
 
-## onceGot
-
-- 类型: `onceGot<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType): Promise<EditorGetResult<T, KeyOrType>>`
-- 参数:
-  - `keyOrType`: 要获取的值的 key 或类型
-
-获取指定 key 的值，如果当前不存在则等待直到该值被设置
+### ComponentMetadata
 
 ```ts
-// 等待设计器实例
-const designer = await editor.onceGot('designer');
-
-// 等待项目实例，并指定类型
-const project = await editor.onceGot<Project>('project');
+interface ComponentMetadata {
+  componentName: string
+  title: string
+  icon?: string
+  group?: string
+  priority?: number
+  props: PropConfig[]
+  configure?: {
+    component?: {
+      isContainer?: boolean
+      isModal?: boolean
+    }
+    supports?: {
+      loop?: boolean
+      condition?: boolean
+    }
+  }
+}
 ```
 
-## onGot
-
-- 类型: `onGot<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType, fn: (data: EditorGetResult<T, KeyOrType>) => void): () => void`
-- 参数:
-  - `keyOrType`: 要监听的值的 key 或类型
-  - `fn`: 当值存在或被设置时调用的回调函数
-
-监听指定 key 的值，当值存在或被设置时调用回调函数
+### PropConfig
 
 ```ts
-// 监听设计器实例
-const dispose = editor.onGot('designer', (designer) => {
-  console.log('设计器已就绪:', designer);
-});
-
-// 取消监听
-dispose();
+interface PropConfig {
+  name: string
+  title: string
+  setter: string | SetterConfig
+  defaultValue?: any
+  condition?: (target: Node) => boolean
+}
 ```
 
-## onChange
+## 事件常量
 
-- 类型: `onChange<T = undefined, KeyOrType extends EditorValueKey = any>(keyOrType: KeyOrType, fn: (data: EditorGetResult<T, KeyOrType>) => void): () => void`
-- 参数:
-  - `keyOrType`: 要监听的值的 key 或类型
-  - `fn`: 当值变化时调用的回调函数
-
-监听指定 key 的值变化，当值变化时调用回调函数
+EasyEditor 提供了一系列事件常量，用于监听不同的编辑操作：
 
 ```ts
-// 监听设计器实例变化
-const dispose = editor.onChange('designer', (designer) => {
-  console.log('设计器已更新:', designer);
-});
+import { DESIGNER_EVENT } from '@easy-editor/core'
 
-// 取消监听
-dispose();
+// 选择相关事件
+DESIGNER_EVENT.SELECTION_CHANGE        // 选择变化
+DESIGNER_EVENT.HOVER_CHANGE            // 悬停变化
+
+// 节点相关事件
+DESIGNER_EVENT.NODE_CHILDREN_CHANGE    // 子节点变化
+DESIGNER_EVENT.NODE_PROPS_CHANGE       // 属性变化
+DESIGNER_EVENT.NODE_VISIBLE_CHANGE     // 可见性变化
+
+// 拖拽相关事件
+DESIGNER_EVENT.DRAG_START              // 拖拽开始
+DESIGNER_EVENT.DRAG_END                // 拖拽结束
 ```
 
-## init
-
-- 类型: `init(config?: EditorConfig): Promise`
-- 参数:
-  - `config`: 可选，编辑器配置
-
-初始化编辑器
-
-```ts
-// 初始化编辑器
-await editor.init({
-  plugins: [MyPlugin()],
-  components: myComponents
-});
-```
-
-## destroy
-
-- 类型: `destroy(): void`
-
-销毁编辑器，清理资源
-
-```ts
-// 销毁编辑器
-editor.destroy();
-```
-
-## extend
-
-- 类型: `extend(pluginManager: PluginManager): Promise`
-- 参数:
-  - `pluginManager`: 插件管理器实例
-
-扩展编辑器，执行插件的 extend 方法
-
-```ts
-// 通常在内部使用，不需要手动调用
-const pluginManager = editor.get('pluginManager');
-await editor.extend(pluginManager);
-```
-
-## onBeforeInit
-
-- 类型: `onBeforeInit(listener: (editor: Editor) => void): () => void`
-- 参数:
-  - `listener`: 事件监听器
-
-监听编辑器初始化前事件
-
-```ts
-// 监听编辑器初始化前事件
-const dispose = editor.onBeforeInit((editor) => {
-  console.log('编辑器即将初始化');
-});
-
-// 取消监听
-dispose();
-```
-
-## onAfterInit
-
-- 类型: `onAfterInit(listener: (editor: Editor) => void): () => void`
-- 参数:
-  - `listener`: 事件监听器
-
-监听编辑器初始化后事件
-
-```ts
-// 监听编辑器初始化后事件
-const dispose = editor.onAfterInit((editor) => {
-  console.log('编辑器已初始化完成');
-});
-
-// 取消监听
-dispose();
-```
-
-## onDestroy
-
-- 类型: `onDestroy(listener: (editor: Editor) => void): () => void`
-- 参数:
-  - `listener`: 事件监听器
-
-监听编辑器销毁事件
-
-```ts
-// 监听编辑器销毁事件
-const dispose = editor.onDestroy((editor) => {
-  console.log('编辑器已销毁');
-});
-
-// 取消监听
-dispose();
-```
-
-## onBeforeExtend
-
-- 类型: `onBeforeExtend(listener: (editor: Editor) => void): () => void`
-- 参数:
-  - `listener`: 事件监听器
-
-监听编辑器扩展前事件
-
-```ts
-// 监听编辑器扩展前事件
-const dispose = editor.onBeforeExtend((editor) => {
-  console.log('编辑器即将扩展');
-});
-
-// 取消监听
-dispose();
-```
-
-## onAfterExtend
-
-- 类型: `onAfterExtend(listener: (editor: Editor) => void): () => void`
-- 参数:
-  - `listener`: 事件监听器
-
-监听编辑器扩展后事件
-
-```ts
-// 监听编辑器扩展后事件
-const dispose = editor.onAfterExtend((editor) => {
-  console.log('编辑器已扩展完成');
-});
-
-// 取消监听
-dispose();
-```
+使用这些常量可以确保事件名称的正确性，并获得更好的 TypeScript 支持。
