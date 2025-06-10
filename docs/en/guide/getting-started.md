@@ -20,7 +20,7 @@ We strongly recommend using pnpm as the package manager, and EasyEditor's depend
 
 EasyEditor provides two ways to create a project:
 
-### Method 1: Using Scaffolding (Recommended)
+### Using Scaffolding (Recommended)
 
 Use the official scaffolding to quickly create a complete EasyEditor project:
 
@@ -56,7 +56,7 @@ pnpm install
 pnpm dev
 ```
 
-### Method 2: Manual Installation
+### Manual Installation
 
 If you need to integrate into an existing project, you can manually install dependencies:
 
@@ -66,7 +66,7 @@ If you need to integrate into an existing project, you can manually install depe
 pnpm add mobx mobx-react
 
 # Install engine core
-pnpm add @easy-editor/core
+pnpm add @easy-editor/core @easy-editor/renderer-core @easy-editor/react-renderer
 ```
 :::
 

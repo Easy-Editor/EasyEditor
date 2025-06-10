@@ -15,7 +15,7 @@
 
 EasyEditor 提供两种方式来创建项目：
 
-### 方式一：使用脚手架（推荐）
+### 使用脚手架（推荐）
 
 使用官方脚手架可以快速创建一个完整的 EasyEditor 项目：
 
@@ -51,7 +51,7 @@ pnpm install
 pnpm dev
 ```
 
-### 方式二：手动安装
+### 手动安装
 
 如果你需要集成到现有项目中，可以手动安装依赖：
 
@@ -61,7 +61,7 @@ pnpm dev
 pnpm add mobx mobx-react
 
 # 安装引擎核心
-pnpm add @easy-editor/core
+pnpm add @easy-editor/core @easy-editor/renderer-core @easy-editor/react-renderer
 ```
 :::
 

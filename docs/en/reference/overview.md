@@ -1,7 +1,7 @@
 # API Overview
 
-:::warning Note
-Currently, the API documentation only provides API references for the core Editor, Plugin, and Renderer components. Other API documentation is still under development. We will continue to update and improve the documentation to provide more comprehensive development guides.
+:::info Note
+Currently, the API documentation provides API references for the core Editor, Plugin, and Renderer components. Additional API documentation is being continuously updated to provide more comprehensive development guides.
 :::
 
 EasyEditor provides a series of powerful APIs for building and extending low-code editors. This section will overview EasyEditor's API architecture system to help you understand how to use these APIs to build your own low-code applications.
