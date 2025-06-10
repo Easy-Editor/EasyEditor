@@ -282,3 +282,19 @@
   --alpha-pointer-background-color: var(--popover) !important;
   --alpha-pointer-box-shadow: transparent 0px 1px 4px 0px !important;
 }
+
+@keyframes float {
+  0% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+  100% {
+    transform: translateY(0px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
