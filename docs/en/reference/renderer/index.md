@@ -1,8 +1,4 @@
-# Renderer
-
-::: warning English Documentation Status
-This English documentation is currently under development. The content may be incomplete or subject to change. For the most complete and up-to-date information, please refer to the Chinese documentation. We appreciate your patience as we work to provide comprehensive English documentation.
-:::
+# Renderer API
 
 The renderer is the core module of EasyEditor that renders component trees (schema) into actual UI interfaces. It provides functionality to convert component metadata and properties into actual DOM elements, serving as a bridge connecting the editor design system with the final rendering result.
 
