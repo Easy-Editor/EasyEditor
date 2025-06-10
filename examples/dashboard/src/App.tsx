@@ -1,26 +1,21 @@
-import Center from './components/Center'
-import Header from './components/Header'
-import Left from './components/Left'
-import Right from './components/Right'
+import { lazy } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { ThemeProvider } from './components/theme-provider'
 
-const App = () => {
+const Preview = lazy(() => import('./pages/preview'))
+const Editor = lazy(() => import('./pages/editor'))
+
+function App() {
   return (
-    <div className='h-screen flex flex-col'>
-      {/* <Monitoring
-        apiKey=''
-        url='https://monitoring.react-scan.com/api/v1/ingest'
-        // commit={process.env.COMMIT_HASH}
-        // branch={process.env.BRANCH}
-        // params={params}
-        // path={pathname}
-      /> */}
-      <Header />
-      <div className='flex-1 flex overflow-hidden'>
-        <Left />
-        <Center />
-        <Right />
-      </div>
-    </div>
+    <ThemeProvider defaultTheme='system' storageKey='easy-dashboard-theme'>
+      <BrowserRouter>
+        <Routes>
+          <Route path='/' element={<Editor />} />
+          <Route path='/preview' element={<Preview />} />
+          <Route path='*' element={<Navigate to='/' />} />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }
 

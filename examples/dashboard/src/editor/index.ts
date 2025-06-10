@@ -1,104 +1,66 @@
-import {
-  type ComponentMetadata,
-  type Setter,
-  type Simulator,
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+import { getPageInfoFromLocalStorage, getPageSchemaFromLocalStorage } from '@/lib/schema'
+import { type ProjectSchema, type RootSchema, init, materials, plugins, project, setters } from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
-import DataSourcePlugin from '@easy-editor/plugin-datasource'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
-import { defaultProjectSchema } from './const'
-import { formatMapFromESModule } from './utils'
+import { defaultRootSchema } from './const'
+import { Group, componentMetaMap } from './materials'
+import { pluginList } from './plugins'
+import { setterMap } from './setters'
 
-const setterMap = formatMapFromESModule<Setter>(await import('./setters'))
-const componentMetaMap = formatMapFromESModule<ComponentMetadata>(await import('./materials/meta'))
+import './overrides.css'
 
 plugins.registerPlugins([
   DashboardPlugin({
     group: {
-      meta: componentMetaMap.Group,
+      meta: Group,
       initSchema: {
         componentName: 'Group',
-        title: '分组',
+        title: 'Group',
         isGroup: true,
       },
     },
   }),
-  DataSourcePlugin(),
   HotkeyPlugin(),
+  ...pluginList,
 ])
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
 setters.registerSetter(setterMap)
 
-await init({
-  designMode: 'design',
-  appHelper: {
-    utils: {
-      test: 'test',
-    },
-  },
-})
+await init()
 
-const { designer } = project
-
-project.onSimulatorReady((simulator: Simulator) => {
+project.onSimulatorReady(simulator => {
+  // 设置模拟器尺寸
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
-  project.load(defaultProjectSchema, true)
 })
 
-export { designer, materials, plugins, project, setters }
+const initProjectSchema = async () => {
+  const defaultSchema = {
+    componentsTree: [defaultRootSchema],
+    version: '0.0.1',
+  }
 
-// export const editor = createEasyEditor({
-//   lifeCycles: {
-//     init: () => {
-//       console.log('init')
-//     },
-//     destroy: () => {
-//       console.log('destroy')
-//     },
-//   },
-//   plugins: [DashboardPlugin(), HotkeyPlugin(), ...plugins],
-//   setters: formatMapFromESModule<Setter>(setterMap),
-//   components: formatMapFromESModule<Component>(componentMap),
-//   componentMetas: formatMapFromESModule<ComponentMetadata>(componentMetaMap),
-//   hotkeys: [
-//     {
-//       combos: ['ctrl+a'],
-//       callback: e => {
-//         e.preventDefault()
-//         console.log('ctrl+a', e)
-//       },
-//     },
-//   ],
-// })
-// console.log('🚀 ~ easyEditor:', editor)
+  // 从本地获取
+  const pageInfo = getPageInfoFromLocalStorage()
+  if (pageInfo && pageInfo.length > 0) {
+    let isLoad = true
+    const projectSchema = {
+      componentsTree: pageInfo.map(item => {
+        const schema = getPageSchemaFromLocalStorage(item.path)
+        if (!schema) {
+          isLoad = false
+        }
+        return (schema as ProjectSchema<RootSchema>).componentsTree[0]
+      }),
+      version: '1.0.0',
+    }
+    if (isLoad) {
+      project.load(projectSchema, true)
+    } else {
+      project.load(defaultSchema, true)
+    }
+  } else {
+    project.load(defaultSchema, true)
+  }
+}
 
-// export const designer = await editor.onceGot<Designer>('designer')
-// export const project = await editor.onceGot<Project>('project')
-// export const simulator = await editor.onceGot<Simulator>('simulator')
-
-// console.log('--------------------------------')
-// console.log('designer', designer)
-// console.log('project', project)
-// console.log('simulator', simulator)
-
-// const setterManager = await editor.onceGot<SetterManager>('setterManager')
-// const componentMetaManager = await editor.onceGot<ComponentMetaManager>('componentMetaManager')
-
-// console.log('--------------------------------')
-// console.log('setters', setterManager.settersMap)
-// console.log('components', simulator.components)
-// console.log('componentMetas', componentMetaManager.componentMetasMap)
-
-// console.log('--------------------------------')
-// // simulator.setupEvents()
-// // renderer.mount(simulator)
-
-// project.open(defaultRootSchema)
-
-// // 设置模拟器样式
-// simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
+initProjectSchema()
