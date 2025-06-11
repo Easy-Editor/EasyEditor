@@ -6,13 +6,7 @@ import { cn } from '@/lib/utils'
 import { Bot, Send, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
-
-interface Message {
-  id: string
-  content: string
-  role: 'user' | 'assistant'
-  timestamp: Date
-}
+import { useCustomChat } from './use-custom-chat'
 
 interface AiChatDialogProps {
   isOpen: boolean
@@ -21,29 +15,71 @@ interface AiChatDialogProps {
 }
 
 export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, className }) => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: '你好！我是AI助手，专门帮助你进行低代码页面的生成和编辑。有什么我可以帮助你的吗？',
-      role: 'assistant',
-      timestamp: new Date(),
+  // TODO
+  // const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
+  //   api: 'https://api.deerapi.com/v1/chat/completions',
+  //   headers: {
+  //     Authorization: '',
+  //     'Content-Type': 'application/json',
+  //   },
+  //   body: {
+  //     model: 'gpt-4o',
+  //     stream: true,
+  //   },
+  //   initialMessages: [
+  //     {
+  //       id: '1',
+  //       role: 'assistant',
+  //       content: '你好！我是AI助手，专门帮助你进行低代码页面的生成和编辑。有什么我可以帮助你的吗？',
+  //       createdAt: new Date(),
+  //     },
+  //   ],
+  //   onFinish(message, options) {
+  //     console.log('✅ onFinish triggered - message:', message)
+  //     console.log('✅ onFinish triggered - options:', options)
+  //   },
+  //   onError(error) {
+  //     console.error('❌ Chat error:', error)
+  //   },
+  //   onResponse(response) {
+  //     console.log('📡 Response received:', response.status, response.statusText)
+  //     console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()))
+  //   },
+  // })
+  const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useCustomChat({
+    api: 'https://api.deerapi.com/v1/chat/completions',
+    headers: {
+      Authorization: '',
     },
-  ])
-  const [inputValue, setInputValue] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
+    body: {
+      model: 'gpt-4o',
+    },
+    initialMessages: [
+      {
+        id: '1',
+        role: 'assistant',
+        content: '你好！我是AI助手，专门帮助你进行低代码页面的生成和编辑。有什么我可以帮助你的吗？',
+        timestamp: new Date(),
+        createdAt: new Date(),
+      },
+    ],
+    onFinish(message) {
+      console.log('✅ Custom onFinish triggered - message:', message)
+    },
+    onError(error) {
+      console.error('❌ Custom chat error:', error)
+    },
+  })
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // 动画卸载控制
   const [isVisible, setIsVisible] = useState(isOpen)
   const [shouldShow, setShouldShow] = useState(false)
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
-
   useEffect(() => {
-    scrollToBottom()
-  }, [messages])
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages.length, isLoading])
 
   useEffect(() => {
     if (isOpen) {
@@ -56,37 +92,10 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
     }
   }, [isOpen])
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content: inputValue.trim(),
-      role: 'user',
-      timestamp: new Date(),
-    }
-
-    setMessages(prev => [...prev, userMessage])
-    setInputValue('')
-    setIsLoading(true)
-
-    // 模拟AI响应 - 这里后续可以替换为真实的AI API调用
-    setTimeout(() => {
-      const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        content: `我理解你想要${userMessage.content}。作为专门用于低代码页面生成和编辑的AI助手，我可以帮你：\n\n1. 生成页面布局\n2. 创建组件结构\n3. 优化页面设计\n4. 修改现有组件\n\n请告诉我更具体的需求，我会为你提供详细的实现方案。`,
-        role: 'assistant',
-        timestamp: new Date(),
-      }
-      setMessages(prev => [...prev, aiResponse])
-      setIsLoading(false)
-    }, 1000)
-  }
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSendMessage()
+      handleSubmit()
     }
   }
 
@@ -131,6 +140,14 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
         {/* 消息列表 */}
         <ScrollArea className='flex-1 p-4 h-[calc(100vh-200px)]'>
           <div className='space-y-4'>
+            {/* 错误信息显示 */}
+            {error && (
+              <div className='bg-destructive/10 border border-destructive/20 rounded-lg p-3'>
+                <p className='text-destructive text-sm font-medium'>聊天错误</p>
+                <p className='text-destructive/80 text-xs mt-1'>{error.message}</p>
+              </div>
+            )}
+
             {messages.map(message => (
               <div
                 key={message.id}
@@ -152,7 +169,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
                 >
                   <p className='whitespace-pre-wrap'>{message.content}</p>
                   <span className='text-xs opacity-70 mt-1 block'>
-                    {message.timestamp.toLocaleTimeString([], {
+                    {message.createdAt?.toLocaleTimeString([], {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
@@ -201,16 +218,16 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
           <div className='flex gap-2'>
             <Textarea
               ref={textareaRef}
-              value={inputValue}
-              onChange={e => setInputValue(e.target.value)}
+              value={input}
+              onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               placeholder='输入你的需求，比如：帮我生成一个用户管理页面...'
               className='min-h-[44px] max-h-32 resize-none flex-1'
               disabled={isLoading}
             />
             <Button
-              onClick={handleSendMessage}
-              disabled={!inputValue.trim() || isLoading}
+              onClick={handleSubmit}
+              disabled={!input.trim() || isLoading}
               size='icon'
               className='h-11 w-11 flex-shrink-0'
               aria-label='发送消息'

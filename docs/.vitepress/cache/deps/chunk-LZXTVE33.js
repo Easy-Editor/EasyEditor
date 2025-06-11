@@ -6160,10 +6160,10 @@ function normalizePropsOptions(comp, appContext, asMixin = false) {
           shouldCast = isFunction(propType) && propType.name === 'Boolean'
         }
         prop[0] =
-        /* shouldCast */
+          /* shouldCast */
           shouldCast
         prop[1] =
-        /* shouldCastTrue */
+          /* shouldCastTrue */
           shouldCastTrue
         if (shouldCast || hasOwn(prop, 'default')) {
           needCastKeys.push(normalizedKey)
