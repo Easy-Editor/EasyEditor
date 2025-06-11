@@ -3,9 +3,8 @@ import { useCallback, useState } from 'react'
 interface Message {
   id: string
   content: string
-  role: 'user' | 'assistant'
-  timestamp: Date
-  createdAt?: Date
+  role: 'user' | 'assistant' | 'system'
+  createdAt: Date
 }
 
 // 自定义聊天Hook作为备选方案
@@ -33,7 +32,6 @@ export const useCustomChat = (config: {
       id: Date.now().toString(),
       content: input.trim(),
       role: 'user',
-      timestamp: new Date(),
       createdAt: new Date(),
     }
 
@@ -75,7 +73,6 @@ export const useCustomChat = (config: {
         id: data.id || Date.now().toString(),
         content: data.choices[0]?.message?.content || '抱歉，我无法理解您的请求。',
         role: 'assistant',
-        timestamp: new Date(),
         createdAt: new Date(),
       }
 

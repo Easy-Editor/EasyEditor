@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Bot, Send, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { systemPrompt } from './prompt'
 import { useCustomChat } from './use-custom-chat'
 
 interface AiChatDialogProps {
@@ -19,7 +20,6 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
   // const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
   //   api: 'https://api.deerapi.com/v1/chat/completions',
   //   headers: {
-  //     Authorization: '',
   //     'Content-Type': 'application/json',
   //   },
   //   body: {
@@ -48,18 +48,22 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
   // })
   const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useCustomChat({
     api: 'https://api.deerapi.com/v1/chat/completions',
-    headers: {
-      Authorization: '',
-    },
+    headers: {},
     body: {
       model: 'gpt-4o',
     },
     initialMessages: [
       {
+        id: '0',
+        role: 'system',
+        content: systemPrompt,
+        createdAt: new Date(),
+      },
+      {
         id: '1',
         role: 'assistant',
-        content: '你好！我是AI助手，专门帮助你进行低代码页面的生成和编辑。有什么我可以帮助你的吗？',
-        timestamp: new Date(),
+        content:
+          '你好！我是 EasyEditor 智能助手 🤖\n\n我可以帮助你：\n📱 生成各种页面布局\n📊 配置图表和数据展示\n🎨 设计组件样式\n⚙️ 设置数据源和接口\n\n请告诉我你想要创建什么样的页面或功能，我会为你提供详细的配置方案！',
         createdAt: new Date(),
       },
     ],
@@ -148,43 +152,45 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               </div>
             )}
 
-            {messages.map(message => (
-              <div
-                key={message.id}
-                className={cn('flex gap-3', message.role === 'user' ? 'justify-end' : 'justify-start')}
-              >
-                {message.role === 'assistant' && (
-                  <Avatar className='h-8 w-8 flex-shrink-0'>
-                    <AvatarFallback className='bg-muted'>
-                      <Bot className='h-4 w-4' />
-                    </AvatarFallback>
-                  </Avatar>
-                )}
-
+            {messages
+              .filter(message => message.role !== 'system')
+              .map(message => (
                 <div
-                  className={cn(
-                    'max-w-[280px] rounded-lg px-3 py-2 text-sm',
-                    message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
-                  )}
+                  key={message.id}
+                  className={cn('flex gap-3', message.role === 'user' ? 'justify-end' : 'justify-start')}
                 >
-                  <p className='whitespace-pre-wrap'>{message.content}</p>
-                  <span className='text-xs opacity-70 mt-1 block'>
-                    {message.createdAt?.toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                </div>
+                  {message.role === 'assistant' && (
+                    <Avatar className='h-8 w-8 flex-shrink-0'>
+                      <AvatarFallback className='bg-muted'>
+                        <Bot className='h-4 w-4' />
+                      </AvatarFallback>
+                    </Avatar>
+                  )}
 
-                {message.role === 'user' && (
-                  <Avatar className='h-8 w-8 flex-shrink-0'>
-                    <AvatarFallback className='bg-secondary'>
-                      <User className='h-4 w-4' />
-                    </AvatarFallback>
-                  </Avatar>
-                )}
-              </div>
-            ))}
+                  <div
+                    className={cn(
+                      'max-w-[280px] rounded-lg px-3 py-2 text-sm',
+                      message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
+                    )}
+                  >
+                    <p className='whitespace-pre-wrap'>{message.content}</p>
+                    <span className='text-xs opacity-70 mt-1 block'>
+                      {message.createdAt?.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+
+                  {message.role === 'user' && (
+                    <Avatar className='h-8 w-8 flex-shrink-0'>
+                      <AvatarFallback className='bg-secondary'>
+                        <User className='h-4 w-4' />
+                      </AvatarFallback>
+                    </Avatar>
+                  )}
+                </div>
+              ))}
 
             {isLoading && (
               <div className='flex gap-3 justify-start'>
