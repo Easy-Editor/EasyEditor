@@ -8,6 +8,7 @@ import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { systemPrompt } from './prompt'
 import { useCustomChat } from './use-custom-chat'
+import { executeAiOperations, filterMessageContent } from './utils'
 
 interface AiChatDialogProps {
   isOpen: boolean
@@ -16,36 +17,6 @@ interface AiChatDialogProps {
 }
 
 export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, className }) => {
-  // TODO
-  // const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
-  //   api: 'https://api.deerapi.com/v1/chat/completions',
-  //   headers: {
-  //     'Content-Type': 'application/json',
-  //   },
-  //   body: {
-  //     model: 'gpt-4o',
-  //     stream: true,
-  //   },
-  //   initialMessages: [
-  //     {
-  //       id: '1',
-  //       role: 'assistant',
-  //       content: '你好！我是AI助手，专门帮助你进行低代码页面的生成和编辑。有什么我可以帮助你的吗？',
-  //       createdAt: new Date(),
-  //     },
-  //   ],
-  //   onFinish(message, options) {
-  //     console.log('✅ onFinish triggered - message:', message)
-  //     console.log('✅ onFinish triggered - options:', options)
-  //   },
-  //   onError(error) {
-  //     console.error('❌ Chat error:', error)
-  //   },
-  //   onResponse(response) {
-  //     console.log('📡 Response received:', response.status, response.statusText)
-  //     console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()))
-  //   },
-  // })
   const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useCustomChat({
     api: 'https://api.deerapi.com/v1/chat/completions',
     headers: {},
@@ -69,6 +40,8 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
     ],
     onFinish(message) {
       console.log('✅ Custom onFinish triggered - message:', message)
+      // 执行 AI 返回的配置操作
+      executeAiOperations(message.content)
     },
     onError(error) {
       console.error('❌ Custom chat error:', error)
@@ -173,7 +146,9 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
                       message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
                     )}
                   >
-                    <p className='whitespace-pre-wrap'>{message.content}</p>
+                    <p className='whitespace-pre-wrap'>
+                      {message.role === 'assistant' ? filterMessageContent(message.content) : message.content}
+                    </p>
                     <span className='text-xs opacity-70 mt-1 block'>
                       {message.createdAt?.toLocaleTimeString([], {
                         hour: '2-digit',
