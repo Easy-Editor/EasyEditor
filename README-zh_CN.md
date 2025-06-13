@@ -68,3 +68,8 @@ pnpm example:dashboard
 
 感谢 [lowcode-engine](https://github.com/alibaba/lowcode-engine) 的启发和参考。
 
+## 交流群
+
+<div align="center">
+  <img src=".github/assets/wechat.jpg" height="500" alt="logo" />
+</div>

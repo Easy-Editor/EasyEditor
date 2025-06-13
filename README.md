@@ -67,3 +67,9 @@ Contributions are welcome! Please feel free to submit issues and pull requests t
 ## Acknowledgments
 
 Thanks [lowcode-engine](https://github.com/alibaba/lowcode-engine) for inspiration and reference.
+
+## Community
+
+<div align="center">
+  <img src=".github/assets/wechat.jpg" height="500" alt="logo" />
+</div>
