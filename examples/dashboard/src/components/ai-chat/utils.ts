@@ -1,4 +1,4 @@
-import { type NodeSchema, project } from '@easy-editor/core'
+import { type Document, type NodeSchema, project } from '@easy-editor/core'
 
 // AI 操作类型
 interface AiOperation {
@@ -63,7 +63,7 @@ export const executeAiOperations = (content: string) => {
   }
 }
 
-const executeOperation = (operation: AiOperation, document: any) => {
+const executeOperation = (operation: AiOperation, document: Document) => {
   const { type, payload } = operation
 
   switch (type) {
@@ -97,7 +97,11 @@ const executeOperation = (operation: AiOperation, document: any) => {
       const node = document.getNode(id)
       if (node) {
         Object.entries(fields).forEach(([key, value]) => {
-          node.setPropValue(key, value)
+          if (key === '$dashboard') {
+            node.setExtraPropValue(key, value)
+          } else {
+            node.setPropValue(key, value)
+          }
         })
         console.log('✅ Updated node props:', id)
       } else {
