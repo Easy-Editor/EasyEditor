@@ -3,10 +3,10 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { Bot, Send, User, X } from 'lucide-react'
+import { Bot, ChevronDown, ChevronUp, Lightbulb, Send, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { systemPrompt } from './prompt'
+import { categorizedSuggestions, quickSuggestions, systemPrompt } from './prompt'
 import { useCustomChat } from './use-custom-chat'
 import { executeAiOperations, filterMessageContent } from './utils'
 
@@ -52,9 +52,15 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
   // 动画卸载控制
   const [isVisible, setIsVisible] = useState(isOpen)
   const [shouldShow, setShouldShow] = useState(false)
+
+  // 建议功能状态
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const [isSuggestionsCollapsed, setIsSuggestionsCollapsed] = useState(true)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -71,6 +77,20 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
     }
   }, [isOpen])
 
+  // 点击外部关闭下拉框
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false)
+      }
+    }
+
+    if (isDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isDropdownOpen])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -80,7 +100,37 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
 
   const handleEscape = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      onClose()
+      if (isDropdownOpen) {
+        setIsDropdownOpen(false)
+      } else {
+        onClose()
+      }
+    }
+  }
+
+  const handleSuggestionClick = (suggestion: Suggestion) => {
+    // 设置输入框内容
+    const event = {
+      target: { value: suggestion.text },
+    } as React.ChangeEvent<HTMLTextAreaElement>
+    handleInputChange(event)
+
+    // 关闭下拉框
+    setIsDropdownOpen(false)
+
+    // 聚焦到输入框
+    textareaRef.current?.focus()
+  }
+
+  const handleDropdownToggle = () => {
+    setIsDropdownOpen(!isDropdownOpen)
+  }
+
+  const handleSuggestionsToggle = () => {
+    setIsSuggestionsCollapsed(!isSuggestionsCollapsed)
+    // 关闭下拉框当折叠建议区域时
+    if (!isSuggestionsCollapsed) {
+      setIsDropdownOpen(false)
     }
   }
 
@@ -117,7 +167,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
         </div>
 
         {/* 消息列表 */}
-        <ScrollArea className='flex-1 p-4 h-[calc(100vh-200px)]'>
+        <ScrollArea className='flex-1 p-4'>
           <div className='space-y-4'>
             {/* 错误信息显示 */}
             {error && (
@@ -196,6 +246,99 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
           </div>
         </ScrollArea>
 
+        {/* 建议区域 */}
+        <div className='border-t border-border'>
+          {/* 建议区域切换按钮 */}
+          <div className='px-4 py-2 border-b border-border'>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='w-full justify-between h-8 text-xs hover:bg-muted'
+              onClick={handleSuggestionsToggle}
+              disabled={isLoading}
+              aria-expanded={!isSuggestionsCollapsed}
+              aria-label={isSuggestionsCollapsed ? '显示建议' : '隐藏建议'}
+            >
+              <div className='flex items-center gap-2'>
+                <Lightbulb className='h-3 w-3' />
+                <span>{isSuggestionsCollapsed ? '显示建议' : '隐藏建议'}</span>
+              </div>
+              {isSuggestionsCollapsed ? <ChevronUp className='h-3 w-3' /> : <ChevronDown className='h-3 w-3' />}
+            </Button>
+          </div>
+
+          {/* 可折叠的建议内容 */}
+          <div
+            className={cn(
+              'overflow-hidden transition-all duration-300 ease-in-out',
+              isSuggestionsCollapsed ? 'max-h-0' : 'max-h-[400px]',
+            )}
+          >
+            <div className='p-4 space-y-3'>
+              {/* 快速建议 */}
+              <div className='space-y-2'>
+                <div className='flex items-center gap-2 text-xs text-muted-foreground'>
+                  <span>快速开始</span>
+                </div>
+                <div className='flex flex-wrap gap-2'>
+                  {quickSuggestions.map(suggestion => (
+                    <Button
+                      key={suggestion.id}
+                      variant='outline'
+                      size='sm'
+                      className='h-7 text-xs px-2 py-1 rounded-full hover:bg-primary hover:text-primary-foreground transition-colors'
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      disabled={isLoading}
+                    >
+                      {suggestion.text}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 更多建议下拉框 */}
+              <div className='relative' ref={dropdownRef}>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='w-full justify-between h-8 text-xs'
+                  onClick={handleDropdownToggle}
+                  disabled={isLoading}
+                  aria-expanded={isDropdownOpen}
+                  aria-label='更多建议'
+                >
+                  <span>更多建议</span>
+                  {isDropdownOpen ? <ChevronUp className='h-3 w-3' /> : <ChevronDown className='h-3 w-3' />}
+                </Button>
+
+                {/* 下拉内容 */}
+                {isDropdownOpen && (
+                  <div className='absolute bottom-full left-0 right-0 mb-2 bg-background border border-border rounded-lg shadow-lg max-h-64 overflow-y-auto z-10'>
+                    {Object.entries(categorizedSuggestions).map(([category, suggestions]) => (
+                      <div key={category} className='p-2'>
+                        <div className='text-xs font-medium text-muted-foreground mb-2 px-2'>{category}</div>
+                        <div className='space-y-1'>
+                          {suggestions.map(suggestion => (
+                            <Button
+                              key={suggestion.id}
+                              variant='ghost'
+                              size='sm'
+                              className='w-full justify-start h-8 text-xs px-2 hover:bg-muted'
+                              onClick={() => handleSuggestionClick(suggestion)}
+                            >
+                              {suggestion.text}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* 输入区域 */}
         <div className='p-4 border-t border-border'>
           <div className='flex gap-2'>
@@ -204,7 +347,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder='输入你的需求，比如：帮我生成一个用户管理页面...'
+              placeholder='输入你的需求，或点击上方建议快速开始...'
               className='min-h-[44px] max-h-32 resize-none flex-1'
               disabled={isLoading}
             />
