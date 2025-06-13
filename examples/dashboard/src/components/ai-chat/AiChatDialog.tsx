@@ -19,7 +19,9 @@ interface AiChatDialogProps {
 export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, className }) => {
   const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useCustomChat({
     api: 'https://api.deerapi.com/v1/chat/completions',
-    headers: {},
+    headers: {
+      Authorization: `Bearer ${import.meta.env.VITE_DEER_API_KEY}`,
+    },
     body: {
       model: 'gpt-4o',
     },
@@ -174,15 +176,15 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
                     <Bot className='h-4 w-4' />
                   </AvatarFallback>
                 </Avatar>
-                <div className='bg-muted rounded-lg px-3 py-2 text-sm'>
+                <div className='bg-muted rounded-lg px-3 py-2 text-sm flex items-center justify-center'>
                   <div className='flex space-x-1'>
-                    <div className='w-2 h-2 bg-current rounded-full animate-bounce' />
+                    <div className='w-1 h-1 bg-current rounded-full animate-bounce' />
                     <div
-                      className='w-2 h-2 bg-current rounded-full animate-bounce'
+                      className='w-1 h-1 bg-current rounded-full animate-bounce'
                       style={{ animationDelay: '0.1s' }}
                     />
                     <div
-                      className='w-2 h-2 bg-current rounded-full animate-bounce'
+                      className='w-1 h-1 bg-current rounded-full animate-bounce'
                       style={{ animationDelay: '0.2s' }}
                     />
                   </div>

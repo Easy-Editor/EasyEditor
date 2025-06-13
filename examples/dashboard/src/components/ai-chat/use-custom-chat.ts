@@ -1,3 +1,4 @@
+import { project } from '@easy-editor/core'
 import { useCallback, useState } from 'react'
 
 interface Message {
@@ -35,7 +36,15 @@ export const useCustomChat = (config: {
       createdAt: new Date(),
     }
 
-    setMessages(prev => [...prev, userMessage])
+    // 每次用户输入需求后，会自动带上当前画布的 JSON 信息，请根据画布的信息，进行提炼，生成组件配置。
+    const systemMessage: Message = {
+      id: Date.now().toString(),
+      content: `当前画布的 JSON 信息：\n${JSON.stringify(project.currentDocument?.export())}`,
+      role: 'system',
+      createdAt: new Date(),
+    }
+
+    setMessages(prev => [...prev, userMessage, systemMessage])
     setInput('')
     setIsLoading(true)
     setError(null)
@@ -51,7 +60,7 @@ export const useCustomChat = (config: {
         },
         body: JSON.stringify({
           ...config.body,
-          messages: [...messages, userMessage].map(msg => ({
+          messages: [...messages, userMessage, systemMessage].map(msg => ({
             role: msg.role,
             content: msg.content,
           })),
