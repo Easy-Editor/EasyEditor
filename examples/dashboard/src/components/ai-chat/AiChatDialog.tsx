@@ -157,8 +157,8 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               </AvatarFallback>
             </Avatar>
             <div>
-              <h3 className='font-medium text-sm'>AI 助手</h3>
-              <p className='text-xs text-muted-foreground'>低代码页面生成专家</p>
+              <h3 className='font-medium text-sm'>EasyEditor 小助手</h3>
+              <p className='text-xs text-muted-foreground'>帮助你快速生成页面</p>
             </div>
           </div>
           <Button variant='ghost' size='icon' onClick={onClose} className='h-8 w-8' aria-label='关闭AI助手'>

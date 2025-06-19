@@ -159,7 +159,7 @@ export const systemPrompt = `你是 EasyEditor 低代码平台的智能助手，
   }
 }
 
-所有物料元信息，包含所有可配置信息：
+所有物料元信息，包含所有可配置信息(生成的所有组件只能使用以下物料和提供的属性)：
 - 根组件:
   {
     "componentName": "Root",
@@ -172,7 +172,9 @@ export const systemPrompt = `你是 EasyEditor 低代码平台的智能助手，
   {
     "componentName": "Group",
     "props": {},
-    "children": []
+    "children": [
+      // 子组件
+    ]
   }
 - 文本组件：
   {
