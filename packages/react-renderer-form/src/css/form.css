@@ -1,0 +1,270 @@
+/* 表单容器样式 */
+.lc-form-container {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+/* 表单项基础样式 */
+.lc-form-item {
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.lc-form-item-wrapper {
+  margin-bottom: 8px;
+}
+
+/* 表单项布局 */
+.lc-form-item-vertical {
+  display: flex;
+  flex-direction: column;
+}
+
+.lc-form-item-horizontal {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.lc-form-item-inline {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 16px;
+  margin-bottom: 8px;
+}
+
+/* 标签样式 */
+.lc-form-item-label {
+  display: inline-block;
+  font-weight: 500;
+  line-height: 1.5;
+  margin-bottom: 4px;
+  color: rgba(0, 0, 0, 0.85);
+  cursor: default;
+}
+
+.lc-form-item-label-horizontal {
+  padding-right: 12px;
+  text-align: right;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.lc-form-item-required .lc-form-item-label::before {
+  content: "*";
+  color: #ff4d4f;
+  font-family: SimSun, sans-serif;
+  margin-right: 4px;
+}
+
+/* 工具提示 */
+.lc-form-item-tooltip {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  background: #f0f0f0;
+  border-radius: 50%;
+  font-size: 12px;
+  color: #666;
+  cursor: help;
+  margin-left: 4px;
+}
+
+.lc-form-item-tooltip:hover {
+  background: #d9d9d9;
+}
+
+/* 控件容器 */
+.lc-form-item-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-form-item-control-horizontal {
+  flex: 1;
+}
+
+/* 表单字段基础样式 */
+.lc-form-field {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.85);
+  transition: all 0.2s;
+}
+
+.lc-form-field:focus {
+  border-color: #1890ff;
+  outline: 0;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
+.lc-form-field:hover {
+  border-color: #40a9ff;
+}
+
+.lc-form-field:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+  color: rgba(0, 0, 0, 0.25);
+}
+
+.lc-form-field::placeholder {
+  color: #bfbfbf;
+}
+
+/* 错误状态 */
+.lc-form-item-error {
+  font-size: 12px;
+  color: #ff4d4f;
+  margin-top: 4px;
+  min-height: 18px;
+}
+
+.lc-form-item.has-error .lc-form-field {
+  border-color: #ff4d4f;
+}
+
+.lc-form-item.has-error .lc-form-field:focus {
+  border-color: #ff4d4f;
+  box-shadow: 0 0 0 2px rgba(255, 77, 79, 0.2);
+}
+
+/* 尺寸变体 */
+.lc-form-item-size-small .lc-form-field {
+  min-height: 24px;
+  padding: 0px 7px;
+  font-size: 12px;
+}
+
+.lc-form-item-size-large .lc-form-field {
+  min-height: 40px;
+  padding: 7px 11px;
+  font-size: 16px;
+}
+
+/* 禁用状态 */
+.lc-form-item-disabled {
+  opacity: 0.65;
+}
+
+.lc-form-item-disabled .lc-form-item-label {
+  color: rgba(0, 0, 0, 0.25);
+}
+
+/* 设计模式样式 */
+.lc-form-item-design-mode {
+  position: relative;
+  border: 1px dashed transparent;
+  transition: border-color 0.2s;
+}
+
+.lc-form-item-design-mode:hover {
+  border-color: #1890ff;
+}
+
+/* 响应式布局 */
+@media (max-width: 768px) {
+  .lc-form-item-horizontal {
+    flex-direction: column;
+  }
+
+  .lc-form-item-label-horizontal {
+    text-align: left;
+    padding-right: 0;
+    margin-bottom: 4px;
+  }
+
+  .lc-form-item-control-horizontal {
+    width: 100% !important;
+  }
+}
+
+/* 特定字段类型样式 */
+.lc-form-field[data-field-type="checkbox"],
+.lc-form-field[data-field-type="radio"] {
+  width: auto;
+  margin-right: 8px;
+}
+
+.lc-form-field[data-field-type="textarea"] {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.lc-form-field[data-field-type="number"] {
+  text-align: right;
+}
+
+/* 表单组合项 */
+.lc-form-item-group {
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.lc-form-item-group-title {
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+/* 表单按钮组 */
+.lc-form-actions {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.lc-form-actions .lc-form-field {
+  width: auto;
+  margin-right: 8px;
+}
+
+/* 加载状态 */
+.lc-form-submitting {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* 暗色主题支持 */
+.dark .lc-form-container {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.dark .lc-form-field {
+  background: #141414;
+  border-color: #434343;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.dark .lc-form-field:focus {
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
+.dark .lc-form-field:disabled {
+  background: #262626;
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.dark .lc-form-item-label {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.dark .lc-form-item-group {
+  border-color: #434343;
+  background: #1f1f1f;
+}

@@ -1,0 +1,112 @@
+.lc-borders {
+  box-sizing: border-box;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  border: 1px solid var(--color-brand-light);
+  will-change: transform, width, height;
+  overflow: visible;
+}
+
+.lc-borders-title {
+  color: var(--color-brand-light);
+  transform: translateY(-100%);
+  font-weight: lighter;
+}
+
+.lc-borders-detecting {
+  z-index: 1;
+  border-style: dashed;
+  background: var(--color-canvas-detecting-background, rgba(0, 121, 242, 0.04));
+}
+
+.lc-borders-selecting {
+  z-index: 2;
+  /* border-width: 2px; */
+
+  &.dragging {
+    /* background: var(--color-layer-mask-background, rgba(182, 178, 178, 0.8)); */
+    /* border: none; */
+  }
+}
+
+.lc-resize-border {
+  box-sizing: border-box;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  will-change: transform, width, height;
+  overflow: visible;
+  z-index: 3;
+}
+
+.lc-resize-corner {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--color-brand, #197aff);
+  background: var(--color-block-background-normal, #fff);
+  pointer-events: auto;
+  z-index: 4;
+}
+
+.lc-resize-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-width: 0;
+  pointer-events: auto;
+  z-index: 3;
+
+  &:after {
+    content: "";
+    display: block;
+    border: 1px solid var(--color-brand, #197aff);
+    background: var(--color-block-background-normal, #fff);
+    border-radius: 2px;
+  }
+
+  &.e,
+  &.w {
+    cursor: ew-resize;
+
+    &:after {
+      width: 4px;
+      min-height: 50%;
+    }
+  }
+
+  &.n,
+  &.s {
+    cursor: ns-resize;
+
+    &:after {
+      min-width: 50%;
+      height: 4px;
+    }
+  }
+}
+
+.lc-guideline {
+  position: absolute;
+  z-index: 999;
+  background-color: var(--color-guideline, #eb5648);
+
+  &.vertical {
+    left: 0;
+    width: 1px;
+    height: 20000px;
+    transform: translateY(-50%);
+  }
+
+  &.horizontal {
+    top: 0;
+    width: 20000px;
+    height: 1px;
+    transform: translateX(-50%);
+  }
+}

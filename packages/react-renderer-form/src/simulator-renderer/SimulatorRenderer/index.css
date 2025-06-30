@@ -1,0 +1,113 @@
+.lc-designer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  font-family: var(--font-family);
+  font-size: var(--font-size-text);
+  box-sizing: border-box;
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
+.lc-project {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+
+  .lc-simulator-shell {
+    width: 100%;
+    height: 100%;
+  }
+
+  .lc-simulator {
+    background-color: var(--color-background, rgb(237, 239, 243));
+  }
+}
+
+#engine-loading-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+.lc-simulator {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+
+  .lc-simulator-canvas {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    overflow: hidden;
+
+    .lc-simulator-canvas-viewport {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+
+      left: 50%;
+      top: 50%;
+      transform-origin: 0px 0px;
+      transform: scale(1) translate(-50%, -50%);
+    }
+  }
+
+  .lc-simulator-content {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+
+    .lc-simulator-content-frame {
+      border: none;
+      transform-origin: 0 0;
+      height: 100%;
+      width: 100%;
+    }
+  }
+
+  .lc-simulator-device-default {
+    top: var(--simulator-top-distance, 16px);
+    right: var(--simulator-right-distance, 16px);
+    bottom: var(--simulator-bottom-distance, 16px);
+    left: var(--simulator-left-distance, 16px);
+    width: auto;
+    box-shadow: 0 1px 4px 0 var(--color-block-background-shallow, rgba(31, 50, 88, 0.125));
+  }
+}
+
+.lc-component-container {
+  position: absolute;
+  border: none;
+  user-select: none;
+  touch-action: none;
+  pointer-events: auto;
+
+  &.mask {
+    cursor: move !important;
+  }
+
+  .lc-component-mask {
+    position: absolute;
+  }
+
+  .lc-component {
+    &.mask {
+      pointer-events: none;
+    }
+  }
+}

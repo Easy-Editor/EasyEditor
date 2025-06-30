@@ -1,0 +1,57 @@
+.loading-logo-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+}
+
+.breathing-logo {
+  width: 60px;
+  height: 60px;
+  animation: breathe 2s infinite ease-in-out;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.loading-text {
+  background: linear-gradient(
+    90deg,
+    #000 0%,
+    #444 10%,
+    #fff 25%,
+    #444 40%,
+    #000 50%,
+    #444 60%,
+    #fff 75%,
+    #444 90%,
+    #000 100%
+  );
+  background-size: 300% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-move 5s linear infinite alternate;
+  font-size: 14px;
+  letter-spacing: 2px;
+}
+
+@keyframes gradient-move {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
+}
