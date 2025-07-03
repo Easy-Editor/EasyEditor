@@ -26,7 +26,7 @@ interface PureRendererProps extends RendererProps {
 
 const PureRenderer: React.FC<PureRendererProps> = props => {
   const { viewport, ...rendererProps } = props
-  const { width: viewportWidth = 1920, height: viewportHeight = 1080 } = viewport || {}
+  const { width: viewportWidth = 800, height: viewportHeight = 600 } = viewport || {}
   const canvasRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
 
@@ -34,9 +34,21 @@ const PureRenderer: React.FC<PureRendererProps> = props => {
     elem: canvasRef,
     onResize: entries => {
       const { width, height } = entries[0].contentRect
+
+      // 确保视口尺寸有效
+      if (!width || !height || !viewportWidth || !viewportHeight || !viewportRef.current) {
+        return
+      }
+
       const ww = width / viewportWidth
       const wh = height / viewportHeight
-      viewportRef.current!.style.transform = `scale(${Math.min(ww, wh)})  translate(-50%, -50%)`
+      const newScale = Math.min(ww, wh)
+
+      // 确保scale是有效的正数，最小值为0.1，最大值为3
+      if (newScale > 0 && !Number.isNaN(newScale)) {
+        const validScale = Math.max(0.1, Math.min(3, newScale))
+        viewportRef.current.style.transform = `scale(${validScale}) translate(-50%, -50%)`
+      }
     },
   })
 

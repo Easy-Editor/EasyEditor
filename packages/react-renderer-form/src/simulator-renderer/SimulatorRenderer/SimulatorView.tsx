@@ -17,8 +17,8 @@ import './index.css'
 
 const defaultDeviceStyle = {
   viewport: {
-    width: 1920,
-    height: 1080,
+    width: 800,
+    height: 600,
   },
 }
 
@@ -107,6 +107,10 @@ export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const frameRef = useRef<HTMLDivElement>(null)
 
   const frameStyle: React.CSSProperties = {
+    // @ts-ignore
+    // 用于 Content 更新
+    width: viewport.contentWidth,
+    height: viewport.contentHeight,
     // 覆盖
     // @ts-ignore
     width: '100%',
