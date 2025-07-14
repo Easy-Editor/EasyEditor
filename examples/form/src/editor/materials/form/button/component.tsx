@@ -1,6 +1,8 @@
-import type { FC } from 'react'
+import type { FC, Ref } from 'react'
 
 export interface ButtonProps {
+  ref: Ref<HTMLButtonElement>
+
   /**
    * 按钮文本
    */
@@ -44,6 +46,7 @@ const Button: FC<ButtonProps> = ({
   fullWidth = false,
   onClick,
   className,
+  ref,
 }) => {
   const handleClick = () => {
     if (disabled || !onClick) return
@@ -80,7 +83,15 @@ const Button: FC<ButtonProps> = ({
     .join(' ')
 
   return (
-    <button type={type} className={classes} disabled={disabled} onClick={handleClick} tabIndex={0} aria-label={text}>
+    <button
+      ref={ref}
+      type={type}
+      className={classes}
+      disabled={disabled}
+      onClick={handleClick}
+      tabIndex={0}
+      aria-label={text}
+    >
       {text}
     </button>
   )

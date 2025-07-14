@@ -68,6 +68,7 @@ export const SettingRenderer = observer<React.FC<SettingRendererProps>>(props =>
   const { settingsManager } = designer
   const { settings } = settingsManager
   const items = settings?.items
+  console.log('🚀 ~ items:', items)
 
   const ctx = useMemo(() => {
     const ctx = {} as SettingRendererContext

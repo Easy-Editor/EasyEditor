@@ -40,7 +40,8 @@ export const generalBasicConfigure: FieldConfig[] = [
       {
         name: 'style',
         title: '自定义样式',
-        setter: 'JsonSetter',
+        // setter: 'JsonSetter',
+        setter: 'StringSetter',
       },
     ],
   },
@@ -86,7 +87,7 @@ export const formFieldConfigure: FieldConfig[] = [
       {
         name: 'required',
         title: '必填',
-        setter: 'BoolSetter',
+        setter: 'SwitchSetter',
         extraProps: {
           getValue(target) {
             return target.getExtraPropValue('$form.required')

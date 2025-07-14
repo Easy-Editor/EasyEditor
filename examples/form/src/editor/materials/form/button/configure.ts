@@ -43,7 +43,7 @@ const configure: Configure = {
                 {
                   name: 'disabled',
                   title: '禁用',
-                  setter: 'BoolSetter',
+                  setter: 'SwitchSetter',
                 },
               ],
             },

@@ -29,12 +29,12 @@ const configure: Configure = {
                 {
                   name: 'checked',
                   title: '选中状态',
-                  setter: 'BoolSetter',
+                  setter: 'SwitchSetter',
                 },
                 {
                   name: 'disabled',
                   title: '禁用',
-                  setter: 'BoolSetter',
+                  setter: 'SwitchSetter',
                 },
               ],
             },
