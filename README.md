@@ -71,5 +71,5 @@ Thanks [lowcode-engine](https://github.com/alibaba/lowcode-engine) for inspirati
 ## Community
 
 <div align="center">
-  <img src=".github/assets/wechat.jpg" height="500" alt="logo" />
+  <img src=".github/assets/wechat_self.jpg" height="500" alt="logo" />
 </div>
