@@ -4,6 +4,7 @@ import { savePageInfoToLocalStorage, savePageSchemaToLocalStorage, saveProjectSc
 import { cn } from '@/lib/utils'
 import { TRANSFORM_STAGE, project } from '@easy-editor/core'
 import { toast } from 'sonner'
+import { DevTools } from './DevTools'
 
 export const AppHeader = ({ className }: { className?: string }) => {
   const save = (kind: 'project' | 'page' = 'page') => {
@@ -43,6 +44,7 @@ export const AppHeader = ({ className }: { className?: string }) => {
           <div className='flex flex-1 items-center justify-between gap-2 md:justify-end'>
             <div className='w-full flex-1 md:w-auto md:flex-none' />
             <div className='flex items-center gap-2'>
+              <DevTools />
               <Button variant='outline' onClick={preview}>
                 预览
               </Button>

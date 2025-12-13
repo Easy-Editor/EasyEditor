@@ -6,6 +6,8 @@ import { defaultRootSchema } from './const'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import { setterMap } from './setters'
+import { RemoteMaterialManager } from './loader'
+import { remoteMaterialsConfig } from './loader/config'
 
 import './overrides.css'
 
@@ -23,7 +25,21 @@ plugins.registerPlugins([
   HotkeyPlugin(),
   ...pluginList,
 ])
+
+// 注册本地物料
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
+
+// 动态加载远程物料
+;(async () => {
+  try {
+    console.log('[EasyEditor] Loading remote materials...')
+    await RemoteMaterialManager.loadMultiple(remoteMaterialsConfig)
+    console.log('[EasyEditor] Remote materials loaded successfully')
+  } catch (error) {
+    console.error('[EasyEditor] Failed to load remote materials:', error)
+  }
+})()
+
 setters.registerSetter(setterMap)
 
 await init()
