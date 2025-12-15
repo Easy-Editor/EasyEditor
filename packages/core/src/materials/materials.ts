@@ -47,6 +47,23 @@ export class Materials {
     return meta
   }
 
+  @action
+  removeComponentMeta(componentName: string): boolean {
+    if (!componentName) {
+      return false
+    }
+
+    const removed = this._componentMetasMap.delete(componentName)
+    this._lostComponentMetasMap.delete(componentName)
+
+    // 触发更新
+    if (removed) {
+      this.refreshComponentMetasMap()
+    }
+
+    return removed
+  }
+
   getComponentMeta(componentName: string, generateMetadata?: () => ComponentMetadata | null): ComponentMeta {
     if (this._componentMetasMap.has(componentName)) {
       return this._componentMetasMap.get(componentName)!
