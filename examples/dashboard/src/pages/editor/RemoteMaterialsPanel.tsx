@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { RemoteMaterialManager } from '@/editor/loader'
+import { ComponentLoadError, RemoteMaterialManager } from '@/editor/loader'
 import { remoteMaterialsConfig } from '@/editor/loader/config'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -30,15 +30,39 @@ export const RemoteMaterialsPanel = () => {
 
       if (result.succeeded > 0) {
         toast.success(`成功加载 ${result.succeeded} 个远程物料`, {
-          description: `失败: ${result.failed} 个`,
+          description: result.failed > 0 ? `失败: ${result.failed} 个` : undefined,
         })
       } else {
-        toast.error('加载远程物料失败')
+        toast.error('所有物料加载失败')
       }
-    } catch (error) {
-      toast.error('加载失败', {
-        description: error instanceof Error ? error.message : String(error),
+
+      // 显示详细错误信息
+      result.results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          const material = materials.filter(m => m.enabled)[i]
+          const error = r.reason
+
+          if (error instanceof ComponentLoadError) {
+            toast.error(`${material.package} 加载失败`, {
+              description: error.toUserMessage(),
+            })
+          } else {
+            toast.error(`${material.package} 加载失败`, {
+              description: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
       })
+    } catch (error) {
+      if (error instanceof ComponentLoadError) {
+        toast.error('加载失败', {
+          description: error.toUserMessage(),
+        })
+      } else {
+        toast.error('加载失败', {
+          description: error instanceof Error ? error.message : String(error),
+        })
+      }
     } finally {
       setLoading(false)
     }
