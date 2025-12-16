@@ -1,5 +1,15 @@
 import { getPageInfoFromLocalStorage, getPageSchemaFromLocalStorage } from '@/lib/schema'
-import { type ProjectSchema, type RootSchema, init, materials, plugins, project, setters } from '@easy-editor/core'
+import {
+  ComponentsMap,
+  NpmInfo,
+  type ProjectSchema,
+  type RootSchema,
+  init,
+  materials,
+  plugins,
+  project,
+  setters,
+} from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { defaultRootSchema } from './const'
@@ -7,7 +17,6 @@ import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import { setterMap } from './setters'
 import { RemoteMaterialManager } from './loader'
-import { remoteMaterialsConfig } from './loader/config'
 
 import './overrides.css'
 
@@ -29,16 +38,16 @@ plugins.registerPlugins([
 // 注册本地物料
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
-// 动态加载远程物料
-;(async () => {
-  try {
-    console.log('[EasyEditor] Loading remote materials...')
-    await RemoteMaterialManager.loadMultiple(remoteMaterialsConfig)
-    console.log('[EasyEditor] Remote materials loaded successfully')
-  } catch (error) {
-    console.error('[EasyEditor] Failed to load remote materials:', error)
-  }
-})()
+// // 动态加载远程物料
+// ;(async () => {
+//   try {
+//     console.log('[EasyEditor] Loading remote materials...')
+//     await RemoteMaterialManager.loadMultiple(remoteMaterialsConfig)
+//     console.log('[EasyEditor] Remote materials loaded successfully')
+//   } catch (error) {
+//     console.error('[EasyEditor] Failed to load remote materials:', error)
+//   }
+// })()
 
 setters.registerSetter(setterMap)
 
@@ -49,6 +58,47 @@ project.onSimulatorReady(simulator => {
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
 })
 
+/**
+ * 从 componentsMap 加载远程物料
+ */
+const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMap) => {
+  if (!componentsMap || componentsMap.length === 0) {
+    return
+  }
+
+  // 提取所有 ProCode 组件（NpmInfo）
+  const remoteMaterials: Array<{ package: string; version?: string; globalName: string }> = []
+  const seenPackages = new Set<string>()
+
+  for (const component of componentsMap) {
+    // 检查是否是 ProCode 组件（NpmInfo）
+    if ('package' in component && 'globalName' in component) {
+      const npmInfo = component as NpmInfo
+      const packageKey = `${npmInfo.package}@${npmInfo.version || 'latest'}`
+
+      // 避免重复加载
+      if (!seenPackages.has(packageKey) && npmInfo.globalName) {
+        seenPackages.add(packageKey)
+        remoteMaterials.push({
+          package: npmInfo.package,
+          version: npmInfo.version || 'latest',
+          globalName: npmInfo.globalName,
+        })
+      }
+    }
+  }
+
+  if (remoteMaterials.length > 0) {
+    console.log(`[EasyEditor] Loading ${remoteMaterials.length} remote materials from componentsMap...`)
+    try {
+      await RemoteMaterialManager.loadMultiple(remoteMaterials)
+      console.log('[EasyEditor] Remote materials from componentsMap loaded successfully')
+    } catch (error) {
+      console.error('[EasyEditor] Failed to load remote materials from componentsMap:', error)
+    }
+  }
+}
+
 const initProjectSchema = async () => {
   const defaultSchema = {
     componentsTree: [defaultRootSchema],
@@ -57,19 +107,52 @@ const initProjectSchema = async () => {
 
   // 从本地获取
   const pageInfo = getPageInfoFromLocalStorage()
+  let projectSchema: ProjectSchema
+
   if (pageInfo && pageInfo.length > 0) {
     let isLoad = true
-    const projectSchema = {
-      componentsTree: pageInfo.map(item => {
-        const schema = getPageSchemaFromLocalStorage(item.path)
-        if (!schema) {
-          isLoad = false
+    const schemas = pageInfo.map(item => {
+      const schema = getPageSchemaFromLocalStorage(item.path)
+      if (!schema) {
+        isLoad = false
+      }
+      return schema as ProjectSchema<RootSchema>
+    })
+
+    if (isLoad && schemas.length > 0) {
+      // 合并所有 schema 的 componentsMap
+      const allComponentsMap: ComponentsMap = []
+      const seenComponents = new Set<string>()
+
+      for (const schema of schemas) {
+        if (schema.componentsMap) {
+          for (const component of schema.componentsMap) {
+            // 生成唯一 key
+            let key: string
+            if ('package' in component) {
+              // ProCodeComponent (NpmInfo)
+              key = `${component.package}@${component.componentName || ''}`
+            } else {
+              // LowCodeComponent
+              key = component.componentName || ''
+            }
+
+            if (!seenComponents.has(key)) {
+              seenComponents.add(key)
+              allComponentsMap.push(component)
+            }
+          }
         }
-        return (schema as ProjectSchema<RootSchema>).componentsTree[0]
-      }),
-      version: '1.0.0',
-    }
-    if (isLoad) {
+      }
+
+      projectSchema = {
+        componentsTree: schemas.map(s => s.componentsTree[0]),
+        componentsMap: allComponentsMap,
+        version: '1.0.0',
+      }
+
+      // 先加载远程物料，再加载 schema
+      await loadRemoteMaterialsFromComponentsMap(allComponentsMap)
       project.load(projectSchema, true)
     } else {
       project.load(defaultSchema, true)

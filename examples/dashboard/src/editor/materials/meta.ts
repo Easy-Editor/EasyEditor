@@ -28,5 +28,5 @@ export const componentMetaMap = {
   RadarChart,
   RadialChart,
   Root,
-  Text,
+  // Text,
 }

@@ -22,7 +22,7 @@ export const AppHeader = ({ className }: { className?: string }) => {
   }
 
   const preview = () => {
-    save('page')
+    save('project')
     window.open('/preview', '_blank')
   }
 

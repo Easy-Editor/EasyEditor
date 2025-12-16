@@ -1,6 +1,7 @@
 import type { SettingField } from '../designer'
 import type { Node, PropKey } from '../document'
 import type { ComponentType } from './component'
+import type { NpmInfo } from './npm-info'
 import type { NodeSchema } from './schema'
 import type { DynamicSetter, SetterType } from './setter'
 
@@ -20,6 +21,11 @@ export interface ComponentMetadata {
    * component dev mode
    */
   devMode?: 'proCode' | 'lowCode'
+
+  /**
+   * npm 源引入完整描述对象
+   */
+  npm?: NpmInfo
 
   /**
    * component configure, for right panel to use setter to config component

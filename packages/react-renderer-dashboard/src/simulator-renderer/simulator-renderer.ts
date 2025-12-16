@@ -143,11 +143,11 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     )
 
     const history = createMemoryHistory({ initialEntries: ['/'] })
+    this.history = history
     history.listen(({ location }) => {
       const docId = location.pathname.slice(1)
       docId && this.host.project.open(docId)
     })
-    this.history = history
 
     this._appContext = {
       utils: {
