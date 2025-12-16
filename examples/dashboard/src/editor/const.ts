@@ -19,65 +19,65 @@ export const defaultRootSchema: RootSchema = {
     },
   },
   children: [
-    {
-      componentName: 'Image',
-      $dashboard: {
-        rect: {
-          x: 600,
-          y: 480,
-          width: 740,
-          height: 120,
-        },
-      },
-    },
-    {
-      componentName: 'Group',
-      title: 'Title Bar',
-      isGroup: true,
-      children: [
-        {
-          componentName: 'Text',
-          title: 'Left Title',
-          props: {
-            text: '标题标题标题左',
-            style: {
-              fontSize: '36px',
-              fontFamily: 'KaiTi',
-              fontWeight: 'bold',
-              color: '#FFFFFF',
-            },
-          },
-          $dashboard: {
-            rect: {
-              x: 0,
-              y: 0,
-              width: 400,
-              height: 100,
-            },
-          },
-        },
-        {
-          componentName: 'Text',
-          title: 'Right Title',
-          props: {
-            text: '标题标题标题右',
-            style: {
-              fontSize: '36px',
-              fontFamily: 'KaiTi',
-              fontWeight: 'bold',
-              color: '#FFFFFF',
-            },
-          },
-          $dashboard: {
-            rect: {
-              x: 1520,
-              y: 0,
-              width: 400,
-              height: 100,
-            },
-          },
-        },
-      ],
-    },
+    // {
+    //   componentName: 'Image',
+    //   $dashboard: {
+    //     rect: {
+    //       x: 600,
+    //       y: 480,
+    //       width: 740,
+    //       height: 120,
+    //     },
+    //   },
+    // },
+    // {
+    //   componentName: 'Group',
+    //   title: 'Title Bar',
+    //   isGroup: true,
+    //   children: [
+    //     {
+    //       componentName: 'Text',
+    //       title: 'Left Title',
+    //       props: {
+    //         text: '标题标题标题左',
+    //         style: {
+    //           fontSize: '36px',
+    //           fontFamily: 'KaiTi',
+    //           fontWeight: 'bold',
+    //           color: '#FFFFFF',
+    //         },
+    //       },
+    //       $dashboard: {
+    //         rect: {
+    //           x: 0,
+    //           y: 0,
+    //           width: 400,
+    //           height: 100,
+    //         },
+    //       },
+    //     },
+    //     {
+    //       componentName: 'Text',
+    //       title: 'Right Title',
+    //       props: {
+    //         text: '标题标题标题右',
+    //         style: {
+    //           fontSize: '36px',
+    //           fontFamily: 'KaiTi',
+    //           fontWeight: 'bold',
+    //           color: '#FFFFFF',
+    //         },
+    //       },
+    //       $dashboard: {
+    //         rect: {
+    //           x: 1520,
+    //           y: 0,
+    //           width: 400,
+    //           height: 100,
+    //         },
+    //       },
+    //     },
+    //   ],
+    // },
   ],
 }

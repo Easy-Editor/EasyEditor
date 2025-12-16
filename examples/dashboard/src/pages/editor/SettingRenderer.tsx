@@ -5,6 +5,7 @@ import { SettingRenderer } from '@easy-editor/react-renderer'
 import { observer } from 'mobx-react'
 
 export const SettingSidebar = observer(({ ...props }: React.ComponentProps<typeof Sidebar>) => {
+  return 'temp'
   return (
     <Sidebar collapsible='none' className='sticky hidden lg:flex top-0 h-svh border-l' {...props}>
       <SidebarHeader className='border-b p-2'>

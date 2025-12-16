@@ -12,11 +12,12 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Component, ListTree, Pin, PinOff, X } from 'lucide-react'
+import { Cloud, Component, ListTree, Pin, PinOff, X } from 'lucide-react'
 import * as React from 'react'
 import { useEffect } from 'react'
 import { ComponentSidebar } from './Components'
 import { OutlineSidebar } from './Outline'
+import { RemoteMaterialsSidebar } from './RemoteMaterials'
 
 const nav = [
   {
@@ -30,6 +31,12 @@ const nav = [
     title: '组件',
     icon: Component,
     component: <ComponentSidebar />,
+  },
+  {
+    key: 'remote-materials',
+    title: '远程物料',
+    icon: Cloud,
+    component: <RemoteMaterialsSidebar />,
   },
 ]
 

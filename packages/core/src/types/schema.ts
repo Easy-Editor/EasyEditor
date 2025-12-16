@@ -1,5 +1,6 @@
 import type { CompositeValue, JSExpression, JSFunction, JSONObject, PropsMap } from '../document'
 import type { DataSource } from './data-source'
+import type { ComponentsMap } from './npm-info'
 
 export interface ProjectSchema<T = RootSchema> {
   id?: string
@@ -12,7 +13,7 @@ export interface ProjectSchema<T = RootSchema> {
   /**
    * 组件映射关系
    */
-  componentsMap?: any
+  componentsMap?: ComponentsMap
 
   /**
    * 组件树

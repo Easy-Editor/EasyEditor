@@ -1,3 +1,5 @@
+import { NpmInfo } from './npm-info'
+
 // export type ComponentInstance = Element
 export type ComponentInstance = any
 
@@ -20,16 +22,11 @@ export interface LowCodeComponent {
   componentName: string
 }
 
-// export type ProCodeComponent = TypeNpmInfo;
-export interface ProCodeComponent {
+export interface ProCodeComponent extends NpmInfo {
   /**
    * 研发模式
    */
   devMode: 'proCode'
-  /**
-   * 组件名称
-   */
-  componentName: string
 }
 
 export type ComponentMap = ProCodeComponent | LowCodeComponent
