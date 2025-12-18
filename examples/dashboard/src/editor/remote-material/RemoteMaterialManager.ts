@@ -3,9 +3,9 @@
  * 远程物料管理器
  */
 
-import { materials } from '@easy-editor/core'
-import { action, computed, observable } from 'mobx'
-import NpmComponentLoader from './NpmComponentLoader'
+import { Component, materials } from '@easy-editor/core'
+import { action, computed, observable, runInAction } from 'mobx'
+import NpmMaterialLoader from './NpmMaterialLoader'
 
 export interface RemoteMaterialConfig {
   /** 包名 */
@@ -19,14 +19,17 @@ export interface RemoteMaterialConfig {
 }
 
 interface CachedMaterial {
-  loaded: any
-  metadata: any
   version: string
   globalName: string
+  metadata?: any
+  component?: Component
 }
 
 class RemoteMaterialManager {
-  @observable.shallow private accessor remoteComponents: Map<string, CachedMaterial> = new Map()
+  /**
+   * 已加载的远程物料
+   */
+  @observable.shallow private accessor remoteMaterials: Map<string, CachedMaterial> = new Map()
 
   /**
    * 获取已加载的远程组件映射
@@ -35,12 +38,12 @@ class RemoteMaterialManager {
   get remoteComponentsMap() {
     const componentsMap: Record<string, any> = {}
 
-    for (const [, data] of this.remoteComponents.entries()) {
-      const { loaded, metadata } = data
+    for (const [, data] of this.remoteMaterials.entries()) {
+      const { component, metadata } = data
       const componentName = metadata?.componentName
 
-      if (componentName && loaded?.component) {
-        componentsMap[componentName] = loaded.component
+      if (componentName && component) {
+        componentsMap[componentName] = component
       }
     }
 
@@ -48,41 +51,37 @@ class RemoteMaterialManager {
   }
 
   /**
-   * 加载远程物料元数据并注册到编辑器（轻量，用于初次加载）
+   * 加载远程物料元数据并注册到编辑器
    */
   @action
   async loadMetaAndRegister(config: RemoteMaterialConfig) {
     const { package: packageName, version = 'latest', globalName, enabled = true } = config
 
     if (!enabled) {
-      console.log(`[Skip Meta] ${packageName} - disabled`)
       return
     }
 
     try {
-      console.log(`[Loading Remote Material Meta] ${packageName}@${version}`)
-
       // 1. 从 NPM/CDN 加载元数据（不加载组件代码）
-      const loadedMeta = await NpmComponentLoader.loadMeta({
+      const loadedMeta = await NpmMaterialLoader.loadMeta({
         name: packageName,
         version,
         globalName,
       })
 
-      const metadata = loadedMeta.meta
+      const metadata = loadedMeta
 
       // 2. 注册到编辑器（只注册元数据，不注册组件）
       materials.createComponentMeta(metadata)
 
       // 3. 缓存（保存版本和 globalName 信息，但不包含 component）
-      this.remoteComponents.set(packageName, {
-        loaded: {
-          meta: loadedMeta.meta,
-          component: null, // 组件代码未加载
-        },
-        metadata,
-        version,
-        globalName,
+      // 使用 runInAction 包装异步操作后的状态修改
+      runInAction(() => {
+        this.remoteMaterials.set(packageName, {
+          metadata,
+          version,
+          globalName,
+        })
       })
 
       console.log(`[Meta Registered] ${packageName}@${version}`, metadata)
@@ -100,45 +99,45 @@ class RemoteMaterialManager {
     const { package: packageName, version = 'latest', globalName } = config
 
     try {
-      console.log(`[Loading Remote Material Component] ${packageName}@${version}`)
-
       // 1. 加载组件代码
-      const component = await NpmComponentLoader.addComponent({
+      const component = await NpmMaterialLoader.addComponent({
         name: packageName,
         version,
         globalName,
       })
 
       // 2. 更新缓存中的组件（重新设置以触发 MobX 响应式更新）
-      const cached = this.remoteComponents.get(packageName)
-      if (cached) {
-        this.remoteComponents.set(packageName, {
-          ...cached,
-          loaded: {
-            ...cached.loaded,
+      // 使用 runInAction 包装异步操作后的状态修改
+      runInAction(() => {
+        const cached = this.remoteMaterials.get(packageName)
+        if (cached) {
+          this.remoteMaterials.set(packageName, {
+            ...cached,
             component,
-          },
-        })
-
-        // 3. 更新 ComponentMeta 的 advanced.view，使 componentsMap 能访问到组件
-        const componentMeta = materials.getComponentMeta(cached.metadata.componentName)
-        if (componentMeta) {
-          const currentMeta = componentMeta.getMetadata()
-          componentMeta.setMetadata({
-            ...currentMeta,
-            configure: {
-              ...currentMeta.configure,
-              advanced: {
-                ...currentMeta.configure?.advanced,
-                view: component, // 设置组件到 advanced.view
-              },
-            },
           })
-
-          // 触发 componentsMap 更新
-          materials.refreshComponentMetasMap()
         }
-      }
+      })
+
+      // 3. 更新 ComponentMeta 的 advanced.view，使 componentsMap 能访问到组件
+      // const componentMeta = materials.getComponentMeta(
+      //   cached.metadata.componentName
+      // );
+      // if (componentMeta) {
+      //   const currentMeta = componentMeta.getMetadata();
+      //   componentMeta.setMetadata({
+      //     ...currentMeta,
+      //     configure: {
+      //       ...currentMeta.configure,
+      //       advanced: {
+      //         ...currentMeta.configure?.advanced,
+      //         view: component, // 设置组件到 advanced.view
+      //       },
+      //     },
+      //   });
+
+      //   // 触发 componentsMap 更新
+      //   materials.refreshComponentMetasMap();
+      // }
 
       console.log(`[Component Loaded] ${packageName}@${version}`)
     } catch (error) {
@@ -155,49 +154,49 @@ class RemoteMaterialManager {
     const { package: packageName, version = 'latest', globalName, enabled = true } = config
 
     if (!enabled) {
-      console.log(`[Skip] ${packageName} - disabled`)
       return
     }
 
     try {
-      console.log(`[Loading Remote Material] ${packageName}@${version}`)
-
       // 1. 从 NPM/CDN 加载物料（完整加载）
-      const loaded = await NpmComponentLoader.loadMaterial({
+      const loaded = await NpmMaterialLoader.loadMaterial({
         name: packageName,
         version,
         globalName,
       })
 
-      const metadata = loaded.meta
+      const { meta: metadata, component } = loaded
 
       // 2. 注册到编辑器
-      const componentMeta = materials.createComponentMeta(metadata)
+      // const componentMeta = materials.createComponentMeta(metadata);
 
       // 3. 设置组件到 advanced.view（使 componentsMap 能访问到组件）
-      if (componentMeta && loaded.component) {
-        const currentMeta = componentMeta.getMetadata()
-        componentMeta.setMetadata({
-          ...currentMeta,
-          configure: {
-            ...currentMeta.configure,
-            advanced: {
-              ...currentMeta.configure?.advanced,
-              view: loaded.component, // 设置组件到 advanced.view
-            },
-          },
-        })
+      // if (componentMeta && loaded.component) {
+      //   const currentMeta = componentMeta.getMetadata();
+      //   componentMeta.setMetadata({
+      //     ...currentMeta,
+      //     configure: {
+      //       ...currentMeta.configure,
+      //       advanced: {
+      //         ...currentMeta.configure?.advanced,
+      //         view: loaded.component, // 设置组件到 advanced.view
+      //       },
+      //     },
+      //   });
 
-        // 触发 componentsMap 更新
-        materials.refreshComponentMetasMap()
-      }
+      //   // 触发 componentsMap 更新
+      //   materials.refreshComponentMetasMap();
+      // }
 
       // 4. 缓存（保存版本和 globalName 信息）
-      this.remoteComponents.set(packageName, {
-        loaded,
-        metadata,
-        version,
-        globalName,
+      // 使用 runInAction 包装异步操作后的状态修改
+      runInAction(() => {
+        this.remoteMaterials.set(packageName, {
+          version,
+          globalName,
+          metadata,
+          component,
+        })
       })
 
       console.log(`[Registered] ${packageName}@${version}`, metadata)
@@ -212,8 +211,6 @@ class RemoteMaterialManager {
    */
   @action
   async loadMetaMultiple(configs: RemoteMaterialConfig[]) {
-    console.log(`[Batch Loading Meta] ${configs.length} remote materials`)
-
     const results = await Promise.allSettled(configs.map(config => this.loadMetaAndRegister(config)))
 
     const succeeded = results.filter(r => r.status === 'fulfilled').length
@@ -233,8 +230,6 @@ class RemoteMaterialManager {
    * 批量加载远程物料（完整加载：元数据 + 组件代码）
    */
   async loadMaterialMultiple(configs: RemoteMaterialConfig[]) {
-    console.log(`[Batch Loading Material] ${configs.length} remote materials`)
-
     const results = await Promise.allSettled(configs.map(config => this.loadMaterialAndRegister(config)))
 
     const succeeded = results.filter(r => r.status === 'fulfilled').length
@@ -254,7 +249,7 @@ class RemoteMaterialManager {
    * 获取已加载的远程物料列表
    */
   getLoadedMaterials() {
-    return Array.from(this.remoteComponents.entries()).map(([name, data]) => ({
+    return Array.from(this.remoteMaterials.entries()).map(([name, data]) => ({
       name,
       metadata: data.metadata,
     }))
@@ -265,7 +260,7 @@ class RemoteMaterialManager {
    */
   @action
   unload(packageName: string) {
-    const data = this.remoteComponents.get(packageName)
+    const data = this.remoteMaterials.get(packageName)
 
     if (!data) {
       console.warn(`[Unload Failed] ${packageName} not found`)
@@ -298,8 +293,8 @@ class RemoteMaterialManager {
       }
 
       // 4. 清除本地缓存
-      this.remoteComponents.delete(packageName)
-      NpmComponentLoader.clearCache(packageName, version)
+      this.remoteMaterials.delete(packageName)
+      NpmMaterialLoader.clearCache(packageName, version)
 
       console.log(`[Unloaded] ${packageName}@${version} (${componentName})`)
       return true
