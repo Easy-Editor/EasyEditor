@@ -1,3 +1,4 @@
+export * from './assets'
 export * from './common'
 export * from './component'
 export * from './data-source'
