@@ -45,6 +45,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     return this._components || {}
   }
 
+  // TEMP
   private _remoteComponents: Record<string, React.ComponentType> | null = {}
 
   @observable.ref private accessor _appContext: NonNullable<RendererProps['appHelper']> = {}

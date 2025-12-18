@@ -4,13 +4,27 @@ import type { MaterialGroup } from '@/editor/materials/type'
 import { cn } from '@/lib/utils'
 import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
 import { observer } from 'mobx-react'
-import React, { useEffect } from 'react'
+import React from 'react'
+import { RemoteSnippet } from './RemoteSnippet'
 
-const Snippet = ({ snippet }: { snippet: ISnippet }) => {
+interface SnippetProps {
+  snippet: ISnippet
+  componentMeta: ComponentMeta
+}
+
+/**
+ * 本地物料 Snippet 组件
+ */
+const Snippet = ({ snippet }: SnippetProps) => {
   const ref = React.useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    const unlink = project.simulator?.linkSnippet(ref.current!, snippet)
+  React.useEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    // 使用 linkSnippet 处理拖拽
+    const unlink = project.simulator?.linkSnippet(element, snippet)
+
     return () => {
       unlink?.()
     }
@@ -57,9 +71,20 @@ export const ComponentSidebar = observer(() => {
               <AccordionTrigger>{group}</AccordionTrigger>
               <AccordionContent className='transition-all data-[state=closed]:animate-[accordion-up_300ms_ease-out] data-[state=open]:animate-[accordion-down_400ms_ease-out]'>
                 <div className='grid grid-cols-2 gap-2 p-2'>
-                  {components.map(component =>
-                    component.getMetadata().snippets?.map(snippet => <Snippet key={snippet.title} snippet={snippet} />),
-                  )}
+                  {components.map(component => {
+                    const metadata = component.getMetadata()
+                    const isRemoteMaterial = metadata.devMode === 'proCode'
+
+                    return component
+                      .getMetadata()
+                      .snippets?.map(snippet =>
+                        isRemoteMaterial ? (
+                          <RemoteSnippet key={snippet.title} snippet={snippet} componentMeta={component} />
+                        ) : (
+                          <Snippet key={snippet.title} snippet={snippet} componentMeta={component} />
+                        ),
+                      )
+                  })}
                 </div>
               </AccordionContent>
             </AccordionItem>
