@@ -1,6 +1,5 @@
 /**
  * npm 源引入完整描述对象
- * 参考 lowcode-engine 的 IPublicTypeNpmInfo
  */
 export interface NpmInfo {
   /**

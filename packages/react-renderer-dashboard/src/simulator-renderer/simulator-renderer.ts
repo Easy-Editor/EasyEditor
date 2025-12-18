@@ -45,6 +45,8 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     return this._components || {}
   }
 
+  private _remoteComponents: Record<string, React.ComponentType> | null = {}
+
   @observable.ref private accessor _appContext: NonNullable<RendererProps['appHelper']> = {}
   @computed get context() {
     return this._appContext
@@ -149,6 +151,14 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       docId && this.host.project.open(docId)
     })
 
+    this.host.componentsConsumer.consume(async componentsAsset => {
+      if (componentsAsset) {
+        this._remoteComponents = componentsAsset
+        // await this.load(componentsAsset);
+        this.buildComponents()
+      }
+    })
+
     this._appContext = {
       utils: {
         // ...getProjectUtils(this._libraryMap, host.get('utilsMetadata')),
@@ -168,11 +178,12 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
   }
 
   private buildComponents() {
-    this._components = buildComponents(this._libraryMap, this._componentsMap)
-    // this._components = {
-    //   ...builtinComponents,
-    //   ...this._components,
-    // }
+    // this._components = buildComponents(this._libraryMap, this._componentsMap)
+    this._components = {
+      ...buildComponents(this._libraryMap, this._componentsMap),
+      ...this._remoteComponents,
+    }
+    console.log('🚀 ~ SimulatorRendererContainer ~ buildComponents ~ this._components:', this._components)
   }
 
   /**
