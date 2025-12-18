@@ -1,25 +1,11 @@
 /**
- * 远程物料配置
- * 用于加载远程物料的元数据，加载后会自动注册到物料系统中，与本地物料一起显示
+ * Remote Materials Configuration
+ * 远程物料配置文件
  */
 
+import type { RemoteMaterialConfig } from './RemoteMaterialManager'
 import RemoteMaterialManager from './RemoteMaterialManager'
 
-export interface RemoteMaterialConfig {
-  /** 包名 */
-  package: string
-  /** 版本 */
-  version?: string
-  /** UMD 暴露的全局变量名 */
-  globalName: string
-  /** 是否启用 */
-  enabled?: boolean
-}
-
-/**
- * 远程物料配置列表
- * 这些物料的元数据会在编辑器初始化时加载，并自动注册到物料系统中
- */
 export const remoteMaterialsConfig: RemoteMaterialConfig[] = [
   {
     package: '@easy-editor/materials-dashboard-text',
@@ -27,11 +13,11 @@ export const remoteMaterialsConfig: RemoteMaterialConfig[] = [
     globalName: 'EasyEditorMaterialsText',
     enabled: true,
   },
-  // 未来可以添加更多远程物料
+  // 后续可以添加更多远程物料
   // {
-  //   package: '@easy-editor/materials-dashboard-chart',
+  //   package: '@easy-editor/materials-dashboard-button',
   //   version: 'latest',
-  //   globalName: 'EasyEditorMaterialsDashboardChart',
+  //   globalName: 'Button',
   //   enabled: true,
   // },
 ]

@@ -8,8 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { ComponentLoadError, RemoteMaterialManager } from '@/editor/loader'
-import { remoteMaterialsConfig } from '@/editor/loader/config'
+import { ComponentLoadError, RemoteMaterialManager } from '@/editor/remote-material'
+import { remoteMaterialsConfig } from '@/editor/remote-material/config'
 import { useState } from 'react'
 import { toast } from 'sonner'
 

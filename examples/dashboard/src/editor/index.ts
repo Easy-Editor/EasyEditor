@@ -16,8 +16,8 @@ import { defaultRootSchema } from './const'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import { setterMap } from './setters'
-import { RemoteMaterialManager } from './loader'
-import { loadRemoteMaterialsMeta } from './loader/remote-materials-presets'
+import { RemoteMaterialManager } from './remote-material'
+import { loadRemoteMaterialsMeta } from './remote-material'
 
 import './overrides.css'
 
@@ -39,17 +39,10 @@ plugins.registerPlugins([
 // 注册本地物料
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
-// // 动态加载远程物料
-// ;(async () => {
-//   try {
-//     console.log('[EasyEditor] Loading remote materials...')
-//     await RemoteMaterialManager.loadMultiple(remoteMaterialsConfig)
-//     console.log('[EasyEditor] Remote materials loaded successfully')
-//   } catch (error) {
-//     console.error('[EasyEditor] Failed to load remote materials:', error)
-//   }
-// })()
+// 批量加载远程物料元数据（加载后会自动注册到物料系统中，与本地物料一起显示）
+loadRemoteMaterialsMeta()
 
+// 注册本地设置器
 setters.registerSetter(setterMap)
 
 await init()
@@ -58,9 +51,6 @@ project.onSimulatorReady(simulator => {
   // 设置模拟器尺寸
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
 })
-
-// 批量加载远程物料元数据（加载后会自动注册到物料系统中，与本地物料一起显示）
-loadRemoteMaterialsMeta()
 
 /**
  * 从 componentsMap 加载远程物料元数据

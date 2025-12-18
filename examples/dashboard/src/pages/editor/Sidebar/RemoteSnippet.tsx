@@ -3,7 +3,7 @@
  * 处理远程物料的拖拽和点击添加到画布
  */
 
-import RemoteMaterialManager from '@/editor/loader/RemoteMaterialManager'
+import RemoteMaterialManager from '@/editor/remote-material/RemoteMaterialManager'
 import { cn } from '@/lib/utils'
 import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
 import { observer } from 'mobx-react'
