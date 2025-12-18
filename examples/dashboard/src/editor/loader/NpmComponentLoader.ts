@@ -3,7 +3,7 @@
  * 从 NPM + CDN 动态加载物料组件
  */
 
-import type { Component, ComponentMetadata, Configure, Snippet } from '@easy-editor/core'
+import type { Component, ComponentMetadata } from '@easy-editor/core'
 
 /**
  * 加载错误类型
@@ -57,26 +57,61 @@ export class ComponentLoadError extends Error {
 interface ComponentInfo {
   name: string // @easy-editor/materials-dashboard-text
   version?: string // 1.0.0 | latest | stable
-  globalName: string // Text（UMD 暴露的全局变量名，即 window.Text）
+  globalName: string // EasyEditorMaterialsText（UMD 暴露的全局变量名）
 }
 
 interface LoadedComponent {
   component: Component
   meta: ComponentMetadata
-  snippets: Snippet[]
-  configure: Configure
+}
+
+interface LoadedMeta {
+  meta: ComponentMetadata
 }
 
 class NpmComponentLoader {
   private cache = new Map<string, LoadedComponent>()
+  private metaCache = new Map<string, LoadedMeta>()
   private loadingPromises = new Map<string, Promise<LoadedComponent>>()
+  private metaLoadingPromises = new Map<string, Promise<LoadedMeta>>()
   private cdnProviders = ['https://unpkg.com', 'https://cdn.jsdelivr.net/npm', 'https://fastly.jsdelivr.net/npm']
   private currentCdnIndex = 0
 
   /**
-   * 从 NPM 加载组件
+   * 从 NPM 加载元数据（轻量，用于初次加载）
    */
-  async loadComponent({ name, version = 'latest', globalName }: ComponentInfo): Promise<LoadedComponent> {
+  async loadMeta({ name, version = 'latest', globalName }: ComponentInfo): Promise<LoadedMeta> {
+    const cacheKey = `${name}@${version}`
+
+    // 1. 检查缓存
+    if (this.metaCache.has(cacheKey)) {
+      console.log(`[Meta Cache Hit] ${cacheKey}`)
+      return this.metaCache.get(cacheKey)!
+    }
+
+    // 2. 检查是否正在加载
+    if (this.metaLoadingPromises.has(cacheKey)) {
+      console.log(`[Meta Loading] ${cacheKey} - waiting...`)
+      return this.metaLoadingPromises.get(cacheKey)!
+    }
+
+    // 3. 开始加载
+    const loadPromise = this._doLoadMeta(name, version, globalName, cacheKey)
+    this.metaLoadingPromises.set(cacheKey, loadPromise)
+
+    try {
+      const meta = await loadPromise
+      this.metaCache.set(cacheKey, meta)
+      return meta
+    } finally {
+      this.metaLoadingPromises.delete(cacheKey)
+    }
+  }
+
+  /**
+   * 从 NPM 加载物料（完整加载：元数据 + 组件代码）
+   */
+  async loadMaterial({ name, version = 'latest', globalName }: ComponentInfo): Promise<LoadedComponent> {
     const cacheKey = `${name}@${version}`
 
     // 1. 检查缓存
@@ -104,6 +139,127 @@ class NpmComponentLoader {
     }
   }
 
+  /**
+   * 添加组件代码（元数据已加载的情况下，只加载组件代码）
+   */
+  async addComponent({ name, version = 'latest', globalName }: ComponentInfo): Promise<Component> {
+    const cacheKey = `${name}@${version}`
+
+    // 检查是否已完整加载
+    if (this.cache.has(cacheKey)) {
+      return this.cache.get(cacheKey)!.component
+    }
+
+    // 加载组件代码
+    const resolvedVersion = await this.resolveVersion(name, version)
+    const pkgInfo = await this.fetchPackageInfo(name, resolvedVersion)
+    const url = this.getCdnUrl(
+      name,
+      resolvedVersion,
+      pkgInfo.unpkg?.replace('index', 'component') || 'dist/component.min.js',
+    )
+
+    await this.loadScript(url, `${cacheKey}-component`)
+
+    // 从 UMD 全局变量获取组件
+    const global = window as any
+    const componentUmdExports = global[`${globalName}Component`]
+
+    if (!componentUmdExports) {
+      throw new ComponentLoadError(
+        LoadErrorType.GLOBAL_NOT_FOUND,
+        globalName,
+        `Component UMD export not found: window.${globalName}Component`,
+      )
+    }
+
+    const component =
+      componentUmdExports.component || componentUmdExports.default?.component || componentUmdExports.default
+
+    if (!component) {
+      throw new ComponentLoadError(
+        LoadErrorType.GLOBAL_NOT_FOUND,
+        globalName,
+        `Component not found in window.${globalName}Component`,
+      )
+    }
+
+    // 获取元数据（如果已加载）
+    const meta = global.$EasyEditor?.materials?.[globalName]?.meta
+
+    if (meta) {
+      // 如果元数据已加载，注册到 window.$EasyEditor.materials
+      const loadedComponent: LoadedComponent = {
+        component,
+        meta,
+      }
+      this.registerToGlobal(globalName, loadedComponent)
+    }
+
+    return component
+  }
+
+  /**
+   * 加载元数据（只加载 meta, snippets, configure）
+   */
+  private async _doLoadMeta(name: string, version: string, globalName: string, cacheKey: string): Promise<LoadedMeta> {
+    console.log(`[Loading Meta] ${cacheKey}`)
+
+    // 1. 解析真实版本号
+    const resolvedVersion = await this.resolveVersion(name, version)
+    console.log(`[Resolved] ${name}: ${version} → ${resolvedVersion}`)
+
+    // 2. 构建 CDN URL（使用 meta.js）
+    const url = this.getCdnUrl(name, resolvedVersion, 'dist/meta.min.js')
+
+    // 4. 动态加载脚本
+    await this.loadScript(url, `${cacheKey}-meta`)
+
+    // 5. 从 UMD 全局变量获取元数据
+    const global = window as any
+    const umdExports = global[`${globalName}Meta`] // 例如: window.EasyEditorMaterialsTextMeta
+
+    if (!umdExports) {
+      throw new ComponentLoadError(
+        LoadErrorType.GLOBAL_NOT_FOUND,
+        globalName,
+        `Material meta UMD export not found: window.${globalName}Meta`,
+      )
+    }
+
+    // 从 UMD 导出中获取 meta
+    const meta = umdExports.meta || umdExports.default?.meta || umdExports.default
+
+    // 挂载到 window.$EasyEditor.materials 以便后续使用
+    global.$EasyEditor = global.$EasyEditor || {}
+    global.$EasyEditor.materials = global.$EasyEditor.materials || {}
+    global.$EasyEditor.materials[globalName] = global.$EasyEditor.materials[globalName] || {}
+    global.$EasyEditor.materials[globalName].meta = meta
+
+    if (!meta) {
+      throw new ComponentLoadError(
+        LoadErrorType.METADATA_INVALID,
+        globalName,
+        `Meta not found in window.$EasyEditor.materials.${globalName}.meta`,
+      )
+    }
+
+    if (!meta.componentName) {
+      throw new ComponentLoadError(
+        LoadErrorType.METADATA_INVALID,
+        globalName,
+        `Component metadata is missing required field: componentName`,
+      )
+    }
+
+    const loadedMeta: LoadedMeta = {
+      meta,
+    }
+
+    console.log(`[Meta Loaded] ${cacheKey}`, loadedMeta)
+    return loadedMeta
+  }
+
   private async _doLoad(name: string, version: string, globalName: string, cacheKey: string): Promise<LoadedComponent> {
     console.log(`[Loading] ${cacheKey}`)
 
@@ -111,23 +267,55 @@ class NpmComponentLoader {
     const resolvedVersion = await this.resolveVersion(name, version)
     console.log(`[Resolved] ${name}: ${version} → ${resolvedVersion}`)
 
-    // 2. 获取 package.json 信息
-    const pkgInfo = await this.fetchPackageInfo(name, resolvedVersion)
+    // 2. 先加载元数据（如果未加载）
+    const global = window as any
+    const existingMeta = global.$EasyEditor?.materials?.[globalName]
 
-    // 3. 构建 CDN URL
-    const url = this.getCdnUrl(name, resolvedVersion, pkgInfo.unpkg || 'dist/index.min.js')
+    if (!existingMeta?.meta) {
+      // 加载元数据
+      await this._doLoadMeta(name, version, globalName, cacheKey)
+    }
 
-    // 4. 动态加载脚本
-    await this.loadScript(url, cacheKey)
+    // 4. 加载组件代码
+    const componentUrl = this.getCdnUrl(name, resolvedVersion, 'dist/component.min.js')
+    await this.loadScript(componentUrl, `${cacheKey}-component`)
 
-    // 5. 从全局获取组件
-    const component = this.getComponentFromGlobal(globalName)
+    // 5. 从 UMD 全局变量获取组件
+    const componentUmdExports = global[`${globalName}Component`]
 
-    // 6. 注册到 $EasyEditor.materials
-    this.registerToGlobal(globalName, component)
+    if (!componentUmdExports) {
+      throw new ComponentLoadError(
+        LoadErrorType.GLOBAL_NOT_FOUND,
+        globalName,
+        `Component UMD export not found: window.${globalName}Component`,
+      )
+    }
 
-    console.log(`[Loaded] ${cacheKey}`, component)
-    return component
+    const component =
+      componentUmdExports.component || componentUmdExports.default?.component || componentUmdExports.default
+
+    if (!component) {
+      throw new ComponentLoadError(
+        LoadErrorType.GLOBAL_NOT_FOUND,
+        globalName,
+        `Component not found in window.${globalName}Component`,
+      )
+    }
+
+    // 6. 从已挂载的全局变量获取完整信息
+    const material = global.$EasyEditor.materials[globalName]
+    const meta = material.meta
+
+    const loadedComponent: LoadedComponent = {
+      component,
+      meta,
+    }
+
+    // 注册到 window.$EasyEditor.materials
+    this.registerToGlobal(globalName, loadedComponent)
+
+    console.log(`[Loaded] ${cacheKey}`, loadedComponent)
+    return loadedComponent
   }
 
   /**
@@ -288,36 +476,29 @@ class NpmComponentLoader {
   }
 
   /**
-   * 从全局变量获取组件
-   * @param globalName UMD 暴露的全局变量名（如 'Text' 对应 window.Text）
+   * 从全局变量获取组件（已废弃，现在直接从 window.$EasyEditor.materials 获取）
+   * @deprecated 使用 window.$EasyEditor.materials[globalName] 代替
    */
   private getComponentFromGlobal(globalName: string): LoadedComponent {
     const global = window as any
+    const material = global.$EasyEditor?.materials?.[globalName]
 
-    // 从 window[globalName] 获取 UMD 导出
-    if (!global[globalName]) {
+    if (!material) {
       throw new ComponentLoadError(
         LoadErrorType.GLOBAL_NOT_FOUND,
         globalName,
-        `Global variable "${globalName}" not found. The UMD build may have failed or globalName is incorrect.`,
+        `Material not found in window.$EasyEditor.materials.${globalName}`,
       )
     }
 
-    const umdExports = global[globalName]
-
-    // UMD 模块的导出可能是：
-    // 1. { default: Component, meta, snippets, configure }
-    // 2. 直接是 Component（但应该包含 meta 等属性）
-    const component = umdExports.default || umdExports
-    const meta = umdExports.meta
-    const snippets = umdExports.snippets
-    const configure = umdExports.configure
+    const component = material.component
+    const meta = material.meta
 
     if (!component) {
       throw new ComponentLoadError(
         LoadErrorType.METADATA_INVALID,
         globalName,
-        `Component not found in global.${globalName}. Expected structure: { default/component, meta, snippets, configure }`,
+        `Component not found in window.$EasyEditor.materials.${globalName}.component`,
       )
     }
 
@@ -325,7 +506,7 @@ class NpmComponentLoader {
       throw new ComponentLoadError(
         LoadErrorType.METADATA_INVALID,
         globalName,
-        `Component metadata not found in global.${globalName}.meta`,
+        `Component metadata not found in window.$EasyEditor.materials.${globalName}.meta`,
       )
     }
 
@@ -340,8 +521,6 @@ class NpmComponentLoader {
     return {
       component,
       meta,
-      snippets,
-      configure,
     }
   }
 
@@ -356,8 +535,6 @@ class NpmComponentLoader {
     global.$EasyEditor.materials[globalName] = {
       component: loaded.component,
       meta: loaded.meta,
-      snippets: loaded.snippets,
-      configure: loaded.configure,
     }
 
     console.log(`✅ Registered to window.$EasyEditor.materials.${globalName}`)
@@ -404,7 +581,7 @@ class NpmComponentLoader {
    */
   async preload(components: ComponentInfo[]) {
     console.log('[Preload] Starting...', components)
-    await Promise.all(components.map(comp => this.loadComponent(comp)))
+    await Promise.all(components.map(comp => this.loadMaterial(comp)))
     console.log('[Preload] Complete')
   }
 }

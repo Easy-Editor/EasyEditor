@@ -17,6 +17,7 @@ import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import { setterMap } from './setters'
 import { RemoteMaterialManager } from './loader'
+import { loadRemoteMaterialsMeta } from './loader/remote-materials-presets'
 
 import './overrides.css'
 
@@ -58,8 +59,11 @@ project.onSimulatorReady(simulator => {
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
 })
 
+// 批量加载远程物料元数据（加载后会自动注册到物料系统中，与本地物料一起显示）
+loadRemoteMaterialsMeta()
+
 /**
- * 从 componentsMap 加载远程物料
+ * 从 componentsMap 加载远程物料元数据
  */
 const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMap) => {
   if (!componentsMap || componentsMap.length === 0) {
@@ -89,12 +93,12 @@ const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMa
   }
 
   if (remoteMaterials.length > 0) {
-    console.log(`[EasyEditor] Loading ${remoteMaterials.length} remote materials from componentsMap...`)
+    console.log(`[EasyEditor] Loading ${remoteMaterials.length} remote material metas from componentsMap...`)
     try {
-      await RemoteMaterialManager.loadMultiple(remoteMaterials)
-      console.log('[EasyEditor] Remote materials from componentsMap loaded successfully')
+      await RemoteMaterialManager.loadMetaMultiple(remoteMaterials)
+      console.log('[EasyEditor] Remote material metas from componentsMap loaded successfully')
     } catch (error) {
-      console.error('[EasyEditor] Failed to load remote materials from componentsMap:', error)
+      console.error('[EasyEditor] Failed to load remote material metas from componentsMap:', error)
     }
   }
 }

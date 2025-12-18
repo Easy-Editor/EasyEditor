@@ -1,3 +1,4 @@
+import { RemoteMaterialManager } from '@/editor/loader'
 import { project } from '@easy-editor/core'
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
 import { observer } from 'mobx-react'
@@ -67,9 +68,12 @@ export const Renderer = observer(() => {
     )
   }
 
+  // 获取已加载的远程组件映射
+  const componentsAsset = RemoteMaterialManager.remoteComponentsMap
+
   return (
     <RendererContextMenu>
-      <SimulatorRenderer designer={project.designer} />
+      <SimulatorRenderer designer={project.designer} simulatorProps={{ componentsAsset }} />
     </RendererContextMenu>
   )
 })
