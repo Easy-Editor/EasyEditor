@@ -3,7 +3,7 @@
  * 处理远程物料的拖拽和点击添加到画布
  */
 
-import RemoteMaterialManager from '@/editor/remote-material/RemoteMaterialManager'
+import { remoteMaterialManager } from '@/editor/materials/loaders'
 import { cn } from '@/lib/utils'
 import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
 import { observer } from 'mobx-react'
@@ -71,7 +71,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
         try {
           // 加载组件代码
-          await RemoteMaterialManager.loadComponent({
+          await remoteMaterialManager.loadComponent({
             package: metadata.npm.package,
             version: metadata.npm.version || 'latest',
             globalName: metadata.npm.globalName,
@@ -195,7 +195,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
       try {
         // 加载组件代码
-        await RemoteMaterialManager.loadComponent({
+        await remoteMaterialManager.loadComponent({
           package: metadata.npm.package,
           version: metadata.npm.version || 'latest',
           globalName: metadata.npm.globalName,

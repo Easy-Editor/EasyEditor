@@ -3,8 +3,7 @@
  * 远程物料配置文件
  */
 
-import type { RemoteMaterialConfig } from './RemoteMaterialManager'
-import RemoteMaterialManager from './RemoteMaterialManager'
+import { type RemoteMaterialConfig, remoteMaterialManager } from './remote-manager'
 
 export const remoteMaterialsConfig: RemoteMaterialConfig[] = [
   {
@@ -32,7 +31,7 @@ export const loadRemoteMaterialsMeta = async () => {
   if (configs.length > 0) {
     console.log(`[EasyEditor] Loading ${configs.length} remote materials meta...`)
     try {
-      await RemoteMaterialManager.loadMetaMultiple(configs)
+      await remoteMaterialManager.loadMetaMultiple(configs)
       console.log('[EasyEditor] Remote materials meta loaded successfully')
     } catch (error) {
       console.error('[EasyEditor] Failed to load remote materials meta:', error)

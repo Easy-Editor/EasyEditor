@@ -26,6 +26,6 @@ export const components = {
   RadarChart,
   RadialChart,
   Root,
-  // Text,
+  Text,
   Group,
 }

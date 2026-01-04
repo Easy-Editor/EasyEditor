@@ -1,7 +1,7 @@
 import { getPageInfoFromLocalStorage, getPageSchemaFromLocalStorage } from '@/lib/schema'
 import {
-  ComponentsMap,
-  NpmInfo,
+  type ComponentsMap,
+  type NpmInfo,
   type ProjectSchema,
   type RootSchema,
   init,
@@ -15,9 +15,8 @@ import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { defaultRootSchema } from './const'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
+import { remoteMaterialManager, loadRemoteMaterialsMeta } from './materials/loaders'
 import { setterMap } from './setters'
-import { RemoteMaterialManager } from './remote-material'
-import { loadRemoteMaterialsMeta } from './remote-material'
 
 import './overrides.css'
 
@@ -85,7 +84,7 @@ const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMa
   if (remoteMaterials.length > 0) {
     console.log(`[EasyEditor] Loading ${remoteMaterials.length} remote material metas from componentsMap...`)
     try {
-      await RemoteMaterialManager.loadMetaMultiple(remoteMaterials)
+      await remoteMaterialManager.loadMetaMultiple(remoteMaterials)
       console.log('[EasyEditor] Remote material metas from componentsMap loaded successfully')
     } catch (error) {
       console.error('[EasyEditor] Failed to load remote material metas from componentsMap:', error)
