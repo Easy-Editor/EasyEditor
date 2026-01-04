@@ -106,6 +106,13 @@ export class ComponentMeta {
       this.emitter.off(COMPONENT_META_EVENT.CHANGE, fn)
     }
   }
+
+  /**
+   * 销毁 ComponentMeta，清理事件监听器
+   */
+  dispose() {
+    this.emitter.removeAllListeners()
+  }
 }
 
 export function isComponentMeta(obj: any): obj is ComponentMeta {

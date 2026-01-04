@@ -166,6 +166,13 @@ export class Document {
 
   @action
   purge() {
+    // 追踪物料使用：批量减少所有节点的使用计数
+    for (const node of this.nodes) {
+      if (node.componentName) {
+        this.designer.materials.decrementUsage(node.componentName)
+      }
+    }
+
     this.rootNode?.purge()
     this.nodes.clear()
     this._nodesMap.clear()
@@ -179,6 +186,8 @@ export class Document {
     }
 
     let node: Node | null = null
+    let isNewNode = false
+
     if (schema?.id) {
       node = this.getNode(schema.id)
       if (node && node.componentName === schema.componentName) {
@@ -193,11 +202,17 @@ export class Document {
 
     if (!node) {
       node = new Node(this, schema)
+      isNewNode = true
     }
 
     this.nodes.add(node)
     this._nodesMap.set(node.id, node)
     this.emitter.emit(NODE_EVENT.ADD, node)
+
+    // 追踪物料使用：仅对新创建的节点增加使用计数
+    if (isNewNode && node.componentName) {
+      this.designer.materials.incrementUsage(node.componentName)
+    }
 
     return node
   }
@@ -246,6 +261,11 @@ export class Document {
 
   @action
   unlinkNode(node: Node) {
+    // 追踪物料使用：减少使用计数
+    if (node.componentName) {
+      this.designer.materials.decrementUsage(node.componentName)
+    }
+
     this.nodes.delete(node)
     this._nodesMap.delete(node.id)
   }

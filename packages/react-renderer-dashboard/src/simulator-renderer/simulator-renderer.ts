@@ -93,6 +93,9 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
     this.disposeFunctions.push(
       this.host.connect(this, () => {
+        // 用于添加到mobx依赖
+        this.host.designer.materials.componentsMap
+
         runInAction(() => {
           // sync layout config
           this._layout = this.host.project.get('config')?.layout
@@ -184,7 +187,6 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       ...buildComponents(this._libraryMap, this._componentsMap),
       ...this._remoteComponents,
     }
-    console.log('🚀 ~ SimulatorRendererContainer ~ buildComponents ~ this._components:', this._components)
   }
 
   /**
