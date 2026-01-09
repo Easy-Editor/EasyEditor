@@ -25,12 +25,15 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
   const metadata = componentMeta.getMetadata()
   const isRemoteMaterial = metadata.devMode === 'proCode'
-  const global = window as any
-  const material =
-    isRemoteMaterial && metadata.npm && metadata.npm.globalName
-      ? global.$EasyEditor?.materials?.[metadata.npm.globalName]
-      : null
-  const needsComponentLoading = isRemoteMaterial && !material?.component
+
+  // 使用 MobX 响应式数据来检测组件是否已加载
+  // 这样当任何 snippet 加载组件后，所有使用同一 globalName 的 snippet 都会重新渲染
+  const remoteComponentsMap = remoteMaterialManager.remoteComponentsMap
+  const hasRemoteComponent =
+    isRemoteMaterial && metadata.componentName ? !!remoteComponentsMap[metadata.componentName] : false
+
+  // 检查组件代码是否需要加载（使用响应式数据）
+  const needsComponentLoading = isRemoteMaterial && !hasRemoteComponent
 
   // 处理拖拽完成：在画布上监听 drop 事件
   useEffect(() => {
@@ -49,12 +52,11 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
       const dragData = e.dataTransfer?.getData('text/plain')
       if (dragData !== `remote-material:${metadata.npm.globalName}`) return
 
-      // 检查组件代码是否已加载
-      const material = global.$EasyEditor?.materials?.[metadata.npm.globalName]
-      const needsComponentLoading = !material?.component
+      // 检查组件代码是否已加载（使用响应式数据）
+      const hasComponent = !!remoteMaterialManager.remoteComponentsMap[metadata.componentName]
 
       // 如果组件已加载，让 linkSnippet 处理（不拦截）
-      if (!needsComponentLoading) {
+      if (hasComponent) {
         return
       }
 
@@ -62,98 +64,96 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
       e.preventDefault()
       e.stopPropagation()
 
-      if (needsComponentLoading) {
-        setIsLoading(true)
-        const toastId = toast.loading('正在加载组件代码...', {
-          description: `${metadata.title || metadata.componentName} - ${metadata.npm.package}@${metadata.npm.version}`,
-          position: 'top-center',
+      setIsLoading(true)
+      const toastId = toast.loading('正在加载组件代码...', {
+        description: `${metadata.title || metadata.componentName} - ${metadata.npm.package}@${metadata.npm.version}`,
+        position: 'top-center',
+      })
+
+      try {
+        // 加载组件代码
+        await remoteMaterialManager.loadComponent({
+          package: metadata.npm.package,
+          version: metadata.npm.version || 'latest',
+          globalName: metadata.npm.globalName,
+          enabled: true,
         })
 
-        try {
-          // 加载组件代码
-          await remoteMaterialManager.loadComponent({
+        toast.dismiss(toastId)
+
+        // 获取 drop 坐标
+        const rect = canvasElement.getBoundingClientRect()
+        const x = e.clientX - rect.left
+        const y = e.clientY - rect.top
+        const canvasPos = simulator.viewport.toLocalPoint({ clientX: x, clientY: y })
+
+        // 获取当前文档
+        const currentDocument = project.currentDocument
+        if (!currentDocument) {
+          throw new Error('No active document')
+        }
+
+        // 验证 snippet.schema
+        if (!snippet.schema) {
+          throw new Error('Snippet schema is missing')
+        }
+
+        // 从 snippet 的 schema 中读取尺寸
+        const snippetRect = snippet.schema.$dashboard?.rect
+        const defaultWidth = snippetRect?.width ?? 200
+        const defaultHeight = snippetRect?.height ?? 100
+
+        // 创建节点 schema（基于 snippet，使用 drop 坐标）
+        const nodeSchema = {
+          ...snippet.schema,
+          componentName: snippet.schema.componentName || metadata.componentName,
+          // 添加 npm 信息到 schema
+          npm: {
             package: metadata.npm.package,
             version: metadata.npm.version || 'latest',
             globalName: metadata.npm.globalName,
-            enabled: true,
-          })
-
-          toast.dismiss(toastId)
-
-          // 获取 drop 坐标
-          const rect = canvasElement.getBoundingClientRect()
-          const x = e.clientX - rect.left
-          const y = e.clientY - rect.top
-          const canvasPos = simulator.viewport.toLocalPoint({ clientX: x, clientY: y })
-
-          // 获取当前文档
-          const currentDocument = project.currentDocument
-          if (!currentDocument) {
-            throw new Error('No active document')
-          }
-
-          // 验证 snippet.schema
-          if (!snippet.schema) {
-            throw new Error('Snippet schema is missing')
-          }
-
-          // 从 snippet 的 schema 中读取尺寸
-          const snippetRect = snippet.schema.$dashboard?.rect
-          const defaultWidth = snippetRect?.width ?? 200
-          const defaultHeight = snippetRect?.height ?? 100
-
-          // 创建节点 schema（基于 snippet，使用 drop 坐标）
-          const nodeSchema = {
-            ...snippet.schema,
-            componentName: snippet.schema.componentName || metadata.componentName,
-            // 添加 npm 信息到 schema
-            npm: {
-              package: metadata.npm.package,
-              version: metadata.npm.version || 'latest',
-              globalName: metadata.npm.globalName,
-              componentName: metadata.npm.componentName || metadata.componentName,
+            componentName: metadata.npm.componentName || metadata.componentName,
+          },
+          // 覆盖位置信息（使用 drop 坐标）
+          $dashboard: {
+            ...snippet.schema.$dashboard,
+            rect: {
+              ...snippetRect,
+              x: canvasPos.clientX,
+              y: canvasPos.clientY,
+              width: defaultWidth,
+              height: defaultHeight,
             },
-            // 覆盖位置信息（使用 drop 坐标）
-            $dashboard: {
-              ...snippet.schema.$dashboard,
-              rect: {
-                ...snippetRect,
-                x: canvasPos.clientX,
-                y: canvasPos.clientY,
-                width: defaultWidth,
-                height: defaultHeight,
-              },
-            },
+          },
+        }
+
+        // 添加到画布（添加到 Root 节点）
+        const rootNode = currentDocument.root
+        if (rootNode) {
+          const newNode = currentDocument.insertNode(rootNode, nodeSchema, 0, true)
+          console.log(`[RemoteSnippet] ✅ Remote material node added:`, newNode?.id)
+
+          // 选中新添加的节点
+          if (newNode) {
+            newNode.select()
           }
 
-          // 添加到画布（添加到 Root 节点）
-          const rootNode = currentDocument.root
-          if (rootNode) {
-            const newNode = currentDocument.insertNode(rootNode, nodeSchema, 0, true)
-            console.log(`[RemoteSnippet] ✅ Remote material node added:`, newNode?.id)
-
-            // 选中新添加的节点
-            if (newNode) {
-              newNode.select()
-            }
-
-            toast.success('远程物料已添加', {
-              description: `${metadata.title || metadata.componentName} 已成功添加到画布`,
-              position: 'top-center',
-            })
-          } else {
-            throw new Error('Root node not found')
-          }
-
-          setIsLoading(false)
-        } catch (error) {
-          toast.dismiss(toastId)
-          toast.error('组件加载失败', {
-            description: error instanceof Error ? error.message : String(error),
+          toast.success('远程物料已添加', {
+            description: `${metadata.title || metadata.componentName} 已成功添加到画布`,
             position: 'top-center',
           })
-          setIsLoading(false)
+        } else {
+          throw new Error('Root node not found')
         }
+
+        setIsLoading(false)
+      } catch (error) {
+        toast.dismiss(toastId)
+        toast.error('组件加载失败', {
+          description: error instanceof Error ? error.message : String(error),
+          position: 'top-center',
+        })
+        setIsLoading(false)
       }
     }
 
@@ -183,9 +183,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
     if (isLoading) return
 
-    const material = global.$EasyEditor?.materials?.[metadata.npm.globalName]
-    const needsComponentLoading = !material?.component
-
+    // 使用响应式数据检查组件是否需要加载
     if (needsComponentLoading) {
       setIsLoading(true)
       const toastId = toast.loading('正在加载组件代码...', {
