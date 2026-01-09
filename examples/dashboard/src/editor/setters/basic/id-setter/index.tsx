@@ -8,7 +8,7 @@ const NodeIdSetter = (props: NodeIdSetterProps) => {
   return (
     <div className='flex flex-col'>
       <p className='leading-7'>{selected.id}</p>
-      <p className='text-xs text-muted-foreground'>{selected.componentMeta.title}</p>
+      <p className='text-xs text-muted-foreground'>{selected.componentMeta.componentName}</p>
     </div>
   )
 }
