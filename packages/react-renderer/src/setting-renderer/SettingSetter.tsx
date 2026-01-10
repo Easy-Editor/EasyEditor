@@ -1,6 +1,7 @@
 import { type DynamicSetterProps, type SettingField, isSetterConfig } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import type { PropsWithChildren, ReactNode } from 'react'
+import { SetterPlaceholder } from './SetterPlaceholder'
 import { useSettingRendererContext } from './context'
 
 const getSetterInfo = (field: SettingField) => {
@@ -77,6 +78,11 @@ export const SettingSetter = observer(({ field, children }: SettingSetterProps) 
   const onChange = extraProps?.onChange
   const value = field.valueState === -1 ? null : field.getValue()
   const { component: SetterComponent, props: mixedSetterProps } = setters.createSetterContent(setterType, setterProps)
+
+  // 处理设置器未加载的情况
+  if (!SetterComponent) {
+    return <SetterPlaceholder setterType={setterType} />
+  }
 
   return (
     <SetterComponent

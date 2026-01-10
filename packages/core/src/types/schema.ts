@@ -1,6 +1,6 @@
 import type { CompositeValue, JSExpression, JSFunction, JSONObject, PropsMap } from '../document'
+import type { ComponentsMap } from './component'
 import type { DataSource } from './data-source'
-import type { ComponentsMap } from './npm-info'
 
 export interface ProjectSchema<T = RootSchema> {
   id?: string

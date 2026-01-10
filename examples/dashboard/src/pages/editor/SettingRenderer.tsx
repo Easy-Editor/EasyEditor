@@ -1,6 +1,6 @@
 import { Sidebar, SidebarContent, SidebarHeader } from '@/components/ui/sidebar'
 import { customFieldItem } from '@/editor/setters'
-import { project } from '@easy-editor/core'
+import { project, setters } from '@easy-editor/core'
 import { SettingRenderer } from '@easy-editor/react-renderer'
 import { observer } from 'mobx-react'
 

@@ -1,5 +1,5 @@
 import type { Designer } from '../designer'
-import type { ComponentMetadata } from '../types'
+import type { ComponentMetadata, NpmInfo } from '../types'
 import { createEventBus } from '../utils'
 
 export enum COMPONENT_META_EVENT {
@@ -9,7 +9,17 @@ export enum COMPONENT_META_EVENT {
 export class ComponentMeta {
   readonly isComponentMeta = true
 
+  private _npm?: NpmInfo
+
   private emitter = createEventBus('ComponentMeta')
+
+  get npm() {
+    return this._npm
+  }
+
+  set npm(_npm: any) {
+    this.setNpm(_npm)
+  }
 
   private _componentName?: string
 
@@ -66,9 +76,16 @@ export class ComponentMeta {
     this.parseMetadata(metadata)
   }
 
+  setNpm(info: NpmInfo) {
+    if (!this._npm) {
+      this._npm = info
+    }
+  }
+
   private parseMetadata(metadata: ComponentMetadata) {
-    const { componentName } = metadata
+    const { componentName, npm } = metadata
     this._metadata = metadata
+    this._npm = npm || this._npm
     this._componentName = componentName
 
     const { title, configure = {} } = this._metadata

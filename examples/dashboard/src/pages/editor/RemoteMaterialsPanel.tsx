@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { CdnLoadError, remoteMaterialManager, remoteMaterialsConfig } from '@/editor/materials/loaders'
+import { materialManager, remoteMaterialsConfig, RemoteLoadError } from '@/editor/remote'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
@@ -25,7 +25,7 @@ export const RemoteMaterialsPanel = () => {
   const handleLoadAll = async () => {
     setLoading(true)
     try {
-      const result = await remoteMaterialManager.loadMaterialMultiple(materials.filter(m => m.enabled))
+      const result = await materialManager.loadMaterialMultiple(materials.filter(m => m.enabled))
 
       if (result.succeeded > 0) {
         toast.success(`成功加载 ${result.succeeded} 个远程物料`, {
@@ -41,7 +41,7 @@ export const RemoteMaterialsPanel = () => {
           const material = materials.filter(m => m.enabled)[i]
           const error = r.reason
 
-          if (error instanceof CdnLoadError) {
+          if (error instanceof RemoteLoadError) {
             toast.error(`${material.package} 加载失败`, {
               description: error.toUserMessage(),
             })
@@ -53,7 +53,7 @@ export const RemoteMaterialsPanel = () => {
         }
       })
     } catch (error) {
-      if (error instanceof CdnLoadError) {
+      if (error instanceof RemoteLoadError) {
         toast.error('加载失败', {
           description: error.toUserMessage(),
         })
@@ -152,9 +152,9 @@ export const RemoteMaterialsPanel = () => {
         <div className='pt-4 border-t'>
           <h4 className='mb-2 text-sm font-semibold'>已加载的远程物料：</h4>
           <div className='space-y-1'>
-            {remoteMaterialManager.getLoadedMaterials().map(m => (
+            {materialManager.getLoadedMaterials().map(m => (
               <div key={m.name} className='text-sm text-muted-foreground'>
-                ✅ {m.name} - {m.metadata.title || m.metadata.componentName}
+                {m.name} - {m.metadata.title || m.metadata.componentName}
               </div>
             ))}
           </div>

@@ -15,7 +15,7 @@ const configure: Configure = {
           key: 'basic',
           title: '基本',
           items: [
-            ...generalBasicConfigure,
+            // ...generalBasicConfigure,
             {
               type: 'group',
               title: '全局属性',

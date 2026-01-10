@@ -17,9 +17,9 @@ const generateProjectSchema = (pageSchema: any): ProjectSchema => {
   }
 }
 
-export const getProjectSchemaFromLocalStorage = () => {
+export const getProjectSchemaFromLocalStorage = (): ProjectSchema => {
   const projectSchema = localStorage.getItem(PROJECT_SCHEMA)
-  return projectSchema ? JSON.parse(projectSchema) : defaultRootSchema
+  return projectSchema ? JSON.parse(projectSchema) : generateProjectSchema(defaultRootSchema)
 }
 
 export const saveProjectSchemaToLocalStorage = (schema: any) => {
@@ -32,7 +32,7 @@ export const getPageSchemaFromLocalStorage = (pageId: string) => {
 }
 
 export const savePageSchemaToLocalStorage = (pageId: string, schema: any) => {
-  localStorage.setItem(getPageName(pageId), JSON.stringify(generateProjectSchema(schema)))
+  localStorage.setItem(getPageName(pageId), JSON.stringify(schema))
 }
 
 export const savePageInfoToLocalStorage = (info: Array<{ path: string; title: string }>) => {

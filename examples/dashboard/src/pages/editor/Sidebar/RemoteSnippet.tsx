@@ -3,7 +3,7 @@
  * 处理远程物料的拖拽和点击添加到画布
  */
 
-import { remoteMaterialManager } from '@/editor/materials/loaders'
+import { materialManager } from '@/editor/remote'
 import { cn } from '@/lib/utils'
 import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
 import { observer } from 'mobx-react'
@@ -28,7 +28,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
   // 使用 MobX 响应式数据来检测组件是否已加载
   // 这样当任何 snippet 加载组件后，所有使用同一 globalName 的 snippet 都会重新渲染
-  const remoteComponentsMap = remoteMaterialManager.remoteComponentsMap
+  const remoteComponentsMap = materialManager.remoteComponentsMap
   const hasRemoteComponent =
     isRemoteMaterial && metadata.componentName ? !!remoteComponentsMap[metadata.componentName] : false
 
@@ -53,7 +53,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
       if (dragData !== `remote-material:${metadata.npm.globalName}`) return
 
       // 检查组件代码是否已加载（使用响应式数据）
-      const hasComponent = !!remoteMaterialManager.remoteComponentsMap[metadata.componentName]
+      const hasComponent = !!materialManager.remoteComponentsMap[metadata.componentName]
 
       // 如果组件已加载，让 linkSnippet 处理（不拦截）
       if (hasComponent) {
@@ -72,12 +72,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
       try {
         // 加载组件代码
-        await remoteMaterialManager.loadComponent({
-          package: metadata.npm.package,
-          version: metadata.npm.version || 'latest',
-          globalName: metadata.npm.globalName,
-          enabled: true,
-        })
+        await materialManager.addComponent(metadata.npm!.package)
 
         toast.dismiss(toastId)
 
@@ -193,12 +188,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
       try {
         // 加载组件代码
-        await remoteMaterialManager.loadComponent({
-          package: metadata.npm.package,
-          version: metadata.npm.version || 'latest',
-          globalName: metadata.npm.globalName,
-          enabled: true,
-        })
+        await materialManager.addComponent(metadata.npm!.package)
 
         toast.dismiss(toastId)
 

@@ -10,7 +10,7 @@ import CollapseSetter from './group/collapse-setter'
 import TabSetter from './group/tab-setter'
 
 /**
- * 设置器
+ * 本地设置器
  */
 export const setterMap = {
   CollapseSetter,
