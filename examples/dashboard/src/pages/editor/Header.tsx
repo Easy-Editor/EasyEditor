@@ -13,7 +13,7 @@ export const AppHeader = ({ className }: { className?: string }) => {
       const pageInfo = []
       for (const doc of project.documents) {
         pageInfo.push({ path: doc.fileName, title: doc.rootNode?.getExtraPropValue('fileDesc') as string })
-        savePageSchemaToLocalStorage(doc.fileName, doc.export(TRANSFORM_STAGE.SAVE))
+        savePageSchemaToLocalStorage(doc.fileName, doc.toData())
       }
       savePageInfoToLocalStorage(pageInfo)
     }

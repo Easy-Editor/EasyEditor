@@ -365,10 +365,17 @@ export class Document {
       const { componentName } = node || {}
       if (!existedMap[componentName]) {
         existedMap[componentName] = true
-        componentsMap.push({
-          devMode: 'lowCode',
-          componentName,
-        })
+        if (node.componentMeta?.npm?.package) {
+          componentsMap.push({
+            ...node.componentMeta.npm,
+            componentName,
+          })
+        } else {
+          componentsMap.push({
+            devMode: 'lowCode',
+            componentName,
+          })
+        }
       }
     }
 
@@ -376,10 +383,18 @@ export class Document {
     if (Array.isArray(extraComps)) {
       extraComps.forEach(componentName => {
         if (componentName && !existedMap[componentName]) {
-          componentsMap.push({
-            devMode: 'lowCode',
-            componentName,
-          })
+          const meta = this.getComponentMeta(componentName)
+          if (meta?.npm?.package) {
+            componentsMap.push({
+              ...meta?.npm,
+              componentName,
+            })
+          } else {
+            componentsMap.push({
+              devMode: 'lowCode',
+              componentName,
+            })
+          }
         }
       })
     }

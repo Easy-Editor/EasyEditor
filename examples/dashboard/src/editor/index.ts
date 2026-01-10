@@ -5,6 +5,7 @@ import {
   type ProjectSchema,
   type RootSchema,
   init,
+  loadingState,
   materials,
   plugins,
   project,
@@ -15,11 +16,18 @@ import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { defaultRootSchema } from './const'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
-import { remoteMaterialManager, loadRemoteMaterialsMeta } from './materials/loaders'
-import { setterMap } from './setters'
+import {
+  loadAllRemoteResources,
+  loadRemoteMaterialsMeta,
+  loadRemoteSetters,
+  materialManager,
+  waitForSetters,
+} from './remote'
 
 import './overrides.css'
+import { setterMap } from './setters'
 
+// 注册插件
 plugins.registerPlugins([
   DashboardPlugin({
     group: {
@@ -37,17 +45,24 @@ plugins.registerPlugins([
 
 // 注册本地物料
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
-
-// 批量加载远程物料元数据（加载后会自动注册到物料系统中，与本地物料一起显示）
-loadRemoteMaterialsMeta()
-
-// 注册本地设置器
 setters.registerSetter(setterMap)
 
+// 启动远程资源加载（异步）
+loadAllRemoteResources()
+
+// 等待核心初始化
 await init()
 
+// 等待设置器加载完成（阻塞，确保属性面板可用）
+try {
+  await waitForSetters(30000)
+  console.log('[EasyEditor] Remote setters loaded successfully')
+} catch (error) {
+  console.warn('[EasyEditor] Setters loading timeout, continuing with available setters')
+}
+
+// 设置模拟器
 project.onSimulatorReady(simulator => {
-  // 设置模拟器尺寸
   simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
 })
 
@@ -64,12 +79,10 @@ const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMa
   const seenPackages = new Set<string>()
 
   for (const component of componentsMap) {
-    // 检查是否是 ProCode 组件（NpmInfo）
     if ('package' in component && 'globalName' in component) {
       const npmInfo = component as NpmInfo
       const packageKey = `${npmInfo.package}@${npmInfo.version || 'latest'}`
 
-      // 避免重复加载
       if (!seenPackages.has(packageKey) && npmInfo.globalName) {
         seenPackages.add(packageKey)
         remoteMaterials.push({
@@ -84,12 +97,33 @@ const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMa
   if (remoteMaterials.length > 0) {
     console.log(`[EasyEditor] Loading ${remoteMaterials.length} remote material metas from componentsMap...`)
     try {
-      await remoteMaterialManager.loadMetaMultiple(remoteMaterials)
+      await materialManager.loadMetaMultiple(remoteMaterials)
       console.log('[EasyEditor] Remote material metas from componentsMap loaded successfully')
     } catch (error) {
       console.error('[EasyEditor] Failed to load remote material metas from componentsMap:', error)
     }
   }
+}
+
+/**
+ * 自动批量加载所有远程组件代码（后台异步，不阻塞）
+ */
+const autoLoadAllRemoteComponents = async () => {
+  const packages = materialManager.getLoadedPackages()
+  const pendingPackages = packages.filter(p => !p.hasComponent)
+
+  if (pendingPackages.length === 0) {
+    return
+  }
+
+  console.log(`[EasyEditor] Auto-loading ${pendingPackages.length} remote components...`)
+
+  // 并行加载所有组件
+  const results = await Promise.allSettled(pendingPackages.map(p => materialManager.addComponent(p.name)))
+
+  const succeeded = results.filter(r => r.status === 'fulfilled').length
+  const failed = results.filter(r => r.status === 'rejected').length
+  console.log(`[EasyEditor] Auto-load completed: ${succeeded} success, ${failed} failed`)
 }
 
 const initProjectSchema = async () => {
@@ -98,9 +132,7 @@ const initProjectSchema = async () => {
     version: '0.0.1',
   }
 
-  // 从本地获取
   const pageInfo = getPageInfoFromLocalStorage()
-  let projectSchema: ProjectSchema
 
   if (pageInfo && pageInfo.length > 0) {
     let isLoad = true
@@ -113,20 +145,16 @@ const initProjectSchema = async () => {
     })
 
     if (isLoad && schemas.length > 0) {
-      // 合并所有 schema 的 componentsMap
       const allComponentsMap: ComponentsMap = []
       const seenComponents = new Set<string>()
 
       for (const schema of schemas) {
         if (schema.componentsMap) {
           for (const component of schema.componentsMap) {
-            // 生成唯一 key
             let key: string
             if ('package' in component) {
-              // ProCodeComponent (NpmInfo)
               key = `${component.package}@${component.componentName || ''}`
             } else {
-              // LowCodeComponent
               key = component.componentName || ''
             }
 
@@ -138,15 +166,19 @@ const initProjectSchema = async () => {
         }
       }
 
-      projectSchema = {
+      const projectSchema: ProjectSchema = {
         componentsTree: schemas.map(s => s.componentsTree[0]),
         componentsMap: allComponentsMap,
         version: '1.0.0',
       }
 
-      // 先加载远程物料，再加载 schema
       await loadRemoteMaterialsFromComponentsMap(allComponentsMap)
       project.load(projectSchema, true)
+
+      // 后台自动加载远程组件代码（不阻塞）
+      autoLoadAllRemoteComponents().catch(error => {
+        console.error('[EasyEditor] Failed to auto-load remote components:', error)
+      })
     } else {
       project.load(defaultSchema, true)
     }

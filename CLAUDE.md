@@ -136,6 +136,45 @@ Setters are UI controls for configuring component properties in the designer:
 - **Group setters**: collapse, tab (for organizing properties)
 - Built with Tailwind CSS v4 + shadcn/ui for modern UX
 
+### Remote Resource Loading Architecture
+
+Remote materials and setters can be loaded dynamically from CDN. The architecture follows a strict separation:
+
+**Core Layer** (`@easy-editor/core/remote/`):
+- Pure TypeScript types and MobX state management
+- NO browser-specific code (DOM APIs)
+- Files: `types.ts`, `errors.ts`, `loading-state.ts`, `resource-registry.ts`
+
+**Application Layer** (`examples/dashboard/src/editor/remote/`):
+- Browser-specific implementations
+- CDN loading with multi-provider fallback (unpkg, jsdelivr, fastly)
+- Structure:
+  ```
+  remote/
+  ├── loaders/           # Browser-specific loading
+  │   ├── cdn-provider.ts
+  │   ├── version-resolver.ts
+  │   ├── script-loader.ts
+  │   ├── material-loader.ts
+  │   ├── setter-loader.ts
+  │   └── local-loader.ts    # Local dev server HMR
+  ├── managers/          # Business logic with MobX
+  │   ├── material-manager.ts
+  │   └── setter-manager.ts
+  └── config.ts          # Remote resource configuration
+  ```
+
+**Key Types**:
+- `MaterialInfo` extends `NpmInfo` - uses `package` field (not `name`)
+- `SetterInfo` - uses `package`, `version`, `globalName` fields
+- `RemoteMaterialConfig` / `RemoteSetterConfig` - configuration with `enabled` flag
+
+**Loading Flow**:
+1. Configure resources in `config.ts`
+2. Call `loadRemoteMaterialsMeta()` / `loadRemoteSetters()` at startup
+3. Materials register metadata first, load component code on-demand
+4. Setters load completely before user interaction (blocking)
+
 ## Code Standards
 
 This project uses **Ultracite** (Biome preset) for strict code quality:
@@ -195,10 +234,12 @@ Each package has:
 ## Important Architectural Constraints
 
 1. **Core is framework-agnostic** - Never import React/Vue/etc. in `@easy-editor/core`
-2. **Renderers implement interfaces** - Follow contracts defined by `renderer-core`
-3. **Plugins are isolated** - Use dependency injection, don't directly couple plugins
-4. **Materials are self-contained** - Each material bundles everything it needs
-5. **Examples mirror applications** - Example code should represent real-world usage patterns
+2. **Core has no browser APIs** - No `document`, `window`, DOM manipulation in `@easy-editor/core`. Browser-specific code belongs in application layer or renderer packages
+3. **Renderers implement interfaces** - Follow contracts defined by `renderer-core`
+4. **Plugins are isolated** - Use dependency injection, don't directly couple plugins
+5. **Materials are self-contained** - Each material bundles everything it needs
+6. **Examples mirror applications** - Example code should represent real-world usage patterns
+7. **Remote loading in application layer** - CDN/script loading code stays in `examples/*/src/editor/remote/`, not in core
 
 ## Working with the Codebase
 

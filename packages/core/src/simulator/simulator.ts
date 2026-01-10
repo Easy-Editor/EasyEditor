@@ -17,7 +17,6 @@ import type { Project } from '../project'
 import type { ComponentInstance, DataSourceEngine, Snippet } from '../types'
 import type { Asset } from '../types/assets'
 import { type Hotkey, createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
-import ResourceConsumer from './resource-consumer'
 import type { SimulatorRenderer } from './simulator-renderer'
 import { Viewport } from './viewport'
 
@@ -63,8 +62,6 @@ export class Simulator {
   readonly viewport: Viewport
 
   readonly scroller: Scroller
-
-  readonly componentsConsumer: ResourceConsumer
 
   iframe?: HTMLElement
 
@@ -182,7 +179,6 @@ export class Simulator {
     this.scroller = this.designer.createScroller(this.viewport)
     this.autoRender = !config.get('disableAutoRender', false)
     this._appHelper = config.get('appHelper')
-    this.componentsConsumer = new ResourceConsumer<Asset | undefined>(() => this.componentsAsset)
 
     config.onGot('appHelper', data => {
       // appHelper被config.set修改后触发injectionConsumer.consume回调
@@ -264,8 +260,6 @@ export class Simulator {
       this._contentDocument = iframe.ownerDocument
       this._contentWindow = iframe.ownerDocument.defaultView!
     }
-
-    await this.componentsConsumer.waitFirstConsume()
 
     // ready & render
     this._renderer?.run()
