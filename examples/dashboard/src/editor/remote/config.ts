@@ -18,10 +18,10 @@ export const remoteMaterialsConfig: RemoteMaterialConfig[] = [
 
 /** 远程设置器配置列表 */
 export const remoteSettersConfig: RemoteSetterConfig[] = [
-  // {
-  //   package: '@easy-editor/setters',
-  //   version: 'latest',
-  //   globalName: 'EasyEditorSetters',
-  //   enabled: true,
-  // },
+  {
+    package: '@easy-editor/setters',
+    version: 'latest',
+    globalName: 'EasyEditorSetters',
+    enabled: true,
+  },
 ]
