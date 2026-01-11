@@ -45,7 +45,7 @@ plugins.registerPlugins([
 
 // 注册本地物料
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
-setters.registerSetter(setterMap)
+// setters.registerSetter(setterMap)
 
 // 启动远程资源加载（异步）
 loadAllRemoteResources()
