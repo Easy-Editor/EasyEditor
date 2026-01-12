@@ -19,4 +19,10 @@ export { MaterialLoader, materialLoader, type LoadedMaterial } from './material-
 export { SetterLoader, setterLoader, type LoadedSetters } from './setter-loader'
 
 // 本地开发加载器
-export { LocalLoader, localLoader, type LocalLoaderConfig } from './local-loader'
+export {
+  LocalMaterialLoaderClass,
+  localLoader,
+  type LocalMaterialConfig,
+  type MaterialServerInfo,
+  type LoadedMaterialModule,
+} from './local-loader'
