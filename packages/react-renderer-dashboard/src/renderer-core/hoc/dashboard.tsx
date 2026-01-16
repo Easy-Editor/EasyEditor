@@ -18,7 +18,7 @@ export function dashboardWrapper(Comp: any, { schema, baseRenderer, componentInf
 
   class Wrapper extends Component<any> {
     render() {
-      const { forwardRef, children, __designMode, className, ...rest } = this.props
+      const { forwardRef, children, className, ...rest } = this.props
       const rect = computeRect(schema)
 
       if (!rect) {
