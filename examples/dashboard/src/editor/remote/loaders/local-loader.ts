@@ -306,16 +306,31 @@ class LocalMaterialLoaderClass extends EventEmitter {
   }
 
   /**
-   * 动态加载物料模块
+   * 动态加载物料模块（使用 Module Federation）
    */
   private async loadModule(baseUrl: string, entry: string): Promise<LoadedMaterialModule> {
     // 增加版本号以强制刷新
     const version = (this.moduleVersion.get(baseUrl) || 0) + 1
     this.moduleVersion.set(baseUrl, version)
 
-    const moduleUrl = `${baseUrl}${entry}?t=${Date.now()}&v=${version}`
-
     try {
+      // 尝试使用 Module Federation 的方式加载
+      // @originjs/vite-plugin-federation 提供了 __federation_get 全局函数
+      if (typeof window !== 'undefined' && 'materials_audio' in window) {
+        // 如果已经配置了 federation remotes，尝试使用 __federation_get
+        const getModule = (
+          window as unknown as { __federation_get?: (remote: string, module: string) => Promise<unknown> }
+        ).__federation_get
+        if (getModule) {
+          console.log('[LocalMaterialLoader] Using Module Federation to load module')
+          const module = await getModule('materials_audio', './Audio')
+          return module as LoadedMaterialModule
+        }
+      }
+
+      // 回退到普通的动态 import
+      console.log('[LocalMaterialLoader] Falling back to dynamic import')
+      const moduleUrl = `${baseUrl}${entry}?t=${Date.now()}&v=${version}`
       const module = await import(/* @vite-ignore */ moduleUrl)
       return module
     } catch (error) {

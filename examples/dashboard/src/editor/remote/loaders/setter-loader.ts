@@ -170,7 +170,7 @@ export class SetterLoader {
     }
 
     try {
-      await scriptLoader.loadCSS(name, version, 'dist/styles.css', context as any, 'setter')
+      await scriptLoader.loadCSS(name, version, 'dist/index.css', context as any, 'setter')
       this.loadedCSS.add(cssKey)
     } catch (error) {
       // CSS 加载失败不阻塞
