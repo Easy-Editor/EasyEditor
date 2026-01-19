@@ -1,5 +1,4 @@
 import { action, computed, observable, runInAction } from 'mobx'
-import { DESIGNER_EVENT, type SettingTopEntry, isJSExpression, isObject } from '../..'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { createEventBus, uniqueId } from '../../utils'
 import type { Document } from '../document'
@@ -542,6 +541,13 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
       return true
     }
     return false
+  }
+
+  /**
+   * 判断当前节点是否为远程物料组件
+   */
+  isRemoteMaterial() {
+    return this.componentMeta.isRemoteMaterial()
   }
 
   @computed
