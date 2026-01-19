@@ -8,3 +8,7 @@ export * from './renderer'
 export * from './setting-renderer'
 export * from './types'
 export * from './utils'
+
+// Export error components
+export { default as NotFoundComponent } from './components/NotFoundComponent'
+export { default as FaultComponent } from './components/FaultComponent'
