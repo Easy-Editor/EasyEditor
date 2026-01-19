@@ -486,6 +486,7 @@ export function baseRendererFactory(): BaseRendererComponent {
               componentName: schema.componentName,
               componentId: schema.id,
               enableStrictNotFoundMode: engine.props.enableStrictNotFoundMode,
+              schema,
               ref: (ref: any) => {
                 ref && engine.props?.onCompGetRef?.(schema, ref)
               },
