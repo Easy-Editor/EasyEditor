@@ -130,6 +130,20 @@ export class ComponentMeta {
   dispose() {
     this.emitter.removeAllListeners()
   }
+
+  /**
+   * 判断当前节点是否为远程物料组件
+   * 远程物料是指通过 CDN 或 NPM 动态加载的组件，而非内置组件
+   * @returns boolean 是否为远程物料
+   */
+  isRemoteMaterial() {
+    try {
+      return !!(this.npm && this.npm.package && this.npm.package !== 'builtin')
+    } catch (error) {
+      console.warn(`[ComponentMeta] Failed to check if component "${this.componentName}" is remote material:`, error)
+      return false
+    }
+  }
 }
 
 export function isComponentMeta(obj: any): obj is ComponentMeta {
