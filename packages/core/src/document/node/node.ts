@@ -1,7 +1,7 @@
 import { action, computed, observable, runInAction } from 'mobx'
 import { DESIGNER_EVENT, type SettingTopEntry } from '../../designer'
-import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
-import { createEventBus, isObject, uniqueId } from '../../utils'
+import { type NodeSchema, NpmInfo, TRANSFORM_STAGE } from '../../types'
+import { createEventBus, isObject, isRemoteComponent, uniqueId } from '../../utils'
 import type { Document } from '../document'
 import { type PropValue, type PropsMap, isJSExpression } from '../prop/prop'
 import { Props, getConvertedExtraKey } from '../prop/props'
@@ -106,10 +106,10 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
     this.id = id || uniqueId('node')
     this.componentName = componentName
-    this._children = new NodeChildren(this, this.initialChildren(children))
     this.props = new Props(this, props, extras)
     this.props.merge(this.upgradeProps(this.initProps(props || {})), this.upgradeProps(extras))
     this.initBuiltinProps()
+    this._children = new NodeChildren(this, this.initialChildren(children))
 
     this.onVisibleChange(visible => {
       this.document.designer.postEvent(DESIGNER_EVENT.NODE_VISIBLE_CHANGE, this, visible)
@@ -544,16 +544,26 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     return false
   }
 
+  get isRemote() {
+    return this.isRemoteComponent()
+  }
+
   /**
    * 判断当前节点是否为远程物料组件
    */
-  isRemoteMaterial() {
-    return this.componentMeta.isRemoteMaterial()
+  isRemoteComponent() {
+    const npm = this.getExtraPropValue('npm') as NpmInfo
+    return isRemoteComponent({ npm })
   }
 
   @computed
   get componentMeta() {
-    return this.document.getComponentMeta(this.componentName)
+    let componentName = this.componentName
+    if (this.isRemote) {
+      componentName = `${componentName}@${this.getExtraPropValue('npm.version')}`
+    }
+
+    return this.document.getComponentMeta(componentName)
   }
 
   @computed

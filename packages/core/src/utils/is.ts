@@ -1,5 +1,5 @@
 import type { Viewport } from '../simulator/viewport'
-import type { ComponentMap, LowCodeComponent, NodeSchema, ProCodeComponent, SetterConfig } from '../types'
+import type { ComponentMap, LowCodeComponent, NodeSchema, NpmInfo, ProCodeComponent, SetterConfig } from '../types'
 
 export const isObject = (value: any): value is Record<string, unknown> => {
   return value !== null && typeof value === 'object'
@@ -65,6 +65,6 @@ export const isPluginEventName = (eventName: string): boolean => {
   return eventSegments.length > 1 && eventSegments[0].length > 0
 }
 
-export const isRemoteComponent = (schema: NodeSchema): boolean => {
+export const isRemoteComponent = (schema: NodeSchema | { npm: NpmInfo }) => {
   return !!(schema.npm && schema.npm.package && schema.npm.package !== 'builtin')
 }
