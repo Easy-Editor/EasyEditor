@@ -19,8 +19,8 @@ import {
   type UnloadOptions,
 } from './types'
 
-/** 组件名称验证正则 */
-const COMPONENT_NAME_REGEX = /^[A-Za-z_$][A-Za-z0-9_$.]*$/
+/** 组件名称验证正则（支持版本化名称，如 AreaChart@1.0.0） */
+const COMPONENT_NAME_REGEX = /^[A-Za-z_$][A-Za-z0-9_$.@]*$/
 
 /** 最大组件名称长度 */
 const MAX_COMPONENT_NAME_LENGTH = 255

@@ -1,4 +1,4 @@
-import { isRemoteComponent } from '@easy-editor/core'
+import { isRemoteComponent, NodeSchema } from '@easy-editor/core'
 import { type ComponentConstruct, baseRendererFactory, compWrapper, leafWrapper } from '@easy-editor/react-renderer'
 import { RemoteComponentLoading } from '../components'
 import { dashboardWrapper } from '../hoc/dashboard'
@@ -13,6 +13,22 @@ export const dashboardBaseRendererFactory: () => any = () => {
       // 保存父类的 __createVirtualDom 方法引用
       const superCreateVirtualDom = this.__createVirtualDom.bind(this)
 
+      // 重写 __getComponentView 以支持版本化组件查找
+      this.__getComponentView = (schema?: NodeSchema) => {
+        const { __components, __schema } = this.props
+        if (!__components) return
+
+        let newSchema = schema || __schema
+
+        let componentName = newSchema.componentName
+        const isRemote = isRemoteComponent(newSchema)
+        if (isRemote) {
+          componentName = `${newSchema.componentName}@${newSchema.npm.version}`
+        }
+
+        return __components[componentName]
+      }
+
       // 覆盖 __createVirtualDom
       this.__createVirtualDom = (
         originalSchema: any,
@@ -26,15 +42,16 @@ export const dashboardBaseRendererFactory: () => any = () => {
         }
 
         // 处理远程组件加载逻辑
-        const { __components: components = {} } = this.props || {}
         const isRemote = isRemoteComponent(originalSchema)
-        const isExist =
-          components[originalSchema.componentName] || this.props.__container?.components?.[originalSchema.componentName]
-
-        if (isRemote && !isExist) {
-          return this.context.engine.createElement(RemoteComponentLoading, {
-            schema: originalSchema,
-          })
+        if (isRemote) {
+          const { __components: components = {} } = this.props || {}
+          const componentName = `${originalSchema.componentName}@${originalSchema.npm.version}`
+          const isExist = components[componentName] || this.props.__container?.components?.[componentName]
+          if (!isExist) {
+            return this.context.engine.createElement(RemoteComponentLoading, {
+              schema: originalSchema,
+            })
+          }
         }
 
         // 处理远程组件的情况

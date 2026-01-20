@@ -248,7 +248,7 @@ export type BaseRendererInstance<C = GeneralComponent<BaseRendererProps, Record<
   __init(props: BaseRendererProps): void
   __afterInit(props: BaseRendererProps): void
   __executeLifeCycleMethod(method: string, args?: any[]): void
-  __getComponentView(): ComponentType<any> | undefined
+  __getComponentView(schema?: NodeSchema): ComponentType<any> | undefined
   __bindCustomMethods(props: BaseRendererProps): void
   __generateCtx(ctx: Record<string, any>): void
   __parseData(data: any, ctx?: any): any
