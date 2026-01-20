@@ -9,16 +9,18 @@ const FaultComponent: FC<FaultComponentProps> = ({ componentName = '', error }) 
       role='alert'
       aria-label={`${componentName} 组件渲染异常`}
       style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
         width: '100%',
-        height: '50px',
-        lineHeight: '50px',
+        height: '100%',
         textAlign: 'center',
         fontSize: '15px',
         color: '#ef4444',
         border: '2px solid #ef4444',
       }}
     >
-      {componentName} 组件渲染异常，请查看控制台日志
+      <span>{componentName} 组件渲染异常，请查看控制台日志</span>
     </div>
   )
 }

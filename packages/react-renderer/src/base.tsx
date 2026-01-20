@@ -223,10 +223,13 @@ export function baseRendererFactory(): BaseRendererComponent {
     /**
      * this method is for legacy purpose only, which used _ prefix instead of __ as private for some historical reasons
      */
-    __getComponentView = () => {
+    __getComponentView = (schema?: NodeSchema) => {
       const { __components, __schema } = this.props
       if (!__components) {
         return
+      }
+      if (schema) {
+        return __components[schema.componentName]
       }
       return __components[__schema.componentName]
     }
@@ -463,7 +466,7 @@ export function baseRendererFactory(): BaseRendererComponent {
           return null
         }
 
-        let Comp = components[schema.componentName] || this.props.__container?.components?.[schema.componentName]
+        let Comp = this.__getComponentView(schema)
 
         // 容器类组件的上下文通过props传递，避免context传递带来的嵌套问题
         const otherProps: any = isSchema(schema)

@@ -13,17 +13,18 @@ const NotFoundComponent: FC<NotFoundComponentProps> = ({ componentName = '', ena
       role='alert'
       aria-label={`${componentName} component not found`}
       style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
         width: '100%',
-        height: '50px',
-        lineHeight: '50px',
+        height: '100%',
         textAlign: 'center',
         fontSize: '15px',
         color: '#eab308',
         border: '2px solid #eab308',
       }}
     >
-      {/* {children || `${componentName} Component Not Found`} */}
-      {`${componentName} Component Not Found`}
+      <span>{`${componentName} Component Not Found`}</span>
     </div>
   )
 }
