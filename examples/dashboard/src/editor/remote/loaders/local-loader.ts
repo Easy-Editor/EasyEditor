@@ -376,7 +376,7 @@ class LocalMaterialLoaderClass extends EventEmitter {
     runInAction(() => {
       // 注册物料，标记为本地调试物料
       materials.createComponentMeta(registrationMeta, {
-        source: MaterialSource.LOCAL_DEBUG,
+        source: MaterialSource.DEBUG,
         component,
       })
 

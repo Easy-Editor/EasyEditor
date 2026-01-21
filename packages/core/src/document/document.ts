@@ -169,7 +169,7 @@ export class Document {
     // 追踪物料使用：批量减少所有节点的使用计数
     for (const node of this.nodes) {
       if (node.componentName) {
-        this.designer.materials.decrementUsage(node.componentName)
+        this.designer.materials.decrementUsage(node.materialUsageKey)
       }
     }
 
@@ -211,7 +211,7 @@ export class Document {
 
     // 追踪物料使用：仅对新创建的节点增加使用计数
     if (isNewNode && node.componentName) {
-      this.designer.materials.incrementUsage(node.componentName)
+      this.designer.materials.incrementUsage(node.materialUsageKey)
     }
 
     return node
@@ -263,7 +263,7 @@ export class Document {
   unlinkNode(node: Node) {
     // 追踪物料使用：减少使用计数
     if (node.componentName) {
-      this.designer.materials.decrementUsage(node.componentName)
+      this.designer.materials.decrementUsage(node.materialUsageKey)
     }
 
     this.nodes.delete(node)

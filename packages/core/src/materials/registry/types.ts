@@ -27,7 +27,7 @@ export enum MaterialSource {
   /** 远程物料（CDN/NPM） */
   REMOTE = 'remote',
   /** 本地调试物料 */
-  LOCAL_DEBUG = 'local_debug',
+  DEBUG = 'debug',
 }
 
 /** 物料条目 */
