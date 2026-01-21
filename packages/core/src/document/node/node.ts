@@ -564,6 +564,19 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   /**
+   * 获取用于物料使用计数追踪的 key
+   * 对于远程组件返回版本化名称（如 "AreaChart@1.0.0"）
+   * 对于本地组件返回原始名称
+   */
+  get materialUsageKey(): string {
+    if (this.isRemote) {
+      const version = this.getExtraPropValue('npm.version')
+      return `${this.componentName}@${version}`
+    }
+    return this.componentName
+  }
+
+  /**
    * 判断当前节点是否为远程物料组件
    */
   isRemoteComponent() {
