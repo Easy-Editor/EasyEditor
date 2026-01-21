@@ -3,7 +3,7 @@ import { DESIGNER_EVENT, type Designer, type Editor, type Node, type Selection, 
 import type { SettingTopEntry } from './setting-top-entry'
 
 export class SettingsManager {
-  private _sessionId = ''
+  _sessionId = ''
 
   @observable.ref private accessor _settings: SettingTopEntry | undefined
 
@@ -47,7 +47,7 @@ export class SettingsManager {
   }
 
   @action
-  private setup(nodes: Node[]) {
+  setup(nodes: Node[]) {
     // check nodes change
     const sessionId = generateSessionId(nodes)
     if (sessionId === this._sessionId) {

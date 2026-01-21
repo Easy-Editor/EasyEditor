@@ -90,12 +90,27 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   props: Props
 
-  _settingEntry: SettingTopEntry
+  _settingEntry: SettingTopEntry | undefined
 
   get settingEntry() {
     if (this._settingEntry) return this._settingEntry
     this._settingEntry = this.document.designer.createSettingEntry([this])
     return this._settingEntry
+  }
+
+  /**
+   * 刷新组件配置项
+   */
+  @action
+  refreshSettingEntry() {
+    if (this._settingEntry) {
+      this._settingEntry.purge()
+      this._settingEntry = undefined
+    }
+    // 重置当前 setting，用于升级版本后配置更新
+    const { settingsManager } = this.document.designer
+    settingsManager._sessionId = ''
+    settingsManager.setup([this])
   }
 
   constructor(
