@@ -5,55 +5,76 @@
   top: 0;
   left: 0;
   z-index: 1;
-  border: 1px solid var(--color-brand-light);
+  border: 1px solid var(--color-brand, #197aff);
   will-change: transform, width, height;
   overflow: visible;
 }
 
 .lc-borders-title {
-  color: var(--color-brand-light);
   transform: translateY(-100%);
-  font-weight: lighter;
+  font-weight: 500;
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--color-brand, #197aff);
+  color: #fff;
+  border-radius: 2px 2px 0 0;
+  white-space: nowrap;
 }
 
 .lc-borders-detecting {
   z-index: 1;
   border-style: dashed;
-  background: var(--color-canvas-detecting-background, rgba(0, 121, 242, 0.04));
+  border-color: var(--color-brand, #197aff);
+  background: var(--color-canvas-detecting-background, rgba(25, 122, 255, 0.06));
+  transition: background-color 0.15s ease;
 }
 
 .lc-borders-selecting {
   z-index: 2;
-  /* border-width: 2px; */
+  border-width: 1.5px;
+  border-color: var(--color-brand, #197aff);
+  box-shadow: 0 0 0 1px rgba(25, 122, 255, 0.1);
 
   &.dragging {
-    /* background: var(--color-layer-mask-background, rgba(182, 178, 178, 0.8)); */
-    /* border: none; */
+    border-style: dashed;
+    background: rgba(25, 122, 255, 0.04);
   }
 }
 
+/* 缩放边框容器 */
 .lc-resize-border {
   box-sizing: border-box;
   pointer-events: none;
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 1;
+  z-index: 3;
   will-change: transform, width, height;
   overflow: visible;
-  z-index: 3;
+  border: none;
 }
 
+/* 缩放角点手柄 */
 .lc-resize-corner {
   display: inline-block;
+  position: absolute;
   width: 8px;
   height: 8px;
-  border: 1px solid var(--color-brand, #197aff);
-  background: var(--color-block-background-normal, #fff);
+  border: 1.5px solid var(--color-brand, #197aff);
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.12);
   pointer-events: auto;
   z-index: 4;
+  transition: border-width 0.1s ease, box-shadow 0.1s ease;
+
+  &:hover {
+    border-width: 2px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  }
 }
 
+/* 缩放边手柄 */
 .lc-resize-side {
   display: flex;
   align-items: center;
@@ -65,9 +86,16 @@
   &:after {
     content: "";
     display: block;
-    border: 1px solid var(--color-brand, #197aff);
-    background: var(--color-block-background-normal, #fff);
-    border-radius: 2px;
+    border: 1.5px solid var(--color-brand, #197aff);
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.12);
+    transition: border-width 0.1s ease, box-shadow 0.1s ease;
+  }
+
+  &:hover:after {
+    border-width: 2px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
   }
 
   &.e,
@@ -75,8 +103,9 @@
     cursor: ew-resize;
 
     &:after {
-      width: 4px;
-      min-height: 50%;
+      width: 5px;
+      min-height: 20px;
+      max-height: 50%;
     }
   }
 
@@ -85,16 +114,20 @@
     cursor: ns-resize;
 
     &:after {
-      min-width: 50%;
-      height: 4px;
+      min-width: 20px;
+      max-width: 50%;
+      height: 5px;
     }
   }
 }
 
+/* 辅助线 */
 .lc-guideline {
   position: absolute;
   z-index: 999;
-  background-color: var(--color-guideline, #eb5648);
+  background-color: var(--color-guideline, #ff3366);
+  pointer-events: none;
+  box-shadow: 0 0 4px var(--color-guideline, #ff3366);
 
   &.vertical {
     left: 0;
@@ -108,5 +141,117 @@
     width: 20000px;
     height: 1px;
     transform: translateX(-50%);
+  }
+}
+
+/* 距离线段样式 */
+.lc-distance-segment {
+  position: absolute;
+  pointer-events: none;
+  z-index: 1001;
+
+  /* 垂直距离线段 */
+  &.vertical {
+    width: 1px;
+    background: var(--color-guideline, #ff3366);
+    box-shadow: 0 0 3px rgba(255, 51, 102, 0.4);
+  }
+
+  /* 水平距离线段 */
+  &.horizontal {
+    height: 1px;
+    background: var(--color-guideline, #ff3366);
+    box-shadow: 0 0 3px rgba(255, 51, 102, 0.4);
+  }
+}
+
+/* 距离线段端点标记 - T型端点 */
+.lc-distance-cap {
+  position: absolute;
+  background: var(--color-guideline, #ff3366);
+  box-shadow: 0 0 2px rgba(255, 51, 102, 0.5);
+
+  .lc-distance-segment.vertical & {
+    width: 7px;
+    height: 1px;
+    left: -3px;
+
+    &.start {
+      top: 0;
+    }
+
+    &.end {
+      bottom: 0;
+    }
+  }
+
+  .lc-distance-segment.horizontal & {
+    width: 1px;
+    height: 7px;
+    top: -3px;
+
+    &.start {
+      left: 0;
+    }
+
+    &.end {
+      right: 0;
+    }
+  }
+}
+
+/* 距离标签 - 精致的数值标签 */
+.lc-distance-label {
+  position: absolute;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Mono", "Droid Sans Mono", monospace;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--color-guideline, #ff3366);
+  border-radius: 3px;
+  white-space: nowrap;
+  z-index: 1002;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+
+  /* 微妙的出现动画 */
+  animation: distanceLabelAppear 0.15s ease-out;
+
+  .lc-distance-segment.vertical & {
+    left: 6px;
+    transform: translateY(-50%);
+  }
+
+  .lc-distance-segment.horizontal & {
+    top: 6px;
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes distanceLabelAppear {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+}
+
+/* 水平标签的动画变体 */
+.lc-distance-segment.horizontal .lc-distance-label {
+  animation-name: distanceLabelAppearHorizontal;
+}
+
+@keyframes distanceLabelAppearHorizontal {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
   }
 }

@@ -169,7 +169,7 @@ export class OffsetObserver {
         })
       }
 
-      this.pid = requestIdleCallback(compute)
+      this.pid = requestAnimationFrame(compute)
       pid = this.pid
     }
 
@@ -190,7 +190,7 @@ export class OffsetObserver {
 
   purge() {
     if (this.pid) {
-      cancelIdleCallback(this.pid)
+      cancelAnimationFrame(this.pid)
     }
     this.pid = undefined
   }

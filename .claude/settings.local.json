@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__filesystem__directory_tree",
+      "mcp__filesystem__read_multiple_files",
+      "mcp__filesystem__read_text_file",
+      "Bash(wc:*)",
+      "mcp__filesystem__write_file",
+      "Bash(pnpm test-types:*)",
+      "Bash(pnpm tsc:*)",
+      "mcp__filesystem__list_directory",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm exec tsc:*)",
+      "Skill(frontend-design)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "shadcn"
+  ]
+}
