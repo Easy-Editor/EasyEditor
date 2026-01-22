@@ -363,8 +363,8 @@ export class Document {
 
     for (const node of this._nodesMap.values()) {
       const { componentName } = node || {}
-      if (!existedMap[componentName]) {
-        existedMap[componentName] = true
+      if (!existedMap[node.materialUsageKey]) {
+        existedMap[node.materialUsageKey] = true
         if (node.componentMeta?.npm?.package) {
           componentsMap.push({
             ...node.componentMeta.npm,

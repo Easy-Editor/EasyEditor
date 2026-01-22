@@ -588,7 +588,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   get componentMeta() {
     let componentName = this.componentName
     if (this.isRemote) {
-      componentName = `${componentName}@${this.getExtraPropValue('npm.version')}`
+      componentName = this.materialUsageKey
     }
 
     return this.document.getComponentMeta(componentName)
