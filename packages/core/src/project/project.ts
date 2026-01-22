@@ -75,7 +75,8 @@ export class Project {
             if (
               isProCodeComponentType(eItem) &&
               isProCodeComponentType(item) &&
-              // eItem.package === item.package &&
+              eItem.package === item.package &&
+              eItem.version === item.version &&
               eItem.componentName === item.componentName
             ) {
               return true
