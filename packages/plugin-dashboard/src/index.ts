@@ -11,9 +11,10 @@ import {
   type Simulator,
   getConvertedExtraKey,
 } from '@easy-editor/core'
-import { GuideLine } from './designer/guideline'
+import { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo } from './designer/guideline'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
+export { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo }
 export * from './type'
 
 interface DashboardPluginOptions {
@@ -136,9 +137,8 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
           // 根据拖拽包围盒的 Rect 计算吸附位置
           const { x: boxStartX = 0, y: boxStartY = 0, width = 0, height = 0 } = startNodes.box
           const { x: boxX = 0, y: boxY = 0 } = startOffsetNodes.box
-          const { isAdsorption, adsorb } = designer.guideline.getAdsorptionPosition(
-            new DOMRect(e.canvasX! - boxX, e.canvasY! - boxY, width, height),
-          )
+          const currentRect = new DOMRect(e.canvasX! - boxX, e.canvasY! - boxY, width, height)
+          const { isAdsorption, adsorb } = designer.guideline.getAdsorptionPosition(currentRect)
 
           // 根据辅助线位置，计算对应吸附位置
           let adsorbX = undefined
