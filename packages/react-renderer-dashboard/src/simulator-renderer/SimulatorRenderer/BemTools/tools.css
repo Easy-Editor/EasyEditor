@@ -255,3 +255,90 @@
     transform: translateX(-50%) scale(1);
   }
 }
+
+/* ========================================
+   用户辅助线（从游尺添加）
+   ======================================== */
+.lc-user-guideline {
+  position: absolute;
+  pointer-events: auto;
+  z-index: 998;
+}
+
+.lc-user-guideline::before {
+  content: "";
+  position: absolute;
+  background: var(--color-user-guideline, #00d4aa);
+}
+
+.lc-user-guideline.horizontal {
+  width: 100%;
+  height: 1px;
+  cursor: ns-resize;
+}
+
+.lc-user-guideline.horizontal::before {
+  inset: 0;
+}
+
+.lc-user-guideline.vertical {
+  height: 100%;
+  width: 1px;
+  cursor: ew-resize;
+}
+
+.lc-user-guideline.vertical::before {
+  inset: 0;
+}
+
+.lc-user-guideline:hover::before {
+  background-color: var(--color-user-guideline-hover, #00ffcc);
+  box-shadow: 0 0 6px var(--color-user-guideline, #00d4aa);
+}
+
+/* 辅助线点击扩展区域 */
+.lc-user-guideline::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+}
+
+.lc-user-guideline.horizontal::after {
+  left: 0;
+  right: 0;
+  top: -5px;
+  bottom: -5px;
+}
+
+.lc-user-guideline.vertical::after {
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
+}
+
+/* 辅助线位置标签 */
+.lc-user-guideline-label {
+  position: absolute;
+  background: var(--color-user-guideline, #00d4aa);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: "SF Mono", Monaco, Consolas, monospace;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1000;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.lc-user-guideline.horizontal .lc-user-guideline-label {
+  left: 8px;
+  top: -22px;
+}
+
+.lc-user-guideline.vertical .lc-user-guideline-label {
+  top: 8px;
+  left: 8px;
+}

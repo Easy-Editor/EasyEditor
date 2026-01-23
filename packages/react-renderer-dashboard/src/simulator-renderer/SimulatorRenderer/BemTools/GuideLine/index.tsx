@@ -1,6 +1,7 @@
 import type { Simulator } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import { useMemo } from 'react'
+import { UserGuideLine } from './UserGuideLine'
 
 interface GuideLineProps {
   host: Simulator
@@ -8,7 +9,7 @@ interface GuideLineProps {
 
 export const GuideLine: React.FC<GuideLineProps> = observer(({ host }) => {
   const { guideline } = host.designer
-  const { enabled, adsorptionLinesWithDistance = [] } = guideline
+  const { enabled, adsorptionLinesWithDistance = [], userGuideLines } = guideline
 
   // 去重：横向和纵向各只保留一个距离线段
   const uniqueDistanceSegments = useMemo(() => {
@@ -98,6 +99,11 @@ export const GuideLine: React.FC<GuideLineProps> = observer(({ host }) => {
             {segment.distance}
           </span>
         </div>
+      ))}
+
+      {/* 用户辅助线（从游尺添加） */}
+      {userGuideLines.map(gl => (
+        <UserGuideLine key={gl.id} host={host} guideLine={gl} />
       ))}
     </>
   )
