@@ -1,6 +1,7 @@
 import type { ComponentInstance } from '@easy-editor/core'
 import type { GuideLine } from './designer/guideline'
 import type { Alignment } from './designer/alignment'
+import type { MarqueeSelection } from './designer/marquee-selection'
 
 declare module '@easy-editor/core' {
   interface Designer {
@@ -13,6 +14,11 @@ declare module '@easy-editor/core' {
      * 对齐功能
      */
     alignment: Alignment
+
+    /**
+     * 框选功能
+     */
+    marqueeSelection: MarqueeSelection
   }
 
   interface Document {

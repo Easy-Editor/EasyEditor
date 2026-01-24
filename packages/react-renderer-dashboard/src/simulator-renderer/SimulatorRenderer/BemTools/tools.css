@@ -342,3 +342,15 @@
   top: 8px;
   left: 8px;
 }
+
+/* 框选矩形样式 */
+.lc-marquee-selection {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  pointer-events: none;
+  border: 1px dashed var(--color-brand, #197aff);
+  background: rgba(25, 122, 255, 0.08);
+  will-change: transform, width, height;
+}
