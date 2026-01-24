@@ -1,5 +1,6 @@
 import type { ComponentInstance } from '@easy-editor/core'
 import type { GuideLine } from './designer/guideline'
+import type { Alignment } from './designer/alignment'
 
 declare module '@easy-editor/core' {
   interface Designer {
@@ -7,6 +8,11 @@ declare module '@easy-editor/core' {
      * 辅助线
      */
     guideline: GuideLine
+
+    /**
+     * 对齐功能
+     */
+    alignment: Alignment
   }
 
   interface Document {

@@ -12,9 +12,11 @@ import {
   getConvertedExtraKey,
 } from '@easy-editor/core'
 import { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo } from './designer/guideline'
+import { Alignment, AlignType, DistributeType } from './designer/alignment'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
 export { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo }
+export { Alignment, AlignType, DistributeType }
 export * from './type'
 
 interface DashboardPluginOptions {
@@ -216,6 +218,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
       /* -------------------------------- Designer -------------------------------- */
       let guideline: GuideLine | null = null
+      let alignment: Alignment | null = null
       extend('Designer', {
         guideline: {
           get() {
@@ -223,6 +226,14 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
               guideline = new GuideLine(this)
             }
             return guideline
+          },
+        },
+        alignment: {
+          get() {
+            if (!alignment) {
+              alignment = new Alignment(this)
+            }
+            return alignment
           },
         },
       })
