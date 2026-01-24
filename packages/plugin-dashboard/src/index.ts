@@ -13,9 +13,17 @@ import {
 } from '@easy-editor/core'
 import { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo } from './designer/guideline'
 import { Alignment, AlignType, DistributeType } from './designer/alignment'
+import { MarqueeSelection, type MarqueeEvent, type MarqueeRect } from './designer/marquee-selection'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
-export { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo }
+export {
+  GuideLine,
+  type UserGuideLineItem,
+  type DistanceSegment,
+  type AdsorptionLineInfo,
+  type MarqueeEvent,
+  type MarqueeRect,
+}
 export { Alignment, AlignType, DistributeType }
 export * from './type'
 
@@ -219,6 +227,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       /* -------------------------------- Designer -------------------------------- */
       let guideline: GuideLine | null = null
       let alignment: Alignment | null = null
+      let marqueeSelection: MarqueeSelection | null = null
       extend('Designer', {
         guideline: {
           get() {
@@ -234,6 +243,14 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
               alignment = new Alignment(this)
             }
             return alignment
+          },
+        },
+        marqueeSelection: {
+          get() {
+            if (!marqueeSelection) {
+              marqueeSelection = new MarqueeSelection(this)
+            }
+            return marqueeSelection
           },
         },
       })
