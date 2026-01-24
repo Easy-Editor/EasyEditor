@@ -333,11 +333,13 @@ export class Simulator {
         // TODO: ?? 阻止了 linkSnippet 事件 - dragstart 事件
         // downEvent.preventDefault()
 
-        const isLeftButton = downEvent.which === 1 || downEvent.button === 0
+        const isLeftButton = downEvent.button === 0
         const checkSelect = (e: MouseEvent) => {
           doc.removeEventListener('mouseup', checkSelect, true)
+
+          const isLeftButtonSelect = e.button === 0
           // 鼠标是否移动 ? - 鼠标抖动应该也需要支持选中事件，偶尔点击不能选中，磁帖块移除 shaken 检测
-          if (!isShaken(downEvent, e)) {
+          if (!isShaken(downEvent, e) && isLeftButtonSelect) {
             const { id } = node
             if (isMulti && rootNode && !node.contains(rootNode) && selection.has(id)) {
               selection.remove(id)
