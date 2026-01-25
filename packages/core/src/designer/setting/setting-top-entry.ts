@@ -61,6 +61,10 @@ export class SettingTopEntry implements SettingEntry {
     return this.first.locked
   }
 
+  get isHidden(): boolean {
+    return this.first.hidden
+  }
+
   /**
    * 多个
    */

@@ -25,6 +25,7 @@ export {
   type MarqueeRect,
 }
 export { Alignment, AlignType, DistributeType }
+export { updateNodeRect, updateNodeRectByDOM }
 export * from './type'
 
 interface DashboardPluginOptions {
@@ -265,22 +266,30 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
             let nodeList: Node[] = []
             if (typeof nodeIdList[0] === 'string') {
               nodeList = (nodeIdList as string[]).map(id => this.getNode(id)!)
+            } else {
+              nodeList = nodeIdList as Node[]
             }
+
+            // 过滤无效节点
+            nodeList = nodeList.filter(node => node && !node.isRoot)
+            if (nodeList.length === 0) return
+
+            // 获取共同父节点（使用第一个节点的父节点）
+            const targetParent = nodeList[0].parent || this.rootNode
 
             const groupNode = this.createNode(groupInitSchema)
 
-            // 计算所有节点的 index，确定分组的插入位置
-            let maxZIndex = Number.POSITIVE_INFINITY
+            // 计算所有节点的最小 index，确定分组的插入位置
+            let minIndex = Number.POSITIVE_INFINITY
             for (const node of nodeList) {
-              if (node.index < maxZIndex) {
-                maxZIndex = node.index
+              if (node.index < minIndex) {
+                minIndex = node.index
               }
-              if (node && !node.isRoot) {
-                this.migrateNode(node, groupNode)
-              }
+              this.migrateNode(node, groupNode)
             }
 
-            this.rootNode?.insert(groupNode, maxZIndex)
+            // 将新分组插入到共同父节点下
+            targetParent?.insert(groupNode, minIndex)
 
             return groupNode
           },
@@ -296,12 +305,16 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
             if (!groupNode || !groupNode.isGroup || !groupNode.children) return
 
-            const nodes = groupNode.childrenNodes
-            // TODO: 这里写法很奇怪，因为children是响应式的，所以迁移之后，children也会更新
-            while (nodes.length > 0) {
-              if (groupNode.parent) {
-                this.migrateNode(nodes[0], groupNode.parent)
-              }
+            const parent = groupNode.parent
+            if (!parent) return
+
+            // 记录分组的原始位置
+            const groupIndex = groupNode.index
+            const nodes = [...groupNode.childrenNodes] // 复制数组避免响应式问题
+
+            // 将子节点迁移到父节点，并保持在原分组位置
+            for (let i = 0; i < nodes.length; i++) {
+              this.migrateNode(nodes[i], parent, groupIndex + i)
             }
 
             this.removeNode(groupNode)

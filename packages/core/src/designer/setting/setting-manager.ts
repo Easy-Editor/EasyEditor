@@ -54,7 +54,14 @@ export class SettingsManager {
       return
     }
     this._sessionId = sessionId
+
+    // 当没有选中节点时，自动使用根节点
     if (nodes.length < 1) {
+      const rootNode = this.designer?.project.currentDocument?.rootNode
+      if (rootNode) {
+        this._settings = rootNode.settingEntry
+        return
+      }
       this._settings = undefined
       return
     }
