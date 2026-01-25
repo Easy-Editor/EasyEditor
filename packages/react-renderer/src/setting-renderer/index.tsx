@@ -90,16 +90,6 @@ export const SettingRenderer = observer<React.FC<SettingRendererProps>>(props =>
     )
   }
 
-  // 当节点被锁定，且未开启锁定后容器可设置属性
-  if (settings.isLocked) {
-    return (
-      <div className='lc-settings-main'>
-        <div className='lc-settings-notice'>
-          <p>Current node is locked</p>
-        </div>
-      </div>
-    )
-  }
   if (Array.isArray(settings.items) && settings.items.length === 0) {
     return (
       <div className='lc-settings-main'>
