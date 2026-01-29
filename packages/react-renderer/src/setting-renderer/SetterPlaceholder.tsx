@@ -22,7 +22,6 @@ export const SetterPlaceholder = ({ setterType }: SetterPlaceholderProps) => {
         padding: '8px',
         fontSize: '12px',
         color: '#999',
-        backgroundColor: '#f5f5f5',
         borderRadius: '4px',
       }}
     >

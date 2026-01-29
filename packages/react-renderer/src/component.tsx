@@ -10,9 +10,6 @@ export function componentRendererFactory(): BaseRendererComponent {
     __namespace = 'component'
 
     __afterInit(props: BaseRendererProps, ...rest: any[]) {
-      this.__generateCtx({
-        component: this,
-      })
       const schema = props.__schema || {}
       this.state = this.__parseData(schema.state || {})
       this.__initDataSource(props)
