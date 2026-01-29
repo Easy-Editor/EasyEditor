@@ -523,35 +523,6 @@ export function baseRendererFactory(): BaseRendererComponent {
           return null
         }
 
-        // TODO: scope
-        // let scopeKey = ''
-        // // 判断组件是否需要生成scope，且只生成一次，挂在this.__compScopes上
-        // if (Comp.generateScope) {
-        //   const key = this.__parseExpression(schema.props?.key, scope)
-        //   if (key) {
-        //     // 如果组件自己设置key则使用组件自己的key
-        //     scopeKey = key
-        //   } else if (schema.__ctx) {
-        //     // 需要判断循环的情况
-        //     scopeKey = schema.__ctx.lceKey + (idx !== undefined ? `_${idx}` : '')
-        //   } else {
-        //     // 在生产环境schema没有__ctx上下文，需要手动生成一个lceKey
-        //     schema.__ctx = {
-        //       lceKey: `lce${++scopeIdx}`,
-        //     }
-        //     scopeKey = schema.__ctx.lceKey
-        //   }
-        //   if (!this.__compScopes[scopeKey]) {
-        //     this.__compScopes[scopeKey] = Comp.generateScope(this, schema)
-        //   }
-        // }
-        // // 如果组件有设置scope，需要为组件生成一个新的scope上下文
-        // if (scopeKey && this.__compScopes[scopeKey]) {
-        //   const compSelf = { ...this.__compScopes[scopeKey] }
-        //   compSelf.__proto__ = scope
-        //   scope = compSelf
-        // }
-
         if (engine.props?.designMode) {
           otherProps.__designMode = engine.props.designMode
         }
@@ -926,6 +897,7 @@ export function baseRendererFactory(): BaseRendererComponent {
     }
 
     __checkSchema = (schema: NodeSchema | undefined, originalExtraComponents: string | string[] = []) => {
+      console.log('🚀 ~ baseRendererFactory ~ schema:', schema)
       let extraComponents = originalExtraComponents
       if (typeof extraComponents === 'string') {
         extraComponents = [extraComponents]

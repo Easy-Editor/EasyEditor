@@ -42,23 +42,58 @@ const patchDidCatch = (Comp: any, { baseRenderer }: ComponentHocInfo) => {
 
 const cache = new Map<string, { Comp: any; WrapperComponent: any }>()
 
+/** 获取数据源数据 */
+const getDataSource = (baseRenderer: any) => {
+  // component
+  const componentDataSource: Record<string, any> = {}
+  if (baseRenderer.dataSourceMap) {
+    const { dataSourceMap, state } = baseRenderer
+    Object.keys(dataSourceMap).forEach(key => {
+      componentDataSource[key] = state[key]
+    })
+  }
+
+  // page
+  const pageDataSource: Record<string, any> = {}
+  if (baseRenderer.page.dataSourceMap) {
+    const { dataSourceMap, state } = baseRenderer.page
+    Object.keys(dataSourceMap).forEach(key => {
+      pageDataSource[key] = state[key]
+    })
+  }
+
+  if (Object.keys(componentDataSource).length > 0 || Object.keys(pageDataSource).length > 0) {
+    return {
+      component: componentDataSource,
+      page: pageDataSource,
+    }
+  }
+  return undefined
+}
+
 export const compWrapper: ComponentConstruct = (Comp, info) => {
+  const { baseRenderer, schema } = info
+
   if (Comp?.prototype?.isReactComponent || Comp?.prototype instanceof Component) {
     patchDidCatch(Comp, info)
     return Comp
   }
 
-  if (info.schema.id && cache.has(info.schema.id) && cache.get(info.schema.id)?.Comp === Comp) {
-    return cache.get(info.schema.id)?.WrapperComponent
+  if (schema.id && cache.has(schema.id) && cache.get(schema.id)?.Comp === Comp) {
+    return cache.get(schema.id)?.WrapperComponent
   }
 
-  class Wrapper extends Component<any> {
+  class Wrapper extends Component<any, { componentDataSource?: Record<string, any> }> {
     static displayName = Comp.displayName
 
     render() {
       const { forwardRef, ...rest } = this.props
-      // @ts-ignore
-      return createElement(Comp, { ...rest, ref: forwardRef })
+
+      return createElement(Comp, {
+        ...rest,
+        ref: forwardRef,
+        __dataSource: getDataSource(baseRenderer),
+      } as any)
     }
   }
 
@@ -66,7 +101,7 @@ export const compWrapper: ComponentConstruct = (Comp, info) => {
 
   const WrapperComponent = createForwardRefHocElement(Wrapper, Comp)
 
-  info.schema.id && cache.set(info.schema.id, { WrapperComponent, Comp })
+  schema.id && cache.set(schema.id, { WrapperComponent, Comp })
 
   return WrapperComponent
 }
