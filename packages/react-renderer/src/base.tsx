@@ -897,7 +897,6 @@ export function baseRendererFactory(): BaseRendererComponent {
     }
 
     __checkSchema = (schema: NodeSchema | undefined, originalExtraComponents: string | string[] = []) => {
-      console.log('🚀 ~ baseRendererFactory ~ schema:', schema)
       let extraComponents = originalExtraComponents
       if (typeof extraComponents === 'string') {
         extraComponents = [extraComponents]

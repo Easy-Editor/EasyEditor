@@ -1,3 +1,4 @@
+import PureRenderer from './renderer/pure'
 import Renderer from './renderer'
 import { LowCodeRenderer } from './renderer-core/renderer'
 import { SimulatorRenderer, simulatorRenderer } from './simulator-renderer'
@@ -11,6 +12,12 @@ export {
    * <LowCodeRenderer schema={schema} components={components} />
    */
   LowCodeRenderer,
+  /**
+   * PreviewRenderer: 用于 preview & live 模式，支持多页面导航
+   * @example
+   * <PreviewRenderer projectSchema={projectSchema} components={components} onBeforeNavigate={...} />
+   */
+  PureRenderer,
   /**
    * Renderer: 用于 live 模式
    * @example
