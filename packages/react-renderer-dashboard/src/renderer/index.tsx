@@ -5,7 +5,7 @@ import { useResizeObserver } from '../simulator-renderer/SimulatorRenderer/hooks
 
 import './index.css'
 
-interface PureRendererProps extends RendererProps {
+interface DashboardRendererProps extends RendererProps {
   /**
    * 视图窗口设置
    */
@@ -24,7 +24,7 @@ interface PureRendererProps extends RendererProps {
   }
 }
 
-const PureRenderer: React.FC<PureRendererProps> = props => {
+const DashboardRenderer: React.FC<DashboardRendererProps> = props => {
   const { viewport, ...rendererProps } = props
   const { width: viewportWidth = 1920, height: viewportHeight = 1080 } = viewport || {}
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -62,4 +62,4 @@ const PureRenderer: React.FC<PureRendererProps> = props => {
   )
 }
 
-export default PureRenderer
+export default DashboardRenderer
