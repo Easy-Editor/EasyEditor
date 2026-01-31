@@ -72,6 +72,26 @@ export interface ExternalConfig {
 }
 
 /**
+ * Rollup 额外配置
+ * 用于添加额外的 external 和 globals（不覆盖默认值，而是合并）
+ */
+export interface RollupConfig {
+  /**
+   * 额外的外部依赖（将与 external.externals 合并）
+   */
+  external?: string[]
+  /**
+   * 输出配置
+   */
+  output?: {
+    /**
+     * 额外的全局变量映射（将与 external.globals 合并）
+     */
+    globals?: Record<string, string>
+  }
+}
+
+/**
  * CSS 配置
  */
 export interface CssConfig {
@@ -157,6 +177,17 @@ export interface EasypackConfig {
    * 额外的 Vite 插件
    */
   vitePlugins?: VitePlugin[]
+
+  /**
+   * Rollup 额外配置
+   * 用于添加额外的 external 和 globals（与默认值合并，不覆盖）
+   * @example
+   * rollup: {
+   *   external: ['echarts', 'echarts/core'],
+   *   output: { globals: { echarts: 'echarts' } }
+   * }
+   */
+  rollup?: RollupConfig
 }
 
 /**
