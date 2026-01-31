@@ -128,6 +128,18 @@ export function resolveConfig(userConfig: EasypackConfig, pkg: { name: string; v
   // 合并用户配置和预设配置
   const merged = deepMerge(presetConfig, userConfig)
 
+  // 合并 externals：默认值 + external.externals + rollup.external
+  const baseExternals = merged.external?.externals || DEFAULT_EXTERNALS
+  const rollupExternals = merged.rollup?.external || []
+  const mergedExternals = [...new Set([...baseExternals, ...rollupExternals])]
+
+  // 合并 globals：默认值 + external.globals + rollup.output.globals
+  const mergedGlobals = {
+    ...DEFAULT_GLOBALS,
+    ...merged.external?.globals,
+    ...merged.rollup?.output?.globals,
+  }
+
   // 构建完整的解析配置
   const resolved: ResolvedConfig = {
     preset: userConfig.preset,
@@ -147,8 +159,8 @@ export function resolveConfig(userConfig: EasypackConfig, pkg: { name: string; v
       types: merged.output?.types ?? DEFAULT_OUTPUT.types,
     },
     external: {
-      externals: merged.external?.externals || DEFAULT_EXTERNALS,
-      globals: { ...DEFAULT_GLOBALS, ...merged.external?.globals },
+      externals: mergedExternals,
+      globals: mergedGlobals,
     },
     css: {
       scopedName: merged.css?.scopedName || DEFAULT_CSS.scopedName,

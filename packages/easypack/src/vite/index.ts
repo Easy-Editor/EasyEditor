@@ -26,17 +26,17 @@ export function createViteConfig(options: CreateViteConfigOptions): UserConfig {
 
   const plugins: UserConfig['plugins'] = [react()]
 
+  // 用户自定义插件（优先，允许用户覆盖默认的外部依赖处理）
+  if (config.vitePlugins.length > 0) {
+    plugins.push(...config.vitePlugins)
+  }
+
   // 外部依赖插件
   plugins.push(externalDepsPlugin({ externals, globals }))
 
   // 物料开发插件（仅 material 预设启用）
   if (config.dev.materialApi) {
     plugins.push(materialDevPlugin({ entry: `/${config.entry.main}` }))
-  }
-
-  // 用户自定义插件
-  if (config.vitePlugins.length > 0) {
-    plugins.push(...config.vitePlugins)
   }
 
   // 路径别名
