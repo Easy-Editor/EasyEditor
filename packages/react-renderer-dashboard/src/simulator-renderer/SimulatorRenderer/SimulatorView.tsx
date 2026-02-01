@@ -69,15 +69,16 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
     height: viewportHeight,
   }
 
-  useResizeObserver({
-    elem: canvasRef,
-    onResize: entries => {
-      const { width, height } = entries[0].contentRect
-      const ww = width / viewportWidth
-      const wh = height / viewportHeight
-      viewport.scale = Math.min(ww, wh)
-    },
-  })
+  // 移除自动缩放逻辑，允许外部手动控制 viewport.scale
+  // useResizeObserver({
+  //   elem: canvasRef,
+  //   onResize: entries => {
+  //     const { width, height } = entries[0].contentRect
+  //     const ww = width / viewportWidth
+  //     const wh = height / viewportHeight
+  //     viewport.scale = Math.min(ww, wh)
+  //   },
+  // })
 
   useEffect(() => {
     viewport.mount(viewportRef.current)
