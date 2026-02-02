@@ -16,9 +16,10 @@ export const ProjectView: React.FC<ProjectViewProps> = observer(props => {
   const Loading = config.get('loadingComponent', BuiltinLoading)
 
   useEffect(() => {
-    project.onRendererReady(() => {
+    const unsubscribe = project.onRendererReady(() => {
       setIsReady(true)
     })
+    return unsubscribe
   }, [project])
 
   return (
