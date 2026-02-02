@@ -21,13 +21,12 @@ export function calculateResizeRect(designer: Designer, direction: Direction, de
   // 步骤 2: 计算基础矩形
   // 注意：DOMRect 的 x, y, width, height 是 getter，不是自有属性，需要显式提取
   const calculated = strategy.calculate(startRect, delta)
-  const newRect: Rect = {
-    x: startRect.x,
-    y: startRect.y,
-    width: startRect.width,
-    height: startRect.height,
-    ...calculated,
-  }
+  const newRect = {
+    x: calculated.x ?? startRect.x,
+    y: calculated.y ?? startRect.y,
+    width: calculated.width ?? startRect.width,
+    height: calculated.height ?? startRect.height,
+  } as Rect
 
   // 步骤 3: 应用吸附
   const adsorptionIndex = strategy.getAdsorptionIndex()

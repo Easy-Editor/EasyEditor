@@ -11,22 +11,25 @@ import {
   type Simulator,
   getConvertedExtraKey,
 } from '@easy-editor/core'
-import { GuideLine, type UserGuideLineItem, type DistanceSegment, type AdsorptionLineInfo } from './designer/guideline'
-import { Alignment, AlignType, DistributeType } from './designer/alignment'
-import { MarqueeSelection, type MarqueeEvent, type MarqueeRect } from './designer/marquee-selection'
+import { AlignType, Alignment, DistributeType } from './designer/alignment'
+import { type AdsorptionLineInfo, type DistanceSegment, GuideLine, type UserGuideLineItem } from './designer/guideline'
+import { type MarqueeEvent, type MarqueeRect, MarqueeSelection } from './designer/marquee-selection'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
+export * from './type'
 export {
+  AlignType,
+  Alignment,
+  DistributeType,
   GuideLine,
-  type UserGuideLineItem,
-  type DistanceSegment,
+  updateNodeRect,
+  updateNodeRectByDOM,
   type AdsorptionLineInfo,
+  type DistanceSegment,
   type MarqueeEvent,
   type MarqueeRect,
+  type UserGuideLineItem,
 }
-export { Alignment, AlignType, DistributeType }
-export { updateNodeRect, updateNodeRectByDOM }
-export * from './type'
 
 interface DashboardPluginOptions {
   /**
@@ -314,7 +317,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
             // 将子节点迁移到父节点，并保持在原分组位置
             for (let i = 0; i < nodes.length; i++) {
-              this.migrateNode(nodes[i], parent, groupIndex + i)
+              this.migrateNode(nodes[i], parent)
             }
 
             this.removeNode(groupNode)
