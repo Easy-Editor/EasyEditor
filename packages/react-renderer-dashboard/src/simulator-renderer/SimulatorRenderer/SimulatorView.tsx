@@ -120,10 +120,19 @@ export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
   }
 
   useEffect(() => {
-    if (host.renderer) {
-      host.mountContentFrame(frameRef.current)
+    const frame = frameRef.current
+    if (!frame) return
+
+    const rafId = requestAnimationFrame(() => {
+      if (host.renderer) {
+        host.mountContentFrame(frame)
+      }
+    })
+
+    return () => {
+      cancelAnimationFrame(rafId)
     }
-  }, [host.renderer])
+  }, [host.renderer, host])
 
   return (
     <div className='lc-simulator-content'>
