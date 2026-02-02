@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/react-renderer-dashboard",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "React Renderer for Dashboard package for EasyEditor",
   "type": "module",
   "main": "src/index.ts",

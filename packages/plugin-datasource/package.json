@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/plugin-datasource",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "DataSource plugin for EasyEditor",
   "type": "module",
   "main": "src/index.ts",

@@ -1,5 +1,46 @@
 # @easy-editor/react-renderer-dashboard
 
+## 1.0.4
+
+### Patch Changes
+
+- ed4525a: perf: bemtools experience
+- 71f5e73: feat: support multi-version component
+- f73af33: fix: miss use ComponentRenderer
+- ba79ef3: fix: ErrorComponent in Dashboard display error
+- 6af5e66: fix: miss designMode
+- 0efe66f: fix: build error
+- c8e6e5a: feat: add resource-consumer & remoteMaterials
+- 853a4c9: feat: load remote materials
+- 93fb7af: feat: add MarqueeSelection
+- 7708649: feat: add UserGuideLine
+- d41ac28: perf: mountContentFrame
+- ecc9dd6: refactor: materials logic
+- d34d48e: feat: remove resize autofit
+- afc357b: feat: remote component load logic
+- bd686d0: feat: add PureRenderer
+- Updated dependencies [ed4525a]
+- Updated dependencies [71f5e73]
+- Updated dependencies [f73af33]
+- Updated dependencies [7db1702]
+- Updated dependencies [ba79ef3]
+- Updated dependencies [8b73acf]
+- Updated dependencies [25a3fa2]
+- Updated dependencies [6e6d434]
+- Updated dependencies [0efe66f]
+- Updated dependencies [c8e6e5a]
+- Updated dependencies [853a4c9]
+- Updated dependencies [93fb7af]
+- Updated dependencies [8d08209]
+- Updated dependencies [c4f553e]
+- Updated dependencies [ecc9dd6]
+- Updated dependencies [1724bcd]
+- Updated dependencies [afc357b]
+  - @easy-editor/plugin-dashboard@1.0.3
+  - @easy-editor/core@1.0.3
+  - @easy-editor/react-renderer@1.0.3
+  - @easy-editor/renderer-core@1.0.3
+
 ## 1.0.3
 
 ### Patch Changes
