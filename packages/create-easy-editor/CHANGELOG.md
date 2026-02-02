@@ -1,5 +1,11 @@
 # @easy-editor/create
 
+## 0.0.3
+
+### Patch Changes
+
+- 0efe66f: fix: build error
+
 ## 0.0.2
 
 ### Patch Changes

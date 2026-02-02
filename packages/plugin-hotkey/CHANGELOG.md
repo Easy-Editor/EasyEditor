@@ -1,5 +1,25 @@
 # @easy-editor/plugin-hotkey
 
+## 1.0.3
+
+### Patch Changes
+
+- 0efe66f: fix: build error
+- Updated dependencies [ed4525a]
+- Updated dependencies [71f5e73]
+- Updated dependencies [ba79ef3]
+- Updated dependencies [8b73acf]
+- Updated dependencies [25a3fa2]
+- Updated dependencies [6e6d434]
+- Updated dependencies [c8e6e5a]
+- Updated dependencies [853a4c9]
+- Updated dependencies [8d08209]
+- Updated dependencies [c4f553e]
+- Updated dependencies [ecc9dd6]
+- Updated dependencies [1724bcd]
+- Updated dependencies [afc357b]
+  - @easy-editor/core@1.0.3
+
 ## 1.0.2
 
 ### Patch Changes
