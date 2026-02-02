@@ -1,5 +1,33 @@
 # @easy-editor/react-renderer
 
+## 1.0.3
+
+### Patch Changes
+
+- 48ab2d3: feat: support multi-version component
+- e6c2c05: fix: miss use ComponentRenderer
+- 3baf4e7: fix: ErrorComponent in Dashboard display error
+- 82e7377: fix: build error
+- 0d14474: feat: load remote materials
+- d572551: perf: setting-rednerer
+- c616486: feat: remote component load logic
+- Updated dependencies [dfd68c7]
+- Updated dependencies [48ab2d3]
+- Updated dependencies [3baf4e7]
+- Updated dependencies [bdbe9f5]
+- Updated dependencies [e0ba706]
+- Updated dependencies [755bcd5]
+- Updated dependencies [82e7377]
+- Updated dependencies [0853432]
+- Updated dependencies [0d14474]
+- Updated dependencies [f3b3afc]
+- Updated dependencies [d572551]
+- Updated dependencies [7577e40]
+- Updated dependencies [2c56ebc]
+- Updated dependencies [c616486]
+  - @easy-editor/core@1.0.3
+  - @easy-editor/renderer-core@1.0.3
+
 ## 1.0.2
 
 ### Patch Changes
