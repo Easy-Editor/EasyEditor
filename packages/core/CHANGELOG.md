@@ -1,5 +1,23 @@
 # @easy-editor/core
 
+## 1.0.3
+
+### Patch Changes
+
+- dfd68c7: perf: bemtools experience
+- 48ab2d3: feat: support multi-version component
+- 3baf4e7: fix: ErrorComponent in Dashboard display error
+- bdbe9f5: fix: project getComponentsMap error
+- e0ba706: fix: node componentMeta error
+- 755bcd5: feat: add node's refreshSettingEntry
+- 0853432: feat: add resource-consumer & remoteMaterials
+- 0d14474: feat: load remote materials
+- f3b3afc: fix: checkSelect only left button
+- d572551: perf: setting-rednerer
+- 7577e40: refactor: materials logic
+- 2c56ebc: fix: node usageCount error
+- c616486: feat: remote component load logic
+
 ## 1.0.2
 
 ### Patch Changes

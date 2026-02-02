@@ -1,6 +1,6 @@
 {
   "name": "@easy-editor/plugin-dashboard",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Dashboard plugin for EasyEditor",
   "type": "module",
   "main": "./src/index.ts",
