@@ -479,18 +479,23 @@ test('failed execute audits rollback and leaks no model/history/events/material 
   const before = captureKernelState(engine)
   const probe = observeDomainMutations(core, engine)
   t.after(() => probe.dispose())
-  const originalRemoveNode = document.removeNode
-  document.removeNode = () => {
-    throw new Error('forced Agent apply failure')
+  const target = document.getNode('child-1')
+  const originalRemove = target.remove
+  let removeAttempts = 0
+  target.remove = function failFirstRemove(...args) {
+    removeAttempts += 1
+    if (removeAttempts === 1) throw new Error('forced Agent apply failure')
+    return originalRemove.apply(this, args)
   }
 
   let error
   try {
     error = await captureFailure(() => capability.execute(plan.planId))
   } finally {
-    document.removeNode = originalRemoveNode
+    target.remove = originalRemove
   }
   expectCapabilityError(error, /^agent\.execution\.failed$/)
+  assert.ok(removeAttempts > 1, 'rollback must retry removal through the restored model path')
   assertKernelState(engine, before)
   assert.deepEqual(probe.read(), { children: 0, materials: 0, props: 0, selection: 0 })
   const audit = latestAudit(engine, record => record.action === 'execute' && record.planId === plan.planId)

@@ -1,4 +1,4 @@
-import { validateCommands } from '../commands'
+import { isEditorCommandType, validateCommands } from '../commands'
 import type { EditorCommand } from '../commands'
 import type { NodeSchema, RootSchema } from '../types'
 import { uniqueId } from '../utils/unique-id'
@@ -7,7 +7,6 @@ import { AGENT_NODE_STANDARD_KEYS, isSafeAgentExtraKey, isSafeAgentPropKey } fro
 import { deepFreezeAgentData, prepareAgentData, serializeCanonicalAgentSnapshotData } from './strict-data-validator'
 import type { AgentCapabilityGrant, AgentCommandAuditSummary, AgentCommandEffect, AgentEditorCommand } from './types'
 
-const COMMAND_TYPES = new Set(['insertNode', 'updateProps', 'removeNode', 'moveNode'])
 const NODE_STANDARD_KEYS = new Set<string>(AGENT_NODE_STANDARD_KEYS)
 
 interface ProjectedNode {
@@ -36,16 +35,28 @@ const violation = (code: string, message: string): never => {
 
 const assertKnownCommandFields = (command: Record<string, unknown>, index: number): void => {
   const common = new Set(['type'])
-  const allowed =
-    command.type === 'insertNode'
-      ? new Set([...common, 'parentId', 'node', 'at'])
-      : command.type === 'updateProps'
-        ? new Set([...common, 'nodeId', 'props', 'extras'])
-        : command.type === 'removeNode'
-          ? new Set([...common, 'nodeId'])
-          : command.type === 'moveNode'
-            ? new Set([...common, 'nodeId', 'parentId', 'at'])
-            : common
+  let allowed = common
+  switch (command.type) {
+    case 'insertNode':
+      allowed = new Set([...common, 'parentId', 'node', 'at'])
+      break
+    case 'updateProps':
+      allowed = new Set([...common, 'nodeId', 'props', 'extras'])
+      break
+    case 'removeNode':
+    case 'unwrap':
+      allowed = new Set([...common, 'nodeId'])
+      break
+    case 'moveNode':
+      allowed = new Set([...common, 'nodeId', 'parentId', 'at'])
+      break
+    case 'replace':
+    case 'insertBefore':
+    case 'insertAfter':
+    case 'wrap':
+      allowed = new Set([...common, 'nodeId', 'node'])
+      break
+  }
   for (const key of Object.keys(command)) {
     if (key === 'documentId') {
       violation('agent.command.documentScope', `Agent commands cannot override documentId at $.commands[${index}]`)
@@ -90,7 +101,15 @@ const assertGrantPreflight = (
         }
       }
     }
-    if (command.type !== 'insertNode') return
+    if (
+      command.type !== 'insertNode' &&
+      command.type !== 'replace' &&
+      command.type !== 'insertBefore' &&
+      command.type !== 'insertAfter' &&
+      command.type !== 'wrap'
+    ) {
+      return
+    }
 
     const inserted = collectInsertedNodes(command.node, `$.commands[${index}].node`)
     insertedCount += inserted.length
@@ -236,6 +255,64 @@ const projectExpectedSchema = (schema: RootSchema, commands: readonly EditorComm
         entry.parent = parent
         break
       }
+      case 'replace': {
+        const entry = requireEntry(command.nodeId)
+        const parent = entry.parent
+        if (!parent) violation('agent.plan.rootMutation', 'The root node cannot be replaced')
+        const children = childrenOf(parent as NodeSchema)
+        const index = children.indexOf(entry.node)
+        if (index < 0) violation('agent.plan.disconnected', `Node is detached from its parent: ${command.nodeId}`)
+        const node = canonicalizeInsertedNode(command.node)
+        children.splice(index, 1, node)
+        removeEntryTree(entry.node)
+        indexTree(node, parent)
+        break
+      }
+      case 'insertBefore':
+      case 'insertAfter': {
+        const reference = requireEntry(command.nodeId)
+        const parent = reference.parent
+        if (!parent) violation('agent.plan.rootMutation', `The root node cannot participate in ${command.type}`)
+        const children = childrenOf(parent as NodeSchema)
+        const referenceIndex = children.indexOf(reference.node)
+        if (referenceIndex < 0) {
+          violation('agent.plan.disconnected', `Node is detached from its parent: ${command.nodeId}`)
+        }
+        const node = canonicalizeInsertedNode(command.node)
+        const offset = command.type === 'insertAfter' ? 1 : 0
+        children.splice(referenceIndex + offset, 0, node)
+        indexTree(node, parent)
+        break
+      }
+      case 'wrap': {
+        const entry = requireEntry(command.nodeId)
+        const parent = entry.parent
+        if (!parent) violation('agent.plan.rootMutation', 'The root node cannot be wrapped')
+        const siblings = childrenOf(parent as NodeSchema)
+        const index = siblings.indexOf(entry.node)
+        if (index < 0) violation('agent.plan.disconnected', `Node is detached from its parent: ${command.nodeId}`)
+        const wrapper = canonicalizeInsertedNode(command.node)
+        wrapper.children = [entry.node]
+        siblings.splice(index, 1, wrapper)
+        indexTree(wrapper, parent)
+        break
+      }
+      case 'unwrap': {
+        const entry = requireEntry(command.nodeId)
+        const parent = entry.parent
+        if (!parent) violation('agent.plan.rootMutation', 'The root node cannot be unwrapped')
+        const siblings = childrenOf(parent as NodeSchema)
+        const index = siblings.indexOf(entry.node)
+        if (index < 0) violation('agent.plan.disconnected', `Node is detached from its parent: ${command.nodeId}`)
+        const promoted = entry.node.children ?? []
+        siblings.splice(index, 1, ...promoted)
+        promoted.forEach(child => {
+          const childEntry = requireEntry(child.id!)
+          childEntry.parent = parent
+        })
+        entries.delete(entry.node.id!)
+        break
+      }
     }
   }
 
@@ -272,6 +349,11 @@ const requireProjectedNode = (nodes: Map<string, ProjectedNode>, id: string): Pr
   const node = nodes.get(id)
   if (!node) violation('agent.plan.nodeMissing', `Command target node does not exist: ${id}`)
   return node as ProjectedNode
+}
+
+const requireProjectedParent = (nodes: Map<string, ProjectedNode>, node: ProjectedNode): ProjectedNode => {
+  if (!node.parentId) violation('agent.plan.disconnected', `Node is detached from its parent: ${node.id}`)
+  return requireProjectedNode(nodes, node.parentId as string)
 }
 
 const normalizeAt = (at: number | undefined, length: number): number => {
@@ -347,7 +429,7 @@ export const summarizeAgentCommands = (commands: readonly EditorCommand[]): Agen
     types.add(command.type)
     if ('nodeId' in command) nodeIds.add(command.nodeId)
     if ('parentId' in command) nodeIds.add(command.parentId)
-    if (command.type === 'insertNode') inspectNode(command.node)
+    if ('node' in command) inspectNode(command.node)
     if (command.type === 'updateProps') {
       Object.keys(command.props ?? {}).forEach(key => propKeys.add(key))
       Object.keys(command.extras ?? {}).forEach(key => extraKeys.add(key))
@@ -385,16 +467,16 @@ export const planAgentCommands = (
   })
   const mutable = JSON.parse(prepared.serialized) as Record<string, unknown>[]
   mutable.forEach(assertKnownCommandFields)
+  mutable.forEach(command => {
+    if (!isEditorCommandType(command.type)) {
+      violation('agent.command.unsupported', `Unsupported command type: ${String(command.type)}`)
+    }
+  })
   try {
     validateCommands(mutable)
   } catch {
     violation('agent.command.invalid', 'Agent commands failed structural validation')
   }
-  mutable.forEach(command => {
-    if (!COMMAND_TYPES.has(String(command.type))) {
-      violation('agent.command.unsupported', `Unsupported command type: ${String(command.type)}`)
-    }
-  })
 
   const commands = mutable as unknown as EditorCommand[]
   const { insertedCount } = assertGrantPreflight(commands, grant)
@@ -453,6 +535,99 @@ export const planAgentCommands = (
         node.parentId = parent.id
         normalized.push({ ...command, documentId })
         effects.push({ commandIndex, nodeIds: [node.id], parentId: parent.id, type: command.type })
+        break
+      }
+      case 'replace': {
+        const target = requireProjectedNode(nodes, command.nodeId)
+        if (target.id === rootId) violation('agent.plan.rootMutation', 'The root node cannot be replaced')
+        const parent = requireProjectedParent(nodes, target)
+        if (target.locked || parent.locked) {
+          violation('agent.plan.locked', 'Locked nodes cannot participate in replace')
+        }
+        const targetIndex = parent.children.indexOf(target.id)
+        if (targetIndex < 0) violation('agent.plan.disconnected', `Node is detached from its parent: ${target.id}`)
+        const assignedIds: string[] = []
+        const node = assignAndProjectInsertedTree(command.node, nodes, parent.id, assignedIds)
+        parent.children.splice(targetIndex, 1, node.id!)
+        removeProjectedSubtree(nodes, target.id)
+        normalized.push({ ...command, documentId, node })
+        effects.push({
+          commandIndex,
+          nodeIds: [target.id, ...assignedIds],
+          parentId: parent.id,
+          type: command.type,
+        })
+        break
+      }
+      case 'insertBefore':
+      case 'insertAfter': {
+        const reference = requireProjectedNode(nodes, command.nodeId)
+        if (reference.id === rootId) {
+          violation('agent.plan.rootMutation', `The root node cannot participate in ${command.type}`)
+        }
+        const parent = requireProjectedParent(nodes, reference)
+        if (parent.locked) violation('agent.plan.locked', `Cannot ${command.type} under locked node: ${parent.id}`)
+        const referenceIndex = parent.children.indexOf(reference.id)
+        if (referenceIndex < 0) {
+          violation('agent.plan.disconnected', `Node is detached from its parent: ${reference.id}`)
+        }
+        const assignedIds: string[] = []
+        const node = assignAndProjectInsertedTree(command.node, nodes, parent.id, assignedIds)
+        const offset = command.type === 'insertAfter' ? 1 : 0
+        parent.children.splice(referenceIndex + offset, 0, node.id!)
+        normalized.push({ ...command, documentId, node })
+        effects.push({ commandIndex, nodeIds: assignedIds, parentId: parent.id, type: command.type })
+        break
+      }
+      case 'wrap': {
+        const target = requireProjectedNode(nodes, command.nodeId)
+        if (target.id === rootId) violation('agent.plan.rootMutation', 'The root node cannot be wrapped')
+        const parent = requireProjectedParent(nodes, target)
+        if (target.locked || parent.locked) {
+          violation('agent.plan.locked', 'Locked nodes cannot participate in wrap')
+        }
+        const targetIndex = parent.children.indexOf(target.id)
+        if (targetIndex < 0) violation('agent.plan.disconnected', `Node is detached from its parent: ${target.id}`)
+        const assignedIds: string[] = []
+        const wrapper = assignAndProjectInsertedTree(command.node, nodes, parent.id, assignedIds)
+        const projectedWrapper = requireProjectedNode(nodes, wrapper.id!)
+        if (projectedWrapper.children.length > 0) {
+          violation('agent.command.invalid', 'wrap node must be initially empty')
+        }
+        parent.children.splice(targetIndex, 1, wrapper.id!)
+        projectedWrapper.children.push(target.id)
+        target.parentId = projectedWrapper.id
+        normalized.push({ ...command, documentId, node: wrapper })
+        effects.push({
+          commandIndex,
+          nodeIds: [wrapper.id!, target.id],
+          parentId: parent.id,
+          type: command.type,
+        })
+        break
+      }
+      case 'unwrap': {
+        const wrapper = requireProjectedNode(nodes, command.nodeId)
+        if (wrapper.id === rootId) violation('agent.plan.rootMutation', 'The root node cannot be unwrapped')
+        const parent = requireProjectedParent(nodes, wrapper)
+        const promoted = wrapper.children.map(id => requireProjectedNode(nodes, id))
+        if (wrapper.locked || parent.locked || promoted.some(child => child.locked)) {
+          violation('agent.plan.locked', 'Locked wrappers, children, and parents cannot participate in unwrap')
+        }
+        const wrapperIndex = parent.children.indexOf(wrapper.id)
+        if (wrapperIndex < 0) violation('agent.plan.disconnected', `Node is detached from its parent: ${wrapper.id}`)
+        parent.children.splice(wrapperIndex, 1, ...wrapper.children)
+        promoted.forEach(child => {
+          child.parentId = parent.id
+        })
+        nodes.delete(wrapper.id)
+        normalized.push({ ...command, documentId })
+        effects.push({
+          commandIndex,
+          nodeIds: [wrapper.id, ...promoted.map(child => child.id)],
+          parentId: parent.id,
+          type: command.type,
+        })
         break
       }
     }

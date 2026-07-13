@@ -3,6 +3,7 @@ import {
   type TransactionManager,
   type TransactionResult,
   TransactionRollbackIncompleteError,
+  isEditorCommandType,
 } from '../commands'
 import type { Document } from '../document'
 import type { Project } from '../project'
@@ -53,8 +54,6 @@ const MAX_GRANT_BYTES = 64 * 1024
 const MAX_GRANT_LIST_ITEMS = 256
 const MAX_IDENTIFIER_LENGTH = 256
 const MAX_SUBJECT_ID_LENGTH = 128
-
-const VALID_COMMAND_TYPES = new Set(['insertNode', 'updateProps', 'removeNode', 'moveNode'])
 
 export interface AgentCapabilityHost {
   readonly lifecycleState: string
@@ -282,7 +281,7 @@ const normalizeGrant = (input: AgentCapabilityGrantInput): { subjectId: string; 
   }
   const commandTypes = normalizeStringList(prepared.commandTypes, '$.grant.commandTypes')
   for (const type of commandTypes) {
-    if (!VALID_COMMAND_TYPES.has(type)) {
+    if (!isEditorCommandType(type)) {
       throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `Unsupported command type: ${type}` })
     }
   }

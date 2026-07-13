@@ -163,12 +163,14 @@ test('an incomplete rollback is terminal and audited explicitly instead of being
     ],
   })
   const before = structuredClone(document.export())
-  const originalRemoveNode = document.removeNode
+  const target = document.getNode('child-1')
+  const originalRemove = target.remove
   const originalRollback = document.history.rollbackTransaction
   let removeAttempts = 0
-  document.removeNode = () => {
+  target.remove = function failFirstRemove(...args) {
     removeAttempts += 1
-    throw new Error('forced apply failure')
+    if (removeAttempts === 1) throw new Error('forced apply failure')
+    return originalRemove.apply(this, args)
   }
   document.history.rollbackTransaction = function rollbackThenReportFailure() {
     originalRollback.call(this)
@@ -188,12 +190,14 @@ test('an incomplete rollback is terminal and audited explicitly instead of being
     assert.match(audit.error.code, /rollback.?incomplete/i)
     assert.notEqual(audit.outcome, 'rolled_back')
 
+    assert.ok(removeAttempts > 1, 'rollback must run after the injected apply failure')
+    const attemptsAfterRollback = removeAttempts
     const replayError = await captureFailure(() => capability.execute(plan.planId))
     assert.equal(replayError.name, 'AgentCapabilityError')
     assert.equal(replayError.code, 'agent.plan.terminal')
-    assert.equal(removeAttempts, 1, 'an incompletely rolled-back plan must never be retried')
+    assert.equal(removeAttempts, attemptsAfterRollback, 'an incompletely rolled-back plan must never be retried')
   } finally {
-    document.removeNode = originalRemoveNode
+    target.remove = originalRemove
     document.history.rollbackTransaction = originalRollback
   }
 })
