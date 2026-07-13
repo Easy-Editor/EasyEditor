@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryRoot = resolve(packageRoot, '../..')
 const templateManifest = JSON.parse(readFileSync(join(packageRoot, 'template/dashboard/react/package.json'), 'utf8'))
+const releaseWorkflow = readFileSync(join(repositoryRoot, '.github/workflows/release.yml'), 'utf8')
 const enginePackages = [
   '@easy-editor/core',
   '@easy-editor/plugin-dashboard',
@@ -55,4 +56,20 @@ test('React dashboard template follows the explicit 2.0.0 engine release plan', 
     assert.equal(plannedRelease.newVersion, '2.0.0')
     assert.equal(templateManifest.dependencies[packageName], `^${plannedRelease.newVersion}`)
   }
+})
+
+test('publication waits for the successful Verify run and checks out its exact commit', () => {
+  for (const requiredBoundary of [
+    'workflow_run:',
+    '- Verify',
+    "github.event.workflow_run.conclusion == 'success'",
+    "github.event.workflow_run.event == 'push'",
+    "github.event.workflow_run.head_branch == 'main'",
+    'github.event.workflow_run.head_repository.full_name == github.repository',
+    'ref: ${{ github.event.workflow_run.head_sha }}',
+  ]) {
+    assert.ok(releaseWorkflow.includes(requiredBoundary), `release workflow must contain: ${requiredBoundary}`)
+  }
+
+  assert.doesNotMatch(releaseWorkflow, /^ {2}push:/m, 'release workflow must not publish directly from a main push')
 })
