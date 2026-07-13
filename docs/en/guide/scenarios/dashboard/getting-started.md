@@ -30,49 +30,122 @@ pnpm add mobx mobx-react
 
 ## Usage
 
-### Initialize Editor
+### Initialize the editor
 
-Create a `src/editor/index.ts` file in your project:
+Create the single Dashboard engine instance in `src/editor/runtime.ts`:
+
+```ts
+import { type EngineInstance, createEngine } from '@easy-editor/core/instance'
+
+export const engine: EngineInstance = createEngine({
+  // DashboardPlugin still extends prototypes in the shared realm.
+  trustPolicy: 'legacyTrusted',
+  hostWindow: window,
+})
+
+export const project = engine.project
+```
+
+Export an awaitable bootstrap function from `src/editor/index.ts`. Keep every startup side effect inside `try`. If startup fails, dispose partial resources first; if startup and cleanup both fail, preserve both error chains with `AggregateError`:
 
 ```ts
 import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+  type ProjectSchema,
+  validateProjectSchema,
+} from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { Group, componentMetaMap } from './materials'
+import { engine } from './runtime'
+import { setterMap } from './setters'
 
-// Register plugins
-plugins.registerPlugins([
-  DashboardPlugin({
-    group: {
-      meta: groupMeta,
-      initSchema: {
-        componentName: 'Group',
-        title: 'Group',
-        isGroup: true,
-      },
-    },
-  }),
-])
+let releaseSimulatorReady: (() => void) | undefined
 
-// Build component metadata
-materials.buildComponentMetasMap(Object.values(componentMetaMap))
+export async function destroyEditor(): Promise<void> {
+  const cleanupErrors: unknown[] = []
+  const release = releaseSimulatorReady
+  releaseSimulatorReady = undefined
+  try {
+    release?.()
+  } catch (error) {
+    cleanupErrors.push(error)
+  }
+  try {
+    await engine.destroy()
+  } catch (error) {
+    cleanupErrors.push(error)
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, 'Editor cleanup failed')
+  }
+}
 
-// Register setters
-setters.registerSetter(setterMap)
+export async function bootstrapEditor(schema: ProjectSchema): Promise<void> {
+  try {
+    await engine.plugins.registerPlugins([
+      DashboardPlugin({
+        group: {
+          meta: Group,
+          initSchema: {
+            componentName: 'Group',
+            title: 'Group',
+            isGroup: true,
+          },
+        },
+      }),
+    ])
 
-// Initialize engine
-await init({
-  designMode: 'design',
+    engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
+    engine.setters.registerSetter(setterMap)
+    await engine.init({ designMode: 'design' })
+
+    releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
+      simulator.set('deviceStyle', {
+        viewport: { width: 1920, height: 1080 },
+      })
+    })
+
+    const validated = validateProjectSchema(schema, engine.trustPolicy)
+    engine.loadProject(validated, true)
+  } catch (startupError) {
+    try {
+      await destroyEditor()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [startupError, cleanupError],
+        'Editor startup and cleanup both failed',
+      )
+    }
+    throw startupError
+  }
+}
+```
+
+The application entry must await bootstrap before mounting UI. Otherwise React or Vue may read the Project while the engine is still `initializing`:
+
+```ts
+import { bootstrapEditor, destroyEditor } from '@/editor/index'
+import { getPageSchemaFromLocalStorage } from '@/lib/schema'
+
+const initialSchema = getPageSchemaFromLocalStorage('home')
+if (!initialSchema) throw new Error('No initial project Schema is available')
+
+await bootstrapEditor(initialSchema)
+// Call createRoot(...).render(...) or app.mount(...) only after bootstrap succeeds.
+
+window.addEventListener('pagehide', event => {
+  if (!event.persisted) void destroyEditor().catch(console.error)
 })
 
-// Export core modules
-export { project, materials, plugins, setters }
-export const { designer } = project
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => destroyEditor())
+}
 ```
+
+Do not retain a settled destroy Promise permanently. `EngineInstance` already joins concurrent calls in the same disposal attempt; returning the current `destroy()` call preserves retry semantics after cleanup failure.
+
+::: warning Compatibility boundary
+`legacyTrusted` only provides compatibility for the current Dashboard plugin and legacy UMD resources. It is not a sandbox. Agents and other untrusted runtimes should cross a Worker/iframe capability boundary and must not receive `engine.project` or Node references.
+:::
 
 ### Design-time Renderer
 
@@ -80,12 +153,12 @@ The design-time renderer is used for visual design in the editor:
 
 ```tsx
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
-import { designer } from '@/editor'
+import { engine } from '@/editor/runtime'
 
 export const DesignRenderer = () => {
   return (
     <div className='h-full w-full'>
-      <SimulatorRenderer designer={designer} />
+      <SimulatorRenderer designer={engine.designer} />
     </div>
   )
 }
@@ -123,8 +196,8 @@ const Preview = () => {
 The material panel is used to display draggable components and templates:
 
 ```tsx
-import { project } from '@/editor'
-import type { Snippet } from '@easy-editor/core'
+import { project } from '@/editor/runtime'
+import type { Snippet } from '@easy-editor/core/instance'
 import { useEffect, useRef } from 'react'
 
 // Single material item
@@ -168,8 +241,8 @@ export const MaterialList = ({ snippets }) => {
 The outline tree is used to view and manage component structure:
 
 ```tsx
-import { project } from '@/editor'
-import type { Node } from '@easy-editor/core'
+import { project } from '@/editor/runtime'
+import type { Node } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 
 export const OutlineTree = observer(({ node }) => {
@@ -219,7 +292,7 @@ export const OutlineTree = observer(({ node }) => {
 The property configuration panel is used to edit properties of selected components:
 
 ```tsx
-import { project } from '@/editor'
+import { project } from '@/editor/runtime'
 import { customFieldItem } from '@/editor/setters'
 import { SettingRender } from '@easy-editor/react-renderer'
 import { observer } from 'mobx-react'

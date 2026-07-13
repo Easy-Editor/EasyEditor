@@ -80,25 +80,27 @@ pnpm add @easy-editor/plugin-dashboard @easy-editor/react-renderer-dashboard
 
 ## 基本使用
 
-### 1. 初始化编辑器
+### 1. 创建并初始化引擎
+
+在一个专用模块中创建实例。当前 Dashboard 插件依赖同 Realm 原型扩展，因此示例显式使用 `legacyTrusted`；不依赖旧插件的新宿主应保留默认的 `agentRestricted`。
 
 ```typescript
-import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import DataSourcePlugin from '@easy-editor/plugin-datasource'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import { Group, componentMetaMap } from './materials'
+import { setterMap } from './setters'
 
-// 注册插件
-plugins.registerPlugins([
+export const engine = createEngine({
+  trustPolicy: 'legacyTrusted',
+  hostWindow: window,
+})
+
+await engine.plugins.registerPlugins([
   DashboardPlugin({
     group: {
-      meta: groupMeta,
+      meta: Group,
       initSchema: {
         componentName: 'Group',
         title: '分组',
@@ -110,91 +112,73 @@ plugins.registerPlugins([
   HotkeyPlugin(),
 ])
 
-// 构建组件元数据
-materials.buildComponentMetasMap(Object.values(componentMetaMap))
+engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
+engine.setters.registerSetter(setterMap)
+await engine.init({ designMode: 'design' })
 
-// 注册设置器
-setters.registerSetter(setterMap)
-
-// 初始化引擎
-await init({
-  designMode: 'design',
-  appHelper: {
-    utils: {
-      // 自定义工具函数
-    },
-  },
-})
+export const project = engine.project
+export const designer = engine.designer
 ```
 
-### 2. 获取核心模块
+一个实例拥有自己的 `project`、`materials`、`setters`、插件和事件。不要把这些对象与 `@easy-editor/core` 根入口的默认 facade 混用。
 
-初始化后，你可以直接使用导出的核心模块：
+### 2. 校验并加载项目
+
+宿主通过引擎拥有的边界加载 Schema：
 
 ```typescript
-import { project, plugins, materials, setters } from '@easy-editor/core'
+import {
+  type ProjectSchema,
+  validateProjectSchema,
+} from '@easy-editor/core/instance'
+import { engine } from './runtime'
 
-// Designer: 设计器核心，通过 project.designer 访问
-const { designer } = project
-
-// Project: 项目管理，负责项目文档的管理
-// 已经可以直接使用 project
-
-// 其他模块也可以直接使用
-console.log('插件:', plugins)
-console.log('物料:', materials)
-console.log('设置器:', setters)
+export function loadProject(schema: ProjectSchema) {
+  const validated = validateProjectSchema(schema, engine.trustPolicy)
+  engine.loadProject(validated, true)
+}
 ```
 
-### 3. 设置项目数据和模拟器
+`engine.loadProject()` 会再次执行当前策略下的 Schema 准备流程。`agentRestricted` 会拒绝函数、访问器、`JSExpression`、`JSFunction` 和其他可执行 Schema 值。
+
+### 3. 设置模拟器
 
 ```typescript
-import { type Simulator } from '@easy-editor/core'
+import type { Simulator } from '@easy-editor/core/instance'
+import { engine } from './runtime'
 
-// 监听模拟器准备就绪
-project.onSimulatorReady((simulator: Simulator) => {
-  // 设置画布尺寸
+export const releaseSimulatorReady = engine.project.onSimulatorReady((simulator: Simulator) => {
   simulator.set('deviceStyle', {
-    viewport: { width: 1920, height: 1080 }
+    viewport: { width: 1920, height: 1080 },
   })
-
-  // 加载项目模式
-  project.load(projectSchema, true)
 })
 ```
+
+保存返回的取消订阅函数，并在销毁前调用它。
 
 ### 4. 使用渲染器
 
-EasyEditor 提供了两种渲染模式：
-
 #### 设计态渲染器
 
-用于编辑环境，提供拖拽、选择等交互功能：
-
 ```tsx
-import { project } from '@easy-editor/core'
+import { designer } from '@/editor/runtime'
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
-import { observer } from 'mobx-react'
 
-const DesignEditor = observer(() => {
-  const { designer } = project
-
+export function DesignEditor() {
   return (
     <div className="editor-container">
       <SimulatorRenderer designer={designer} />
     </div>
   )
-})
+}
 ```
 
 #### 运行态渲染器
 
-用于预览或生产环境，只渲染内容不提供编辑功能：
-
 ```tsx
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 
-const RuntimePreview = ({ schema, components }) => {
+export function RuntimePreview({ schema, components }) {
   return (
     <Renderer
       schema={schema}
@@ -204,6 +188,29 @@ const RuntimePreview = ({ schema, components }) => {
   )
 }
 ```
+
+### 5. 销毁引擎
+
+应用卸载、非持久化 `pagehide` 和 HMR dispose 时都要等待 `engine.destroy()`：
+
+```typescript
+import { engine, releaseSimulatorReady } from './runtime'
+
+export async function destroyEditor() {
+  releaseSimulatorReady()
+  await engine.destroy()
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => destroyEditor())
+}
+```
+
+`destroy()` 是整个实例的清理边界。不要绕过它单独销毁引擎拥有的 Project、物料、设置器或远程 registry。
+
+::: tip v1 项目
+如果项目仍从 `@easy-editor/core` 导入 `init`、`project` 等全局对象，请按[从 v1 迁移到 v2](/guide/migration-v2)逐步切换到显式实例。
+:::
 
 ## 核心概念
 

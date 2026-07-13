@@ -85,27 +85,27 @@ pnpm add @easy-editor/plugin-dashboard @easy-editor/react-renderer-dashboard
 
 ## Basic Usage
 
-### 1. Initialize Editor
+### 1. Create and initialize an engine
 
-The editor initialization approach has been updated. Now using a more modular approach:
+Create the instance in a dedicated module. The current Dashboard plugin extends prototypes in the shared realm, so this example explicitly selects `legacyTrusted`. New hosts that do not depend on legacy plugins should keep the default `agentRestricted` policy.
 
 ```typescript
-import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import DataSourcePlugin from '@easy-editor/plugin-datasource'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import { Group, componentMetaMap } from './materials'
+import { setterMap } from './setters'
 
-// Register plugins
-plugins.registerPlugins([
+export const engine = createEngine({
+  trustPolicy: 'legacyTrusted',
+  hostWindow: window,
+})
+
+await engine.plugins.registerPlugins([
   DashboardPlugin({
     group: {
-      meta: groupMeta,
+      meta: Group,
       initSchema: {
         componentName: 'Group',
         title: 'Group',
@@ -117,91 +117,73 @@ plugins.registerPlugins([
   HotkeyPlugin(),
 ])
 
-// Build component metadata
-materials.buildComponentMetasMap(Object.values(componentMetaMap))
+engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
+engine.setters.registerSetter(setterMap)
+await engine.init({ designMode: 'design' })
 
-// Register setters
-setters.registerSetter(setterMap)
-
-// Initialize engine
-await init({
-  designMode: 'design',
-  appHelper: {
-    utils: {
-      // Custom utility functions
-    },
-  },
-})
+export const project = engine.project
+export const designer = engine.designer
 ```
 
-### 2. Access Core Modules
+Each instance owns its Project, materials, setters, plugins, and events. Do not mix these objects with the default facade exported from the `@easy-editor/core` root entry.
 
-After initialization, you can directly use the exported core modules:
+### 2. Validate and load a project
+
+Load Schema through the engine-owned host boundary:
 
 ```typescript
-import { project, plugins, materials, setters } from '@easy-editor/core'
+import {
+  type ProjectSchema,
+  validateProjectSchema,
+} from '@easy-editor/core/instance'
+import { engine } from './runtime'
 
-// Designer: Design core, accessed through project.designer
-const { designer } = project
-
-// Project: Project management, responsible for project document management
-// project can be used directly
-
-// Other modules can also be used directly
-console.log('Plugins:', plugins)
-console.log('Materials:', materials)
-console.log('Setters:', setters)
+export function loadProject(schema: ProjectSchema) {
+  const validated = validateProjectSchema(schema, engine.trustPolicy)
+  engine.loadProject(validated, true)
+}
 ```
 
-### 3. Set Project Data and Simulator
+`engine.loadProject()` runs the Schema preparation pipeline again under the current policy. `agentRestricted` rejects functions, accessors, `JSExpression`, `JSFunction`, and other executable Schema values.
+
+### 3. Configure the simulator
 
 ```typescript
-import { type Simulator } from '@easy-editor/core'
+import type { Simulator } from '@easy-editor/core/instance'
+import { engine } from './runtime'
 
-// Listen for simulator ready
-project.onSimulatorReady((simulator: Simulator) => {
-  // Set canvas size
+export const releaseSimulatorReady = engine.project.onSimulatorReady((simulator: Simulator) => {
   simulator.set('deviceStyle', {
-    viewport: { width: 1920, height: 1080 }
+    viewport: { width: 1920, height: 1080 },
   })
-
-  // Load project mode
-  project.load(projectSchema, true)
 })
 ```
 
-### 4. Using Renderers
+Keep the returned unsubscribe function and call it before disposal.
 
-EasyEditor provides two rendering modes:
+### 4. Use renderers
 
-#### Design-time Renderer
-
-Used in editing environment, providing drag, select and other interactive functions:
+#### Design-time renderer
 
 ```tsx
-import { project } from '@easy-editor/core'
+import { designer } from '@/editor/runtime'
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
-import { observer } from 'mobx-react'
 
-const DesignEditor = observer(() => {
-  const { designer } = project
-
+export function DesignEditor() {
   return (
     <div className="editor-container">
       <SimulatorRenderer designer={designer} />
     </div>
   )
-})
+}
 ```
 
-#### Runtime Renderer
-
-Used for preview or production environment, only renders content without editing features:
+#### Runtime renderer
 
 ```tsx
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 
-const RuntimePreview = ({ schema, components }) => {
+export function RuntimePreview({ schema, components }) {
   return (
     <Renderer
       schema={schema}
@@ -211,6 +193,29 @@ const RuntimePreview = ({ schema, components }) => {
   )
 }
 ```
+
+### 5. Destroy the engine
+
+Await `engine.destroy()` during application unmount, non-persisted `pagehide`, and HMR disposal:
+
+```typescript
+import { engine, releaseSimulatorReady } from './runtime'
+
+export async function destroyEditor() {
+  releaseSimulatorReady()
+  await engine.destroy()
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => destroyEditor())
+}
+```
+
+`destroy()` is the cleanup boundary for the whole instance. Do not tear down the engine-owned Project, materials, setters, or remote registry independently.
+
+::: tip v1 projects
+If the project still imports `init`, `project`, and other globals from `@easy-editor/core`, follow [Migrate from v1 to v2](/en/guide/migration-v2) to move to an explicit instance.
+:::
 
 ## Core Concepts
 

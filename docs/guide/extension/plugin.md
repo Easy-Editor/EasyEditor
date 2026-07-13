@@ -184,9 +184,10 @@ import {
 import MyPlugin from './plugins/my-plugin'
 import EventHandlerPlugin from './plugins/event-handler-plugin'
 import ExtendPlugin from './plugins/extend-plugin'
+import MyNewPlugin from './plugins/my-new-plugin'
 
 // 注册插件
-plugins.registerPlugins([
+await plugins.registerPlugins([
   MyPlugin({ debug: true }),
   EventHandlerPlugin(),
   ExtendPlugin()
@@ -197,11 +198,14 @@ await init({
   designMode: 'design',
 })
 
-// 也可以在初始化后动态注册插件
-plugins.registerPlugins([
-  MyNewPlugin()
-])
+// 初始化完成后，普通插件必须显式 autoInit 才会立即执行 init()
+await plugins.registerPlugins(
+  [MyNewPlugin()],
+  { autoInit: true },
+)
 ```
+
+包含 `extend` 的原型扩展插件不能使用 `autoInit`。这类插件必须在引擎初始化前注册；如果引擎已经运行，请销毁并重启实例后再预注册。
 
 ## 通信模式
 

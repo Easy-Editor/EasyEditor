@@ -7,6 +7,7 @@ const description = 'Plugin-based cross-framework low-code engine for building v
 const GettingStartedGuides: DefaultTheme.NavItemWithLink[] = [
   { text: 'Why EasyEditor?', link: '/en/guide/why' },
   { text: 'Getting Started', link: '/en/guide/getting-started' },
+  { text: 'Migrate from v1 to v2', link: '/en/guide/migration-v2' },
   { text: 'Core Concepts', link: '/en/guide/core-concepts' },
 ]
 
@@ -60,7 +61,7 @@ const References: DefaultTheme.SidebarItem[] = [
   { text: 'Overview', link: '/en/reference/overview' },
   {
     text: 'Core',
-    items: [{ text: 'Editor', link: '/en/reference/core' }],
+    items: [{ text: 'EngineInstance', link: '/en/reference/core' }],
   },
   {
     text: 'Renderer',
@@ -109,7 +110,7 @@ const Nav: DefaultTheme.NavItem[] = [
     items: [
       {
         text: 'Getting Started',
-        items: GettingStartedGuides.slice(0, 2),
+        items: GettingStartedGuides.slice(0, 3),
       },
       {
         text: 'Scenarios',

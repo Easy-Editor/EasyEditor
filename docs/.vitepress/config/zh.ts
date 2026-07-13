@@ -7,6 +7,7 @@ const description = '用于构建可视化应用平台的插件化跨框架低�
 const GettingStartedGuides: DefaultTheme.NavItemWithLink[] = [
   { text: '为什么选择 EasyEditor', link: '/guide/why' },
   { text: '快速开始', link: '/guide/getting-started' },
+  { text: '从 v1 迁移到 v2', link: '/guide/migration-v2' },
   { text: '核心概念', link: '/guide/core-concepts' },
 ]
 
@@ -60,7 +61,7 @@ const References: DefaultTheme.SidebarItem[] = [
   { text: '总览', link: '/reference/overview' },
   {
     text: 'Core',
-    items: [{ text: 'Editor', link: '/reference/core' }],
+    items: [{ text: 'EngineInstance', link: '/reference/core' }],
   },
   {
     text: 'Renderer',
@@ -105,7 +106,7 @@ const Nav: DefaultTheme.NavItem[] = [
     items: [
       {
         text: '入门指南',
-        items: GettingStartedGuides.slice(0, 2),
+        items: GettingStartedGuides.slice(0, 3),
       },
       {
         text: '场景实践',

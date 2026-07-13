@@ -20,16 +20,18 @@ The engine is the core of the entire system, responsible for coordinating the wo
 ```typescript
 import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { Group, componentMetaMap } from '@/editor/materials'
+import { setterMap } from '@/editor/setters'
 
 // The legacy DashboardPlugin extends the shared realm, so the host makes
 // that compatibility choice explicitly.
 const engine = createEngine({ trustPolicy: 'legacyTrusted', hostWindow: window })
 
 // Register plugins
-engine.plugins.registerPlugins([
+await engine.plugins.registerPlugins([
   DashboardPlugin({
     group: {
-      meta: groupMeta,
+      meta: Group,
       initSchema: {
         componentName: 'Group',
         title: 'Group',

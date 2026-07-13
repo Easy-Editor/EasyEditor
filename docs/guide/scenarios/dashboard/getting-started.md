@@ -27,47 +27,120 @@ pnpm add mobx mobx-react
 
 ### 初始化编辑器
 
-在项目中创建 `src/editor/index.ts` 文件：
+先在 `src/editor/runtime.ts` 中创建唯一的 Dashboard 引擎实例：
+
+```ts
+import { type EngineInstance, createEngine } from '@easy-editor/core/instance'
+
+export const engine: EngineInstance = createEngine({
+  // DashboardPlugin 仍依赖同 Realm 原型扩展。
+  trustPolicy: 'legacyTrusted',
+  hostWindow: window,
+})
+
+export const project = engine.project
+```
+
+然后在 `src/editor/index.ts` 中导出一个可等待的启动函数。所有启动副作用都放在 `try` 中；如果启动失败，先销毁已经创建的部分资源。如果启动错误与清理错误同时发生，用 `AggregateError` 保留两条错误链：
 
 ```ts
 import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+  type ProjectSchema,
+  validateProjectSchema,
+} from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { Group, componentMetaMap } from './materials'
+import { engine } from './runtime'
+import { setterMap } from './setters'
 
-// 注册插件
-plugins.registerPlugins([
-  DashboardPlugin({
-    group: {
-      meta: groupMeta,
-      initSchema: {
-        componentName: 'Group',
-        title: '分组',
-        isGroup: true,
-      },
-    },
-  }),
-])
+let releaseSimulatorReady: (() => void) | undefined
 
-// 构建组件元数据
-materials.buildComponentMetasMap(Object.values(componentMetaMap))
+export async function destroyEditor(): Promise<void> {
+  const cleanupErrors: unknown[] = []
+  const release = releaseSimulatorReady
+  releaseSimulatorReady = undefined
+  try {
+    release?.()
+  } catch (error) {
+    cleanupErrors.push(error)
+  }
+  try {
+    await engine.destroy()
+  } catch (error) {
+    cleanupErrors.push(error)
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, 'Editor cleanup failed')
+  }
+}
 
-// 注册设置器
-setters.registerSetter(setterMap)
+export async function bootstrapEditor(schema: ProjectSchema): Promise<void> {
+  try {
+    await engine.plugins.registerPlugins([
+      DashboardPlugin({
+        group: {
+          meta: Group,
+          initSchema: {
+            componentName: 'Group',
+            title: '分组',
+            isGroup: true,
+          },
+        },
+      }),
+    ])
 
-// 初始化引擎
-await init({
-  designMode: 'design',
+    engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
+    engine.setters.registerSetter(setterMap)
+    await engine.init({ designMode: 'design' })
+
+    releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
+      simulator.set('deviceStyle', {
+        viewport: { width: 1920, height: 1080 },
+      })
+    })
+
+    const validated = validateProjectSchema(schema, engine.trustPolicy)
+    engine.loadProject(validated, true)
+  } catch (startupError) {
+    try {
+      await destroyEditor()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [startupError, cleanupError],
+        'Editor startup and cleanup both failed',
+      )
+    }
+    throw startupError
+  }
+}
+```
+
+应用入口必须先等待启动完成，再挂载 UI；否则 React/Vue 组件可能在引擎仍处于 `initializing` 时读取 Project：
+
+```ts
+import { bootstrapEditor, destroyEditor } from '@/editor/index'
+import { getPageSchemaFromLocalStorage } from '@/lib/schema'
+
+const initialSchema = getPageSchemaFromLocalStorage('home')
+if (!initialSchema) throw new Error('没有可加载的初始项目 Schema')
+
+await bootstrapEditor(initialSchema)
+// bootstrap 成功后再调用 createRoot(...).render(...) 或 app.mount(...)
+
+window.addEventListener('pagehide', event => {
+  if (!event.persisted) void destroyEditor().catch(console.error)
 })
 
-// 导出核心模块
-export { project, materials, plugins, setters }
-export const { designer } = project
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => destroyEditor())
+}
 ```
+
+不要永久缓存已经 settle 的销毁 Promise。`EngineInstance` 自身会合并同一轮并发 `destroy()`；直接返回当前销毁调用，才能保留清理失败后的重试语义。
+
+::: warning 兼容边界
+`legacyTrusted` 只用于兼容当前 Dashboard 插件和旧 UMD 资源，不提供沙箱隔离。Agent 或其他不可信运行时应通过 Worker/iframe capability 边界访问宿主，不应获得 `engine.project` 或 Node 引用。
+:::
 
 ### 设计态渲染器
 
@@ -75,12 +148,12 @@ export const { designer } = project
 
 ```tsx
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
-import { designer } from '@/editor'
+import { engine } from '@/editor/runtime'
 
 export const DesignRenderer = () => {
   return (
     <div className='h-full w-full'>
-      <SimulatorRenderer designer={designer} />
+      <SimulatorRenderer designer={engine.designer} />
     </div>
   )
 }
@@ -118,8 +191,8 @@ const Preview = () => {
 物料面板用于展示可拖拽的组件和模板：
 
 ```tsx
-import { project } from '@/editor'
-import type { Snippet } from '@easy-editor/core'
+import { project } from '@/editor/runtime'
+import type { Snippet } from '@easy-editor/core/instance'
 import { useEffect, useRef } from 'react'
 
 // 单个物料项
@@ -163,8 +236,8 @@ export const MaterialList = ({ snippets }) => {
 大纲树用于查看和管理组件结构：
 
 ```tsx
-import { project } from '@/editor'
-import type { Node } from '@easy-editor/core'
+import { project } from '@/editor/runtime'
+import type { Node } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 
 export const OutlineTree = observer(({ node }) => {
@@ -214,7 +287,7 @@ export const OutlineTree = observer(({ node }) => {
 属性配置面板用于编辑选中组件的属性：
 
 ```tsx
-import { project } from '@/editor'
+import { project } from '@/editor/runtime'
 import { customFieldItem } from '@/editor/setters'
 import { SettingRender } from '@easy-editor/react-renderer'
 import { observer } from 'mobx-react'

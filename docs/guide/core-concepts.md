@@ -15,15 +15,17 @@ EasyEditor 采用模块化的架构设计，各个模块之间通过清晰的接
 ```typescript
 import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { Group, componentMetaMap } from '@/editor/materials'
+import { setterMap } from '@/editor/setters'
 
 // 旧 DashboardPlugin 依赖同 Realm 扩展，因此宿主必须显式选择 legacyTrusted。
 const engine = createEngine({ trustPolicy: 'legacyTrusted', hostWindow: window })
 
 // 注册插件
-engine.plugins.registerPlugins([
+await engine.plugins.registerPlugins([
   DashboardPlugin({
     group: {
-      meta: groupMeta,
+      meta: Group,
       initSchema: {
         componentName: 'Group',
         title: '分组',

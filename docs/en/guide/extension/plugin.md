@@ -189,9 +189,10 @@ import {
 import MyPlugin from './plugins/my-plugin'
 import EventHandlerPlugin from './plugins/event-handler-plugin'
 import ExtendPlugin from './plugins/extend-plugin'
+import MyNewPlugin from './plugins/my-new-plugin'
 
 // Register plugins
-plugins.registerPlugins([
+await plugins.registerPlugins([
   MyPlugin({ debug: true }),
   EventHandlerPlugin(),
   ExtendPlugin()
@@ -202,11 +203,14 @@ await init({
   designMode: 'design',
 })
 
-// Can also dynamically register plugins after initialization
-plugins.registerPlugins([
-  MyNewPlugin()
-])
+// After initialization, ordinary plugins require explicit autoInit to run init()
+await plugins.registerPlugins(
+  [MyNewPlugin()],
+  { autoInit: true },
+)
 ```
+
+Prototype-extension plugins that define `extend` cannot use `autoInit`. Register them before engine initialization. If the engine is already running, destroy and restart the instance, then pre-register them.
 
 ## Communication Patterns
 
