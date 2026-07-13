@@ -6,9 +6,9 @@ const readSource = relativePath => readFileSync(new URL(relativePath, import.met
 
 test('DesignerView owns the instance clipboard injection lifecycle', () => {
   const source = readSource('../src/simulator-renderer/SimulatorRenderer/DesignView.tsx')
-  const coreImport = source.match(/import\s+(?:type\s+)?{([\s\S]*?)}\s*from\s*['"]@easy-editor\/core['"]/)
+  const coreImport = source.match(/import\s+(?:type\s+)?{([\s\S]*?)}\s*from\s*['"]@easy-editor\/core\/instance['"]/)
 
-  assert.ok(coreImport, 'expected a named @easy-editor/core import')
+  assert.ok(coreImport, 'expected a named @easy-editor/core/instance import')
   assert.doesNotMatch(coreImport[1], /(^|,)\s*clipboard\s*(,|$)/)
   assert.match(source, /designer\.editor\.get<Clipboard>\(['"]clipboard['"]\)/)
 
@@ -20,9 +20,18 @@ test('DesignerView owns the instance clipboard injection lifecycle', () => {
 
 test('ProjectView reads loading configuration from its designer instance', () => {
   const source = readSource('../src/simulator-renderer/SimulatorRenderer/ProjectView.tsx')
-  const coreImport = source.match(/import\s+(?:type\s+)?{([\s\S]*?)}\s*from\s*['"]@easy-editor\/core['"]/)
+  const coreImport = source.match(/import\s+(?:type\s+)?{([\s\S]*?)}\s*from\s*['"]@easy-editor\/core\/instance['"]/)
 
-  assert.ok(coreImport, 'expected a named @easy-editor/core import')
+  assert.ok(coreImport, 'expected a named @easy-editor/core/instance import')
   assert.doesNotMatch(coreImport[1], /(^|,)\s*config\s*(,|$)/)
   assert.match(source, /designer\.editor\.engineConfig\.get\(['"]loadingComponent['"],\s*BuiltinLoading\)/)
+})
+
+test('each Canvas owns and disposes its own simulator renderer container', () => {
+  const source = readSource('../src/simulator-renderer/SimulatorRenderer/SimulatorView.tsx')
+
+  assert.match(source, /useState\(\(\)\s*=>\s*new SimulatorRendererContainer\(\)\)/)
+  assert.match(source, /renderer\.mount\(host\)/)
+  assert.match(source, /return\s*\(\)\s*=>\s*renderer\.dispose\(\)/)
+  assert.doesNotMatch(source, /import\s*{[^}]*\bsimulatorRenderer\b[^}]*}/)
 })

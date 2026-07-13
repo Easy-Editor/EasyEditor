@@ -1,4 +1,4 @@
-import { DESIGNER_EVENT, type Designer, type Viewport } from '@easy-editor/core'
+import { DESIGNER_EVENT, type Designer, type Viewport } from '@easy-editor/core/instance'
 import { action, computed, observable } from 'mobx'
 
 type GuideLineType = 'horizontal' | 'vertical'
@@ -32,6 +32,16 @@ interface AdsorptionLine {
    */
   adsorption: number
   position: number
+}
+
+const groupGuideLines = <T extends { type: GuideLineType }>(guideLines: readonly T[]) => {
+  const horizontal: T[] = []
+  const vertical: T[] = []
+  for (const guideLine of guideLines) {
+    if (guideLine.type === 'horizontal') horizontal.push(guideLine)
+    else vertical.push(guideLine)
+  }
+  return { horizontal, vertical }
 }
 
 /**
@@ -75,10 +85,10 @@ export class GuideLine {
 
   @computed
   get guideLinesMap() {
-    const result = Object.groupBy(this.guideLines, item => item.type)
+    const result = groupGuideLines(this.guideLines)
     return {
-      verticalLinesMap: new Map(result.vertical?.map(item => [item.position, item])),
-      horizontalLinesMap: new Map(result.horizontal?.map(item => [item.position, item])),
+      verticalLinesMap: new Map(result.vertical.map(item => [item.position, item])),
+      horizontalLinesMap: new Map(result.horizontal.map(item => [item.position, item])),
     }
   }
 
@@ -188,10 +198,10 @@ export class GuideLine {
    */
   @computed
   get userGuideLinesMap() {
-    const result = Object.groupBy(this.userGuideLines, item => item.type)
+    const result = groupGuideLines(this.userGuideLines)
     return {
-      verticalLinesMap: new Map(result.vertical?.map(item => [item.position, item])),
-      horizontalLinesMap: new Map(result.horizontal?.map(item => [item.position, item])),
+      verticalLinesMap: new Map(result.vertical.map(item => [item.position, item])),
+      horizontalLinesMap: new Map(result.horizontal.map(item => [item.position, item])),
     }
   }
 

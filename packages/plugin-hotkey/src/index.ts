@@ -1,4 +1,4 @@
-import { type PluginCreator, TRANSFORM_STAGE, insertChildren } from '@easy-editor/core'
+import { type PluginCreator, TRANSFORM_STAGE, insertChildren } from '@easy-editor/core/instance'
 import { HOTKEY_MAP } from './const'
 import { isFormEvent } from './utils'
 

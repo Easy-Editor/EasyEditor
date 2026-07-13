@@ -1,4 +1,4 @@
-import { type Clipboard, DESIGNER_EVENT, type Designer, type DesignerProps } from '@easy-editor/core'
+import { type Clipboard, DESIGNER_EVENT, type Designer, type DesignerProps } from '@easy-editor/core/instance'
 import { classnames } from '@easy-editor/renderer-core'
 import { memo, useEffect, useState } from 'react'
 import { ProjectView } from './ProjectView'

@@ -1,6 +1,6 @@
 import type { ComponentInstance } from '@easy-editor/core'
-import type { GuideLine } from './designer/guideline'
 import type { Alignment } from './designer/alignment'
+import type { GuideLine } from './designer/guideline'
 import type { MarqueeSelection } from './designer/marquee-selection'
 
 declare module '@easy-editor/core' {

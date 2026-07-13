@@ -1,4 +1,4 @@
-import { type Document, type Node, TRANSFORM_STAGE, isElementNode } from '@easy-editor/core'
+import { type Document, type Node, TRANSFORM_STAGE, isElementNode } from '@easy-editor/core/instance'
 import type { RendererProps } from '@easy-editor/renderer-core'
 import { computed, observable } from 'mobx'
 import type { ReactInstance } from 'react'

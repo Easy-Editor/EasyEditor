@@ -1,4 +1,4 @@
-import type { Designer } from '@easy-editor/core'
+import type { Designer } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 import { useEffect, useState } from 'react'
 import { SimulatorView } from './SimulatorView'

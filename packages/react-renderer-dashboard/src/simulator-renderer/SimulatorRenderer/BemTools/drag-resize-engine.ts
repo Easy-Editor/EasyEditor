@@ -1,4 +1,10 @@
-import { type Designer, type Point, type Simulator, createEventBus, makeEventsHandler } from '@easy-editor/core'
+import {
+  type Designer,
+  type Point,
+  type Simulator,
+  createEventBus,
+  makeEventsHandler,
+} from '@easy-editor/core/instance'
 
 export enum Direction {
   N = 'n',

@@ -1,8 +1,8 @@
-import { type Project, Simulator, type SimulatorProps } from '@easy-editor/core'
+import { type Project, Simulator, type SimulatorProps } from '@easy-editor/core/instance'
 import { classnames } from '@easy-editor/renderer-core'
 import { observer } from 'mobx-react'
-import { Component, useEffect, useRef } from 'react'
-import { simulatorRenderer } from '..'
+import { Component, useEffect, useRef, useState } from 'react'
+import { SimulatorRendererContainer } from '../simulator-renderer'
 import { BemTools } from './BemTools'
 import { useResizeObserver } from './hooks/useResizeObserver'
 import './index.css'
@@ -54,6 +54,7 @@ export class SimulatorView extends Component<SimulatorViewProps> {
 
 export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
   const { viewport } = host
+  const [renderer] = useState(() => new SimulatorRendererContainer())
   const canvasRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const { canvas: canvasStyle = {}, viewport: viewportStyle } = host.deviceStyle || {}
@@ -82,8 +83,9 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
 
   useEffect(() => {
     viewport.mount(viewportRef.current)
-    simulatorRenderer.mount(host)
-  }, [])
+    renderer.mount(host)
+    return () => renderer.dispose()
+  }, [host, renderer, viewport])
 
   return (
     <div
@@ -104,18 +106,10 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
 })
 
 export const Content: React.FC<{ host: Simulator }> = observer(({ host }) => {
-  const { viewport } = host
   const frameRef = useRef<HTMLDivElement>(null)
 
   const frameStyle: React.CSSProperties = {
-    // @ts-ignore
-    // 用于 Content 更新
-    width: viewport.contentWidth,
-    height: viewport.contentHeight,
-    // 覆盖
-    // @ts-ignore
     width: '100%',
-    // @ts-ignore
     height: '100%',
   }
 

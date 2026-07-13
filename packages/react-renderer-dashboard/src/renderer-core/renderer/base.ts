@@ -1,4 +1,4 @@
-import { isRemoteComponent, NodeSchema } from '@easy-editor/core'
+import { type NodeSchema, isRemoteComponent } from '@easy-editor/core/instance'
 import { type ComponentConstruct, baseRendererFactory, compWrapper, leafWrapper } from '@easy-editor/react-renderer'
 import { isSchema, isUseLoop } from '@easy-editor/renderer-core'
 import { RemoteComponentLoading } from '../components'
@@ -34,7 +34,7 @@ export const dashboardBaseRendererFactory: () => any = () => {
         const { __components, __schema } = this.props
         if (!__components) return
 
-        let newSchema = schema || __schema
+        const newSchema = schema || __schema
 
         let componentName = newSchema.componentName
         const isRemote = isRemoteComponent(newSchema)

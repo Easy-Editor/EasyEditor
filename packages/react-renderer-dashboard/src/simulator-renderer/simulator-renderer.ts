@@ -3,7 +3,7 @@ import {
   type NodeInstance,
   type Simulator,
   isElementNode,
-} from '@easy-editor/core'
+} from '@easy-editor/core/instance'
 import type { RendererProps } from '@easy-editor/renderer-core'
 import { type MemoryHistory, createMemoryHistory } from 'history'
 import { isPlainObject } from 'lodash-es'

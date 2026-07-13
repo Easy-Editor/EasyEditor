@@ -1,4 +1,4 @@
-import { type ProjectSchema, isElementNode } from '@easy-editor/core'
+import { type ProjectSchema, isElementNode } from '@easy-editor/core/instance'
 import type { ComponentType, ReactInstance } from 'react'
 
 export type Component = ComponentType<any> | object

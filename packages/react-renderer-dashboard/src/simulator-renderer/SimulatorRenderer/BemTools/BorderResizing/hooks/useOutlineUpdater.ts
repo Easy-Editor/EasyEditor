@@ -1,7 +1,7 @@
 import type { Rect } from '@easy-editor/core'
 import { useCallback } from 'react'
-import type { ResizeRefs } from '../../shared/types'
 import { useAnimationFrame } from '../../shared/hooks/useAnimationFrame'
+import type { ResizeRefs } from '../../shared/types'
 
 /**
  * 轮廓更新 Hook

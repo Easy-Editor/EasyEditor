@@ -6,6 +6,7 @@ import { Direction as Dir } from '../../drag-resize-engine'
  * 矩形更新器
  * 统一处理节点和DOM的矩形更新逻辑
  */
+// biome-ignore lint/complexity/noStaticOnlyClass: Preserve the existing namespace-style API for callers.
 export class RectUpdater {
   /**
    * 通过 MobX 更新节点矩形
@@ -15,12 +16,12 @@ export class RectUpdater {
    * @param startRect 开始时的矩形
    */
   static updateByNode(node: Node, direction: Direction, rect: Rect, startRect: Rect): void {
-    const updates = this.getUpdateFields(direction, rect)
+    const updates = RectUpdater.getUpdateFields(direction, rect)
     node.updateDashboardRect(updates)
 
     // 处理分组节点
     if (node.isGroup) {
-      this.updateGroupChildren(node, rect, startRect)
+      RectUpdater.updateGroupChildren(node, rect, startRect)
     }
   }
 
@@ -44,7 +45,7 @@ export class RectUpdater {
 
     // 处理分组节点
     if (node.isGroup) {
-      this.updateGroupChildrenByDOM(node, rect, startRect)
+      RectUpdater.updateGroupChildrenByDOM(node, rect, startRect)
     }
   }
 

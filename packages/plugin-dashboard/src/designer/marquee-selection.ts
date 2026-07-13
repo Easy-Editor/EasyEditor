@@ -1,4 +1,10 @@
-import { type Designer, type Simulator, type Viewport, createEventBus, makeEventsHandler } from '@easy-editor/core'
+import {
+  type Designer,
+  type Simulator,
+  type Viewport,
+  createEventBus,
+  makeEventsHandler,
+} from '@easy-editor/core/instance'
 
 export interface MarqueeRect {
   x: number

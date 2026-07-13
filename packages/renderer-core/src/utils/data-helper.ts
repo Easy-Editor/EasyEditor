@@ -1,4 +1,4 @@
-import { type DataSource, type DataSourceItem, isJSFunction } from '@easy-editor/core'
+import { type DataSource, type DataSourceItem, isJSFunction } from '@easy-editor/core/instance'
 import { isEmpty } from 'lodash-es'
 import { type ExpressionEvaluator, legacyTrustedExpressionEvaluator } from '../expression-evaluator'
 import type { RendererAppHelper } from '../types'

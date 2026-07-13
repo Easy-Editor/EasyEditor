@@ -5,7 +5,7 @@ import {
   type JSONObject,
   isJSExpression,
   isJSFunction,
-} from '@easy-editor/core'
+} from '@easy-editor/core/instance'
 import {
   type ExpressionEvaluator,
   evaluateExpression,

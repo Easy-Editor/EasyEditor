@@ -15,6 +15,7 @@ import type { ResizeStrategy } from './ResizeStrategy'
  * 缩放策略工厂
  * 使用工厂模式创建和管理策略实例
  */
+// biome-ignore lint/complexity/noStaticOnlyClass: Preserve the existing namespace-style API for callers.
 export class ResizeStrategyFactory {
   private static strategies = new Map<Direction, ResizeStrategy>([
     [Direction.N, new NorthResizeStrategy()],
@@ -33,7 +34,7 @@ export class ResizeStrategyFactory {
    * @returns 缩放策略实例
    */
   static getStrategy(direction: Direction): ResizeStrategy {
-    const strategy = this.strategies.get(direction)
+    const strategy = ResizeStrategyFactory.strategies.get(direction)
     if (!strategy) {
       throw new Error(`Unknown resize direction: ${direction}`)
     }

@@ -1,7 +1,7 @@
 import type { Node, Simulator } from '@easy-editor/core'
+import type { MarqueeEvent, MarqueeRect } from '@easy-editor/plugin-dashboard'
 import { observer } from 'mobx-react'
 import { useCallback, useEffect, useState } from 'react'
-import { MarqueeEvent, MarqueeRect } from '@easy-editor/plugin-dashboard'
 
 interface MarqueeSelectionProps {
   host: Simulator

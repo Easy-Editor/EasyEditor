@@ -16,5 +16,5 @@ export const useResizeObserver = ({
       observer.observe(elem.current)
       return () => observer.disconnect()
     }
-  }, [elem])
+  }, [elem, onResize, throttleTime])
 }

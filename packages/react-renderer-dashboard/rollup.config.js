@@ -5,7 +5,7 @@ import cleanup from 'rollup-plugin-cleanup'
 import postcss from 'rollup-plugin-postcss'
 import pkg from './package.json' with { type: 'json' }
 
-const external = [
+const externalPackages = [
   ...Object.keys(pkg.peerDependencies),
   'mobx-react-lite',
   'mobx-react',
@@ -13,6 +13,7 @@ const external = [
   'react/jsx-runtime',
   'react-dom/client',
 ]
+const external = id => externalPackages.some(packageName => id === packageName || id.startsWith(`${packageName}/`))
 
 const plugins = [
   nodeResolve({

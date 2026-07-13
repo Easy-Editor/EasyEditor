@@ -1,4 +1,4 @@
-import { type DynamicSetterProps, type SettingField, isSetterConfig } from '@easy-editor/core'
+import { type DynamicSetterProps, type SettingField, isSetterConfig } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 import type { PropsWithChildren, ReactNode } from 'react'
 import { SetterPlaceholder } from './SetterPlaceholder'

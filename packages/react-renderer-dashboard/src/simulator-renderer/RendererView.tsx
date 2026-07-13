@@ -1,4 +1,4 @@
-import { DESIGNER_EVENT } from '@easy-editor/core'
+import { DESIGNER_EVENT } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 import type React from 'react'
 import { Component, type ReactInstance, createElement } from 'react'

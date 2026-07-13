@@ -1,4 +1,4 @@
-import { type Simulator, getClosestNode } from '@easy-editor/core'
+import { type Simulator, getClosestNode } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 import { memo } from 'react'
 

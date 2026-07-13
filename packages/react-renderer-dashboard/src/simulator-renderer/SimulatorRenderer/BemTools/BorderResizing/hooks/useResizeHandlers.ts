@@ -5,8 +5,8 @@ import type DragResizeEngine from '../../drag-resize-engine'
 import type { Direction } from '../../drag-resize-engine'
 import type { ResizeInfo } from '../../shared/types'
 import { calculateDashboardRectBox } from '../../utils'
-import { calculateResizeRect } from '../utils/resize-calculator'
 import { RectUpdater } from '../utils/rect-updater'
+import { calculateResizeRect } from '../utils/resize-calculator'
 
 interface UseResizeHandlersOptions {
   dragEngine: DragResizeEngine

@@ -4,7 +4,8 @@ import nodeResolve from '@rollup/plugin-node-resolve'
 import cleanup from 'rollup-plugin-cleanup'
 import pkg from './package.json' with { type: 'json' }
 
-const external = Object.keys(pkg.peerDependencies)
+const externalPackages = Object.keys(pkg.peerDependencies)
+const external = id => externalPackages.some(packageName => id === packageName || id.startsWith(`${packageName}/`))
 
 const plugins = [
   nodeResolve({
@@ -45,18 +46,14 @@ export default [
     input: 'src/index.ts',
     output: [
       {
-        file: 'dist/cjs/index.js',
-        format: 'cjs',
-        sourcemap: true,
-      },
-      {
-        file: 'dist/esm/index.js',
-        format: 'es',
-        sourcemap: true,
-      },
-      {
         file: 'dist/index.js',
         format: 'es',
+        sourcemap: true,
+      },
+      {
+        file: 'dist/index.cjs',
+        format: 'cjs',
+        sourcemap: true,
       },
     ],
     plugins,

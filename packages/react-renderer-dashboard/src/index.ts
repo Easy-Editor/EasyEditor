@@ -1,6 +1,6 @@
-import PureRenderer from './renderer/pure'
 import Renderer from './renderer'
 import { LowCodeRenderer } from './renderer-core/renderer'
+import PureRenderer from './renderer/pure'
 import { SimulatorRenderer, simulatorRenderer } from './simulator-renderer'
 
 import './css/theme.css'

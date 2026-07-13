@@ -11,7 +11,7 @@ import {
   type PluginCreator,
   type Simulator,
   getConvertedExtraKey,
-} from '@easy-editor/core'
+} from '@easy-editor/core/instance'
 import { AlignType, Alignment, DistributeType } from './designer/alignment'
 import { type AdsorptionLineInfo, type DistanceSegment, GuideLine, type UserGuideLineItem } from './designer/guideline'
 import { type MarqueeEvent, type MarqueeRect, MarqueeSelection } from './designer/marquee-selection'

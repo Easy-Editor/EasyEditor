@@ -1,4 +1,4 @@
-import { DESIGNER_EVENT, type Node, type NodeSchema, TRANSFORM_STAGE } from '@easy-editor/core'
+import { DESIGNER_EVENT, type Node, type NodeSchema, TRANSFORM_STAGE } from '@easy-editor/core/instance'
 import { type Schema, logger } from '@easy-editor/renderer-core'
 import { debounce } from 'lodash-es'
 import { Component, type ComponentType } from 'react'

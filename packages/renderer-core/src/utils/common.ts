@@ -1,4 +1,4 @@
-import { type NodeSchema, isJSExpression } from '@easy-editor/core'
+import { type NodeSchema, isJSExpression } from '@easy-editor/core/instance'
 import { forEach } from 'lodash-es'
 import {
   type ExpressionEvaluationKind,

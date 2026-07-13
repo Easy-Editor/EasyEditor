@@ -7,7 +7,7 @@ import {
   type RootSchema,
   isJSExpression,
   isJSFunction,
-} from '@easy-editor/core'
+} from '@easy-editor/core/instance'
 import {
   type BaseRendererProps,
   DataHelper,
