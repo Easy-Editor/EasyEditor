@@ -5,9 +5,16 @@ import { uniqueId } from '../utils/unique-id'
 import { AgentCapabilityError } from './errors'
 import { AGENT_NODE_STANDARD_KEYS, isSafeAgentExtraKey, isSafeAgentPropKey } from './policy'
 import { deepFreezeAgentData, prepareAgentData, serializeCanonicalAgentSnapshotData } from './strict-data-validator'
-import type { AgentCapabilityGrant, AgentCommandAuditSummary, AgentCommandEffect, AgentEditorCommand } from './types'
+import type {
+  AgentCapabilityGrant,
+  AgentCommandAuditSummary,
+  AgentCommandEffect,
+  AgentEditorCommand,
+  AgentValuePolicy,
+} from './types'
 
 const NODE_STANDARD_KEYS = new Set<string>(AGENT_NODE_STANDARD_KEYS)
+const TEXT_ENCODER = new TextEncoder()
 
 interface ProjectedNode {
   id: string
@@ -75,6 +82,79 @@ const collectInsertedNodes = (node: NodeSchema, path: string, result: NodeSchema
   return result
 }
 
+const assertValueGranted = (
+  policy: AgentValuePolicy,
+  value: unknown,
+  path: string,
+  denialCode: 'agent.grant.extraValueDenied' | 'agent.grant.propValueDenied',
+): void => {
+  switch (policy.type) {
+    case 'string':
+      if (typeof value !== 'string') {
+        throw violation(denialCode, `Value does not satisfy its string policy at ${path}`)
+      }
+      if (TEXT_ENCODER.encode(value).byteLength > policy.maxBytes) {
+        violation(denialCode, `String value exceeds its byte policy at ${path}`)
+      }
+      return
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw violation(denialCode, `Value does not satisfy its finite number policy at ${path}`)
+      }
+      if (
+        value < policy.minimum ||
+        value > policy.maximum ||
+        (policy.exclusiveMinimum === true && value === policy.minimum) ||
+        (policy.exclusiveMaximum === true && value === policy.maximum)
+      ) {
+        violation(denialCode, `Number value exceeds its range policy at ${path}`)
+      }
+      return
+    case 'object': {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw violation(denialCode, `Value does not satisfy its object policy at ${path}`)
+      }
+      const record = value as Record<string, unknown>
+      for (const key of policy.required) {
+        if (!Object.hasOwn(record, key)) violation(denialCode, `Required value is missing at ${path}.${key}`)
+      }
+      for (const key of Object.keys(record)) {
+        const childPolicy = Object.hasOwn(policy.properties, key) ? policy.properties[key] : undefined
+        if (!childPolicy) throw violation(denialCode, `Additional value is denied at ${path}.${key}`)
+        assertValueGranted(childPolicy, record[key], `${path}.${key}`, denialCode)
+      }
+      return
+    }
+  }
+}
+
+const assertComponentPropsGranted = (
+  grant: AgentCapabilityGrant,
+  componentName: string,
+  props: Record<string, unknown>,
+  path: string,
+): void => {
+  const componentPolicies = Object.hasOwn(grant.componentProps, componentName)
+    ? grant.componentProps[componentName]
+    : undefined
+  for (const key of Object.keys(props)) {
+    if (!isSafeAgentPropKey(key)) {
+      violation('agent.command.propPathDenied', `Agent props must use direct canonical property keys at ${path}`)
+    }
+    const policy = componentPolicies && Object.hasOwn(componentPolicies, key) ? componentPolicies[key] : undefined
+    if (!policy) {
+      throw violation('agent.grant.propDenied', `Property is not granted at ${path}.${key}`)
+    }
+    assertValueGranted(policy, props[key], `${path}.${key}`, 'agent.grant.propValueDenied')
+  }
+}
+
+const assertExtraValueGranted = (grant: AgentCapabilityGrant, key: string, value: unknown, path: string): void => {
+  const extraPolicy = Object.hasOwn(grant.extraValues, key) ? grant.extraValues[key] : undefined
+  if (!extraPolicy) throw violation('agent.grant.extraValueDenied', `Extra value policy is missing at ${path}`)
+  assertValueGranted(extraPolicy.policy, value, path, 'agent.grant.extraValueDenied')
+}
+
 const assertGrantPreflight = (
   commands: readonly EditorCommand[],
   grant: AgentCapabilityGrant,
@@ -92,13 +172,7 @@ const assertGrantPreflight = (
         if (!grant.extraKeys.includes(key)) {
           violation('agent.grant.extraDenied', `Extra key is not granted at $.commands[${index}].extras.${key}`)
         }
-      }
-    }
-    if (command.type === 'updateProps' && command.props) {
-      for (const key of Object.keys(command.props)) {
-        if (!isSafeAgentPropKey(key)) {
-          violation('agent.command.propPathDenied', 'Agent props must use direct canonical property keys')
-        }
+        assertExtraValueGranted(grant, key, command.extras[key], `$.commands[${index}].extras.${key}`)
       }
     }
     if (
@@ -127,14 +201,25 @@ const assertGrantPreflight = (
           `Inserted nodes require an explicit props object at index ${nodeIndex}`,
         )
       }
-      for (const key of Object.keys(props as Record<string, unknown>)) {
-        if (!isSafeAgentPropKey(key)) {
-          violation('agent.command.propPathDenied', 'Inserted node props must use direct canonical property keys')
-        }
-      }
+      assertComponentPropsGranted(
+        grant,
+        node.componentName,
+        props as Record<string, unknown>,
+        `$.commands[${index}].node[${nodeIndex}].props`,
+      )
       for (const key of Object.keys(node)) {
-        if (!NODE_STANDARD_KEYS.has(key) && !grant.extraKeys.includes(key)) {
+        if (NODE_STANDARD_KEYS.has(key)) continue
+        if (!grant.extraKeys.includes(key)) {
           violation('agent.grant.extraDenied', `Extra key is not granted at $.commands[${index}].node.${key}`)
+        }
+        assertExtraValueGranted(grant, key, node[key], `$.commands[${index}].node[${nodeIndex}].${key}`)
+      }
+      for (const [key, extraPolicy] of Object.entries(grant.extraValues)) {
+        if (extraPolicy.requiredOnInsert && !Object.hasOwn(node, key)) {
+          violation(
+            'agent.grant.extraValueDenied',
+            `Required extra value is missing at $.commands[${index}].node[${nodeIndex}].${key}`,
+          )
         }
       }
     })
@@ -503,6 +588,9 @@ export const planAgentCommands = (
       case 'updateProps': {
         const node = requireProjectedNode(nodes, command.nodeId)
         if (node.locked) violation('agent.plan.locked', `Cannot update locked node: ${node.id}`)
+        if (command.props) {
+          assertComponentPropsGranted(grant, node.componentName, command.props, `$.commands[${commandIndex}].props`)
+        }
         if (command.extras && typeof command.extras.locked === 'boolean') node.locked = command.extras.locked
         normalized.push({ ...command, documentId })
         effects.push({ commandIndex, nodeIds: [node.id], type: command.type })

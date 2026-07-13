@@ -80,8 +80,7 @@
     "mobx": "^6.13.5"
   },
   "dependencies": {
-    "events": "^3.3.0",
-    "nanoid": "^5.0.7"
+    "events": "^3.3.0"
   },
   "devDependencies": {
     "@rollup/plugin-alias": "^5.1.1"

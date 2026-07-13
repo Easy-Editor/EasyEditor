@@ -189,6 +189,7 @@ test('restricted host composition, typed transactions, Agent capability, and eng
     subjectId: 'agent:mutation-authority',
     documentIds: [document.id],
     commandTypes: ['updateProps'],
+    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
   })
   const snapshot = capability.snapshot(document.id)
   const plan = capability.preview({

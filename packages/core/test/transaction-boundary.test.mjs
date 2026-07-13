@@ -117,6 +117,7 @@ test('Agent transactions block Project.config and Project.set writes while settl
     subjectId: 'agent:project-boundary-regression',
     documentIds: [document.id],
     commandTypes: ['updateProps'],
+    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
   })
   const snapshot = capability.snapshot(document.id)
   const plan = capability.preview({

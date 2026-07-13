@@ -26,7 +26,15 @@ async function createHarness(t, options = {}) {
     documentIds: options.documentIds ?? [document.id],
     commandTypes: options.commandTypes ?? [],
     componentNames: options.componentNames ?? [],
+    componentProps: options.componentProps ?? {
+      Page: { title: { type: 'string', maxBytes: 16 * 1024 } },
+      Text: {
+        color: { type: 'string', maxBytes: 256 },
+        text: { type: 'string', maxBytes: 4096 },
+      },
+    },
     extraKeys: options.extraKeys ?? [],
+    ...(options.extraValues ? { extraValues: options.extraValues } : {}),
   })
   return { capability, core, document, engine }
 }
@@ -107,6 +115,7 @@ test('issued grants are copied/frozen, deny by default, and preflight every comm
     subjectId: 'agent:copied-grant',
     documentIds,
     commandTypes,
+    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
   })
 
   documentIds.push('other-document')
@@ -117,6 +126,9 @@ test('issued grants are copied/frozen, deny by default, and preflight every comm
   assert.equal(Object.isFrozen(capability.descriptor.grant), true)
   assert.equal(Object.isFrozen(capability.descriptor.grant.documentIds), true)
   assert.equal(Object.isFrozen(capability.descriptor.grant.commandTypes), true)
+  assert.equal(Object.isFrozen(capability.descriptor.grant.componentProps), true)
+  assert.equal(Object.isFrozen(capability.descriptor.grant.componentProps.Page), true)
+  assert.equal(Object.isFrozen(capability.descriptor.grant.componentProps.Page.title), true)
 
   const base = capability.snapshot(document.id)
   const before = captureKernelState(engine)
@@ -159,6 +171,17 @@ test('granted extraKeys export node extras while ungranted extras reject before 
   const { capability, document, engine } = await createHarness(t, {
     commandTypes: ['updateProps'],
     extraKeys: ['$dashboard'],
+    extraValues: {
+      $dashboard: {
+        requiredOnInsert: false,
+        policy: {
+          type: 'object',
+          properties: { layout: { type: 'string', maxBytes: 64 } },
+          required: ['layout'],
+          additionalProperties: false,
+        },
+      },
+    },
   })
   const base = capability.snapshot(document.id)
   const plan = capability.preview({

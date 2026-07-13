@@ -14,7 +14,7 @@ import { planAgentCommands } from './command-planner'
 import { type AgentDocumentBaseline, AgentDocumentBaselineRegistry } from './document-baseline'
 import { AgentDomainEventPublisher } from './domain-events'
 import { AgentCapabilityError, AgentPlanStaleError, toAgentCapabilityError } from './errors'
-import { isSafeAgentExtraKey } from './policy'
+import { isSafeAgentExtraKey, isSafeAgentPropKey } from './policy'
 import { deepFreezeAgentData, prepareAgentData, serializeCanonicalAgentSnapshotData } from './strict-data-validator'
 import type {
   AgentAuditAction,
@@ -31,11 +31,13 @@ import type {
   AgentDocumentSnapshot,
   AgentDomainEventListener,
   AgentExecutionReceipt,
+  AgentExtraValuePolicies,
   AgentMessagePort,
   AgentPlanPreview,
   AgentPlanRequest,
   AgentPortSession,
   AgentPortSessionOptions,
+  AgentValuePolicy,
 } from './types'
 
 const HARD_LIMITS: AgentCapabilityLimits = Object.freeze({
@@ -54,6 +56,7 @@ const MAX_GRANT_BYTES = 64 * 1024
 const MAX_GRANT_LIST_ITEMS = 256
 const MAX_IDENTIFIER_LENGTH = 256
 const MAX_SUBJECT_ID_LENGTH = 128
+const MAX_STRING_VALUE_BYTES = HARD_LIMITS.maxPayloadBytes
 
 export interface AgentCapabilityHost {
   readonly lifecycleState: string
@@ -253,6 +256,212 @@ const normalizeLimits = (value: unknown): AgentCapabilityLimits => {
   return deepFreezeAgentData(normalized)
 }
 
+const assertExactPolicyKeys = (policy: Record<string, unknown>, allowedKeys: readonly string[], path: string): void => {
+  const allowed = new Set(allowedKeys)
+  const unknownKey = Object.keys(policy).find(key => !allowed.has(key))
+  if (unknownKey) {
+    throw new AgentCapabilityError({
+      code: 'agent.grant.invalid',
+      message: `Unknown value policy field at ${path}: ${unknownKey}`,
+    })
+  }
+}
+
+const normalizeValuePolicy = (value: unknown, path: string): AgentValuePolicy => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `${path} must be a policy object` })
+  }
+  const policy = value as Record<string, unknown>
+  if (policy.type === 'string') {
+    assertExactPolicyKeys(policy, ['type', 'maxBytes'], path)
+    if (!Number.isSafeInteger(policy.maxBytes) || (policy.maxBytes as number) < 1) {
+      throw new AgentCapabilityError({
+        code: 'agent.grant.invalid',
+        message: `${path}.maxBytes must be a positive integer`,
+      })
+    }
+    if ((policy.maxBytes as number) > MAX_STRING_VALUE_BYTES) {
+      throw new AgentCapabilityError({
+        code: 'agent.grant.invalid',
+        message: `${path}.maxBytes cannot exceed ${MAX_STRING_VALUE_BYTES}`,
+      })
+    }
+    return Object.freeze({ maxBytes: policy.maxBytes as number, type: 'string' })
+  }
+  if (policy.type === 'number') {
+    assertExactPolicyKeys(policy, ['type', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'], path)
+    const minimum = policy.minimum
+    const maximum = policy.maximum
+    if (typeof minimum !== 'number' || !Number.isFinite(minimum)) {
+      throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `${path}.minimum must be finite` })
+    }
+    if (typeof maximum !== 'number' || !Number.isFinite(maximum)) {
+      throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `${path}.maximum must be finite` })
+    }
+    if (minimum > maximum) {
+      throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `${path} has an empty numeric range` })
+    }
+    if (policy.exclusiveMinimum !== undefined && typeof policy.exclusiveMinimum !== 'boolean') {
+      throw new AgentCapabilityError({
+        code: 'agent.grant.invalid',
+        message: `${path}.exclusiveMinimum must be boolean`,
+      })
+    }
+    if (policy.exclusiveMaximum !== undefined && typeof policy.exclusiveMaximum !== 'boolean') {
+      throw new AgentCapabilityError({
+        code: 'agent.grant.invalid',
+        message: `${path}.exclusiveMaximum must be boolean`,
+      })
+    }
+    if (minimum === maximum && (policy.exclusiveMinimum === true || policy.exclusiveMaximum === true)) {
+      throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `${path} has an empty numeric range` })
+    }
+    return deepFreezeAgentData({
+      ...(policy.exclusiveMaximum === true ? { exclusiveMaximum: true } : {}),
+      ...(policy.exclusiveMinimum === true ? { exclusiveMinimum: true } : {}),
+      maximum,
+      minimum,
+      type: 'number' as const,
+    })
+  }
+  if (policy.type === 'object') {
+    assertExactPolicyKeys(policy, ['type', 'properties', 'required', 'additionalProperties'], path)
+    if (!policy.properties || typeof policy.properties !== 'object' || Array.isArray(policy.properties)) {
+      throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `${path}.properties must be an object` })
+    }
+    if (policy.additionalProperties !== false) {
+      throw new AgentCapabilityError({
+        code: 'agent.grant.invalid',
+        message: `${path}.additionalProperties must be false`,
+      })
+    }
+    const propertyKeys = normalizeStringList(Object.keys(policy.properties), `${path}.properties`)
+    for (const key of propertyKeys) {
+      if (!isSafeAgentPropKey(key)) {
+        throw new AgentCapabilityError({
+          code: 'agent.grant.invalid',
+          message: `${path}.properties must use direct canonical keys`,
+        })
+      }
+    }
+    const required = normalizeStringList(policy.required, `${path}.required`)
+    for (const key of required) {
+      if (!propertyKeys.includes(key)) {
+        throw new AgentCapabilityError({
+          code: 'agent.grant.invalid',
+          message: `${path}.required contains an undeclared property`,
+        })
+      }
+    }
+    const properties = Object.fromEntries(
+      propertyKeys.map(key => [
+        key,
+        normalizeValuePolicy((policy.properties as Record<string, unknown>)[key], `${path}.properties.${key}`),
+      ]),
+    )
+    return deepFreezeAgentData({
+      additionalProperties: false as const,
+      properties,
+      required,
+      type: 'object' as const,
+    })
+  }
+  throw new AgentCapabilityError({
+    code: 'agent.grant.invalid',
+    message: `${path}.type must be "string", "number", or "object"`,
+  })
+}
+
+const normalizeExtraValues = (value: unknown, extraKeys: readonly string[]): AgentExtraValuePolicies => {
+  if (value === undefined) {
+    if (extraKeys.length === 0) return Object.freeze({})
+    throw new AgentCapabilityError({
+      code: 'agent.grant.invalid',
+      message: 'Every granted extra key requires an extraValues policy',
+    })
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: 'extraValues must be a plain object' })
+  }
+  const policyKeys = normalizeStringList(Object.keys(value), '$.grant.extraValues')
+  if (
+    policyKeys.length !== extraKeys.length ||
+    policyKeys.some(key => !extraKeys.includes(key)) ||
+    extraKeys.some(key => !policyKeys.includes(key))
+  ) {
+    throw new AgentCapabilityError({
+      code: 'agent.grant.invalid',
+      message: 'extraKeys and extraValues must declare exactly the same keys',
+    })
+  }
+  const normalized = Object.fromEntries(
+    policyKeys.map(key => {
+      const entry = (value as Record<string, unknown>)[key]
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new AgentCapabilityError({
+          code: 'agent.grant.invalid',
+          message: `$.grant.extraValues.${key} must be a policy object`,
+        })
+      }
+      const preparedEntry = entry as Record<string, unknown>
+      assertExactPolicyKeys(preparedEntry, ['requiredOnInsert', 'policy'], `$.grant.extraValues.${key}`)
+      if (typeof preparedEntry.requiredOnInsert !== 'boolean') {
+        throw new AgentCapabilityError({
+          code: 'agent.grant.invalid',
+          message: `$.grant.extraValues.${key}.requiredOnInsert must be boolean`,
+        })
+      }
+      return [
+        key,
+        {
+          policy: normalizeValuePolicy(preparedEntry.policy, `$.grant.extraValues.${key}.policy`),
+          requiredOnInsert: preparedEntry.requiredOnInsert,
+        },
+      ]
+    }),
+  )
+  return deepFreezeAgentData(normalized)
+}
+
+const normalizeComponentProps = (value: unknown): AgentCapabilityGrant['componentProps'] => {
+  if (value === undefined) return Object.freeze({})
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: 'componentProps must be a plain object' })
+  }
+  const componentNames = normalizeStringList(Object.keys(value), '$.grant.componentProps')
+  const normalized = Object.fromEntries(
+    componentNames.map(componentName => {
+      const componentPolicy = (value as Record<string, unknown>)[componentName]
+      if (!componentPolicy || typeof componentPolicy !== 'object' || Array.isArray(componentPolicy)) {
+        throw new AgentCapabilityError({
+          code: 'agent.grant.invalid',
+          message: `$.grant.componentProps.${componentName} must be a prop policy object`,
+        })
+      }
+      const propKeys = normalizeStringList(Object.keys(componentPolicy), `$.grant.componentProps.${componentName}`)
+      for (const key of propKeys) {
+        if (!isSafeAgentPropKey(key)) {
+          throw new AgentCapabilityError({
+            code: 'agent.grant.invalid',
+            message: 'Agent component props must be direct canonical property keys',
+          })
+        }
+      }
+      const policies = Object.fromEntries(
+        propKeys.map(key => [
+          key,
+          normalizeValuePolicy(
+            (componentPolicy as Record<string, unknown>)[key],
+            `$.grant.componentProps.${componentName}.${key}`,
+          ),
+        ]),
+      )
+      return [componentName, policies]
+    }),
+  )
+  return deepFreezeAgentData(normalized)
+}
+
 const normalizeGrant = (input: AgentCapabilityGrantInput): { subjectId: string; grant: AgentCapabilityGrant } => {
   const grantData = prepareAgentData(input, '$.grant', {
     limitCode: 'agent.grant.invalid',
@@ -266,7 +475,16 @@ const normalizeGrant = (input: AgentCapabilityGrantInput): { subjectId: string; 
     throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: 'Agent grant must be a plain object' })
   }
   const prepared = preparedValue as Record<string, unknown>
-  const allowedKeys = new Set(['subjectId', 'documentIds', 'commandTypes', 'componentNames', 'extraKeys', 'limits'])
+  const allowedKeys = new Set([
+    'subjectId',
+    'documentIds',
+    'commandTypes',
+    'componentNames',
+    'componentProps',
+    'extraKeys',
+    'extraValues',
+    'limits',
+  ])
   for (const key of Object.keys(prepared)) {
     if (!allowedKeys.has(key)) {
       throw new AgentCapabilityError({ code: 'agent.grant.invalid', message: `Unknown grant field: ${key}` })
@@ -298,8 +516,10 @@ const normalizeGrant = (input: AgentCapabilityGrantInput): { subjectId: string; 
     grant: deepFreezeAgentData({
       commandTypes,
       componentNames: normalizeStringList(prepared.componentNames, '$.grant.componentNames'),
+      componentProps: normalizeComponentProps(prepared.componentProps),
       documentIds: normalizeStringList(prepared.documentIds, '$.grant.documentIds'),
       extraKeys,
+      extraValues: normalizeExtraValues(prepared.extraValues, extraKeys),
       limits: normalizeLimits(prepared.limits),
     }) as AgentCapabilityGrant,
     subjectId: prepared.subjectId.trim(),

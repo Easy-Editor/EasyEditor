@@ -29,6 +29,9 @@ function issueCapability(engine, document, options = {}) {
     documentIds: [document.id],
     commandTypes: options.commandTypes ?? ['updateProps'],
     componentNames: options.componentNames ?? [],
+    componentProps: options.componentProps ?? {
+      Page: { title: { type: 'string', maxBytes: 16 * 1024 } },
+    },
     ...(options.limits ? { limits: options.limits } : {}),
   })
 }

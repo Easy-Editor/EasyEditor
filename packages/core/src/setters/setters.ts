@@ -47,14 +47,30 @@ export class Setters {
     option?: RegisterSetterOption,
   ) {
     if (typeof typeOrMaps === 'object') {
-      Object.keys(typeOrMaps).forEach(type => {
-        this.registerSetter(type, typeOrMaps[type])
-      })
+      const checkpoint = new Map(this.settersMap)
+      const descriptors = Object.getOwnPropertyDescriptors(typeOrMaps)
+      try {
+        for (const type of Object.keys(typeOrMaps)) {
+          const descriptor = descriptors[type]
+          if (!descriptor || !('value' in descriptor)) {
+            throw new TypeError(`Setter map entry ${type} must be a data property`)
+          }
+          this.registerSetter(type, descriptor.value)
+        }
+      } catch (error) {
+        this.settersMap.clear()
+        for (const [type, registeredSetter] of checkpoint) this.settersMap.set(type, registeredSetter)
+        throw error
+      }
       return
     }
 
     if (!setter) {
       return
+    }
+
+    if (typeof setter !== 'object' && typeof setter !== 'function') {
+      throw new TypeError(`Setter ${typeOrMaps} must be a component or setter object`)
     }
 
     if (this.settersMap.has(typeOrMaps) && !option?.overwrite) {
@@ -63,23 +79,26 @@ export class Setters {
     }
 
     // TODO: 暂时通过这样判断是 Setter 还是 Component
-    if (!('component' in setter)) {
-      setter = {
+    let normalizedSetter: Component | Setter
+    if ('component' in setter) {
+      normalizedSetter = { ...setter }
+    } else {
+      normalizedSetter = {
         component: setter,
         title: (setter as Component).displayName || (setter as Setter).name || typeOrMaps,
       }
     }
 
-    if (!setter.initialValue) {
-      const initial = getInitialFromSetter(setter.component)
+    if (!normalizedSetter.initialValue) {
+      const initial = getInitialFromSetter(normalizedSetter.component)
       if (initial) {
-        setter.initialValue = (field: any) => {
+        normalizedSetter.initialValue = (field: any) => {
           return initial.call(field, field.getValue())
         }
       }
     }
 
-    this.settersMap.set(typeOrMaps, { type: typeOrMaps, ...setter })
+    this.settersMap.set(typeOrMaps, { type: typeOrMaps, ...normalizedSetter })
   }
 
   createSetterContent = (setter: any, props: Record<string, any>): Component => {

@@ -17,20 +17,62 @@ export interface AgentCapabilityLimits {
   readonly maxSnapshotBytes: number
 }
 
+export interface AgentStringValuePolicy {
+  readonly type: 'string'
+  readonly maxBytes: number
+}
+
+export interface AgentNumberValuePolicy {
+  readonly type: 'number'
+  readonly minimum: number
+  readonly maximum: number
+  readonly exclusiveMinimum?: boolean
+  readonly exclusiveMaximum?: boolean
+}
+
+export interface AgentObjectValuePolicy {
+  readonly type: 'object'
+  readonly properties: Readonly<Record<string, AgentValuePolicy>>
+  readonly required: readonly string[]
+  readonly additionalProperties: false
+}
+
+export type AgentValuePolicy = AgentStringValuePolicy | AgentNumberValuePolicy | AgentObjectValuePolicy
+
+export type AgentPropValuePolicy = AgentValuePolicy
+
+export type AgentComponentPropPolicies = Readonly<Record<string, Readonly<Record<string, AgentPropValuePolicy>>>>
+
+export interface AgentExtraValuePolicy {
+  readonly requiredOnInsert: boolean
+  readonly policy: AgentValuePolicy
+}
+
+export type AgentExtraValuePolicies = Readonly<Record<string, AgentExtraValuePolicy>>
+
 export interface AgentCapabilityGrantInput {
   readonly subjectId: string
   readonly documentIds: readonly string[]
   readonly commandTypes: readonly AgentCommandType[]
+  /** Component types the capability may insert; this does not authorize any props. */
   readonly componentNames?: readonly string[]
+  /** Per-component prop value policies; this does not authorize component insertion. */
+  readonly componentProps?: AgentComponentPropPolicies
   readonly extraKeys?: readonly string[]
+  /** Every granted extra key requires an explicit value policy. */
+  readonly extraValues?: AgentExtraValuePolicies
   readonly limits?: Partial<AgentCapabilityLimits>
 }
 
 export interface AgentCapabilityGrant {
   readonly documentIds: readonly string[]
   readonly commandTypes: readonly AgentCommandType[]
+  /** Component types the capability may insert; independent from componentProps. */
   readonly componentNames: readonly string[]
+  /** Per-component prop value policies; independent from componentNames and fail-closed when absent. */
+  readonly componentProps: AgentComponentPropPolicies
   readonly extraKeys: readonly string[]
+  readonly extraValues: AgentExtraValuePolicies
   readonly limits: AgentCapabilityLimits
 }
 

@@ -39,6 +39,21 @@ test('the instance entry is isolated from the legacy facade and version banner',
     if (typeof instance.EngineInstance !== 'function' || typeof instance.createEngine !== 'function') {
       throw new Error('the instance entry is missing its construction API')
     }
+    for (const runtimeExport of [
+      'CURRENT_PROJECT_SCHEMA_VERSION',
+      'DEFAULT_TIMEOUT',
+      'DESIGNER_EVENT',
+      'MaterialSource',
+      'RemoteLoadError',
+      'TRANSFORM_STAGE',
+      'createEventBus',
+      'insertChildren',
+      'validateProjectSchema',
+    ]) {
+      if (!(runtimeExport in instance)) {
+        throw new Error('the instance entry is missing runtime export ' + runtimeExport)
+      }
+    }
     process.stdout.write('INSTANCE_ENTRY_IMPORTED')
   `
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
@@ -64,6 +79,21 @@ test('the instance entry is isolated from the legacy facade and version banner',
     }
     if (typeof instance.EngineInstance !== 'function' || typeof instance.createEngine !== 'function') {
       throw new Error('the CommonJS instance entry is missing its construction API')
+    }
+    for (const runtimeExport of [
+      'CURRENT_PROJECT_SCHEMA_VERSION',
+      'DEFAULT_TIMEOUT',
+      'DESIGNER_EVENT',
+      'MaterialSource',
+      'RemoteLoadError',
+      'TRANSFORM_STAGE',
+      'createEventBus',
+      'insertChildren',
+      'validateProjectSchema',
+    ]) {
+      if (!(runtimeExport in instance)) {
+        throw new Error('the CommonJS instance entry is missing runtime export ' + runtimeExport)
+      }
     }
     process.stdout.write('INSTANCE_ENTRY_REQUIRED')
   `

@@ -18,6 +18,7 @@ function grantFor(document) {
     subjectId: 'agent:worker-channel',
     documentIds: [document.id],
     commandTypes: ['updateProps'],
+    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
   }
 }
 
@@ -43,7 +44,9 @@ const createFakeDescriptor = () => ({
       documentIds: ['doc'],
       commandTypes: ['updateProps'],
       componentNames: [],
+      componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
       extraKeys: [],
+      extraValues: {},
       limits: {
         maxCommands: 1,
         maxInsertedNodes: 1,

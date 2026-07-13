@@ -30,6 +30,10 @@ async function createHarness(t, grant = {}) {
     documentIds: [document.id],
     commandTypes: grant.commandTypes ?? ['replace', 'insertBefore', 'insertAfter', 'wrap', 'unwrap'],
     componentNames: grant.componentNames ?? ['Text', 'Container'],
+    componentProps: grant.componentProps ?? {
+      Container: {},
+      Text: { label: { type: 'string', maxBytes: 4096 } },
+    },
   })
   return { capability, document, engine }
 }

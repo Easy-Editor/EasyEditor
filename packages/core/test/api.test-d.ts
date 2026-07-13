@@ -2,6 +2,7 @@ import { MessageChannel as NodeMessageChannel } from 'node:worker_threads'
 import {
   type AgentAuditRecord,
   type AgentCapability,
+  type AgentComponentPropPolicies,
   type AgentExecutionReceipt,
   type AgentPlanPreview,
   CURRENT_PROJECT_SCHEMA_VERSION,
@@ -47,12 +48,27 @@ const schemaPreparation: SchemaPreparationResult = new SchemaValidator(
 const migrated: boolean = schemaPreparation.report.migrated
 void migrated
 
+const componentProps: AgentComponentPropPolicies = {
+  Text: { text: { type: 'string', maxBytes: 4096 } },
+}
 const capability: AgentCapability = engine.agentCapabilities.issue({
   subjectId: 'agent:type-test',
   documentIds: ['document-id'],
   commandTypes: ['insertNode', 'updateProps'],
   componentNames: ['Text'],
+  componentProps,
   extraKeys: ['$dashboard'],
+  extraValues: {
+    $dashboard: {
+      requiredOnInsert: false,
+      policy: {
+        type: 'object',
+        properties: { layout: { type: 'string', maxBytes: 64 } },
+        required: ['layout'],
+        additionalProperties: false,
+      },
+    },
+  },
 })
 const snapshot = capability.snapshot('document-id')
 const plan: AgentPlanPreview = capability.preview({
@@ -68,6 +84,13 @@ const unsubscribeAudit: () => void = engine.agentCapabilities.subscribeAudit(rec
 })
 // @ts-expect-error issued grants are deeply readonly
 capability.descriptor.grant.commandTypes.push('removeNode')
+// @ts-expect-error component property grants are deeply readonly
+capability.descriptor.grant.componentProps.Text.text.maxBytes = 1024
+const issuedExtraPolicy = capability.descriptor.grant.extraValues.$dashboard.policy
+if (issuedExtraPolicy.type === 'object') {
+  // @ts-expect-error extra value policies are deeply readonly
+  issuedExtraPolicy.required.push('other')
+}
 unsubscribeAudit()
 capability.close()
 

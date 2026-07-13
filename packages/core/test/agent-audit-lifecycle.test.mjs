@@ -9,6 +9,7 @@ function issueUpdateCapability(engine, subjectId = 'agent:audit') {
     subjectId,
     documentIds: [document.id],
     commandTypes: ['updateProps'],
+    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
   })
 }
 
