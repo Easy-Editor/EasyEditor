@@ -1,4 +1,4 @@
-import { project } from '@easy-editor/core'
+import { project } from '@/editor/runtime'
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
 import { observer } from 'mobx-react'
 import { RendererContextMenu } from './ContextMenu'

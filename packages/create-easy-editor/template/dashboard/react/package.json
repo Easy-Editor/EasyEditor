@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "pnpm@10.25.0",
   "scripts": {
     "format": "biome format --write .",
     "lint": "biome check .",
@@ -13,12 +14,12 @@
     "add:ui": "pnpm dlx shadcn@canary add"
   },
   "dependencies": {
-    "@easy-editor/core": "^1.0.0",
-    "@easy-editor/plugin-dashboard": "^1.0.0",
-    "@easy-editor/plugin-hotkey": "^1.0.0",
-    "@easy-editor/renderer-core": "^1.0.0",
-    "@easy-editor/react-renderer": "^1.0.0",
-    "@easy-editor/react-renderer-dashboard": "^1.0.1",
+    "@easy-editor/core": "^1.1.0",
+    "@easy-editor/plugin-dashboard": "^1.0.4",
+    "@easy-editor/plugin-hotkey": "^1.0.4",
+    "@easy-editor/renderer-core": "^1.0.4",
+    "@easy-editor/react-renderer": "^1.0.4",
+    "@easy-editor/react-renderer-dashboard": "^1.0.5",
     "@radix-ui/react-accordion": "^1.2.3",
     "@radix-ui/react-alert-dialog": "^1.1.6",
     "@radix-ui/react-checkbox": "^1.1.4",

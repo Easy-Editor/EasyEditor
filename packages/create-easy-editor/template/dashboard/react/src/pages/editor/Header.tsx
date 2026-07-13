@@ -1,8 +1,9 @@
 import BannerImg from '@/assets/banner.png'
 import { Button } from '@/components/ui/button'
+import { project } from '@/editor/runtime'
 import { savePageInfoToLocalStorage, savePageSchemaToLocalStorage, saveProjectSchemaToLocalStorage } from '@/lib/schema'
 import { cn } from '@/lib/utils'
-import { TRANSFORM_STAGE, project } from '@easy-editor/core'
+import { TRANSFORM_STAGE } from '@easy-editor/core/instance'
 import { toast } from 'sonner'
 
 export const AppHeader = ({ className }: { className?: string }) => {

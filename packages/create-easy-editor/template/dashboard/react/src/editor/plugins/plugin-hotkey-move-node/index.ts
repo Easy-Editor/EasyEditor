@@ -12,7 +12,8 @@ const HotKeyMoveNodePlugin: PluginCreator = () => {
     name: 'HotKeyMoveNodePlugin',
     deps: [],
     init(ctx) {
-      const { hotkey, designer } = ctx
+      const { hotkey, project } = ctx
+      const { designer } = project
 
       const moveNode = (type: 'up' | 'down' | 'left' | 'right', step = 1) => {
         const selectedNodes = designer.selection.getTopNodes(false)

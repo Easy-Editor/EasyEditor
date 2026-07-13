@@ -32,6 +32,9 @@
     "dev": "deno run --watch ./src/index.ts",
     "format": "biome format --write .",
     "lint": "biome check .",
+    "types": "tsc --noEmit --project tsconfig.json",
+    "test": "node --test test/*.test.mjs",
+    "test:template-pack": "node test/template-pack-smoke.mjs",
     "build": "npm-run-all -nl build:*",
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c"

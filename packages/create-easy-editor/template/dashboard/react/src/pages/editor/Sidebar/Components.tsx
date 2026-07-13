@@ -1,8 +1,9 @@
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Card, CardContent } from '@/components/ui/card'
 import type { MaterialGroup } from '@/editor/materials/type'
+import { project } from '@/editor/runtime'
 import { cn } from '@/lib/utils'
-import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
+import type { ComponentMeta, Snippet as ISnippet } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import React, { useEffect } from 'react'
 
