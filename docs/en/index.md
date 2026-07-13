@@ -24,13 +24,13 @@ hero:
 features:
   - title: Decoupled Design
     icon: 🔌
-    details: Framework-agnostic engine core with support for multiple framework rendering extensions
+    details: The engine core is separated from renderer adapters; React is implemented today and other frameworks remain extension targets
   - title: Plugin Architecture
     icon: 🧩
     details: Flexible plugin system design with lifecycle management, hotkey binding, class extension mechanisms, dependency injection...
   - title: Rendering Engine
     icon: ⚡
-    details: Multi-framework support, real-time preview, Schema-driven, component isolation sandbox
+    details: React rendering, real-time preview, Schema-driven composition, and explicit same-realm expression policy boundaries (not a security sandbox)
   - title: Visual Design
     icon: 🎨
     details: Complete designer implementation with drag-and-drop layout, snap alignment, multi-device preview, undo/redo stack...
@@ -41,4 +41,3 @@ features:
     icon: 📦
     details: Built-in material marketplace, component packaging standards, material development tools, component version management...
 ---
-

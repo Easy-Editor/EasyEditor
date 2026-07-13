@@ -18,17 +18,15 @@ EasyEditor adopts a modular architecture design where modules communicate throug
 The engine is the core of the entire system, responsible for coordinating the work of various modules and managing the plugin lifecycle. It provides unified event system and state management capabilities, serving as the hub connecting various modules.
 
 ```typescript
-import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 
+// The legacy DashboardPlugin extends the shared realm, so the host makes
+// that compatibility choice explicitly.
+const engine = createEngine({ trustPolicy: 'legacyTrusted', hostWindow: window })
+
 // Register plugins
-plugins.registerPlugins([
+engine.plugins.registerPlugins([
   DashboardPlugin({
     group: {
       meta: groupMeta,
@@ -42,13 +40,13 @@ plugins.registerPlugins([
 ])
 
 // Build component metadata
-materials.buildComponentMetasMap(Object.values(componentMetaMap))
+engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
 // Register setters
-setters.registerSetter(setterMap)
+engine.setters.registerSetter(setterMap)
 
 // Initialize engine
-await init({
+await engine.init({
   designMode: 'design',
   appHelper: {
     utils: {
@@ -56,9 +54,12 @@ await init({
     },
   },
 })
+
+// Await teardown during application unmount or HMR.
+await engine.destroy()
 ```
 
-The engine provides direct access to various core modules such as `project`, `materials`, `setters`, etc., enabling developers to easily access and manipulate these modules. For specific Engine API details, check the [API Reference](../reference/core/index) documentation.
+Each engine instance owns its `project`, `materials`, `setters`, and other mutable services. Do not mix the legacy root facade with an explicit instance. See the [architecture overview](../design/overview) and [API Reference](../reference/core/index) for the boundary contracts.
 
 ### Designer
 
@@ -218,7 +219,7 @@ Plugins can access various core modules of the editor and communicate with other
 
 Renderers are responsible for converting Schema into actual user interfaces. EasyEditor supports extending different renderer implementations:
 
-- Support different frontend frameworks such as React, Vue, etc.
+- React rendering is implemented today; other frameworks require their own implemented and verified adapters
 - Customize rendering behavior for specific scenarios such as dashboard rendering, form rendering, etc.
 - Implement different rendering optimization strategies such as lazy loading, virtual scrolling, etc.
 

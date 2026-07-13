@@ -5,40 +5,44 @@ Engine 是 EasyEditor 的核心引擎，负责管理整个编辑器的生命周�
 ## 概览
 
 ```ts
-import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core';
+import { createEngine } from '@easy-editor/core/instance'
+
+const engine = createEngine({
+  // DashboardPlugin 会扩展同 Realm 原型，因此这里显式选择兼容策略。
+  trustPolicy: 'legacyTrusted',
+  hostWindow: window,
+})
 
 // 注册插件
-plugins.registerPlugins([
+engine.plugins.registerPlugins([
   DashboardPlugin(),
   DataSourcePlugin(),
 ]);
 
 // 构建组件元数据
-materials.buildComponentMetasMap(componentMetas);
+engine.materials.buildComponentMetasMap(componentMetas)
 
 // 注册设置器
-setters.registerSetter(setterMap);
+engine.setters.registerSetter(setterMap)
 
 // 初始化引擎
-await init({
+await engine.init({
   designMode: 'design',
   appHelper: {
     utils: {
       // 自定义工具函数
     },
   },
-});
+})
 ```
+
+::: warning 信任策略
+`agentRestricted` 不允许原型扩展插件、可执行 Schema 或原始模型直写。依赖旧插件的宿主必须显式选择 `legacyTrusted`，并承担同 Realm 受信代码风险。它不是安全沙箱。
+:::
 
 ## 核心模块
 
-### init()
+### engine.init()
 
 引擎初始化函数，用于启动 EasyEditor 引擎。
 
@@ -48,9 +52,10 @@ await init({
 - `options` - 可选的配置选项
 
 ```ts
-import { init } from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 
-await init({
+const engine = createEngine({ trustPolicy: 'agentRestricted', hostWindow: window })
+await engine.init({
   designMode: 'design',
   appHelper: {
     utils: {
@@ -70,8 +75,9 @@ await init({
 插件管理模块，用于注册和管理插件。
 
 ```ts
-import { plugins } from '@easy-editor/core'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+
+const { plugins } = engine
 
 // 注册插件
 plugins.registerPlugins([
@@ -97,7 +103,7 @@ plugins.registerPlugins([
 物料管理模块，用于管理组件物料和元数据。
 
 ```ts
-import { materials } from '@easy-editor/core'
+const { materials } = engine
 
 // 构建组件元数据映射
 materials.buildComponentMetasMap(Object.values(componentMetaMap))
@@ -117,7 +123,7 @@ const buttonMeta = materials.getComponentMeta('Button')
 设置器管理模块，用于管理属性设置器。
 
 ```ts
-import { setters } from '@easy-editor/core'
+const { setters } = engine
 
 // 注册设置器
 setters.registerSetter({
@@ -141,7 +147,7 @@ const stringSetter = setters.getSetter('StringSetter')
 项目管理模块，负责文档和资源的管理。
 
 ```ts
-import { project } from '@easy-editor/core'
+const { project } = engine
 
 // 获取设计器实例
 const { designer } = project
@@ -182,9 +188,7 @@ const schema = project.exportSchema()
 设计器是用户进行可视化编辑的核心模块，通过 `project.designer` 访问。
 
 ```ts
-import { project } from '@easy-editor/core'
-
-const { designer } = project
+const { designer } = engine.project
 
 // 监听选择变化
 designer.onEvent('selection.change', (nodeIds) => {

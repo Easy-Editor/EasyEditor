@@ -13,17 +13,14 @@ EasyEditor 采用模块化的架构设计，各个模块之间通过清晰的接
 引擎是整个系统的核心，负责协调各个模块的工作并管理插件的生命周期。它提供了统一的事件系统和状态管理能力，是连接各个模块的枢纽。
 
 ```typescript
-import {
-  init,
-  materials,
-  plugins,
-  project,
-  setters,
-} from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 
+// 旧 DashboardPlugin 依赖同 Realm 扩展，因此宿主必须显式选择 legacyTrusted。
+const engine = createEngine({ trustPolicy: 'legacyTrusted', hostWindow: window })
+
 // 注册插件
-plugins.registerPlugins([
+engine.plugins.registerPlugins([
   DashboardPlugin({
     group: {
       meta: groupMeta,
@@ -37,13 +34,13 @@ plugins.registerPlugins([
 ])
 
 // 构建组件元数据
-materials.buildComponentMetasMap(Object.values(componentMetaMap))
+engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
 // 注册设置器
-setters.registerSetter(setterMap)
+engine.setters.registerSetter(setterMap)
 
 // 初始化引擎
-await init({
+await engine.init({
   designMode: 'design',
   appHelper: {
     utils: {
@@ -51,9 +48,12 @@ await init({
     },
   },
 })
+
+// 应用卸载或 HMR 时必须等待销毁。
+await engine.destroy()
 ```
 
-引擎提供了各个核心模块的直接访问，如 `project`、`materials`、`setters` 等，使开发者能够轻松获取和操作这些模块。具体的 Engine API 可以查看 [API 参考](../reference/core/index) 文档。
+每个引擎实例拥有自己的 `project`、`materials`、`setters` 等可变服务。不要把根入口的旧全局 facade 与显式实例混用。具体边界请查看[架构综述](../design/overview)和 [API 参考](../reference/core/index)。
 
 ### 设计器 (Designer)
 
@@ -213,7 +213,7 @@ EasyEditor 提供了多种扩展机制，使开发者可以根据需求定制和
 
 渲染器负责将 Schema 转换为实际的用户界面，EasyEditor 支持扩展不同的渲染器实现：
 
-- 支持不同的前端框架，如 React、Vue 等
+- 当前提供 React 渲染实现；其他前端框架需要实现并验证各自适配器
 - 针对特定场景定制渲染行为，如大屏渲染、表单渲染等
 - 实现不同的渲染优化策略，如懒加载、虚拟滚动等
 

@@ -22,9 +22,9 @@ EasyEditor is a plugin-based cross-framework low-code engine, providing a comple
 
 ## Features
 
-- **🔌 Decoupling Design**: Engine core is framework-independent, supporting multiple framework rendering extensions
+- **🔌 Decoupling Design**: The engine core is separated from renderer adapters; React is implemented today and other frameworks remain extension targets
 - **🧩 Plugin Architecture**: Flexible plugin system design, lifecycle management, hotkey binding, class extension mechanism, dependency injection...
-- **⚡ Renderer Engine**: Multi-framework support, real-time preview, Schema driven, component isolation sandbox
+- **⚡ Renderer Engine**: React rendering, real-time preview, Schema-driven composition, and explicit same-realm expression policy boundaries (not a security sandbox)
 - **🎨 Visual Design**: Complete implementation of the designer, drag-and-drop layout, snapping alignment, multi-device preview, undo/redo stack...
 - **🏢 Enterprise-level Capabilities**: Data source management, multi-language support, version control, online collaboration
 - **📦 Component Ecosystem**: Built-in material market, component packaging specifications, material development tools, component version management...
