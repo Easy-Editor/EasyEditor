@@ -118,6 +118,10 @@ jobs:
             examples/dashboard/server/ai-chat-gateway.mjs \
             examples/dashboard/server/index.mjs \
             examples/dashboard/server/server-env.mjs \
+            examples/dashboard/src/components/ai-chat/agent-plan-confirmation.d.mts \
+            examples/dashboard/src/components/ai-chat/agent-plan-confirmation.mjs \
+            examples/dashboard/src/components/ai-chat/agent-plan-summary.d.mts \
+            examples/dashboard/src/components/ai-chat/agent-plan-summary.mjs \
             examples/dashboard/src/components/ai-chat/agent-request-boundary.d.mts \
             examples/dashboard/src/components/ai-chat/agent-request-boundary.mjs \
             examples/dashboard/src/components/ai-chat/agent-request-slot.d.mts \
@@ -148,6 +152,8 @@ jobs:
             examples/dashboard/src/pages/editor/Sidebar/Outline.tsx \
             examples/dashboard/src/pages/editor/Sidebar/RemoteSnippet.tsx \
             examples/dashboard/test/agent-outcome-contract.test.mjs \
+            examples/dashboard/test/agent-plan-confirmation.test.mjs \
+            examples/dashboard/test/agent-plan-summary.test.mjs \
             examples/dashboard/test/agent-request-boundary.test.mjs \
             examples/dashboard/test/agent-request-slot.test.mjs \
             examples/dashboard/test/ai-chat-gateway.test.mjs \

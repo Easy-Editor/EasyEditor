@@ -113,13 +113,16 @@ Agent 不应在 UI 主线程持有引擎对象。推荐流向是：
 ```text
 UI -> request DTO -> Worker
 Worker -> snapshot capability -> 隐私投影 -> 同源 AI Gateway
-Worker -> strict command parse -> preview -> execute
-Worker -> safe result DTO -> UI
+Worker -> strict command parse -> preview -> safe proposal
+UI -> 显式确认 -> trusted Host -> approveAndExecute
+Host -> safe result DTO -> UI
 ```
 
 宿主按请求签发最小 grant：允许的文档、组件、命令、额外字段和大小上限。组件类型、组件 prop 和额外字段是三组独立授权；prop/额外字段默认拒绝，只有通过递归值策略验证的有限字符串、有限数值或精确对象才可进入命令。Dashboard 当前只允许受限的 `Text.text`，并要求插入节点携带经过数值范围验证的 `$dashboard.rect`。
 
-`preview` 固化 revision、生成 ID、effects 和预期结果；`execute(planId)` 在提交前检查 stale 状态，在提交后校验精确结果。Dashboard 宿主只检查并复制最近 10 条消息，单条 UTF-8 上限 2 KiB、总计 12 KiB，并在创建 Worker 前拒绝越界输入。传输在命令可能已经提交但响应丢失时返回 `outcome: unknown`，调用者不得自动重试。
+`preview` 固化 revision、生成 ID、effects 和预期结果；`execute(planId)` 在提交前检查 stale 状态，在提交后校验精确结果。Dashboard 的 Worker session 使用 `executionAuthority: 'host'`：peer 的 `execute` 会 fail-closed，只有可信宿主持有的 `approveAndExecute(planId)` 能提交。Host 按 plan ID 读取自己保存的权威 preview，再向 UI 派生命令数量、操作类型和受影响节点数量；Worker 不能用伪造 effects 替换确认摘要。UI 不会拿到 plan ID、节点 ID 或命令。拒绝、超时、关闭窗口和 stale 都不会静默重新 preview 或自动重试。
+
+Dashboard 宿主只检查并复制最近 10 条消息，单条 UTF-8 上限 2 KiB、总计 12 KiB，并在创建 Worker 前拒绝越界输入。若执行错误表明已经提交或无法证明完整回滚，则返回 `outcome: unknown`；调用者必须重新读取画布，不能自动重试。
 
 ## 7. 远程资源与销毁
 
@@ -152,5 +155,5 @@ Worker -> safe result DTO -> UI
 - 当前仓库提供 React 渲染实现；其他框架是可扩展目标，不是已经交付的能力。
 - `legacyTrusted` 插件和 UMD 模块不是可撤销沙箱。
 - 同 Realm 表达式策略只能控制是否允许执行，不能隔离恶意代码。
-- Agent capability 只能约束模型可执行的动作集合，不能证明动作符合用户意图。Dashboard 当前仍会自动执行通过策略验证的模型计划；画布展示文本可能形成提示注入，在加入宿主侧计划摘要和显式用户确认前应视为实验性受信用户流程。
+- Agent capability 只能约束模型可执行的动作集合；Dashboard 的显式确认门用于核对用户意图，但不能消除画布文本中的提示注入，也不能保护已被 XSS 或恶意脚本控制的宿主 UI Realm。
 - 宿主仍需负责认证、租户授权、速率限制、持久化审计以及真正的进程/iframe 隔离。

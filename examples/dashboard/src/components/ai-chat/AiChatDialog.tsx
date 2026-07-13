@@ -4,7 +4,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { runDashboardAgentRequest } from '@/editor/agent'
 import { cn } from '@/lib/utils'
-import { Bot, ChevronDown, ChevronUp, Lightbulb, Send, User, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronUp, Lightbulb, Send, ShieldAlert, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { MAX_AGENT_MESSAGE_BYTES } from './agent-request-boundary.mjs'
@@ -18,7 +18,18 @@ interface AiChatDialogProps {
 }
 
 export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, className }) => {
-  const { messages, input, handleInputChange, handleSubmit, cancelRequest, isLoading, error } = useCustomChat({
+  const {
+    messages,
+    input,
+    handleInputChange,
+    handleSubmit,
+    cancelRequest,
+    confirmPendingProposal,
+    rejectPendingProposal,
+    pendingProposal,
+    isLoading,
+    error,
+  } = useCustomChat({
     requestAgent: runDashboardAgentRequest,
     initialMessages: [
       {
@@ -84,12 +95,17 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
     }
   }
 
+  const handleClose = () => {
+    cancelRequest()
+    onClose()
+  }
+
   const handleEscape = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       if (isDropdownOpen) {
         setIsDropdownOpen(false)
       } else {
-        onClose()
+        handleClose()
       }
     }
   }
@@ -147,7 +163,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               <p className='text-xs text-muted-foreground'>帮助你快速生成页面</p>
             </div>
           </div>
-          <Button variant='ghost' size='icon' onClick={onClose} className='h-8 w-8' aria-label='关闭AI助手'>
+          <Button variant='ghost' size='icon' onClick={handleClose} className='h-8 w-8' aria-label='关闭AI助手'>
             <X className='h-4 w-4' />
           </Button>
         </div>
@@ -201,7 +217,56 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               </div>
             ))}
 
-            {isLoading && (
+            {pendingProposal && (
+              <div className='flex gap-3 justify-start'>
+                <Avatar className='h-8 w-8 flex-shrink-0'>
+                  <AvatarFallback className='bg-primary/10 text-primary'>
+                    <ShieldAlert className='h-4 w-4' />
+                  </AvatarFallback>
+                </Avatar>
+                <div className='max-w-[280px] rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm space-y-3'>
+                  <div>
+                    <p className='font-medium text-primary'>等待你的确认，尚未执行</p>
+                    <p className='mt-1 whitespace-pre-wrap text-foreground'>{pendingProposal.message.content}</p>
+                  </div>
+                  <div className='rounded-md border border-border bg-background/80 p-2 space-y-2'>
+                    <p className='text-xs text-muted-foreground'>由引擎预演结果生成的安全摘要</p>
+                    <p className='font-medium'>
+                      {pendingProposal.summary.commandCount} 项操作，影响 {pendingProposal.summary.affectedNodeCount}{' '}
+                      个节点
+                    </p>
+                    <div className='flex flex-wrap gap-1.5'>
+                      {pendingProposal.summary.operations.map(operation => (
+                        <span
+                          key={operation.type}
+                          className='rounded-full border border-border bg-muted px-2 py-0.5 text-xs'
+                        >
+                          {operation.type === 'insertNode' && '新增'}
+                          {operation.type === 'updateProps' && '更新'}
+                          {operation.type === 'moveNode' && '移动'}
+                          {operation.type === 'removeNode' && '删除'} {operation.commandCount}
+                        </span>
+                      ))}
+                    </div>
+                    {pendingProposal.summary.destructiveCommandCount > 0 && (
+                      <p className='text-xs text-destructive'>包含删除操作，请确认这符合你的意图。</p>
+                    )}
+                  </div>
+                  <div className='flex gap-2'>
+                    <Button variant='outline' size='sm' className='flex-1' onClick={rejectPendingProposal}>
+                      取消
+                    </Button>
+                    <Button size='sm' className='flex-1' onClick={confirmPendingProposal}>
+                      <Check className='mr-1 h-3.5 w-3.5' />
+                      确认执行
+                    </Button>
+                  </div>
+                  <p className='text-[11px] text-muted-foreground'>等待期间若画布发生变化，引擎会拒绝过期提案。</p>
+                </div>
+              </div>
+            )}
+
+            {isLoading && !pendingProposal && (
               <div className='flex gap-3 justify-start'>
                 <Avatar className='h-8 w-8 flex-shrink-0'>
                   <AvatarFallback className='bg-muted'>

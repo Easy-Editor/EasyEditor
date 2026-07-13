@@ -2,7 +2,6 @@ import {
   AgentCapabilityError,
   type AgentMessagePort,
   type AgentPortCapability,
-  AgentTransportOutcomeUnknownError,
   connectAgentPort,
 } from '@easy-editor/core/agent-channel'
 import { filterMessageContent, parseAiCommands } from '../components/ai-chat/commands.mjs'
@@ -92,38 +91,29 @@ const readGatewayResponse = async (response: Response): Promise<GatewayChatRespo
   return value as unknown as GatewayChatResponse
 }
 
-const toSafeFailure = (error: unknown, committed = false): { code: string; message: string; outcome?: 'unknown' } => {
-  if (error instanceof AgentTransportOutcomeUnknownError || committed) {
-    return {
-      code: error instanceof AgentTransportOutcomeUnknownError ? error.code : 'dashboard.agent.resultUnavailable',
-      message: 'Agent 执行响应丢失，结果未知；不会自动重试，请重新读取画布确认。',
-      outcome: 'unknown',
-    }
-  }
+const toSafeFailure = (error: unknown): { code: string; message: string } => {
   if (error instanceof AgentCapabilityError) {
-    if (error.committed) {
-      return {
-        code: error.code,
-        message: 'Agent 操作已提交，但结果无法确认；不会自动重试，请重新读取画布确认。',
-        outcome: 'unknown',
-      }
-    }
     return {
       code: error.code,
-      message: 'Agent 操作被引擎安全边界拒绝。',
+      message: 'Agent 提案被引擎安全边界拒绝。',
     }
   }
-  return { code: 'dashboard.agent.failed', message: 'AI 请求或画布操作失败。' }
+  return { code: 'dashboard.agent.failed', message: 'AI 请求或提案生成失败。' }
 }
 
+// One Worker serves one request. Retaining the client keeps its MessagePort and
+// host-owned prepared plan alive until the host terminates the Worker.
+let retainedCapability: AgentPortCapability | undefined
+
 const executeRequest = async (request: AgentWorkerRunRequest): Promise<void> => {
-  let committed = false
+  let proposed = false
   let capability: AgentPortCapability | undefined
   try {
     capability = await connectAgentPort(request.port, {
       connectTimeoutMs: 10_000,
       requestTimeoutMs: 30_000,
     })
+    retainedCapability = capability
     const snapshot = await capability.snapshot(request.documentId)
     const projection = createCanvasProjection(snapshot.schema)
     const gatewayRequest = createChatRequest(request.messages, projection.canvas)
@@ -141,38 +131,38 @@ const executeRequest = async (request: AgentWorkerRunRequest): Promise<void> => 
       commands,
       documentId: snapshot.documentId,
     })
-    const receipt = await capability.execute(preview.planId)
-    committed = true
 
     workerScope.postMessage({
-      kind: 'result',
+      kind: 'proposal',
       requestId: request.requestId,
       message: {
         content:
-          filterMessageContent(gatewayResponse.message.content, projection.nodeIdsByAlias.keys()) || '已完成画布更新。',
+          filterMessageContent(gatewayResponse.message.content, projection.nodeIdsByAlias.keys()) ||
+          '已生成画布修改提案，请确认后执行。',
         role: 'assistant',
       },
-      execution: {
-        commandCount: receipt.commandCount,
-        observerErrorCount: receipt.observerErrorCount,
-        status: receipt.status,
-      },
+      planId: preview.planId,
     })
+    proposed = true
   } catch (error) {
     try {
       workerScope.postMessage({
         kind: 'failure',
         requestId: request.requestId,
-        error: toSafeFailure(error, committed),
+        error: toSafeFailure(error),
       })
     } catch {
-      // The host treats a lost Worker response as outcome-unknown after dispatch.
+      // The Worker never owns execution authority, so a lost proposal cannot mutate the document.
     }
   } finally {
-    try {
-      capability?.close()
-    } catch {
-      // Worker termination closes the host-side session even if local close fails.
+    if (!proposed) {
+      try {
+        capability?.close()
+      } catch {
+        // Worker termination closes the host-side session even if local close fails.
+      } finally {
+        if (retainedCapability === capability) retainedCapability = undefined
+      }
     }
   }
 }

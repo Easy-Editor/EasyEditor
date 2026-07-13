@@ -50,11 +50,13 @@ service. A conservative pattern filter removes some obvious secret-like values,
 but it cannot prove that arbitrary natural-language text is free of credentials
 or personal data; do not place sensitive data in presentation fields.
 
-Projection, alias resolution, strict response parsing, preview, and execute all
-run inside a request-scoped Web Worker. The UI receives only filtered assistant
-text and a small execution status DTO. It never receives the capability, raw
-snapshot, document/node IDs, aliases, plan, or command payload. A lost execute
-response is outcome-unknown and is never automatically retried.
+Projection, alias resolution, strict response parsing, and preview run inside a
+request-scoped Web Worker. Its MessagePort capability uses
+`executionAuthority: 'host'`: the peer can prepare a revision-bound plan, but a
+peer `execute` call fails closed. The trusted Dashboard host privately retains
+the plan and exposes only filtered assistant text plus a summary derived from
+the Host's authoritative preview record. The UI never receives the capability, raw snapshot,
+document/node IDs, aliases, plan ID, preview effects, or command payload.
 
 Before the Worker is created, the host inspects only the newest 10 messages and
 copies at most 2 KiB of UTF-8 per message and 12 KiB in total. Agent commands
@@ -64,7 +66,10 @@ range-checked `$dashboard.rect`; other props and extra fields are denied.
 
 The capability boundary limits *what* the model can change; it does not prove
 that a permitted change matches the user's intent. Allowlisted canvas text is
-untrusted model input and can contain prompt injection. The current demo still
-executes a validated preview automatically, including permitted update, move,
-and remove commands. Treat the AI feature as an experimental trusted-user flow
-until a host-side plan summary and explicit user confirmation gate are added.
+untrusted model input and can contain prompt injection. The Dashboard therefore
+stops after preview and shows a structured summary of the host's authoritative
+preview record. Only an explicit user confirmation lets the trusted host
+synchronously call `approveAndExecute(planId)` for that exact prepared plan.
+Rejection, timeout,
+dialog close, or a stale document revokes the plan without retrying. This is a
+human-intent gate, not protection against XSS or a compromised host UI realm.

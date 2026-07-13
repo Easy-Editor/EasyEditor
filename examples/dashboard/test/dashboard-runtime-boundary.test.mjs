@@ -790,9 +790,14 @@ test('AI UI cannot observe Agent authority or raw editor state', async () => {
   const uiFiles = ['components/ai-chat/AiChatDialog.tsx', 'components/ai-chat/use-custom-chat.ts']
   const forbiddenUiReferences = [
     'AgentCapability',
+    'AgentPlanPreview',
+    'approveAndExecute',
     'createCanvasProjection',
     'createDashboardAgentContext',
     'executeAiCommands',
+    'planId',
+    'preview.effects',
+    'nodeIds',
     'nodeIdsByAlias',
     'snapshot.schema',
     "fetch('/api/ai/chat'",

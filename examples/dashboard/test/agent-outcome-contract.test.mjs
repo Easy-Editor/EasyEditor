@@ -6,44 +6,38 @@ const hostUrl = new URL('../src/editor/agent.ts', import.meta.url)
 const workerUrl = new URL('../src/editor/agent.worker.ts', import.meta.url)
 const hookUrl = new URL('../src/components/ai-chat/use-custom-chat.ts', import.meta.url)
 
-test('host marks every post-dispatch Worker or protocol failure as outcome unknown', async () => {
+test('Worker can prepare a plan but only the trusted host can execute it after confirmation', async () => {
   const host = await readFile(hostUrl, 'utf8')
-  const postIndex = host.indexOf('worker.postMessage(')
-  const dispatchedIndex = host.indexOf('dispatched = true')
-  const messageHandler = host.slice(
-    host.indexOf("worker.addEventListener('message'"),
-    host.indexOf("worker.addEventListener('error'"),
-  )
-  const errorHandler = host.slice(
-    host.indexOf("worker.addEventListener('error'"),
-    host.indexOf("worker.addEventListener('messageerror'"),
-  )
-  const messageErrorHandler = host.slice(
-    host.indexOf("worker.addEventListener('messageerror'"),
-    host.indexOf('worker.postMessage('),
-  )
+  const worker = await readFile(workerUrl, 'utf8')
+  const previewIndex = worker.indexOf('await capability.preview(')
+  const proposalIndex = worker.indexOf("kind: 'proposal'")
+  const authoritativePreviewIndex = host.indexOf('session.getPreparedPlanPreview(response.planId)')
+  const summaryIndex = host.indexOf('createAgentPlanSummary(preview)')
+  const confirmationIndex = host.indexOf('await awaitProposalConfirmation(')
+  const executeIndex = host.indexOf('session.approveAndExecute(')
 
-  assert.match(host, /let dispatched = false/)
-  assert.ok(postIndex >= 0 && postIndex < dispatchedIndex)
-  assert.match(messageHandler, /parseWorkerResponse/)
-  assert.match(messageHandler, /toTransportFailure/)
-  assert.match(messageHandler, /dispatched/)
-  assert.match(errorHandler, /workerFailed/)
-  assert.match(errorHandler, /toTransportFailure[\s\S]*dispatched/)
-  assert.match(messageErrorHandler, /workerProtocol/)
-  assert.match(messageErrorHandler, /toTransportFailure[\s\S]*dispatched/)
-  assert.doesNotMatch(host, /\bretry\b|setInterval/)
+  assert.ok(previewIndex >= 0 && previewIndex < proposalIndex)
+  assert.doesNotMatch(worker, /capability\.execute\s*\(/)
+  assert.match(worker, /planId:\s*preview\.planId/)
+  assert.doesNotMatch(worker, /\bpreview,\s*\n\s*\}/)
+  assert.match(host, /AgentCapabilityError[^\n]+@easy-editor\/core\/instance/)
+  assert.doesNotMatch(host, /AgentCapabilityError[^\n]+@easy-editor\/core\/agent-channel/)
+  assert.match(host, /executionAuthority:\s*'host'/)
+  assert.ok(authoritativePreviewIndex >= 0 && authoritativePreviewIndex < summaryIndex)
+  assert.ok(confirmationIndex >= 0 && confirmationIndex < executeIndex)
+  assert.match(host, /if \(!confirmed\)[\s\S]*dashboard\.agent\.rejected/)
+  assert.match(host, /Date\.now\(\) >= proposal\.expiresAt/)
 })
 
-test('Worker reports failures after execute receipt as outcome unknown', async () => {
+test('generation failures are known non-mutations while uncertain execution remains non-retryable', async () => {
+  const host = await readFile(hostUrl, 'utf8')
   const worker = await readFile(workerUrl, 'utf8')
-  const executeIndex = worker.indexOf('await capability.execute(')
-  const committedIndex = worker.indexOf('committed = true')
 
-  assert.match(worker, /let committed = false/)
-  assert.ok(executeIndex >= 0 && executeIndex < committedIndex)
-  assert.match(worker, /toSafeFailure\(error, committed\)/)
-  assert.match(worker, /committed[\s\S]*outcome:\s*'unknown'/)
+  assert.doesNotMatch(host, /toTransportFailure|let dispatched = false/)
+  assert.match(worker, /lost proposal cannot mutate the document/)
+  assert.match(host, /error\.committed \|\| error\.rollbackComplete === false/)
+  assert.match(host, /'unknown'/)
+  assert.doesNotMatch(host, /\bretry\b|setInterval/)
 })
 
 test('caller cancellation never hides an outcome-unknown result', async () => {

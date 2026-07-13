@@ -118,13 +118,16 @@ The Agent must not hold engine objects on the UI thread. The recommended flow is
 ```text
 UI -> request DTO -> Worker
 Worker -> snapshot capability -> privacy projection -> same-origin AI gateway
-Worker -> strict command parse -> preview -> execute
-Worker -> safe result DTO -> UI
+Worker -> strict command parse -> preview -> safe proposal
+UI -> explicit confirmation -> trusted Host -> approveAndExecute
+Host -> safe result DTO -> UI
 ```
 
 The host issues a minimal request-scoped grant covering document IDs, component names, command types, extra fields, and size limits. Component types, component props, and extra fields are independent authorities. Props and extras fail closed; only bounded strings, finite ranged numbers, or exact recursively validated objects may enter a command. The Dashboard currently grants only bounded `Text.text` and requires an inserted node to carry a range-checked `$dashboard.rect`.
 
-`preview` fixes the base revision, generated IDs, effects, and expected result. `execute(planId)` checks staleness before commit and exact output afterward. Before constructing a Worker, the Dashboard host inspects and copies only the newest 10 messages, capped at 2 KiB of UTF-8 per message and 12 KiB total. If a command may have committed but its response is lost, transport reports `outcome: unknown`; callers must not automatically retry.
+`preview` fixes the base revision, generated IDs, effects, and expected result. `execute(planId)` checks staleness before commit and exact output afterward. The Dashboard Worker session uses `executionAuthority: 'host'`: peer `execute` fails closed, while only the trusted host can call `approveAndExecute(planId)`. The host looks up its authoritative preview record by plan ID before deriving command counts, operation types, and affected-node counts, so the Worker cannot substitute forged effects for the confirmation summary. The UI never receives the plan ID, node IDs, or commands. Rejection, timeout, dialog close, and stale plans do not silently re-preview or retry.
+
+Before constructing a Worker, the Dashboard host inspects and copies only the newest 10 messages, capped at 2 KiB of UTF-8 per message and 12 KiB total. If an execution error reports a committed mutation or an incomplete rollback, the host returns `outcome: unknown`; callers must re-read the canvas and never automatically retry.
 
 ## 7. Remote resources and disposal
 
@@ -155,5 +158,5 @@ Architectural claims hold only when lint, public type contracts, runtime tests, 
 - React rendering is implemented today; other frameworks remain extension targets.
 - `legacyTrusted` plugins and UMD modules are not reversibly sandboxed.
 - Same-realm evaluation policy controls permission to execute, not isolation from malicious code.
-- Agent capabilities constrain the set of model actions but cannot prove user intent. The Dashboard still auto-executes model plans that pass policy validation, and projected canvas text can carry prompt injection. Treat it as an experimental trusted-user flow until the host adds a plan summary and explicit confirmation gate.
+- Agent capabilities constrain the set of model actions. The Dashboard confirmation gate helps verify user intent, but it cannot remove prompt injection from projected canvas text or protect a host UI realm already controlled by XSS or malicious scripts.
 - Hosts remain responsible for authentication, tenant authorization, rate limits, persistent audit, and real process or iframe isolation.

@@ -1,4 +1,6 @@
 import type { AgentExtraValuePolicies, AgentPortSession } from '@easy-editor/core'
+import { AgentCapabilityError } from '@easy-editor/core/instance'
+import { type DashboardAgentPlanSummary, createAgentPlanSummary } from '../components/ai-chat/agent-plan-summary.mjs'
 import { AgentRequestBoundaryError, prepareAgentWorkerMessages } from '../components/ai-chat/agent-request-boundary.mjs'
 import { engine } from './runtime'
 
@@ -68,6 +70,7 @@ const DASHBOARD_AGENT_EXTRA_VALUES = Object.freeze({
 }) satisfies AgentExtraValuePolicies
 
 const AGENT_REQUEST_TIMEOUT_MS = 75_000
+const AGENT_CONFIRMATION_TIMEOUT_MS = 2 * 60_000
 
 export interface DashboardAgentMessageInput {
   readonly content: string
@@ -86,8 +89,22 @@ export interface DashboardAgentResult {
   }
 }
 
+export interface DashboardAgentProposal {
+  readonly proposalId: string
+  readonly expiresAt: number
+  readonly message: {
+    readonly content: string
+    readonly role: 'assistant'
+  }
+  readonly summary: DashboardAgentPlanSummary
+}
+
 export interface DashboardAgentRequestOptions {
   readonly signal?: AbortSignal
+  readonly confirmProposal: (
+    proposal: DashboardAgentProposal,
+    options: { readonly signal: AbortSignal },
+  ) => Promise<boolean>
 }
 
 interface AgentWorkerFailure {
@@ -96,13 +113,14 @@ interface AgentWorkerFailure {
   readonly error: {
     readonly code: string
     readonly message: string
-    readonly outcome?: 'unknown'
   }
 }
 
-interface AgentWorkerResult extends DashboardAgentResult {
-  readonly kind: 'result'
+interface AgentWorkerProposal {
+  readonly kind: 'proposal'
   readonly requestId: string
+  readonly message: DashboardAgentProposal['message']
+  readonly planId: string
 }
 
 export class DashboardAgentError extends Error {
@@ -117,15 +135,6 @@ export class DashboardAgentError extends Error {
   }
 }
 
-const toTransportFailure = (error: DashboardAgentError, dispatched: boolean): DashboardAgentError => {
-  if (!dispatched || error.outcome === 'unknown') return error
-  return new DashboardAgentError(
-    error.code,
-    `${error.message} 提交结果可能未知且不会自动重试，请重新读取画布确认。`,
-    'unknown',
-  )
-}
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -134,7 +143,7 @@ const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).every(key => allowed.has(key)) && keys.every(key => Object.hasOwn(value, key))
 }
 
-const parseWorkerResponse = (value: unknown, requestId: string): AgentWorkerFailure | AgentWorkerResult => {
+const parseWorkerResponse = (value: unknown, requestId: string): AgentWorkerFailure | AgentWorkerProposal => {
   if (!isRecord(value) || value.requestId !== requestId || typeof value.kind !== 'string') {
     throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了无效响应。')
   }
@@ -143,12 +152,10 @@ const parseWorkerResponse = (value: unknown, requestId: string): AgentWorkerFail
     if (!hasExactKeys(value, ['kind', 'requestId', 'error']) || !isRecord(value.error)) {
       throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了无效响应。')
     }
-    const errorKeys = value.error.outcome === undefined ? ['code', 'message'] : ['code', 'message', 'outcome']
     if (
-      !hasExactKeys(value.error, errorKeys) ||
+      !hasExactKeys(value.error, ['code', 'message']) ||
       typeof value.error.code !== 'string' ||
-      typeof value.error.message !== 'string' ||
-      (value.error.outcome !== undefined && value.error.outcome !== 'unknown')
+      typeof value.error.message !== 'string'
     ) {
       throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了无效响应。')
     }
@@ -156,24 +163,95 @@ const parseWorkerResponse = (value: unknown, requestId: string): AgentWorkerFail
   }
 
   if (
-    value.kind !== 'result' ||
-    !hasExactKeys(value, ['kind', 'requestId', 'message', 'execution']) ||
+    value.kind !== 'proposal' ||
+    !hasExactKeys(value, ['kind', 'requestId', 'message', 'planId']) ||
     !isRecord(value.message) ||
-    !isRecord(value.execution) ||
     !hasExactKeys(value.message, ['content', 'role']) ||
-    !hasExactKeys(value.execution, ['commandCount', 'observerErrorCount', 'status']) ||
     value.message.role !== 'assistant' ||
     typeof value.message.content !== 'string' ||
-    !Number.isSafeInteger(value.execution.commandCount) ||
-    (value.execution.commandCount as number) < 1 ||
-    !Number.isSafeInteger(value.execution.observerErrorCount) ||
-    (value.execution.observerErrorCount as number) < 0 ||
-    !['committed', 'committed_with_observer_errors'].includes(value.execution.status as string)
+    new TextEncoder().encode(value.message.content).byteLength > 32 * 1024 ||
+    typeof value.planId !== 'string' ||
+    value.planId.length < 1 ||
+    value.planId.length > 256
   ) {
     throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了无效响应。')
   }
 
-  return value as unknown as AgentWorkerResult
+  return {
+    kind: 'proposal',
+    message: Object.freeze({ content: value.message.content, role: 'assistant' }),
+    planId: value.planId,
+    requestId,
+  }
+}
+
+const awaitProposalConfirmation = async (
+  confirmProposal: DashboardAgentRequestOptions['confirmProposal'],
+  proposal: DashboardAgentProposal,
+  signal: AbortSignal,
+): Promise<boolean> =>
+  new Promise<boolean>((resolve, reject) => {
+    let settled = false
+    const settle = (operation: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', handleAbort)
+      operation()
+    }
+    const handleAbort = () =>
+      settle(() => reject(new DashboardAgentError('dashboard.agent.aborted', 'Agent 请求已取消。')))
+    const timeout = setTimeout(
+      () =>
+        settle(() =>
+          reject(new DashboardAgentError('dashboard.agent.confirmationExpired', 'Agent 提案已过期，请重新生成。')),
+        ),
+      Math.max(0, proposal.expiresAt - Date.now()),
+    )
+
+    signal.addEventListener('abort', handleAbort, { once: true })
+    if (signal.aborted) {
+      handleAbort()
+      return
+    }
+    let confirmation: Promise<boolean>
+    try {
+      confirmation = Promise.resolve(confirmProposal(proposal, { signal }))
+    } catch (error) {
+      settle(() => reject(error))
+      return
+    }
+    confirmation.then(
+      decision =>
+        settle(() => {
+          if (typeof decision !== 'boolean') {
+            reject(
+              new DashboardAgentError('dashboard.agent.invalidConfirmation', 'Agent 提案确认回调必须返回明确决定。'),
+            )
+            return
+          }
+          resolve(decision)
+        }),
+      error => settle(() => reject(error)),
+    )
+  })
+
+const toExecutionFailure = (error: unknown): DashboardAgentError => {
+  if (error instanceof DashboardAgentError) return error
+  if (error instanceof AgentCapabilityError) {
+    if (error.committed || error.rollbackComplete === false) {
+      return new DashboardAgentError(
+        error.code,
+        'Agent 提交结果无法确定且不会自动重试，请重新读取画布确认。',
+        'unknown',
+      )
+    }
+    if (error.code === 'agent.plan.stale') {
+      return new DashboardAgentError(error.code, '画布已发生变化，提案未执行；请重新生成。')
+    }
+    return new DashboardAgentError(error.code, 'Agent 提案未执行：引擎安全边界拒绝了本次提交。')
+  }
+  return new DashboardAgentError('dashboard.agent.executeFailed', 'Agent 提案执行失败。')
 }
 
 const createRequestId = (): string => {
@@ -190,8 +268,11 @@ const createRequestId = (): string => {
  */
 export const runDashboardAgentRequest = async (
   messages: readonly DashboardAgentMessageInput[],
-  options: DashboardAgentRequestOptions = {},
+  options: DashboardAgentRequestOptions,
 ): Promise<DashboardAgentResult> => {
+  if (!options || typeof options.confirmProposal !== 'function') {
+    throw new DashboardAgentError('dashboard.agent.confirmationRequired', 'Agent 请求必须提供显式的提案确认回调。')
+  }
   let workerMessages: ReturnType<typeof prepareAgentWorkerMessages>
   try {
     workerMessages = prepareAgentWorkerMessages(messages)
@@ -236,72 +317,49 @@ export const runDashboardAgentRequest = async (
         subjectId: `dashboard-ai-worker:${requestId}`,
       },
       channel.port1,
-      { signal: controller.signal },
+      { executionAuthority: 'host', signal: controller.signal },
     )
 
-    const response = await new Promise<AgentWorkerFailure | AgentWorkerResult>((resolve, reject) => {
-      let dispatched = false
+    const response = await new Promise<AgentWorkerFailure | AgentWorkerProposal>((resolve, reject) => {
       let settled = false
       const settle = (operation: () => void) => {
         if (settled) return
         settled = true
         clearTimeout(timeout)
         controller.signal.removeEventListener('abort', handleAbort)
+        worker.removeEventListener('message', handleMessage)
+        worker.removeEventListener('error', handleWorkerError)
+        worker.removeEventListener('messageerror', handleMessageError)
         operation()
       }
       const handleAbort = () =>
-        settle(() =>
-          reject(
-            toTransportFailure(new DashboardAgentError('dashboard.agent.aborted', 'Agent 请求已取消。'), dispatched),
-          ),
-        )
+        settle(() => reject(new DashboardAgentError('dashboard.agent.aborted', 'Agent 请求已取消。')))
       const timeout = setTimeout(
-        () =>
-          settle(() =>
-            reject(
-              toTransportFailure(new DashboardAgentError('dashboard.agent.timeout', 'Agent 请求超时。'), dispatched),
-            ),
-          ),
+        () => settle(() => reject(new DashboardAgentError('dashboard.agent.timeout', 'Agent 请求超时。'))),
         AGENT_REQUEST_TIMEOUT_MS,
       )
-
-      controller.signal.addEventListener('abort', handleAbort, { once: true })
-      worker.addEventListener('message', event => {
+      const handleMessage = (event: MessageEvent<unknown>) => {
         settle(() => {
           try {
             resolve(parseWorkerResponse(event.data, requestId))
           } catch (error) {
             reject(
-              toTransportFailure(
-                error instanceof DashboardAgentError
-                  ? error
-                  : new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了无效响应。'),
-                dispatched,
-              ),
+              error instanceof DashboardAgentError
+                ? error
+                : new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了无效响应。'),
             )
           }
         })
-      })
-      worker.addEventListener('error', () => {
-        settle(() =>
-          reject(
-            toTransportFailure(
-              new DashboardAgentError('dashboard.agent.workerFailed', 'Agent Worker 执行失败。'),
-              dispatched,
-            ),
-          ),
-        )
-      })
-      worker.addEventListener('messageerror', () => {
-        settle(() =>
-          reject(
-            toTransportFailure(
-              new DashboardAgentError('dashboard.agent.workerProtocol', 'Agent Worker 通信失败。'),
-              dispatched,
-            ),
-          ),
-        )
-      })
+      }
+      const handleWorkerError = () =>
+        settle(() => reject(new DashboardAgentError('dashboard.agent.workerFailed', 'Agent Worker 提案生成失败。')))
+      const handleMessageError = () =>
+        settle(() => reject(new DashboardAgentError('dashboard.agent.workerProtocol', 'Agent Worker 通信失败。')))
+
+      controller.signal.addEventListener('abort', handleAbort, { once: true })
+      worker.addEventListener('message', handleMessage)
+      worker.addEventListener('error', handleWorkerError)
+      worker.addEventListener('messageerror', handleMessageError)
 
       if (controller.signal.aborted) {
         handleAbort()
@@ -318,23 +376,65 @@ export const runDashboardAgentRequest = async (
           },
           [channel.port2],
         )
-        dispatched = true
       } catch {
         settle(() => reject(new DashboardAgentError('dashboard.agent.workerProtocol', 'Agent Worker 请求无法发送。')))
       }
     })
 
     if (response.kind === 'failure') {
-      throw new DashboardAgentError(response.error.code, response.error.message, response.error.outcome)
+      throw new DashboardAgentError(response.error.code, response.error.message)
+    }
+
+    let preview: ReturnType<AgentPortSession['getPreparedPlanPreview']>
+    try {
+      preview = session.getPreparedPlanPreview(response.planId)
+    } catch (error) {
+      if (error instanceof AgentCapabilityError) {
+        throw new DashboardAgentError(error.code, 'Agent 提案已不可用，画布未发生变化。')
+      }
+      throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了未知提案。')
+    }
+    if (preview.documentId !== documentId || preview.planId !== response.planId) {
+      throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 提案不属于当前请求。')
+    }
+    const proposal = Object.freeze({
+      expiresAt: Date.now() + AGENT_CONFIRMATION_TIMEOUT_MS,
+      message: response.message,
+      proposalId: requestId,
+      summary: createAgentPlanSummary(preview),
+    }) satisfies DashboardAgentProposal
+    const confirmed = await awaitProposalConfirmation(options.confirmProposal, proposal, controller.signal)
+    if (!confirmed) {
+      throw new DashboardAgentError('dashboard.agent.rejected', '已取消执行，画布未发生变化。')
+    }
+    if (controller.signal.aborted) {
+      throw new DashboardAgentError('dashboard.agent.aborted', 'Agent 请求已取消。')
+    }
+    if (Date.now() >= proposal.expiresAt) {
+      throw new DashboardAgentError('dashboard.agent.confirmationExpired', 'Agent 提案已过期，请重新生成。')
+    }
+
+    let receipt: ReturnType<AgentPortSession['approveAndExecute']>
+    try {
+      receipt = session.approveAndExecute(preview.planId)
+    } catch (error) {
+      throw toExecutionFailure(error)
     }
     return Object.freeze({
-      execution: Object.freeze({ ...response.execution }),
+      execution: Object.freeze({
+        commandCount: receipt.commandCount,
+        observerErrorCount: receipt.observerErrorCount,
+        status: receipt.status,
+      }),
       message: Object.freeze({ ...response.message }),
     })
   } finally {
     options.signal?.removeEventListener('abort', abortFromCaller)
     controller.abort()
-    session?.close()
-    worker.terminate()
+    try {
+      session?.close()
+    } finally {
+      worker.terminate()
+    }
   }
 }
