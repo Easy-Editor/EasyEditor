@@ -3,10 +3,10 @@
  * 配置加载器 - 加载和解析 easypack.config.ts
  */
 
-import { build } from 'esbuild'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { build } from 'esbuild'
 import { resolveConfig } from './defaults'
 import type { EasypackConfig, ResolvedConfig } from './types'
 

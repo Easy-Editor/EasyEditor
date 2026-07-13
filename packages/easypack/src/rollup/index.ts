@@ -3,11 +3,11 @@
  * Rollup 配置生成器
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import type { RollupOptions } from 'rollup'
 import type { ResolvedConfig } from '../config/types'
 import { createOutputConfigs } from './outputs'
-import fs from 'node:fs'
-import path from 'node:path'
 
 export interface CreateRollupConfigOptions {
   config: ResolvedConfig

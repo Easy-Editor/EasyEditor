@@ -171,8 +171,7 @@ export function externalDepsPlugin(options: ExternalDepsOptions = {}): Plugin {
 
       if (!globalName) {
         throw new Error(
-          `[vite-plugin-external-deps] No global mapping found for "${moduleName}". ` +
-            'Please add it to the globals option.',
+          `[vite-plugin-external-deps] No global mapping found for "${moduleName}". Please add it to the globals option.`,
         )
       }
 

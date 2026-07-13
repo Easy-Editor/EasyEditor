@@ -5,8 +5,8 @@
 
 import type { RollupOptions } from 'rollup'
 import type { ResolvedConfig } from '../config/types'
-import { createPlugins } from './plugins'
 import { capitalize } from './constants'
+import { createPlugins } from './plugins'
 
 export type BuildType = 'full' | 'meta' | 'component'
 

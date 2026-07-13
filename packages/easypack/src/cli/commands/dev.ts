@@ -5,9 +5,9 @@
 
 import pc from 'picocolors'
 import { createServer } from 'vite'
-import type { CliArgs } from '../index'
 import { loadConfig } from '../../config'
 import { createViteConfig } from '../../vite'
+import type { CliArgs } from '../index'
 
 export async function devCommand(argv: CliArgs): Promise<void> {
   console.log(pc.cyan('Starting development server...\n'))

@@ -6,10 +6,10 @@
 import { spawn } from 'node:child_process'
 import pc from 'picocolors'
 import { rollup } from 'rollup'
-import type { CliArgs } from '../index'
 import { loadConfig } from '../../config'
-import { createRollupConfig } from '../../rollup'
 import type { ResolvedConfig } from '../../config/types'
+import { createRollupConfig } from '../../rollup'
+import type { CliArgs } from '../index'
 
 /**
  * 生成 TypeScript 类型声明
@@ -81,11 +81,11 @@ export async function buildCommand(argv: CliArgs): Promise<void> {
         fileCount++
       }
     } catch (error) {
-      console.log(pc.yellow(`  ⚠ Types generation skipped (no tsconfig.json or tsc error)`))
+      console.log(pc.yellow('  ⚠ Types generation skipped (no tsconfig.json or tsc error)'))
     }
   }
 
   const duration = Date.now() - startTime
   console.log('')
-  console.log(pc.green(`Build completed! `) + pc.gray(`(${fileCount} files in ${duration}ms)`))
+  console.log(pc.green('Build completed! ') + pc.gray(`(${fileCount} files in ${duration}ms)`))
 }

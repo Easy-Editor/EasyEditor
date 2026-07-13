@@ -3,18 +3,18 @@
  * Rollup 插件配置
  */
 
+import path from 'node:path'
+import alias from '@rollup/plugin-alias'
 import babel from '@rollup/plugin-babel'
 import commonjs from '@rollup/plugin-commonjs'
-import nodeResolve from '@rollup/plugin-node-resolve'
 import json from '@rollup/plugin-json'
-import alias from '@rollup/plugin-alias'
-import cleanup from 'rollup-plugin-cleanup'
-import postcss from 'rollup-plugin-postcss'
+import nodeResolve from '@rollup/plugin-node-resolve'
 import terser from '@rollup/plugin-terser'
 import type { Plugin as RollupPlugin } from 'rollup'
+import cleanup from 'rollup-plugin-cleanup'
+import postcss from 'rollup-plugin-postcss'
 import type { ResolvedConfig } from '../config/types'
 import { DEFAULT_EXTENSIONS } from './constants'
-import path from 'node:path'
 
 export interface CreatePluginsOptions {
   config: ResolvedConfig

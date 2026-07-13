@@ -3,10 +3,10 @@
  * 初始化配置文件命令
  */
 
-import * as prompts from '@clack/prompts'
-import pc from 'picocolors'
 import fs from 'node:fs'
 import path from 'node:path'
+import * as prompts from '@clack/prompts'
+import pc from 'picocolors'
 import type { CliArgs } from '../index'
 
 const MATERIAL_TEMPLATE = `/**
@@ -120,7 +120,6 @@ export async function initCommand(argv: CliArgs): Promise<void> {
     case 'setter':
       template = SETTER_TEMPLATE
       break
-    case 'library':
     default:
       template = LIBRARY_TEMPLATE
       break

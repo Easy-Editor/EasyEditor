@@ -3,9 +3,9 @@
  * 物料开发插件 - 提供物料调试所需的 API 和 WebSocket 通知
  */
 
-import type { Plugin, ViteDevServer } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { WebSocketServer, WebSocket } from 'ws'
+import type { Plugin, ViteDevServer } from 'vite'
+import { WebSocket, WebSocketServer } from 'ws'
 
 export interface MaterialDevPluginOptions {
   /** 物料入口文件路径 */

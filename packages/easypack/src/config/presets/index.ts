@@ -7,10 +7,10 @@ export { materialPreset } from './material'
 export { setterPreset } from './setter'
 export { libraryPreset } from './library'
 
-import type { Preset, EasypackConfig } from '../types'
+import type { EasypackConfig, Preset } from '../types'
+import { libraryPreset } from './library'
 import { materialPreset } from './material'
 import { setterPreset } from './setter'
-import { libraryPreset } from './library'
 
 /**
  * 根据预设名称获取预设配置

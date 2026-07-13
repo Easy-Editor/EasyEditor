@@ -8,24 +8,38 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { materialManager, remoteMaterialsConfig, RemoteLoadError } from '@/editor/remote'
+import { RemoteLoadError, type RemoteMaterialConfig, materialManager, remoteMaterialsConfig } from '@/editor/remote'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
+type EditableRemoteMaterial = RemoteMaterialConfig & { editorKey: string }
+
+let materialKeySequence = 0
+
+const createEditableMaterial = (material: RemoteMaterialConfig): EditableRemoteMaterial => ({
+  ...material,
+  editorKey: `remote-material-${materialKeySequence++}`,
+})
+
 export const RemoteMaterialsPanel = () => {
-  const [materials, setMaterials] = useState(remoteMaterialsConfig)
+  const [materials, setMaterials] = useState(() => remoteMaterialsConfig.map(createEditableMaterial))
   const [loading, setLoading] = useState(false)
 
   const handleToggle = (index: number) => {
-    const newMaterials = [...materials]
-    newMaterials[index].enabled = !newMaterials[index].enabled
-    setMaterials(newMaterials)
+    setMaterials(current =>
+      current.map((material, materialIndex) =>
+        materialIndex === index ? { ...material, enabled: !material.enabled } : material,
+      ),
+    )
   }
 
   const handleLoadAll = async () => {
     setLoading(true)
     try {
-      const result = await materialManager.loadMaterialMultiple(materials.filter(m => m.enabled))
+      const enabledMaterials = materials.filter(material => material.enabled)
+      const result = await materialManager.loadMaterialMultiple(
+        enabledMaterials.map(({ editorKey: _editorKey, ...material }) => material),
+      )
 
       if (result.succeeded > 0) {
         toast.success(`成功加载 ${result.succeeded} 个远程物料`, {
@@ -38,7 +52,7 @@ export const RemoteMaterialsPanel = () => {
       // 显示详细错误信息
       result.results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          const material = materials.filter(m => m.enabled)[i]
+          const material = enabledMaterials[i]
           const error = r.reason
 
           if (error instanceof RemoteLoadError) {
@@ -68,26 +82,25 @@ export const RemoteMaterialsPanel = () => {
   }
 
   const handleAddMaterial = () => {
-    setMaterials([
-      ...materials,
-      {
+    setMaterials(current => [
+      ...current,
+      createEditableMaterial({
         package: '',
         version: 'latest',
         globalName: '',
         enabled: true,
-      },
+      }),
     ])
   }
 
   const handleRemove = (index: number) => {
-    const newMaterials = materials.filter((_, i) => i !== index)
-    setMaterials(newMaterials)
+    setMaterials(current => current.filter((_, materialIndex) => materialIndex !== index))
   }
 
-  const handleChange = (index: number, field: keyof (typeof materials)[0], value: string | boolean) => {
-    const newMaterials = [...materials]
-    newMaterials[index] = { ...newMaterials[index], [field]: value }
-    setMaterials(newMaterials)
+  const handleChange = (index: number, field: keyof RemoteMaterialConfig, value: string | boolean) => {
+    setMaterials(current =>
+      current.map((material, materialIndex) => (materialIndex === index ? { ...material, [field]: value } : material)),
+    )
   }
 
   return (
@@ -98,7 +111,7 @@ export const RemoteMaterialsPanel = () => {
       </CardHeader>
       <CardContent className='space-y-4'>
         {materials.map((material, index) => (
-          <div key={index} className='flex items-end gap-2 p-3 border rounded-lg'>
+          <div key={material.editorKey} className='flex items-end gap-2 p-3 border rounded-lg'>
             <div className='flex-1 space-y-2'>
               <div>
                 <Label htmlFor={`package-${index}`}>Package Name</Label>

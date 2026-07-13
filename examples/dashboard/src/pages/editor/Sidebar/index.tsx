@@ -39,7 +39,7 @@ export const AppSidebar = ({ ...props }: React.ComponentProps<typeof Sidebar>) =
 
   useEffect(() => {
     setOpen(true)
-  }, [])
+  }, [setOpen])
 
   return (
     <Sidebar

@@ -3,12 +3,12 @@
  * Vite 配置生成器
  */
 
-import type { UserConfig } from 'vite'
+import path from 'node:path'
 import react from '@vitejs/plugin-react'
+import type { UserConfig } from 'vite'
 import type { ResolvedConfig } from '../config/types'
 import { externalDepsPlugin } from './plugins/external-deps'
 import { materialDevPlugin } from './plugins/material-dev'
-import path from 'node:path'
 
 export interface CreateViteConfigOptions {
   config: ResolvedConfig

@@ -152,6 +152,7 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* biome-ignore lint/a11y/useGenericFontNames: -apple-system-body is a WebKit feature query, not a font stack. */
   @supports (font: -apple-system-body) and (-webkit-appearance: none) {
     [data-wrapper] {
       @apply min-[1800px]:border-t;

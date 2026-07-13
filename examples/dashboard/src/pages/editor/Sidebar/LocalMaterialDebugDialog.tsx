@@ -3,9 +3,7 @@
  * 本地物料调试对话框 - 用于连接本地物料开发服务器
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import { observer } from 'mobx-react'
-import { Plug, Unplug, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -15,10 +13,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { localLoader } from '@/editor/remote'
+import { AlertCircle, CheckCircle, Plug, RefreshCw, Unplug } from 'lucide-react'
+import { observer } from 'mobx-react'
+import { useCallback, useEffect, useState } from 'react'
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error'
 
