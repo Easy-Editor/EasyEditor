@@ -1,5 +1,13 @@
 import { PolicyViolation, type TrustPolicy, findExecutableValue } from '../trust'
 import type { NodeSchema, ProjectSchema } from '../types'
+import {
+  CURRENT_PROJECT_SCHEMA_VERSION,
+  LEGACY_PROJECT_SCHEMA_VERSION,
+  type SchemaPreparationResult,
+  createSchemaPreparationReport,
+  migrateProjectSchema,
+  normalizeProjectSchema,
+} from './schema-migration'
 
 export interface SchemaValidationIssue {
   code: string
@@ -18,6 +26,28 @@ export class SchemaValidationError extends Error {
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
+
+const parseSemanticVersion = (value: string): readonly [number, number, number] | undefined => {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value)
+  if (!match) return undefined
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+const compareSemanticVersions = (
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number => {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index]
+  }
+  return 0
+}
+
+const CURRENT_PROJECT_SCHEMA_SEMVER = parseSemanticVersion(CURRENT_PROJECT_SCHEMA_VERSION) as readonly [
+  number,
+  number,
+  number,
+]
 
 const findInvalidSchemaStructure = (
   value: unknown,
@@ -71,7 +101,12 @@ const cloneSchemaValue = <T>(value: T, visited = new Map<object, unknown>()): T 
   const clone: Record<string, unknown> = {}
   visited.set(value, clone)
   Object.entries(value).forEach(([key, child]) => {
-    clone[key] = cloneSchemaValue(child, visited)
+    Object.defineProperty(clone, key, {
+      configurable: true,
+      enumerable: true,
+      value: cloneSchemaValue(child, visited),
+      writable: true,
+    })
   })
   return clone as T
 }
@@ -108,6 +143,106 @@ const validateNode = (
   ancestors.delete(value)
 }
 
+const validateSourceVersion = (schema: unknown): string => {
+  const issues: SchemaValidationIssue[] = []
+  if (!isRecord(schema)) {
+    throw new SchemaValidationError([{ code: 'project.type', message: 'Project schema must be an object', path: '$' }])
+  }
+
+  const version = schema.version
+  if (version === undefined || version === null || (typeof version === 'string' && version.trim().length === 0)) {
+    issues.push({
+      code: 'project.version.required',
+      message: 'version must be a non-empty semantic version string',
+      path: '$.version',
+    })
+  } else if (typeof version !== 'string') {
+    issues.push({
+      code: 'project.version.type',
+      message: 'version must be a string',
+      path: '$.version',
+    })
+  } else {
+    const parsedVersion = parseSemanticVersion(version)
+    if (!parsedVersion) {
+      issues.push({
+        code: 'project.version.format',
+        message: 'version must use major.minor.patch semantic version format',
+        path: '$.version',
+      })
+    } else if (compareSemanticVersions(parsedVersion, CURRENT_PROJECT_SCHEMA_SEMVER) > 0) {
+      issues.push({
+        code: 'project.version.future',
+        message: `Project schema version ${version} is newer than supported version ${CURRENT_PROJECT_SCHEMA_VERSION}`,
+        path: '$.version',
+      })
+    } else if (version !== CURRENT_PROJECT_SCHEMA_VERSION && version !== LEGACY_PROJECT_SCHEMA_VERSION) {
+      issues.push({
+        code: 'project.version.unsupported',
+        message: `No migration path is registered from project schema version ${version}`,
+        path: '$.version',
+      })
+    }
+  }
+
+  if (issues.length > 0) throw new SchemaValidationError(issues)
+  return version as string
+}
+
+const validateCurrentProjectSchema = (schema: ProjectSchema): void => {
+  const issues: SchemaValidationIssue[] = []
+
+  if (schema.version !== CURRENT_PROJECT_SCHEMA_VERSION) {
+    issues.push({
+      code: 'project.version.current',
+      message: `Migrated schema must use version ${CURRENT_PROJECT_SCHEMA_VERSION}`,
+      path: '$.version',
+    })
+  }
+
+  if (schema.componentsMap !== undefined && !Array.isArray(schema.componentsMap)) {
+    issues.push({
+      code: 'project.componentsMap.type',
+      message: 'componentsMap must be an array when provided',
+      path: '$.componentsMap',
+    })
+  }
+
+  if (schema.config !== undefined && !isRecord(schema.config)) {
+    issues.push({
+      code: 'project.config.type',
+      message: 'config must be an object when provided',
+      path: '$.config',
+    })
+  }
+
+  if (schema.meta !== undefined && !isRecord(schema.meta)) {
+    issues.push({
+      code: 'project.meta.type',
+      message: 'meta must be an object when provided',
+      path: '$.meta',
+    })
+  }
+
+  if (schema.componentsTree === undefined) {
+    issues.push({
+      code: 'project.componentsTree.required',
+      message: 'componentsTree is required',
+      path: '$.componentsTree',
+    })
+  } else if (Array.isArray(schema.componentsTree)) {
+    schema.componentsTree.forEach((node, index) => validateNode(node, `$.componentsTree[${index}]`, issues))
+  } else {
+    issues.push({
+      code: 'project.componentsTree.type',
+      message: 'componentsTree must be an array',
+      path: '$.componentsTree',
+    })
+  }
+
+  if (issues.length > 0) throw new SchemaValidationError(issues)
+}
+
 export class SchemaValidator {
   constructor(
     readonly trustPolicy: TrustPolicy,
@@ -115,36 +250,22 @@ export class SchemaValidator {
   ) {}
 
   prepare(schema: ProjectSchema): ProjectSchema {
+    return this.prepareWithReport(schema).schema
+  }
+
+  prepareWithReport(schema: ProjectSchema): SchemaPreparationResult {
     this.assertSerializableStructure(schema)
     this.assertTrustedValue(schema, 'project.load')
-    const issues: SchemaValidationIssue[] = []
+    const sourceVersion = validateSourceVersion(schema)
+    const detachedSchema = cloneSchemaValue(schema)
+    const migration = migrateProjectSchema(detachedSchema)
+    validateCurrentProjectSchema(migration.schema)
+    const normalization = normalizeProjectSchema(migration.schema)
 
-    if (isRecord(schema)) {
-      if (typeof schema.version !== 'string' || schema.version.trim().length === 0) {
-        issues.push({
-          code: 'project.version.required',
-          message: 'version must be a non-empty string',
-          path: '$.version',
-        })
-      }
-      if (Array.isArray(schema.componentsTree)) {
-        schema.componentsTree.forEach((node, index) => validateNode(node, `$.componentsTree[${index}]`, issues))
-      } else {
-        issues.push({
-          code: 'project.componentsTree.type',
-          message: 'componentsTree must be an array',
-          path: '$.componentsTree',
-        })
-      }
-    } else {
-      issues.push({ code: 'project.type', message: 'Project schema must be an object', path: '$' })
-    }
-
-    if (issues.length > 0) {
-      throw new SchemaValidationError(issues)
-    }
-
-    return cloneSchemaValue(schema)
+    return Object.freeze({
+      schema: normalization.schema,
+      report: createSchemaPreparationReport(sourceVersion, migration.migrations, normalization.normalizations),
+    })
   }
 
   prepareNode(schema: NodeSchema, path = '$'): NodeSchema {

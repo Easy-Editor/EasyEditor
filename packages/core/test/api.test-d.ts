@@ -4,13 +4,17 @@ import {
   type AgentCapability,
   type AgentExecutionReceipt,
   type AgentPlanPreview,
+  CURRENT_PROJECT_SCHEMA_VERSION,
   type EditorCommand,
   type EngineInstance,
   PolicyViolation,
+  type SchemaPreparationResult,
   SchemaValidationError,
+  SchemaValidator,
   connectAgentPort,
   createEngine,
   defaultEngine,
+  resolveTrustPolicy,
 } from '../src/index.js'
 
 const engine: EngineInstance = createEngine()
@@ -35,6 +39,13 @@ engine.transactions.run([command])
 engine.transactions.runOnDocument('document-id', [extrasOnlyCommand], document => {
   void document.id
 })
+
+const currentSchemaVersion: '1.0.0' = CURRENT_PROJECT_SCHEMA_VERSION
+const schemaPreparation: SchemaPreparationResult = new SchemaValidator(
+  resolveTrustPolicy('legacyTrusted'),
+).prepareWithReport({ version: currentSchemaVersion, componentsTree: [] })
+const migrated: boolean = schemaPreparation.report.migrated
+void migrated
 
 const capability: AgentCapability = engine.agentCapabilities.issue({
   subjectId: 'agent:type-test',

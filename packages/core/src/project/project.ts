@@ -2,6 +2,7 @@ import { action, computed, intercept, observable, observe, runInAction } from 'm
 import type { Designer } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
 import { SchemaValidator } from '../schema'
+import { createEmptyProjectSchema } from '../schema/schema-migration'
 import type { Simulator } from '../simulator'
 import { type TrustPolicy, resolveTrustPolicy } from '../trust'
 import { type ComponentsMap, type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
@@ -65,11 +66,7 @@ interface ActiveDocumentMutationBoundary {
 export class Project {
   private emitter: EventBus
 
-  private data: ProjectSchema = {
-    version: '0.0.1',
-    componentsMap: [],
-    componentsTree: [],
-  }
+  private data: ProjectSchema = createEmptyProjectSchema()
 
   @observable.shallow accessor documents: Document[] = []
 
@@ -184,19 +181,18 @@ export class Project {
   @action
   load(schema?: ProjectSchema, autoOpen?: boolean | string) {
     this.assertProjectMutationAllowed()
-    // Validation and normalization must complete before the current project is
-    // unloaded. A rejected schema therefore has no observable side effects.
-    const preparedSchema = schema ? this.schemaValidator.prepare(schema) : undefined
+    // Validation, migration, and normalization must complete before the
+    // current project is unloaded. A rejected schema therefore has no
+    // observable side effects.
+    const preparedSchema = schema ? this.schemaValidator.prepare(schema) : createEmptyProjectSchema()
 
     this.unload()
 
-    this.data = this.protectProjectDataValue({
-      ...this.data,
-      ...preparedSchema,
-    })
-    if (preparedSchema?.config != null) {
-      this._config = this.data.config
-    }
+    // Loading is replacement, not a merge. Reusing the previous data object
+    // would leak stale config, metadata, or extension fields into the new
+    // project.
+    this.data = this.protectProjectDataValue(preparedSchema)
+    this._config = this.data.config
 
     // perf: 在 open 的时候才创建 document
     // if (schema?.documents) {
@@ -265,11 +261,7 @@ export class Project {
         }
         this.documents = []
         this.documentsMap.clear()
-        this.data = this.protectProjectDataValue({
-          version: '0.0.1',
-          componentsMap: [],
-          componentsTree: [],
-        })
+        this.data = this.protectProjectDataValue(createEmptyProjectSchema())
         this._config = undefined
         this.isRendererReady = false
         this.emitter.dispose()
