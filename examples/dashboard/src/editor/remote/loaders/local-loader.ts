@@ -344,17 +344,14 @@ export class LocalMaterialLoaderClass extends EventEmitter {
         runInAction(() => {
           this.assertMaterialNameAvailable(url, meta.componentName)
           this.services.materials.createComponentMeta(registrationMeta, {
-            source: MaterialSource.DEBUG,
             component,
+            extensions: new Map<string, unknown>([
+              ['devServerUrl', url],
+              ['isLocalDebug', true],
+            ]),
+            source: MaterialSource.DEBUG,
           })
           onRegistered?.(meta.componentName)
-          const entry = this.services.materials.registry.get(meta.componentName)
-          if (entry) {
-            entry.extensions = entry.extensions || new Map()
-            entry.extensions.set('devServerUrl', url)
-            entry.extensions.set('isLocalDebug', true)
-          }
-          this.services.materials.refreshComponentMetasMap()
         })
       },
     )

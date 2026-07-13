@@ -33,25 +33,25 @@ export enum MaterialSource {
 /** 物料条目 */
 export interface MaterialEntry {
   /** 组件名称（唯一标识） */
-  componentName: string
+  readonly componentName: string
   /** 物料状态 */
-  status: MaterialStatus
+  readonly status: MaterialStatus
   /** 物料来源 */
-  source: MaterialSource
+  readonly source: MaterialSource
   /** 组件元数据包装 */
-  meta: ComponentMeta
+  readonly meta: ComponentMeta
   /** 组件实现（可选，懒加载时可能未加载） */
-  component?: Component
+  readonly component?: Component
   /** 版本号（远程物料） */
-  version?: string
+  readonly version?: string
   /** 加载时间戳 */
-  loadedAt: number
+  readonly loadedAt: number
   /** 最后访问时间戳 */
-  lastAccessedAt: number
+  readonly lastAccessedAt: number
   /** 使用计数（画布上的实例数） */
-  usageCount: number
+  readonly usageCount: number
   /** 扩展数据 */
-  extensions?: Map<string, unknown>
+  readonly extensions?: ReadonlyMap<string, unknown>
 }
 
 /** Detached, deterministic registry state for diagnostics and verification. */
@@ -80,6 +80,8 @@ export interface RegisterOptions {
   version?: string
   /** 组件实现 */
   component?: Component
+  /** Atomically replace registry-owned extension metadata. */
+  extensions?: ReadonlyMap<string, unknown>
   /** 是否覆盖已存在的物料 */
   override?: boolean
 }
@@ -108,12 +110,12 @@ export enum RegistryEventType {
 
 /** 注册表事件 */
 export interface RegistryEvent {
-  type: RegistryEventType
-  componentName: string
-  entry?: MaterialEntry
-  previousStatus?: MaterialStatus
-  error?: Error
-  timestamp: number
+  readonly type: RegistryEventType
+  readonly componentName: string
+  readonly entry?: MaterialRegistryEntrySnapshot
+  readonly previousStatus?: MaterialStatus
+  readonly error?: Readonly<Error>
+  readonly timestamp: number
 }
 
 /** 注册表事件监听器 */
@@ -184,7 +186,7 @@ export interface IMaterialRegistry {
   /**
    * 获取所有物料条目
    */
-  getAll(): Map<string, MaterialEntry>
+  getAll(): ReadonlyMap<string, MaterialEntry>
 
   /** Return a frozen, detached snapshot suitable for invariant checks. */
   getSnapshot(): MaterialRegistrySnapshot
@@ -193,7 +195,7 @@ export interface IMaterialRegistry {
    * 获取按来源分组的物料
    * @param source 物料来源
    */
-  getBySource(source: MaterialSource): MaterialEntry[]
+  getBySource(source: MaterialSource): readonly MaterialEntry[]
 
   /**
    * 获取版本号（用于缓存失效）

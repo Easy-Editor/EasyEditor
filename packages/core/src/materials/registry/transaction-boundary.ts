@@ -1,13 +1,13 @@
+import type { Component } from '../../types'
 import type { ComponentMeta } from '../component-meta'
 import type { ComponentMetaTransactionState } from '../component-meta-transaction'
 import type { MaterialRegistry } from './material-registry'
-import type { MaterialEntry, MaterialSource, MaterialStatus } from './types'
+import type { MaterialSource, MaterialStatus } from './types'
 
 export interface MaterialEntryTransactionState {
-  readonly component: MaterialEntry['component']
+  readonly component?: Component
   readonly componentName: string
-  readonly entry: MaterialEntry
-  readonly extensions?: Map<string, unknown>
+  readonly extensions?: ReadonlyMap<string, unknown>
   readonly lastAccessedAt: number
   readonly loadedAt: number
   readonly meta: ComponentMeta

@@ -243,10 +243,14 @@ test('material registry metadata and structural state roll back atomically with 
   const replacementComponent = () => 'replacement'
   const originalMeta = registry.register(
     { componentName: 'Page', title: 'before' },
-    { component: originalComponent, override: true, version: '1.0.0' },
+    {
+      component: originalComponent,
+      extensions: new Map([['origin', 'before']]),
+      override: true,
+      version: '1.0.0',
+    },
   )
   const originalEntry = registry.get('Page')
-  originalEntry.extensions = new Map([['origin', 'before']])
   let metadataChanges = 0
   const disposeChange = originalMeta.onMetadataChange(() => {
     metadataChanges += 1
@@ -276,7 +280,7 @@ test('material registry metadata and structural state roll back atomically with 
   assert.equal(document.history.isUndoable(), false)
   assert.equal(registry.has('TransactionOnly'), false)
   const restoredEntry = registry.get('Page')
-  assert.strictEqual(restoredEntry, originalEntry)
+  assert.notStrictEqual(restoredEntry, originalEntry)
   assert.strictEqual(restoredEntry.meta, originalMeta)
   assert.strictEqual(restoredEntry.component, originalComponent)
   assert.equal(restoredEntry.version, '1.0.0')
@@ -285,7 +289,10 @@ test('material registry metadata and structural state roll back atomically with 
   assert.equal(originalMeta.title, 'before')
 
   const changesAfterRollback = metadataChanges
-  originalMeta.setMetadata({ componentName: 'Page', title: 'listener-still-live' })
+  assert.strictEqual(
+    engine.materials.createComponentMeta({ componentName: 'Page', title: 'listener-still-live' }),
+    originalMeta,
+  )
   assert.equal(metadataChanges, changesAfterRollback + 1)
 })
 
@@ -307,7 +314,7 @@ test('committed material replacement tombstones the old meta and releases the tr
   )
 
   assert.equal(registry.get('Page').meta.title, 'replacement')
-  assert.throws(() => originalMeta.setMetadata({ componentName: 'Page', title: 'zombie' }), /disposed/)
+  assert.throws(() => originalMeta.onMetadataChange(() => {}), /disposed/)
   const second = engine.transactions.runOnDocument(document, [
     { type: 'updateProps', nodeId: document.root.id, props: { title: 'second-commit' } },
   ])

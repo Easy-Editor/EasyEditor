@@ -73,7 +73,7 @@ test('generation-scoped model, material, and plugin references remain tombstoned
     ['nodeChildren.onInsert', () => oldRoot.children.onInsert(() => {})],
     ['history.savePoint', () => oldHistory.savePoint()],
     ['materialRegistry.register', () => materialRegistry.register({ componentName: 'StaleMaterial' })],
-    ['componentMeta.setMetadata', () => materialMeta.setMetadata({ componentName: 'Page', title: 'stale' })],
+    ['componentMeta.onMetadataChange', () => materialMeta.onMetadataChange(() => {})],
     ['pluginContext.onDispose', () => oldContext.onDispose(() => {})],
     ['pluginEvent.on', () => oldContext.pluginEvent.on('generation:stale', () => {})],
   ]

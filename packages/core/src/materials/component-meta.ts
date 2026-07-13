@@ -6,7 +6,7 @@ import {
   installLifecycleTeardownOperation,
   runInternalLifecycleTeardown,
 } from '../lifecycle/teardown-boundary'
-import type { ComponentMetadata, NpmInfo } from '../types'
+import type { Advanced, ComponentMetadata, FieldConfig, NpmInfo, Snippet } from '../types'
 import type { EventBus } from '../utils'
 import {
   type ComponentMetaTransactionState,
@@ -17,211 +17,199 @@ export enum COMPONENT_META_EVENT {
   CHANGE = 'componentMeta:metadata.change',
 }
 
-const cloneMetadataValue = <T>(value: T, visited = new Map<object, unknown>()): T => {
-  if (!value || typeof value !== 'object') return value
-  if (visited.has(value)) return visited.get(value) as T
-  if (Array.isArray(value)) {
-    const clone: unknown[] = []
-    visited.set(value, clone)
-    value.forEach(item => clone.push(cloneMetadataValue(item, visited)))
-    return clone as T
+const EMPTY_FIELDS = Object.freeze([]) as readonly FieldConfig[]
+const EMPTY_SNIPPETS = Object.freeze([]) as readonly Snippet[]
+const EMPTY_ADVANCED = Object.freeze({}) as Readonly<Advanced>
+
+interface MetadataCloneContext {
+  readonly clones: Map<object, unknown>
+  readonly opaqueValues: WeakSet<object>
+}
+
+const isAdvancedViewPath = (path: readonly PropertyKey[]): boolean =>
+  path.length === 3 && path[0] === 'configure' && path[1] === 'advanced' && path[2] === 'view'
+
+const cloneMetadataValue = <T>(value: T, context: MetadataCloneContext, path: readonly PropertyKey[] = []): T => {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return value
+  if (isAdvancedViewPath(path)) {
+    context.opaqueValues.add(value as object)
+    return value
   }
+  if (typeof value === 'function') return value
+  if (context.clones.has(value)) return context.clones.get(value) as T
+
   const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) return value
-  const clone = Object.create(prototype) as Record<PropertyKey, unknown>
-  visited.set(value, clone)
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    context.opaqueValues.add(value)
+    return value
+  }
+
+  const clone: unknown[] | Record<PropertyKey, unknown> = Array.isArray(value) ? [] : Object.create(prototype)
+  context.clones.set(value, clone)
   for (const key of Reflect.ownKeys(value)) {
+    if (Array.isArray(value) && key === 'length') continue
     const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
     if (!descriptor) continue
-    if ('value' in descriptor) descriptor.value = cloneMetadataValue(descriptor.value, visited)
-    Reflect.defineProperty(clone, key, descriptor)
+    if (!('value' in descriptor)) {
+      throw new TypeError(`Component metadata cannot contain accessors at ${[...path, key].map(String).join('.')}`)
+    }
+    Reflect.defineProperty(clone, key, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      value: cloneMetadataValue(descriptor.value, context, [...path, key]),
+      writable: true,
+    })
   }
   return clone as T
 }
 
+const freezeMetadataValue = <T>(value: T, opaqueValues: WeakSet<object>, visited = new WeakSet<object>()): T => {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return value
+  if (typeof value === 'function' || opaqueValues.has(value) || visited.has(value)) return value
+  visited.add(value)
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+    if (descriptor && 'value' in descriptor) freezeMetadataValue(descriptor.value, opaqueValues, visited)
+  }
+  return Object.freeze(value)
+}
+
+const snapshotMetadata = (metadata: ComponentMetadata): Readonly<ComponentMetadata> => {
+  if (!metadata || typeof metadata !== 'object') throw new TypeError('Component metadata must be a plain object')
+  const prototype = Object.getPrototypeOf(metadata)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('Component metadata must be a plain object')
+  }
+  const context: MetadataCloneContext = {
+    clones: new Map(),
+    opaqueValues: new WeakSet(),
+  }
+  return freezeMetadataValue(cloneMetadataValue(metadata, context), context.opaqueValues)
+}
+
 export class ComponentMeta {
-  readonly isComponentMeta = true
+  readonly isComponentMeta!: true
 
-  private _npm?: NpmInfo
+  #metadata!: Readonly<ComponentMetadata>
 
-  private emitter: EventBus
+  #emitter: EventBus
 
-  private disposeStarted = false
+  #disposeStarted = false
 
-  private disposeCompleted = false
+  #disposeCompleted = false
 
-  get npm() {
-    return this._npm
+  get npm(): Readonly<NpmInfo> | undefined {
+    return this.#metadata.npm
   }
-
-  set npm(_npm: any) {
-    this.setNpm(_npm)
-  }
-
-  private _componentName?: string
 
   get componentName(): string {
-    return this._componentName!
+    return this.#metadata.componentName
   }
 
-  private _isContainer?: boolean
-
-  get isContainer() {
-    return this._isContainer!
+  get isContainer(): boolean {
+    return !!this.#metadata.configure?.component?.isContainer
   }
-
-  private _isMinimalRenderUnit?: boolean
 
   get isMinimalRenderUnit(): boolean {
-    return this._isMinimalRenderUnit || false
+    return !!this.#metadata.configure?.component?.isMinimalRenderUnit
   }
 
-  private _descriptor?: string
-
-  get descriptor() {
-    return this._descriptor
+  get descriptor(): string | undefined {
+    return this.#metadata.configure?.component?.descriptor
   }
 
-  private _metadata?: ComponentMetadata
-
-  get configure() {
-    return this._metadata?.configure?.props || []
+  get configure(): readonly FieldConfig[] {
+    return this.#metadata.configure?.props || EMPTY_FIELDS
   }
-
-  private _title?: string
 
   get title(): string {
-    return this._title || this.componentName
+    return this.#metadata.title || this.componentName
   }
 
-  get icon() {
-    return this._metadata?.icon
+  get icon(): string | undefined {
+    return this.#metadata.icon
   }
 
-  get advanced() {
-    return this._metadata?.configure?.advanced || {}
+  get advanced(): Readonly<Advanced> {
+    return this.#metadata.configure?.advanced || EMPTY_ADVANCED
   }
 
-  get snippets() {
-    return this._metadata?.snippets || []
+  get snippets(): readonly Snippet[] {
+    return this.#metadata.snippets || EMPTY_SNIPPETS
   }
 
-  constructor(
-    readonly designer: Designer,
-    metadata: ComponentMetadata,
-  ) {
+  constructor(designer: Designer, metadata: ComponentMetadata) {
+    Object.defineProperty(this, 'isComponentMeta', {
+      configurable: false,
+      enumerable: true,
+      value: true,
+      writable: false,
+    })
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
-    this.emitter = designer.createEventBus('ComponentMeta')
-    inheritEngineTeardownOwnership(this, this.emitter)
+    this.#emitter = designer.createEventBus('ComponentMeta')
+    inheritEngineTeardownOwnership(this, this.#emitter)
     installComponentMetaTransactionOperations(this, {
       capture: () => this.#captureTransactionState(),
+      replace: nextMetadata => this.#replaceMetadata(nextMetadata),
       restore: state => this.#restoreTransactionState(state),
     })
-    this.parseMetadata(metadata)
+    this.#installMetadataSnapshot(snapshotMetadata(metadata), false)
   }
 
-  setNpm(info: NpmInfo) {
-    this.assertUsable('materials.componentMeta.setNpm')
-    if (!this._npm) {
-      this._npm = info
-    }
+  getMetadata(): Readonly<ComponentMetadata> {
+    return this.#metadata
   }
 
-  private parseMetadata(metadata: ComponentMetadata) {
-    const { componentName, npm } = metadata
-    this._metadata = metadata
-    this._npm = npm || this._npm
-    this._componentName = componentName
-
-    const { title, configure = {} } = this._metadata
-    if (title) {
-      this._title = title
-    }
-
-    const { component } = configure
-    if (component) {
-      this._isContainer = !!component.isContainer
-      this._descriptor = component.descriptor
-      this._isMinimalRenderUnit = component.isMinimalRenderUnit
-    } else {
-      this._isContainer = false
-    }
-
-    this.emitter.emit(COMPONENT_META_EVENT.CHANGE)
+  onMetadataChange(fn: (metadata: Readonly<ComponentMetadata>) => void): () => void {
+    this.#assertUsable('materials.componentMeta.onMetadataChange')
+    return this.#emitter.on(COMPONENT_META_EVENT.CHANGE, fn)
   }
 
-  refreshMetadata() {
-    this.assertUsable('materials.componentMeta.refreshMetadata')
-    this.parseMetadata(this.getMetadata())
-  }
-
-  setMetadata(metadata: ComponentMetadata) {
-    this.assertUsable('materials.componentMeta.setMetadata')
-    this.parseMetadata(metadata)
-  }
-
-  getMetadata() {
-    return this._metadata!
-  }
-
-  onMetadataChange(fn: (args: any) => void) {
-    this.assertUsable('materials.componentMeta.onMetadataChange')
-    return this.emitter.on(COMPONENT_META_EVENT.CHANGE, fn)
-  }
-
-  /**
-   * 销毁 ComponentMeta，清理事件监听器
-   */
-  dispose() {
+  dispose(): void {
     assertPublicLifecycleTeardownAllowed(this, 'materials.componentMeta.dispose')
     this.#disposeInternal()
   }
 
-  #disposeInternal() {
-    if (this.disposeCompleted) return
-    this.disposeStarted = true
-    runInternalLifecycleTeardown(this.emitter)
-    this.disposeCompleted = true
+  #replaceMetadata(metadata: ComponentMetadata): void {
+    this.#assertUsable('materials.componentMeta.replaceMetadata')
+    if (metadata.componentName !== this.componentName) {
+      throw new Error('Component metadata name is immutable; register a different component instead')
+    }
+    this.#installMetadataSnapshot(snapshotMetadata(metadata), true)
+  }
+
+  #installMetadataSnapshot(metadata: Readonly<ComponentMetadata>, emit: boolean): void {
+    this.#metadata = metadata
+    if (emit) this.#emitter.emit(COMPONENT_META_EVENT.CHANGE, metadata)
+  }
+
+  #disposeInternal(): void {
+    if (this.#disposeCompleted) return
+    this.#disposeStarted = true
+    runInternalLifecycleTeardown(this.#emitter)
+    this.#disposeCompleted = true
   }
 
   #captureTransactionState(): ComponentMetaTransactionState {
     return {
-      componentName: this._componentName,
-      descriptor: this._descriptor,
-      disposeCompleted: this.disposeCompleted,
-      disposeStarted: this.disposeStarted,
-      isContainer: this._isContainer,
-      isMinimalRenderUnit: this._isMinimalRenderUnit,
-      metadata: this._metadata ? cloneMetadataValue(this._metadata) : undefined,
-      npm: this._npm ? cloneMetadataValue(this._npm) : undefined,
-      title: this._title,
+      disposeCompleted: this.#disposeCompleted,
+      disposeStarted: this.#disposeStarted,
+      metadata: this.#metadata,
     }
   }
 
   #restoreTransactionState(state: ComponentMetaTransactionState): void {
-    this._componentName = state.componentName
-    this._descriptor = state.descriptor
-    this.disposeCompleted = state.disposeCompleted
-    this.disposeStarted = state.disposeStarted
-    this._isContainer = state.isContainer
-    this._isMinimalRenderUnit = state.isMinimalRenderUnit
-    this._metadata = state.metadata ? cloneMetadataValue(state.metadata) : undefined
-    this._npm = state.npm ? cloneMetadataValue(state.npm) : undefined
-    this._title = state.title
-    this.emitter.emit(COMPONENT_META_EVENT.CHANGE)
+    this.#disposeCompleted = state.disposeCompleted
+    this.#disposeStarted = state.disposeStarted
+    this.#installMetadataSnapshot(state.metadata, true)
   }
 
-  private assertUsable(origin: string): void {
-    if (this.disposeStarted) throw new Error(`Cannot ${origin} on a disposed component metadata instance`)
+  #assertUsable(origin: string): void {
+    if (this.#disposeStarted) throw new Error(`Cannot ${origin} on a disposed component metadata instance`)
     assertLifecycleMutationAllowed(this, origin)
   }
 
-  /**
-   * 判断当前节点是否为远程物料组件
-   * 远程物料是指通过 CDN 或 NPM 动态加载的组件，而非内置组件
-   * @returns boolean 是否为远程物料
-   */
-  isRemoteMaterial() {
+  isRemoteMaterial(): boolean {
     try {
       return !!(this.npm && this.npm.package && this.npm.package !== 'builtin')
     } catch (error) {
@@ -232,5 +220,5 @@ export class ComponentMeta {
 }
 
 export function isComponentMeta(obj: any): obj is ComponentMeta {
-  return obj && obj.isComponentMeta
+  return obj && obj.isComponentMeta === true
 }

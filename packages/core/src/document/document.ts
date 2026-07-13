@@ -284,27 +284,25 @@ export class Document {
   @action
   createNode(schema: NodeSchema, checkId = true, options: NodeModelOptions = {}) {
     this.markSchemaMutation()
-    if (schema?.id && this.hasNode(schema.id)) {
-      schema.id = undefined
-    }
+    const normalizedSchema = schema?.id && this.hasNode(schema.id) ? { ...schema, id: undefined } : schema
 
     let node: Node | null = null
     let isNewNode = false
 
-    if (schema?.id) {
-      node = this.getNode(schema.id)
-      if (node && node.componentName === schema.componentName) {
+    if (normalizedSchema?.id) {
+      node = this.getNode(normalizedSchema.id)
+      if (node && node.componentName === normalizedSchema.componentName) {
         if (node.parent) {
           node.internalSetParent(null, false)
         }
-        node.import(schema, checkId, options)
+        node.import(normalizedSchema, checkId, options)
       } else if (node) {
         node = null
       }
     }
 
     if (!node) {
-      node = new Node(this, schema, options)
+      node = new Node(this, normalizedSchema, options)
       isNewNode = true
     }
 
@@ -480,6 +478,7 @@ export class Document {
           componentsMap.push({
             ...node.componentMeta.npm,
             componentName,
+            devMode: 'proCode',
           })
         } else {
           componentsMap.push({
@@ -499,6 +498,7 @@ export class Document {
             componentsMap.push({
               ...meta?.npm,
               componentName,
+              devMode: 'proCode',
             })
           } else {
             componentsMap.push({

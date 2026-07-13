@@ -21,7 +21,7 @@ import { installMaterialsTransactionOperations } from './transaction-boundary'
 
 export class Materials {
   /** 物料注册表（新架构核心） */
-  private _registry: MaterialRegistry | null = null
+  #registry: MaterialRegistry | null = null
 
   get designer() {
     return this.editor.get<Designer>('designer')!
@@ -29,13 +29,13 @@ export class Materials {
 
   /** 获取物料注册表 */
   get registry(): MaterialRegistry {
-    if (!this._registry) {
+    if (!this.#registry) {
       assertLifecycleMutationAllowed(this, 'materials.registry.create')
-      this._registry = new MaterialRegistry(this.designer)
+      this.#registry = new MaterialRegistry(this.designer)
     }
-    inheritLifecycleMutationGuard(this, this._registry)
-    inheritEngineTeardownOwnership(this, this._registry)
-    return this._registry
+    inheritLifecycleMutationGuard(this, this.#registry)
+    inheritEngineTeardownOwnership(this, this.#registry)
+    return this.#registry
   }
 
   /** 获取版本号（用于缓存失效） */
@@ -46,7 +46,7 @@ export class Materials {
   constructor(readonly editor: Editor) {
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
     installMaterialsTeardown(this, componentName => {
-      if (this._registry) releaseMaterialRegistryUsageDuringTeardown(this._registry, componentName)
+      if (this.#registry) releaseMaterialRegistryUsageDuringTeardown(this.#registry, componentName)
     })
     installMaterialsTransactionOperations(this, {
       begin: () => beginMaterialRegistryTransaction(this.registry),
@@ -202,7 +202,7 @@ export class Materials {
   }
 
   #disposeInternal(): void {
-    if (this._registry) runInternalLifecycleTeardown(this._registry)
-    this._registry = null
+    if (this.#registry) runInternalLifecycleTeardown(this.#registry)
+    this.#registry = null
   }
 }

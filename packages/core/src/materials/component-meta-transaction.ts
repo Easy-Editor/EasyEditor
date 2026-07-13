@@ -1,20 +1,15 @@
-import type { ComponentMetadata, NpmInfo } from '../types'
+import type { ComponentMetadata } from '../types'
 import type { ComponentMeta } from './component-meta'
 
 export interface ComponentMetaTransactionState {
-  readonly componentName?: string
-  readonly descriptor?: string
   readonly disposeCompleted: boolean
   readonly disposeStarted: boolean
-  readonly isContainer?: boolean
-  readonly isMinimalRenderUnit?: boolean
-  readonly metadata?: ComponentMetadata
-  readonly npm?: NpmInfo
-  readonly title?: string
+  readonly metadata: Readonly<ComponentMetadata>
 }
 
 interface ComponentMetaTransactionOperations {
   capture(): ComponentMetaTransactionState
+  replace(metadata: ComponentMetadata): void
   restore(state: ComponentMetaTransactionState): void
 }
 
@@ -36,6 +31,9 @@ const requireOperations = (meta: ComponentMeta): ComponentMetaTransactionOperati
 
 export const captureComponentMetaTransactionState = (meta: ComponentMeta): ComponentMetaTransactionState =>
   requireOperations(meta).capture()
+
+export const replaceComponentMetaMetadata = (meta: ComponentMeta, metadata: ComponentMetadata): void =>
+  requireOperations(meta).replace(metadata)
 
 export const restoreComponentMetaTransactionState = (meta: ComponentMeta, state: ComponentMetaTransactionState): void =>
   requireOperations(meta).restore(state)

@@ -3,7 +3,7 @@
  * 已加载资源注册表
  */
 
-import { action, computed, observable } from 'mobx'
+import { type ObservableMap, action, computed, observable } from 'mobx'
 import { assertLifecycleMutationAllowed } from '../../lifecycle/mutation-barrier'
 import {
   assertPublicLifecycleTeardownAllowed,
@@ -14,17 +14,58 @@ import type { ResourceType } from '../core/errors'
 /** 已加载资源条目 */
 export interface LoadedResource<T = unknown> {
   /** 资源类型 */
-  type: ResourceType
+  readonly type: ResourceType
   /** 资源名称（包名） */
-  name: string
+  readonly name: string
   /** 版本号 */
-  version: string
+  readonly version: string
   /** UMD 全局变量名 */
-  globalName: string
-  /** 资源数据 */
-  data: T
+  readonly globalName: string
+  /** 资源数据；作为适配器拥有的不透明能力对象保留原始引用 */
+  readonly data: T
   /** 加载完成时间 */
-  loadedAt: number
+  readonly loadedAt: number
+}
+
+const assertNonEmptyString: (value: unknown, field: string) => asserts value is string = (value, field) => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError(`Resource ${field} must be a non-empty string`)
+  }
+}
+
+const readResourceField = (resource: object, field: keyof LoadedResource): unknown => {
+  const descriptor = Object.getOwnPropertyDescriptor(resource, field)
+  if (!descriptor || !('value' in descriptor)) {
+    throw new TypeError(`Resource ${field} must be an own data property`)
+  }
+  return descriptor.value
+}
+
+const snapshotResource = <T>(resource: LoadedResource<T>): LoadedResource<T> => {
+  if (!resource || typeof resource !== 'object') {
+    throw new TypeError('Resource must be an object')
+  }
+
+  const data = readResourceField(resource, 'data') as T
+  const globalName = readResourceField(resource, 'globalName')
+  const loadedAt = readResourceField(resource, 'loadedAt')
+  const name = readResourceField(resource, 'name')
+  const type = readResourceField(resource, 'type')
+  const version = readResourceField(resource, 'version')
+  if (type !== 'material' && type !== 'setter') {
+    throw new TypeError('Resource type must be "material" or "setter"')
+  }
+  assertNonEmptyString(name, 'name')
+  assertNonEmptyString(version, 'version')
+  assertNonEmptyString(globalName, 'globalName')
+  if (typeof loadedAt !== 'number' || !Number.isFinite(loadedAt) || loadedAt < 0) {
+    throw new TypeError('Resource loadedAt must be a finite non-negative number')
+  }
+
+  // `data` deliberately remains the adapter-owned capability leaf. Only the
+  // registry envelope is copied and frozen so callers cannot rewrite the
+  // registry's identity or routing metadata through an input/output alias.
+  return Object.freeze({ data, globalName, loadedAt, name, type, version })
 }
 
 /**
@@ -33,10 +74,10 @@ export interface LoadedResource<T = unknown> {
  */
 export class ResourceRegistry {
   /** 物料资源 */
-  @observable.shallow private accessor materials = new Map<string, LoadedResource>()
+  readonly #materials = observable.map<string, LoadedResource>(undefined, { deep: false })
 
   /** 设置器资源 */
-  @observable.shallow private accessor setters = new Map<string, LoadedResource>()
+  readonly #setters = observable.map<string, LoadedResource>(undefined, { deep: false })
 
   constructor() {
     installLifecycleTeardownOperation(
@@ -50,7 +91,7 @@ export class ResourceRegistry {
    */
   @computed
   get materialCount(): number {
-    return this.materials.size
+    return this.#materials.size
   }
 
   /**
@@ -58,7 +99,7 @@ export class ResourceRegistry {
    */
   @computed
   get setterCount(): number {
-    return this.setters.size
+    return this.#setters.size
   }
 
   /**
@@ -67,15 +108,16 @@ export class ResourceRegistry {
   @action
   register<T>(resource: LoadedResource<T>): void {
     assertLifecycleMutationAllowed(this, 'remote.registry.register')
-    const map = this.getMap(resource.type)
-    map.set(resource.name, resource as LoadedResource)
+    const ownedResource = snapshotResource(resource)
+    const map = this.#getMap(ownedResource.type)
+    map.set(ownedResource.name, ownedResource as LoadedResource)
   }
 
   /**
    * 获取资源
    */
   get<T>(type: ResourceType, name: string): LoadedResource<T> | undefined {
-    const map = this.getMap(type)
+    const map = this.#getMap(type)
     return map.get(name) as LoadedResource<T> | undefined
   }
 
@@ -83,7 +125,7 @@ export class ResourceRegistry {
    * 检查资源是否已加载
    */
   has(type: ResourceType, name: string): boolean {
-    const map = this.getMap(type)
+    const map = this.#getMap(type)
     return map.has(name)
   }
 
@@ -93,35 +135,36 @@ export class ResourceRegistry {
   @action
   unload(type: ResourceType, name: string): boolean {
     assertLifecycleMutationAllowed(this, 'remote.registry.unload')
-    const map = this.getMap(type)
+    const map = this.#getMap(type)
     return map.delete(name)
   }
 
   /**
    * 获取所有资源
    */
-  getAll(type?: ResourceType): LoadedResource[] {
+  getAll(type?: ResourceType): readonly LoadedResource[] {
     if (type === 'material') {
-      return Array.from(this.materials.values())
+      return Object.freeze(Array.from(this.#materials.values()))
     }
     if (type === 'setter') {
-      return Array.from(this.setters.values())
+      return Object.freeze(Array.from(this.#setters.values()))
     }
-    return [...Array.from(this.materials.values()), ...Array.from(this.setters.values())]
+    if (type !== undefined) this.#getMap(type)
+    return Object.freeze([...this.#materials.values(), ...this.#setters.values()])
   }
 
   /**
    * 获取所有物料名称
    */
-  getMaterialNames(): string[] {
-    return Array.from(this.materials.keys())
+  getMaterialNames(): readonly string[] {
+    return Object.freeze(Array.from(this.#materials.keys()))
   }
 
   /**
    * 获取所有设置器名称
    */
-  getSetterNames(): string[] {
-    return Array.from(this.setters.keys())
+  getSetterNames(): readonly string[] {
+    return Object.freeze(Array.from(this.#setters.keys()))
   }
 
   /**
@@ -130,7 +173,7 @@ export class ResourceRegistry {
   @action
   clearType(type: ResourceType): void {
     assertLifecycleMutationAllowed(this, 'remote.registry.clearType')
-    const map = this.getMap(type)
+    const map = this.#getMap(type)
     map.clear()
   }
 
@@ -140,8 +183,8 @@ export class ResourceRegistry {
   @action
   clearAll(): void {
     assertLifecycleMutationAllowed(this, 'remote.registry.clearAll')
-    this.materials.clear()
-    this.setters.clear()
+    this.#materials.clear()
+    this.#setters.clear()
   }
 
   dispose(): void {
@@ -150,14 +193,16 @@ export class ResourceRegistry {
   }
 
   #disposeInternal(): void {
-    this.materials.clear()
-    this.setters.clear()
+    this.#materials.clear()
+    this.#setters.clear()
   }
 
   /**
    * 获取资源映射
    */
-  private getMap(type: ResourceType): Map<string, LoadedResource> {
-    return type === 'material' ? this.materials : this.setters
+  #getMap(type: ResourceType): ObservableMap<string, LoadedResource> {
+    if (type === 'material') return this.#materials
+    if (type === 'setter') return this.#setters
+    throw new TypeError('Resource type must be "material" or "setter"')
   }
 }

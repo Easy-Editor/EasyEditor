@@ -4,7 +4,6 @@
  */
 
 export { MaterialRegistry } from './material-registry'
-export type { MaterialRegistryTransactionState } from './transaction-boundary'
 export {
   type IMaterialRegistry,
   type MaterialEntry,
