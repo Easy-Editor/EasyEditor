@@ -1,11 +1,11 @@
 ---
 "@easy-editor/core": major
-"@easy-editor/plugin-dashboard": patch
+"@easy-editor/plugin-dashboard": major
 "@easy-editor/plugin-datasource": patch
-"@easy-editor/plugin-hotkey": patch
-"@easy-editor/renderer-core": patch
-"@easy-editor/react-renderer": patch
-"@easy-editor/react-renderer-dashboard": patch
+"@easy-editor/plugin-hotkey": major
+"@easy-editor/renderer-core": major
+"@easy-editor/react-renderer": major
+"@easy-editor/react-renderer-dashboard": major
 "@easy-editor/create": patch
 ---
 

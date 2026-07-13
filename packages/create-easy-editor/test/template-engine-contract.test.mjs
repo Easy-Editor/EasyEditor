@@ -147,12 +147,12 @@ test('React dashboard template pins the compatible engine release set and packag
       ].map(name => [name, manifest.dependencies[name]]),
     ),
     {
-      '@easy-editor/core': '^1.1.0',
-      '@easy-editor/plugin-dashboard': '^1.0.4',
-      '@easy-editor/plugin-hotkey': '^1.0.4',
-      '@easy-editor/renderer-core': '^1.0.4',
-      '@easy-editor/react-renderer': '^1.0.4',
-      '@easy-editor/react-renderer-dashboard': '^1.0.5',
+      '@easy-editor/core': '^2.0.0',
+      '@easy-editor/plugin-dashboard': '^2.0.0',
+      '@easy-editor/plugin-hotkey': '^2.0.0',
+      '@easy-editor/renderer-core': '^2.0.0',
+      '@easy-editor/react-renderer': '^2.0.0',
+      '@easy-editor/react-renderer-dashboard': '^2.0.0',
     },
   )
 })
