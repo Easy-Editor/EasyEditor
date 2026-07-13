@@ -1,3 +1,4 @@
+import { MessageChannel as NodeMessageChannel } from 'node:worker_threads'
 import {
   type AgentAuditRecord,
   type AgentCapability,
@@ -7,11 +8,17 @@ import {
   type EngineInstance,
   PolicyViolation,
   SchemaValidationError,
+  connectAgentPort,
   createEngine,
   defaultEngine,
 } from '../src/index.js'
 
 const engine: EngineInstance = createEngine()
+engine.loadProject({ version: '0.0.1', componentsMap: [], componentsTree: [] }, true)
+engine.unloadProject()
+engine.undo()
+engine.undo('document-id')
+engine.redo(engine.project.currentDocument)
 const command: EditorCommand = {
   type: 'updateProps',
   nodeId: 'node-id',
@@ -52,6 +59,43 @@ const unsubscribeAudit: () => void = engine.agentCapabilities.subscribeAudit(rec
 capability.descriptor.grant.commandTypes.push('removeNode')
 unsubscribeAudit()
 capability.close()
+
+const browserChannel = new MessageChannel()
+const browserController = new AbortController()
+const browserSession = engine.agentCapabilities.issuePort(
+  {
+    subjectId: 'agent:browser-port',
+    documentIds: ['document-id'],
+    commandTypes: ['updateProps'],
+  },
+  browserChannel.port1,
+  { signal: browserController.signal },
+)
+const browserCapability = await connectAgentPort(browserChannel.port2)
+const disposeBrowserEvents = browserCapability.subscribe(event => {
+  const type: 'agent.transaction.committed' = event.type
+  void type
+})
+disposeBrowserEvents()
+browserCapability.close()
+browserSession.close()
+
+const nodeChannel = new NodeMessageChannel()
+const nodeController = new AbortController()
+engine.agentCapabilities.issuePort(
+  {
+    subjectId: 'agent:node-port',
+    documentIds: ['document-id'],
+    commandTypes: [],
+  },
+  nodeChannel.port1,
+  { signal: nodeController.signal },
+)
+void connectAgentPort(nodeChannel.port2, {
+  signal: nodeController.signal,
+  connectTimeoutMs: 1000,
+  requestTimeoutMs: 1000,
+})
 void receipt
 void auditRecords
 void defaultEngine

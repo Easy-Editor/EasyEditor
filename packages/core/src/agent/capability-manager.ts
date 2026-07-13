@@ -8,8 +8,10 @@ import type { Document } from '../document'
 import type { Project } from '../project'
 import type { TrustPolicy } from '../trust'
 import { uniqueId } from '../utils/unique-id'
+import { AgentPortHostSession } from './channel'
 import { planAgentCommands } from './command-planner'
 import { type AgentDocumentBaseline, AgentDocumentBaselineRegistry } from './document-baseline'
+import { AgentDomainEventPublisher } from './domain-events'
 import { AgentCapabilityError, AgentPlanStaleError, toAgentCapabilityError } from './errors'
 import { isSafeAgentExtraKey } from './policy'
 import { deepFreezeAgentData, prepareAgentData, serializeCanonicalAgentSnapshotData } from './strict-data-validator'
@@ -26,9 +28,13 @@ import type {
   AgentCapabilityLimits,
   AgentCommandAuditSummary,
   AgentDocumentSnapshot,
+  AgentDomainEventListener,
   AgentExecutionReceipt,
+  AgentMessagePort,
   AgentPlanPreview,
   AgentPlanRequest,
+  AgentPortSession,
+  AgentPortSessionOptions,
 } from './types'
 
 const HARD_LIMITS: AgentCapabilityLimits = Object.freeze({
@@ -353,6 +359,10 @@ export class AgentCapabilityManager {
 
   private auditDelivery = createAuditDeliveryState()
 
+  private readonly domainEvents = new AgentDomainEventPublisher()
+
+  private readonly portSessions = new Set<AgentPortHostSession>()
+
   private active = false
 
   private generation = 0
@@ -434,6 +444,55 @@ export class AgentCapabilityManager {
     })
   }
 
+  issuePort(
+    input: AgentCapabilityGrantInput,
+    port: AgentMessagePort,
+    options: AgentPortSessionOptions,
+  ): AgentPortSession {
+    this.assertManagerReady()
+    if (
+      !port ||
+      typeof port.postMessage !== 'function' ||
+      typeof port.close !== 'function' ||
+      !options?.signal ||
+      typeof options.signal.addEventListener !== 'function' ||
+      typeof options.signal.removeEventListener !== 'function'
+    ) {
+      throw new AgentCapabilityError({
+        code: 'agent.transport.invalidOptions',
+        message: 'Agent MessagePort sessions require a dedicated port and AbortSignal',
+      })
+    }
+    if (options.signal.aborted) {
+      throw new AgentCapabilityError({
+        code: 'agent.transport.aborted',
+        message: 'Cannot issue an Agent MessagePort session with an aborted signal',
+      })
+    }
+
+    const capability = this.issue(input)
+    try {
+      const session = new AgentPortHostSession({
+        capability,
+        onClose: closed => this.portSessions.delete(closed),
+        options,
+        port,
+        subscribeEvents: listener => this.subscribeDomainEvents(listener),
+      })
+      if (session.state !== 'open') {
+        throw new AgentCapabilityError({
+          code: 'agent.transport.closed',
+          message: 'The Agent MessagePort session closed during initialization',
+        })
+      }
+      this.portSessions.add(session)
+      return session
+    } catch (error) {
+      capability.close()
+      throw error
+    }
+  }
+
   getAuditRecords(): readonly AgentAuditRecord[] {
     return Object.freeze([...this.auditRecords])
   }
@@ -455,8 +514,27 @@ export class AgentCapabilityManager {
     }
   }
 
+  subscribeDomainEvents(listener: AgentDomainEventListener): () => void {
+    this.assertManagerReady()
+    if (typeof listener !== 'function') {
+      throw new AgentCapabilityError({
+        code: 'agent.event.listenerInvalid',
+        message: 'Agent domain event listener must be a function',
+      })
+    }
+    return this.domainEvents.subscribe(listener)
+  }
+
   revokeAll(reason = 'engine.lifecycle'): void {
     const failures: unknown[] = []
+    for (const session of [...this.portSessions]) {
+      try {
+        session.terminate(reason)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    this.portSessions.clear()
     for (const capabilityId of [...this.capabilities.keys()]) {
       try {
         this.revoke(capabilityId, reason)
@@ -478,6 +556,7 @@ export class AgentCapabilityManager {
     this.baselines.clear()
     clearAuditDeliveryState(this.auditDelivery)
     this.auditDelivery = createAuditDeliveryState()
+    this.domainEvents.clear()
     this.active = false
     this.generation += 1
     if (failures.length) throw new AggregateError(failures, 'One or more Agent capabilities failed to revoke cleanly')
@@ -747,7 +826,6 @@ export class AgentCapabilityManager {
           this.assertPlanCurrent(capability, plan, current)
         },
         publishEvents: false,
-        restrictDocumentMutations: true,
         settledPostcondition: boundDocument => verifyExpectedDocument(boundDocument, '$.settledPostcondition'),
       })
     } catch (error) {
@@ -877,6 +955,19 @@ export class AgentCapabilityManager {
       errorCode: verificationError ? 'agent.postCommit.verificationFailed' : undefined,
       outcome: status,
       planId: plan.planId,
+    })
+    this.domainEvents.publishCommitted({
+      affectedNodeIds: [...receipt.affectedNodeIds],
+      baseRevision: plan.baseRevision,
+      capabilityId: capability.descriptor.capabilityId,
+      commandCount: receipt.commandCount,
+      commandTypes: plan.commands.map(command => command.type),
+      documentId: plan.documentId,
+      observerErrorCount: receipt.observerErrorCount,
+      planId: plan.planId,
+      revision: receipt.revision,
+      status: receipt.status,
+      subjectId: capability.descriptor.subjectId,
     })
     return receipt
   }

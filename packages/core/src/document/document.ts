@@ -14,6 +14,72 @@ export enum DOCUMENT_EVENT {
   OPEN = 'document:open',
 }
 
+const createMutationGuardedMapView = <K, V>(backing: Map<K, V>, assertMutation: () => void): Map<K, V> => {
+  return new Proxy(backing, {
+    get(target, property, receiver) {
+      if (property === 'set') {
+        return (key: K, value: V) => {
+          assertMutation()
+          target.set(key, value)
+          return receiver as Map<K, V>
+        }
+      }
+      if (property === 'delete') {
+        return (key: K) => {
+          assertMutation()
+          return target.delete(key)
+        }
+      }
+      if (property === 'clear') {
+        return () => {
+          assertMutation()
+          target.clear()
+        }
+      }
+      if (property === 'forEach') {
+        return (callback: (value: V, key: K, map: Map<K, V>) => void, thisArg?: unknown) => {
+          target.forEach((value, key) => callback.call(thisArg, value, key, receiver as Map<K, V>))
+        }
+      }
+      if (property === 'size') return target.size
+      if (property === 'valueOf') return () => receiver
+      if (
+        property === 'get' ||
+        property === 'has' ||
+        property === 'entries' ||
+        property === 'keys' ||
+        property === 'values' ||
+        property === Symbol.iterator
+      ) {
+        const method = Reflect.get(target, property, target) as (...args: unknown[]) => unknown
+        return (...args: unknown[]) => Reflect.apply(method, target, args)
+      }
+
+      return Reflect.get(target, property, receiver)
+    },
+    defineProperty(target, property, attributes) {
+      assertMutation()
+      return Reflect.defineProperty(target, property, attributes)
+    },
+    deleteProperty(target, property) {
+      assertMutation()
+      return Reflect.deleteProperty(target, property)
+    },
+    preventExtensions(target) {
+      assertMutation()
+      return Reflect.preventExtensions(target)
+    },
+    set(target, property, value) {
+      assertMutation()
+      return Reflect.set(target, property, value, target)
+    },
+    setPrototypeOf(target, prototype) {
+      assertMutation()
+      return Reflect.setPrototypeOf(target, prototype)
+    },
+  })
+}
+
 export class Document {
   readonly isDocument = true
 
@@ -31,7 +97,16 @@ export class Document {
 
   private emitter: EventBus
 
-  id: string
+  #id = ''
+
+  get id(): string {
+    return this.#id
+  }
+
+  set id(value: string) {
+    this.project.assertProjectMutationAllowed()
+    this.#id = value
+  }
 
   /** document is open or not */
   @observable.ref accessor _opened = false
@@ -57,7 +132,16 @@ export class Document {
   private _blank = true
 
   /** document root node */
-  rootNode: Node | null = null
+  #rootNode: Node | null = null
+
+  get rootNode(): Node | null {
+    return this.#rootNode
+  }
+
+  set rootNode(value: Node | null) {
+    this.project.assertDocumentMutationAllowed(this)
+    this.#rootNode = value
+  }
 
   get root() {
     return this.rootNode
@@ -67,10 +151,12 @@ export class Document {
     return this.rootNode
   }
 
-  private _nodesMap = new Map<Node['id'], Node>()
+  #nodesMap = new Map<Node['id'], Node>()
+
+  private readonly restrictedNodesMapView: Map<Node['id'], Node>
 
   get nodesMap() {
-    return this._nodesMap
+    return this.project.allowsDirectModelMutation() ? this.#nodesMap : this.restrictedNodesMapView
   }
 
   get simulator(): Simulator | null {
@@ -135,6 +221,7 @@ export class Document {
     this.designer = project.designer
     this.emitter = this.designer.createEventBus('Document')
     this.id = schema?.docId ?? uniqueId('doc')
+    this.restrictedNodesMapView = createMutationGuardedMapView(this.#nodesMap, () => this.markSchemaMutation())
 
     if (schema) {
       this.rootNode = this.createNode(schema)
@@ -184,7 +271,7 @@ export class Document {
     this.history.destroy()
     this.designer.postEvent(DOCUMENT_EVENT.REMOVE, { id: this.id })
     this.purge()
-    this.project.removeDocument(this)
+    this.project.internalUnlinkDocument(this)
   }
 
   @action
@@ -200,7 +287,7 @@ export class Document {
 
     this.rootNode?.purge()
     this.nodes.clear()
-    this._nodesMap.clear()
+    this.#nodesMap.clear()
     this.rootNode = null
   }
 
@@ -232,7 +319,7 @@ export class Document {
     }
 
     this.nodes.add(node)
-    this._nodesMap.set(node.id, node)
+    this.#nodesMap.set(node.id, node)
     this.emitter.emit(NODE_EVENT.ADD, node)
 
     // 追踪物料使用：仅对新创建的节点增加使用计数
@@ -244,11 +331,11 @@ export class Document {
   }
 
   getNode(id: string) {
-    return this._nodesMap.get(id) || null
+    return this.#nodesMap.get(id) || null
   }
 
   getNodeCount(): number {
-    return this._nodesMap.size
+    return this.#nodesMap.size
   }
 
   hasNode(id: string) {
@@ -274,6 +361,7 @@ export class Document {
 
   @action
   private internalRemoveNode(node: Node, useMutator = false) {
+    this.project.assertDocumentMutationAllowed(this)
     if (!this.nodes.has(node)) {
       return
     }
@@ -287,16 +375,18 @@ export class Document {
 
   @action
   unlinkNode(node: Node) {
+    this.markSchemaMutation()
     // 追踪物料使用：减少使用计数
     if (node.componentName) {
       this.designer.materials.decrementUsage(node.materialUsageKey)
     }
 
     this.nodes.delete(node)
-    this._nodesMap.delete(node.id)
+    this.#nodesMap.delete(node.id)
   }
 
   migrateNode(node: Node, newParent: Node) {
+    this.project.assertDocumentMutationAllowed(this)
     if (node.parent === newParent) {
       return
     }
@@ -392,7 +482,7 @@ export class Document {
     // use map to avoid duplicate
     const existedMap: Record<string, boolean> = {}
 
-    for (const node of this._nodesMap.values()) {
+    for (const node of this.#nodesMap.values()) {
       const { componentName } = node || {}
       if (!existedMap[node.materialUsageKey]) {
         existedMap[node.materialUsageKey] = true

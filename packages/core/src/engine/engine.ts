@@ -3,6 +3,7 @@ import { AgentCapabilityManager } from '../agent'
 import { CommandManager, TransactionManager } from '../commands'
 import { Config, type ConfigOptions, config as legacyConfig } from '../config'
 import { Clipboard, Designer, clipboard as legacyClipboard } from '../designer'
+import type { Document } from '../document'
 import { DisposalLedger } from '../lifecycle'
 import { Materials } from '../materials'
 import {
@@ -14,10 +15,12 @@ import {
   getProcessPrototypeExtensionIntegrityIssues,
   hasProcessPrototypeExtensions,
 } from '../plugin'
+import { withProjectMutationAuthority } from '../project/mutation-authority'
 import { LoadingStateManager, ResourceRegistry, loadingState, resourceRegistry } from '../remote'
 import { SchemaValidator } from '../schema'
 import { Setters } from '../setters'
 import { PolicyViolation, type TrustPolicy, type TrustPolicyPreset, resolveTrustPolicy } from '../trust'
+import type { ProjectSchema } from '../types'
 import { Event, EventBus, Hotkey, commonEvent, createLogger } from '../utils'
 import { EventTransactionCoordinator } from '../utils/event-transaction'
 import { Editor } from './editor'
@@ -122,6 +125,7 @@ export class EngineInstance {
     this.hotkey = new Hotkey()
     this.clipboard = options.services?.clipboard || new Clipboard()
     this.editor = new Editor(undefined, this.config, this.eventTransactions.defer)
+    this.editor.set('trustPolicy', this.trustPolicy)
 
     const schemaValidator = new SchemaValidator(this.trustPolicy, origin => this.assertTrustBoundaryIntegrity(origin))
     this.designer = new Designer({ editor: this.editor, eventDelivery: this.eventTransactions.defer, schemaValidator })
@@ -281,6 +285,26 @@ export class EngineInstance {
     }
   }
 
+  /** Validate and replace the project through the engine-owned host boundary. */
+  loadProject(schema?: ProjectSchema, autoOpen?: boolean | string): void {
+    this.runHostModelMutation('engine.loadProject', () => this.project.load(schema, autoOpen))
+  }
+
+  /** Remove all project documents through the engine-owned host boundary. */
+  unloadProject(): void {
+    this.runHostModelMutation('engine.unloadProject', () => this.project.unload())
+  }
+
+  /** Undo one committed history unit without exposing raw History mutation authority. */
+  undo(documentOrId?: Document | string): void {
+    this.runHostModelMutation('engine.undo', () => this.resolveOwnedDocument(documentOrId).history.back())
+  }
+
+  /** Redo one committed history unit without exposing raw History mutation authority. */
+  redo(documentOrId?: Document | string): void {
+    this.runHostModelMutation('engine.redo', () => this.resolveOwnedDocument(documentOrId).history.forward())
+  }
+
   private async disposeEngine(): Promise<void> {
     this.lifecycleState = 'disposing'
     const failures: unknown[] = []
@@ -298,7 +322,7 @@ export class EngineInstance {
     this.initScope = undefined
     await cleanup(() => this.plugins.destroy())
     await cleanup(() => this.designer.purge())
-    await cleanup(() => this.project.dispose())
+    await cleanup(() => withProjectMutationAuthority(this.project, () => this.project.dispose()))
     if (!initScope) {
       await cleanup(() => this.disposeRemoteAdapter())
     }
@@ -398,6 +422,27 @@ export class EngineInstance {
     if (this.hostWindow === null) return undefined
     if (this.hostWindow) return this.hostWindow
     return typeof window === 'undefined' ? undefined : window
+  }
+
+  private runHostModelMutation<T>(origin: string, operation: () => T): T {
+    this.assertTrustBoundaryIntegrity(origin)
+    if (this.lifecycleState === 'disposing' || this.lifecycleState === 'disposed' || this.lifecycleState === 'failed') {
+      throw new Error(`Cannot mutate the project while engine is ${this.lifecycleState}`)
+    }
+    return withProjectMutationAuthority(this.project, operation)
+  }
+
+  private resolveOwnedDocument(documentOrId?: Document | string): Document {
+    const document =
+      documentOrId === undefined
+        ? this.project.currentDocument
+        : typeof documentOrId === 'string'
+          ? this.project.getDocument(documentOrId)
+          : documentOrId
+    if (!document || this.project.getDocument(document.id) !== document) {
+      throw new Error('The history document does not belong to this engine project')
+    }
+    return document
   }
 
   private wireEditorContext() {

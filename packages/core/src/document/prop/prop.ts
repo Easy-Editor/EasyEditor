@@ -109,7 +109,19 @@ export class Prop {
 
   readonly id = uniqueId('prop')
 
-  @observable.ref accessor key: PropKey
+  @observable.ref private accessor _key: PropKey
+
+  get key(): PropKey {
+    return this._key
+  }
+
+  @action
+  set key(value: PropKey) {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
+    if (this._key === value) return
+    this.owner.document.markSchemaMutation()
+    this._key = value
+  }
 
   readonly owner: Node
 
@@ -353,10 +365,12 @@ export class Prop {
    */
   @action
   purge() {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     if (this.purged) {
       return
     }
 
+    this.owner.document.markSchemaMutation()
     this.purged = true
     if (this._items) {
       for (const item of this._items) {

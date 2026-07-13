@@ -17,7 +17,7 @@ async function createReadyEngine(t, subjectId = 'agent:audit') {
   const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
   t.after(() => engine.destroy())
   await engine.init()
-  engine.project.load(createProjectSchema(), true)
+  engine.loadProject(createProjectSchema(), true)
   return {
     capability: issueUpdateCapability(engine, subjectId),
     core,
@@ -223,7 +223,7 @@ test('restricted policy reports a co-realm assurance instead of claiming process
   const engine = core.createEngine({ hostWindow: null })
   t.after(() => engine.destroy())
   await engine.init()
-  engine.project.load(createProjectSchema(), true)
+  engine.loadProject(createProjectSchema(), true)
   const document = engine.project.currentDocument
   const capability = engine.agentCapabilities.issue({
     subjectId: 'agent:assurance',

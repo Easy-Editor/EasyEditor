@@ -10,7 +10,7 @@ test('agentRestricted rejects deeply nested executable schema before project mut
   t.after(() => engine.destroy())
   const before = structuredClone(engine.project.export())
 
-  const error = await captureFailure(() => engine.project.load(createExecutableSchema(), true))
+  const error = await captureFailure(() => engine.loadProject(createExecutableSchema(), true))
   assertStructuredPolicyViolation(error, /schema|executable/i)
   assert.match(
     JSON.stringify({ message: error.message, path: error.path, details: error.details }),
@@ -24,7 +24,7 @@ test('agentRestricted rejects executable command payload before node mutation', 
   assertKernelApi(core)
   const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
   t.after(() => engine.destroy())
-  engine.project.load(createProjectSchema(), true)
+  engine.loadProject(createProjectSchema(), true)
   const root = engine.project.currentDocument.root
   const before = engine.project.currentDocument.export()
 
@@ -128,7 +128,7 @@ test('agentRestricted rejects raw functions and accessors without invoking gette
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
   t.after(() => engine.destroy())
-  engine.project.load(createProjectSchema(), true)
+  engine.loadProject(createProjectSchema(), true)
   const root = engine.project.currentDocument.root
 
   const functionError = await captureFailure(() =>

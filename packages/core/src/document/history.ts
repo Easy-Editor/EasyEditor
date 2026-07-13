@@ -126,6 +126,7 @@ export class History<T = RootSchema> {
   }
 
   go(originalCursor: number) {
+    if (this.document) this.document.project.assertDocumentMutationAllowed(this.document)
     this.session.end()
 
     let cursor = originalCursor

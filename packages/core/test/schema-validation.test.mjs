@@ -50,11 +50,11 @@ test('invalid descendant nodes identify their exact JSON path', async t => {
   assert.ok(error.issues.some(issue => issue.path === '$.componentsTree[0].children[0].componentName'))
 })
 
-test('document-level schema ingress validates before createDocument and import mutate', async t => {
+test('restricted document-level raw ingress is denied before createDocument and import mutate', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
   t.after(() => engine.destroy())
-  engine.project.load(createProjectSchema(), true)
+  engine.loadProject(createProjectSchema(), true)
   const document = engine.project.currentDocument
   const before = structuredClone(document.export())
   const beforeCount = engine.project.documents.length
@@ -63,10 +63,12 @@ test('document-level schema ingress validates before createDocument and import m
 
   const createError = await captureFailure(() => engine.project.createDocument(unsafeRoot))
   assert.equal(createError.name, 'PolicyViolation')
+  assert.equal(createError.capability, 'model.mutation')
   assert.equal(engine.project.documents.length, beforeCount)
 
   const importError = await captureFailure(() => document.import(unsafeRoot))
   assert.equal(importError.name, 'PolicyViolation')
+  assert.equal(importError.capability, 'model.mutation')
   assert.deepEqual(document.export(), before)
 })
 

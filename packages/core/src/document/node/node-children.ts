@@ -100,6 +100,7 @@ export class NodeChildren {
 
   @action
   remove(purge = true, useMutator = true) {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     this.children.forEach(child => {
       child.remove(purge, useMutator)
     })
@@ -110,9 +111,11 @@ export class NodeChildren {
 
   @action
   purge() {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     if (this.purged) {
       return
     }
+    this.owner.document.markSchemaMutation()
     this.purged = true
     this.childrenMutationDisposer()
     this.childrenReferenceDisposer()
@@ -123,6 +126,7 @@ export class NodeChildren {
   }
 
   internalInitParent() {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     for (const child of this.children) {
       child.internalSetParent(this.owner)
     }
@@ -130,6 +134,7 @@ export class NodeChildren {
 
   @action
   internalUnlinkChild(node: Node) {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     const i = this.children.indexOf(node)
     if (i < 0) {
       return false
@@ -154,6 +159,7 @@ export class NodeChildren {
 
   @action
   internalDelete(node: Node, purge = false, useMutator = true): boolean {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     if (node.isParental) {
       node.children?.remove(purge, useMutator)
     }
@@ -256,6 +262,7 @@ export class NodeChildren {
     adder: (children: Node[]) => NodeSchema[] | null,
     sorter: (firstNode: Node, secondNode: Node) => number,
   ): any {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     let changed = false
     if (remover) {
       const willRemove = this.children.filter(remover)

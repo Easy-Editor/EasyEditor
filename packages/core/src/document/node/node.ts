@@ -93,7 +93,16 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     return this.purged
   }
 
-  props: Props
+  #props: Props
+
+  get props(): Props {
+    return this.#props
+  }
+
+  set props(value: Props) {
+    this.document.project.assertDocumentMutationAllowed(this.document)
+    this.#props = value
+  }
 
   _settingEntry: SettingTopEntry | undefined
 
@@ -201,9 +210,11 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   purge() {
+    this.document.project.assertDocumentMutationAllowed(this.document)
     if (this.purged) {
       return
     }
+    this.document.markSchemaMutation()
     this.purged = true
     this._children?.purge()
     this.props.purge()
@@ -484,9 +495,11 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   internalSetParent(parent: Node | null, useMutator = false) {
+    this.document.project.assertDocumentMutationAllowed(this.document)
     if (this._parent === parent) {
       return
     }
+    this.document.markSchemaMutation()
 
     if (this._parent) {
       this._parent.children?.unlinkChild(this)
@@ -505,6 +518,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   internalUnlinkParent() {
+    this.document.markSchemaMutation()
     this._parent = null
   }
 
@@ -512,6 +526,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    * unlink this node from its parent and document
    */
   unlink() {
+    this.document.project.assertDocumentMutationAllowed(this.document)
     if (this.parent) {
       this.parent.children!.unlinkChild(this)
     }
@@ -573,6 +588,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   @action
   remove(purge = true, useMutator = true) {
+    this.document.project.assertDocumentMutationAllowed(this.document)
     if (this.parent) {
       this.document.designer.postEvent(DESIGNER_EVENT.NODE_REMOVE, {
         node: this,

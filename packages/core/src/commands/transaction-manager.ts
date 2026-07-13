@@ -2,6 +2,7 @@ import { transaction as mobxTransaction } from 'mobx'
 import type { Document } from '../document'
 import type { Materials } from '../materials'
 import type { Project } from '../project'
+import { withProjectMutationAuthority } from '../project/mutation-authority'
 import { PolicyViolation, type TrustPolicy, findExecutableValue } from '../trust'
 import { EventTransactionCoordinator } from '../utils/event-transaction'
 import { applyCommand } from './apply-command'
@@ -70,7 +71,10 @@ export interface BoundTransactionOptions {
   readonly invokeNodeCallbacks?: boolean
   /** Agent boundaries discard executable domain-event observers. */
   readonly publishEvents?: boolean
-  /** Block writes to every project document except the explicitly bound one. */
+}
+
+interface InternalTransactionOptions extends BoundTransactionOptions {
+  /** Typed commands always bind mutation authority to exactly one document. */
   readonly restrictDocumentMutations?: boolean
 }
 
@@ -109,18 +113,26 @@ export class TransactionManager {
     commands: readonly EditorCommand[],
     options: BoundTransactionOptions = {},
   ): TransactionResult {
+    const transactionOptions: InternalTransactionOptions = {
+      ...options,
+      // This invariant is deliberately assigned after caller options. Typed
+      // commands have no public escape hatch for cross-document mutation.
+      restrictDocumentMutations: true,
+    }
     this.preflight(commands, document)
     return this.withTransaction(
       document,
       () => {
-        const results = commands.map(command =>
-          applyCommand(document, command, { invokeNodeCallbacks: options.invokeNodeCallbacks }),
+        const results = withProjectMutationAuthority(this.host.project, () =>
+          commands.map(command =>
+            applyCommand(document, command, { invokeNodeCallbacks: transactionOptions.invokeNodeCallbacks }),
+          ),
         )
         const result = this.createResult(results)
-        this.runSynchronousBoundary(options.postcondition, [document, result], 'postcondition')
+        this.runSynchronousBoundary(transactionOptions.postcondition, [document, result], 'postcondition')
         return result
       },
-      options,
+      transactionOptions,
     )
   }
 
@@ -151,7 +163,7 @@ export class TransactionManager {
     })
   }
 
-  private withTransaction<T>(document: Document, operation: () => T, options: BoundTransactionOptions = {}): T {
+  private withTransaction<T>(document: Document, operation: () => T, options: InternalTransactionOptions = {}): T {
     if (this.active) {
       if (this.active.failure.occurred) throw this.active.failure.error
       try {
@@ -191,16 +203,17 @@ export class TransactionManager {
     const rollbackErrors: unknown[] = []
     let historyStarted = false
     let rollbackAttempted = false
-    const delayCommitUntilSettled =
-      options.restrictDocumentMutations === true || options.settledPostcondition !== undefined
+    const delayCommitUntilSettled = options.settledPostcondition !== undefined
 
     const rollbackModel = (restoreDocument = true) => {
       if (rollbackAttempted) return
       rollbackAttempted = true
       if (historyStarted) {
         try {
-          if (restoreDocument) document.history.rollbackTransaction()
-          else document.history.cancelTransaction()
+          withProjectMutationAuthority(this.host.project, () => {
+            if (restoreDocument) document.history.rollbackTransaction()
+            else document.history.cancelTransaction()
+          })
           historyStarted = false
         } catch (rollbackError) {
           rollbackErrors.push(rollbackError)
@@ -245,15 +258,10 @@ export class TransactionManager {
       try {
         mobxTransaction(() => {
           try {
-            if (mutationBoundary) {
-              this.runSynchronousBoundary(options.precondition, [document], 'precondition')
-            }
             document.history.beginTransaction()
             historyStarted = true
-            if (!mutationBoundary) {
-              this.runSynchronousBoundary(options.precondition, [document], 'precondition')
-            }
             mutationBoundary?.allowMutations()
+            this.runSynchronousBoundary(options.precondition, [document], 'precondition')
             result = operation()
             if (context.failure.occurred) throw context.failure.error
             if (!delayCommitUntilSettled) {

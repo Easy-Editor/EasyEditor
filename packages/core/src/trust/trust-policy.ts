@@ -1,9 +1,16 @@
 export type TrustPolicyPreset = 'legacyTrusted' | 'agentRestricted'
 
-export type TrustCapability = 'schema.executable' | 'command.executable' | 'remote' | 'plugin.extension'
+export type TrustCapability =
+  | 'schema.executable'
+  | 'command.executable'
+  | 'model.mutation'
+  | 'remote'
+  | 'plugin.extension'
 
 export interface TrustPolicy {
   readonly name: TrustPolicyPreset
+  /** Allow callers to mutate the raw Project/Document/Node model outside an engine-owned boundary. */
+  readonly allowDirectModelMutation?: boolean
   readonly allowExecutableCommands: boolean
   readonly allowExecutableSchema: boolean
   readonly allowPluginExtensions: boolean
@@ -45,6 +52,7 @@ export class PolicyViolation extends Error {
 const PRESETS: Record<TrustPolicyPreset, TrustPolicy> = {
   legacyTrusted: {
     name: 'legacyTrusted',
+    allowDirectModelMutation: true,
     allowExecutableCommands: true,
     allowExecutableSchema: true,
     allowPluginExtensions: true,
@@ -52,6 +60,7 @@ const PRESETS: Record<TrustPolicyPreset, TrustPolicy> = {
   },
   agentRestricted: {
     name: 'agentRestricted',
+    allowDirectModelMutation: false,
     allowExecutableCommands: false,
     allowExecutableSchema: false,
     allowPluginExtensions: false,
@@ -67,7 +76,10 @@ export const resolveTrustPolicy = (policy: TrustPolicyPreset | TrustPolicy = 'ag
     }
     return Object.freeze({ ...preset })
   }
-  return Object.freeze({ ...policy })
+  return Object.freeze({
+    ...policy,
+    allowDirectModelMutation: policy.allowDirectModelMutation ?? policy.name === 'legacyTrusted',
+  })
 }
 
 export const assertTrustCapability = (

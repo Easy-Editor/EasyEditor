@@ -7,7 +7,7 @@ import cleanup from 'rollup-plugin-cleanup'
 const require = createRequire(import.meta.url)
 const pkg = require('./package.json')
 
-const plugins = [
+const createPlugins = () => [
   replace({
     _EASY_EDITOR_VERSION_: pkg.version,
     preventAssignment: true,
@@ -51,6 +51,20 @@ export default [
         format: 'cjs',
       },
     ],
-    plugins,
+    plugins: createPlugins(),
+  },
+  {
+    input: 'src/agent-channel.ts',
+    output: [
+      {
+        file: 'dist/agent-channel.js',
+        format: 'es',
+      },
+      {
+        file: 'dist/agent-channel.cjs',
+        format: 'cjs',
+      },
+    ],
+    plugins: createPlugins(),
   },
 ]

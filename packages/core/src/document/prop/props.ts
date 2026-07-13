@@ -171,9 +171,11 @@ export class Props {
 
   @action
   purge() {
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
     if (this.purged) {
       return
     }
+    this.owner.document.markSchemaMutation()
     this.purged = true
     this.itemsMutationDisposer()
     this.itemsReferenceDisposer()

@@ -1,3 +1,5 @@
 export * from './capability-manager'
+export * from './channel'
+export * from './domain-events'
 export * from './errors'
 export * from './types'

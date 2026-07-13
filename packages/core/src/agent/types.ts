@@ -139,6 +139,70 @@ export interface AgentAuditRecord {
 
 export type AgentAuditListener = (record: AgentAuditRecord) => void
 
+export interface AgentTransactionCommittedEvent {
+  readonly version: 1
+  readonly type: 'agent.transaction.committed'
+  readonly eventId: string
+  readonly sequence: number
+  readonly timestamp: number
+  readonly capabilityId: string
+  readonly subjectId: string
+  readonly documentId: string
+  readonly planId: string
+  readonly baseRevision: string
+  readonly revision?: string
+  readonly status: AgentExecutionStatus
+  readonly commandCount: number
+  readonly commandTypes: readonly AgentCommandType[]
+  readonly affectedNodeIds: readonly string[]
+  readonly observerErrorCount: number
+}
+
+export type AgentDomainEvent = AgentTransactionCommittedEvent
+
+export type AgentDomainEventListener = (event: AgentDomainEvent) => void
+
+export interface AgentMessagePort {
+  postMessage(value: unknown): void
+  start?(): void
+  close(): void
+}
+
+export interface AgentPortSessionDescriptor {
+  readonly protocol: 1
+  readonly transport: 'message-port'
+  readonly isolation: 'structured-clone-object-capability'
+  readonly capability: AgentCapabilityDescriptor
+}
+
+export interface AgentPortSessionOptions {
+  readonly signal: AbortSignal
+}
+
+export interface AgentPortClientOptions {
+  /** Cancels the client connection and all pending requests. */
+  readonly signal?: AbortSignal
+  /** Maximum time to wait for the host handshake. Defaults to 10 seconds. */
+  readonly connectTimeoutMs?: number
+  /** Maximum time to wait for each host response. Defaults to 30 seconds. */
+  readonly requestTimeoutMs?: number
+}
+
+export interface AgentPortSession {
+  readonly descriptor: AgentPortSessionDescriptor
+  readonly state: 'open' | 'closing' | 'closed'
+  close(): void
+}
+
+export interface AgentPortCapability {
+  readonly descriptor: AgentPortSessionDescriptor
+  snapshot(documentId: string): Promise<AgentDocumentSnapshot>
+  preview(request: AgentPlanRequest): Promise<AgentPlanPreview>
+  execute(planId: string): Promise<AgentExecutionReceipt>
+  subscribe(listener: AgentDomainEventListener): () => void
+  close(): void
+}
+
 export interface AgentCapability {
   readonly descriptor: AgentCapabilityDescriptor
   snapshot(documentId: string): AgentDocumentSnapshot

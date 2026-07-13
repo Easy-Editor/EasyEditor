@@ -3,11 +3,47 @@ import type { Designer } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
 import { SchemaValidator } from '../schema'
 import type { Simulator } from '../simulator'
-import { resolveTrustPolicy } from '../trust'
+import { type TrustPolicy, resolveTrustPolicy } from '../trust'
 import { type ComponentsMap, type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
 import { type EventBus, createLogger, isLowCodeComponentType, isProCodeComponentType } from '../utils'
+import {
+  assertProjectMutationAuthority,
+  installProjectMutationAuthority,
+  withProjectMutationAuthority,
+} from './mutation-authority'
 
 const logger = createLogger('Project')
+
+const cloneProjectDataValue = <T>(value: T, visited = new Map<object, unknown>()): T => {
+  if (!value || typeof value !== 'object') return value
+  if (visited.has(value)) return visited.get(value) as T
+
+  if (Array.isArray(value)) {
+    const clone: unknown[] = []
+    visited.set(value, clone)
+    value.forEach(item => clone.push(cloneProjectDataValue(item, visited)))
+    return clone as T
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('Restricted project data only supports plain objects and arrays')
+  }
+
+  const clone = Object.create(prototype) as Record<string, unknown>
+  visited.set(value, clone)
+  Object.entries(value).forEach(([key, child]) => {
+    clone[key] = cloneProjectDataValue(child, visited)
+  })
+  return clone as T
+}
+
+const deepFreezeProjectData = <T>(value: T, visited = new Set<object>()): T => {
+  if (!value || typeof value !== 'object' || visited.has(value)) return value
+  visited.add(value)
+  Object.values(value).forEach(child => deepFreezeProjectData(child, visited))
+  return Object.freeze(value)
+}
 
 export enum PROJECT_EVENT {
   RENDERER_READY = 'renderer:ready',
@@ -48,7 +84,7 @@ export class Project {
     return this.documents.find(document => document.active)
   }
 
-  @observable private accessor _config: Record<string, any> | undefined
+  @observable.ref private accessor _config: Record<string, any> | undefined
 
   @computed
   get config(): Record<string, any> | undefined {
@@ -56,12 +92,19 @@ export class Project {
   }
 
   set config(value: Record<string, any>) {
-    this._config = value
+    this.assertProjectMutationAllowed()
+    this._config = this.protectProjectDataValue(value, true)
   }
 
   private _simulator?: Simulator
 
   private readonly schemaValidator: SchemaValidator
+
+  private readonly trustPolicy: TrustPolicy
+
+  allowsDirectModelMutation(): boolean {
+    return this.trustPolicy.allowDirectModelMutation === true
+  }
 
   get simulator() {
     return this._simulator || null
@@ -72,8 +115,9 @@ export class Project {
     schema?: ProjectSchema,
   ) {
     this.emitter = designer.createEventBus('Project')
-    this.schemaValidator =
-      this.designer.get('schemaValidator') || new SchemaValidator(resolveTrustPolicy('legacyTrusted'))
+    this.trustPolicy = this.designer.editor.get<TrustPolicy>('trustPolicy') || resolveTrustPolicy('legacyTrusted')
+    installProjectMutationAuthority(this, this.trustPolicy)
+    this.schemaValidator = this.designer.get('schemaValidator') || new SchemaValidator(this.trustPolicy)
     this.trackDocumentCollectionMutations()
     intercept(this, 'documents', change => {
       this.assertProjectMutationAllowed()
@@ -82,7 +126,7 @@ export class Project {
     observe(this, 'documents', () => {
       this.trackDocumentCollectionMutations()
     })
-    this.load(schema)
+    withProjectMutationAuthority(this, () => this.load(schema))
   }
 
   private trackDocumentCollectionMutations(): void {
@@ -146,11 +190,13 @@ export class Project {
 
     this.unload()
 
-    this.data = {
+    this.data = this.protectProjectDataValue({
       ...this.data,
       ...preparedSchema,
+    })
+    if (preparedSchema?.config != null) {
+      this._config = this.data.config
     }
-    this._config = preparedSchema?.config ?? this.config
 
     // perf: 在 open 的时候才创建 document
     // if (schema?.documents) {
@@ -198,34 +244,36 @@ export class Project {
       failures.push(error)
     }
 
-    for (const document of [...this.documents].reverse()) {
-      try {
-        document.remove()
-      } catch (error) {
-        failures.push(error)
+    withProjectMutationAuthority(this, () => {
+      for (const document of [...this.documents].reverse()) {
         try {
-          document.purge()
-        } catch (purgeError) {
-          failures.push(purgeError)
+          document.remove()
+        } catch (error) {
+          failures.push(error)
+          try {
+            document.purge()
+          } catch (purgeError) {
+            failures.push(purgeError)
+          }
+          this.internalUnlinkDocument(document)
         }
-        this.removeDocument(document)
       }
-    }
 
-    runInAction(() => {
-      if (simulatorDisposed) {
-        this._simulator = undefined
-      }
-      this.documents = []
-      this.documentsMap.clear()
-      this.data = {
-        version: '0.0.1',
-        componentsMap: [],
-        componentsTree: [],
-      }
-      this._config = undefined
-      this.isRendererReady = false
-      this.emitter.dispose()
+      runInAction(() => {
+        if (simulatorDisposed) {
+          this._simulator = undefined
+        }
+        this.documents = []
+        this.documentsMap.clear()
+        this.data = this.protectProjectDataValue({
+          version: '0.0.1',
+          componentsMap: [],
+          componentsTree: [],
+        })
+        this._config = undefined
+        this.isRendererReady = false
+        this.emitter.dispose()
+      })
     })
     if (failures.length) {
       throw new AggregateError(failures, 'Project disposal completed with errors')
@@ -261,6 +309,18 @@ export class Project {
     const index = this.documents.indexOf(document)
     if (index < 0) {
       return logger.warn('document not found', idOrDoc)
+    }
+
+    document.remove()
+  }
+
+  /** @internal Document.remove owns teardown; this method only unlinks project identity. */
+  @action
+  internalUnlinkDocument(document: Document) {
+    this.assertProjectMutationAllowed()
+    const index = this.documents.indexOf(document)
+    if (index < 0) {
+      return logger.warn('document not found', document)
     }
 
     this.documents.splice(index, 1)
@@ -302,6 +362,7 @@ export class Project {
   }
 
   assertDocumentMutationAllowed(document: Document): void {
+    assertProjectMutationAuthority(this, 'document.mutation')
     const boundary = this.documentMutationBoundary
     if (boundary && (boundary.document !== document || !boundary.mutationsAllowed)) {
       throw new Error(`Document mutation is blocked while document "${boundary.document.id}" is isolated`)
@@ -310,6 +371,7 @@ export class Project {
 
   /** Internal guard for project document identity and lifecycle changes. */
   assertProjectMutationAllowed(): void {
+    assertProjectMutationAuthority(this, 'project.mutation')
     const boundary = this.documentMutationBoundary
     if (boundary) {
       throw new Error(`Project mutation is blocked while document "${boundary.document.id}" is isolated`)
@@ -318,6 +380,7 @@ export class Project {
 
   /** Internal guard for operations that detach, purge, open, or close a document. */
   assertDocumentLifecycleMutationAllowed(document: Document): void {
+    assertProjectMutationAuthority(this, 'document.lifecycle')
     const boundary = this.documentMutationBoundary
     if (boundary) {
       throw new Error(
@@ -399,11 +462,13 @@ export class Project {
   set<T extends keyof ProjectSchema>(key: T, value: ProjectSchema[T]): void
   set(key: string, value: unknown): void
   set(key: string, value: unknown): void {
+    this.assertProjectMutationAllowed()
+    const protectedValue = this.protectProjectDataValue(value, true)
     if (key === 'config') {
-      this._config = value as Record<string, any>
+      this._config = protectedValue as Record<string, any>
     }
 
-    Object.assign(this.data, { [key]: value })
+    this.data = this.protectProjectDataValue({ ...this.data, [key]: protectedValue })
   }
 
   /**
@@ -420,14 +485,21 @@ export class Project {
     return Reflect.get(this.data, key)
   }
 
+  private protectProjectDataValue<T>(value: T, clone = false): T {
+    if (this.allowsDirectModelMutation()) return value
+    return deepFreezeProjectData(clone ? cloneProjectDataValue(value) : value)
+  }
+
   private isRendererReady = false
 
   setRendererReady(renderer: any) {
+    this.assertProjectMutationAllowed()
     this.isRendererReady = true
     this.emitter.emit(PROJECT_EVENT.RENDERER_READY, renderer)
   }
 
   mountSimulator(simulator: Simulator) {
+    this.assertProjectMutationAllowed()
     this._simulator = simulator
     this.emitter.emit(PROJECT_EVENT.SIMULATOR_READY, simulator)
   }
