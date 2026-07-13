@@ -1,5 +1,6 @@
 import type { DashboardAgentContext } from '@/editor/agent'
 import { useCallback, useState } from 'react'
+import { createCanvasProjection, createChatRequest } from './privacy.mjs'
 
 interface Message {
   id: string
@@ -9,22 +10,29 @@ interface Message {
 }
 
 interface CustomChatConfig {
-  api: string
-  headers: Record<string, string>
-  body: Record<string, unknown>
   initialMessages: Message[]
   createAgentContext: () => DashboardAgentContext
-  onFinish: (message: Message, context: DashboardAgentContext) => Promise<void> | void
+  onFinish: (
+    message: Message,
+    context: DashboardAgentContext,
+    nodeIdsByAlias: ReadonlyMap<string, string>,
+  ) => Promise<void> | void
   onError: (error: Error) => void
 }
 
 interface ChatCompletionResponse {
   id?: string
-  choices?: Array<{
-    message?: {
-      content?: string
-    }
-  }>
+  message?: {
+    role?: 'assistant'
+    content?: string
+  }
+}
+
+interface GatewayErrorResponse {
+  error?: {
+    code?: string
+    message?: string
+  }
 }
 
 // 自定义聊天Hook作为备选方案
@@ -58,54 +66,38 @@ export const useCustomChat = (config: CustomChatConfig) => {
       // 在请求发出前固定文档身份和修订版本；响应回来后不再读取全局项目状态。
       agentContext = config.createAgentContext()
       const { snapshot } = agentContext
-      const systemMessage: Message = {
-        id: `${Date.now()}-canvas`,
-        content: `当前画布上下文：\n${JSON.stringify({
-          documentId: snapshot.documentId,
-          revision: snapshot.revision,
-          schema: snapshot.schema,
-        })}`,
-        role: 'system',
-        createdAt: new Date(),
-      }
+      const projection = createCanvasProjection(snapshot.schema)
 
       setMessages(prev => [...prev, userMessage])
 
-      const systemInstructions = config.initialMessages.filter(message => message.role === 'system')
       const conversation = messages.filter(message => message.role !== 'system')
+      const request = createChatRequest([...conversation, userMessage], projection.canvas)
 
-      const response = await fetch(config.api, {
+      const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {
-          ...config.headers,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          ...config.body,
-          messages: [...systemInstructions, ...conversation, userMessage, systemMessage].map(msg => ({
-            role: msg.role,
-            content: msg.content,
-          })),
-          stream: false, // 使用非流式响应确保完整性
-        }),
+        body: JSON.stringify(request),
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        const gatewayError = (await response.json().catch(() => undefined)) as GatewayErrorResponse | undefined
+        throw new Error(gatewayError?.error?.message || `AI request failed (${response.status})`)
       }
 
       const data = (await response.json()) as ChatCompletionResponse
 
       const assistantMessage: Message = {
         id: data.id || Date.now().toString(),
-        content: data.choices?.[0]?.message?.content || '抱歉，我无法理解您的请求。',
+        content: data.message?.content || '抱歉，我无法理解您的请求。',
         role: 'assistant',
         createdAt: new Date(),
       }
 
       setMessages(prev => [...prev, assistantMessage])
 
-      await config.onFinish(assistantMessage, agentContext)
+      await config.onFinish(assistantMessage, agentContext, projection.nodeIdsByAlias)
     } catch (err) {
       console.error('❌ Chat error:', err)
       const error = err instanceof Error ? err : new Error('Unknown error')

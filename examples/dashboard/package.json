@@ -6,10 +6,13 @@
   "scripts": {
     "format": "biome format --write .",
     "lint": "biome check .",
+    "test": "node --test test/*.test.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:only": "vite build",
-    "preview": "vite preview",
+    "preview": "node server/index.mjs",
+    "start": "node server/index.mjs",
+    "verify:ai-bundle": "node scripts/verify-ai-bundle.mjs",
     "add:ui": "pnpm dlx shadcn@canary add"
   },
   "dependencies": {

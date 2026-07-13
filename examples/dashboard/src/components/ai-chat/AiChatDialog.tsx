@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { Bot, ChevronDown, ChevronUp, Lightbulb, Send, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { type Suggestion, categorizedSuggestions, quickSuggestions, systemPrompt } from './prompt'
+import { type Suggestion, categorizedSuggestions, quickSuggestions } from './prompt'
 import { useCustomChat } from './use-custom-chat'
 import { executeAiCommands, filterMessageContent } from './utils'
 
@@ -19,21 +19,8 @@ interface AiChatDialogProps {
 
 export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, className }) => {
   const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useCustomChat({
-    api: 'https://api.deerapi.com/v1/chat/completions',
-    headers: {
-      Authorization: `Bearer ${import.meta.env.VITE_DEER_API_KEY}`,
-    },
-    body: {
-      model: 'gpt-4o',
-    },
     createAgentContext: createDashboardAgentContext,
     initialMessages: [
-      {
-        id: '0',
-        role: 'system',
-        content: systemPrompt,
-        createdAt: new Date(),
-      },
       {
         id: '1',
         role: 'assistant',
@@ -42,8 +29,8 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
         createdAt: new Date(),
       },
     ],
-    onFinish(message, context) {
-      executeAiCommands(message.content, context)
+    onFinish(message, context, nodeIdsByAlias) {
+      executeAiCommands(message.content, context, nodeIdsByAlias)
     },
     onError(error) {
       console.error('❌ Custom chat error:', error)

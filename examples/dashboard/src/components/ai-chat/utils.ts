@@ -1,5 +1,6 @@
 import type { DashboardAgentContext } from '@/editor/agent'
 import type { AgentEditorCommand, AgentExecutionReceipt } from '@easy-editor/core'
+import { resolveCommandAliases } from './privacy.mjs'
 
 interface TextRange {
   readonly end: number
@@ -108,10 +109,13 @@ export const parseAiCommands = (content: string): AgentEditorCommand[] => {
 export const executeAiCommands = (
   content: string,
   { capability, snapshot }: DashboardAgentContext,
+  nodeIdsByAlias: ReadonlyMap<string, string>,
 ): AgentExecutionReceipt => {
+  const commands = resolveCommandAliases<AgentEditorCommand>(parseAiCommands(content), nodeIdsByAlias)
+
   const preview = capability.preview({
     baseRevision: snapshot.revision,
-    commands: parseAiCommands(content),
+    commands,
     documentId: snapshot.documentId,
   })
 
