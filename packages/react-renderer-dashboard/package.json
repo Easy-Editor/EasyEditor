@@ -57,6 +57,7 @@
     "types": "npm-run-all -nl types:*",
     "types:clean": "rimraf types/",
     "types:src": "tsc --project tsconfig.build.json",
+    "test": "node --test test/*.test.mjs",
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {

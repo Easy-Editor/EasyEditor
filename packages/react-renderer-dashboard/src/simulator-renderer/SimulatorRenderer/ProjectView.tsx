@@ -1,4 +1,4 @@
-import { type Designer, config } from '@easy-editor/core'
+import type { Designer } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import { useEffect, useState } from 'react'
 import { SimulatorView } from './SimulatorView'
@@ -13,7 +13,7 @@ export const ProjectView: React.FC<ProjectViewProps> = observer(props => {
   const { designer } = props
   const { project, projectSimulatorProps: simulatorProps } = designer
   const [isReady, setIsReady] = useState(false)
-  const Loading = config.get('loadingComponent', BuiltinLoading)
+  const Loading = designer.editor.engineConfig.get('loadingComponent', BuiltinLoading)
 
   useEffect(() => {
     const unsubscribe = project.onRendererReady(() => {

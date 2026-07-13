@@ -1,4 +1,4 @@
-import { DESIGNER_EVENT, type Designer, type DesignerProps, clipboard } from '@easy-editor/core'
+import { type Clipboard, DESIGNER_EVENT, type Designer, type DesignerProps } from '@easy-editor/core'
 import { classnames } from '@easy-editor/renderer-core'
 import { memo, useEffect, useState } from 'react'
 import { ProjectView } from './ProjectView'
@@ -19,19 +19,32 @@ export const DesignerView: React.FC<DesignerViewProps> = memo(
       propsDesigner.setProps(designerProps)
       return propsDesigner
     })
+    const instanceClipboard = designer.editor.get<Clipboard>('clipboard')
+    if (!instanceClipboard) {
+      throw new Error('DesignerView requires an engine-owned clipboard service')
+    }
 
     useEffect(() => {
       if (onMount) {
         onMount(designer)
       }
 
-      clipboard.injectCopyPaster(document)
-      designer.postEvent(DESIGNER_EVENT.MOUNT, designer)
+      const disposeCopyPaster = instanceClipboard.injectCopyPaster(document)
+      try {
+        designer.postEvent(DESIGNER_EVENT.MOUNT, designer)
+      } catch (error) {
+        disposeCopyPaster()
+        throw error
+      }
 
       return () => {
-        designer.purge()
+        try {
+          disposeCopyPaster()
+        } finally {
+          designer.purge()
+        }
       }
-    }, [])
+    }, [designer, instanceClipboard, onMount])
 
     return (
       <div className={classnames('lc-designer', className)} style={style}>

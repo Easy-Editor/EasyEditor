@@ -1,4 +1,4 @@
-import { type PluginCreator, TRANSFORM_STAGE, clipboard, insertChildren } from '@easy-editor/core'
+import { type PluginCreator, TRANSFORM_STAGE, insertChildren } from '@easy-editor/core'
 import { HOTKEY_MAP } from './const'
 import { isFormEvent } from './utils'
 
@@ -24,7 +24,10 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = (options = {} as Hotkey
     name: 'HotkeyPlugin',
     deps: [],
     init(ctx) {
-      const { hotkey, project, logger } = ctx
+      const { clipboard, hotkey, project, logger } = ctx
+      if (!clipboard) {
+        throw new Error('HotkeyPlugin requires an engine-owned clipboard service')
+      }
       const { designer } = project
 
       // Define the default handler functions
