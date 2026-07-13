@@ -281,6 +281,3 @@ export class LoadingStateManager {
     this.states.clear()
   }
 }
-
-/** 导出单例 */
-export const loadingState = new LoadingStateManager()

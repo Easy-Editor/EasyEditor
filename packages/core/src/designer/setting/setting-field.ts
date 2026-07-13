@@ -1,6 +1,8 @@
 import { action, computed, observable, untracked } from 'mobx'
-import { cloneDeep, isJSExpression } from '../..'
-import type { DynamicSetter, FieldConfig, FieldExtraProps, SetterType } from '../../types'
+import { isJSExpression } from '../../document/prop/prop'
+import type { FieldConfig, FieldExtraProps } from '../../types/meta'
+import type { DynamicSetter, SetterType } from '../../types/setter'
+import { cloneDeep } from '../../utils/common'
 import { SettingPropEntry } from './setting-prop-entry'
 import type { SettingTopEntry } from './setting-top-entry'
 

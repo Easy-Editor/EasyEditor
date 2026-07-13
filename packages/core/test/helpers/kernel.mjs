@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { installLegacyBrowserGlobals } from './fake-browser.mjs'
 
 const coreUrl = new URL('../../dist/index.js', import.meta.url)
+const instanceUrl = new URL('../../dist/instance.js', import.meta.url)
 
 export async function loadCore() {
   installLegacyBrowserGlobals()
@@ -34,4 +35,8 @@ export function assertStructuredPolicyViolation(error, capabilityPattern) {
 
 export function coreBundleUrl() {
   return coreUrl
+}
+
+export function instanceBundleUrl() {
+  return instanceUrl
 }

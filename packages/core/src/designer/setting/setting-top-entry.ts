@@ -1,14 +1,10 @@
-import {
-  type ComponentMeta,
-  DESIGNER_EVENT,
-  type Designer,
-  type Editor,
-  type EventBus,
-  type Node,
-  type PropKey,
-  type Setters,
-  createEventBus,
-} from '../..'
+import type { Node } from '../../document/node/node'
+import type { PropKey } from '../../document/prop/prop'
+import type { ComponentMeta } from '../../materials/component-meta'
+import type { Setters } from '../../setters/setters'
+import type { Editor } from '../../types/editor'
+import { type EventBus, createEventBus } from '../../utils/event-bus'
+import { DESIGNER_EVENT, type Designer } from '../designer'
 import type { SettingEntry } from './setting-entry'
 import { SettingField } from './setting-field'
 

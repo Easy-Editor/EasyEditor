@@ -67,4 +67,18 @@ export default [
     ],
     plugins: createPlugins(),
   },
+  {
+    input: 'src/instance.ts',
+    output: [
+      {
+        file: 'dist/instance.js',
+        format: 'es',
+      },
+      {
+        file: 'dist/instance.cjs',
+        format: 'cjs',
+      },
+    ],
+    plugins: createPlugins(),
+  },
 ]

@@ -139,6 +139,3 @@ export class ResourceRegistry {
     return type === 'material' ? this.materials : this.setters
   }
 }
-
-/** 导出单例 */
-export const resourceRegistry = new ResourceRegistry()

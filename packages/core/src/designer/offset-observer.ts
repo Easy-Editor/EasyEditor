@@ -1,5 +1,7 @@
 import { computed, observable, runInAction } from 'mobx'
-import type { ComponentInstance, Node, Viewport } from '..'
+import type { Node } from '../document/node/node'
+import type { Viewport } from '../simulator/viewport'
+import type { ComponentInstance } from '../types/component'
 import { uniqueId } from '../utils'
 
 export interface NodeSelector {

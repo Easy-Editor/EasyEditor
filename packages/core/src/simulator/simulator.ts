@@ -1,18 +1,16 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
 import { action, autorun, computed, observable, reaction } from 'mobx'
-import { config } from '..'
-import type { Config } from '../config'
-import type { Designer, LocateEvent, LocationChildrenDetail, LocationData, NodeInstance } from '../designer'
+import { Config } from '../config'
+import { Clipboard } from '../designer/clipboard'
+import { DESIGNER_EVENT, type Designer } from '../designer/designer'
+import { DragObjectType, type NodeInstance, isDragAnyObject, isShaken } from '../designer/dragon'
 import {
-  type Clipboard,
-  DESIGNER_EVENT,
-  DragObjectType,
+  type LocateEvent,
+  type LocationChildrenDetail,
+  type LocationData,
   LocationDetailType,
-  clipboard,
-  isDragAnyObject,
   isLocationData,
-  isShaken,
-} from '../designer'
+} from '../designer/location'
 import type { Scroller } from '../designer/scroller'
 import { type Node, getClosestClickableNode, getClosestNode } from '../document'
 import type { Project } from '../project'
@@ -174,16 +172,23 @@ export class Simulator {
 
   private readonly frameDisposers = new Set<Disposable>()
 
+  private fallbackConfig?: Config
+
+  private fallbackClipboard?: Clipboard
+
   get currentDocument() {
     return this.project.currentDocument
   }
 
   private get engineConfig(): Config {
-    return (this.editor as typeof this.editor & { engineConfig?: Config }).engineConfig || config
+    return (
+      (this.editor as typeof this.editor & { engineConfig?: Config }).engineConfig ||
+      (this.fallbackConfig ||= new Config())
+    )
   }
 
   private get engineClipboard(): Clipboard {
-    return this.editor.get<Clipboard>('clipboard') || clipboard
+    return this.editor.get<Clipboard>('clipboard') || (this.fallbackClipboard ||= new Clipboard())
   }
 
   constructor(project: Project, designer: Designer) {
@@ -275,6 +280,18 @@ export class Simulator {
     }
     try {
       this.scroller.cancel()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.fallbackConfig?.dispose()
+      this.fallbackConfig = undefined
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.fallbackClipboard?.dispose()
+      this.fallbackClipboard = undefined
     } catch (error) {
       errors.push(error)
     }

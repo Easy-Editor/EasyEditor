@@ -7,10 +7,9 @@
 export {
   LoadingStateManager,
   LoadingStatus,
-  loadingState,
   type ResourceState,
   type StateChangeListener,
 } from './loading-state'
 
 // 资源注册表
-export { ResourceRegistry, resourceRegistry, type LoadedResource } from './resource-registry'
+export { ResourceRegistry, type LoadedResource } from './resource-registry'

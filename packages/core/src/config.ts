@@ -243,5 +243,3 @@ export class Config {
     this.waits.clear()
   }
 }
-
-export const config = new Config()

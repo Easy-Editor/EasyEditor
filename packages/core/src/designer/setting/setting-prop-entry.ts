@@ -1,18 +1,13 @@
 import { computed, observable, runInAction } from 'mobx'
-import {
-  type ComponentMeta,
-  DESIGNER_EVENT,
-  type Designer,
-  type EventBus,
-  type FieldExtraProps,
-  type Node,
-  type PropKey,
-  createEventBus,
-  isJSExpression,
-  uniqueId,
-} from '../..'
+import type { Node } from '../../document/node/node'
+import { type PropKey, isJSExpression } from '../../document/prop/prop'
+import type { ComponentMeta } from '../../materials/component-meta'
 import type { Setters } from '../../setters'
-import type { Editor } from '../../types'
+import type { Editor } from '../../types/editor'
+import type { FieldExtraProps } from '../../types/meta'
+import { type EventBus, createEventBus } from '../../utils/event-bus'
+import { uniqueId } from '../../utils/unique-id'
+import { DESIGNER_EVENT, type Designer } from '../designer'
 import type { SettingEntry } from './setting-entry'
 import type { SetValueOptions, SettingField } from './setting-field'
 import type { SettingTopEntry } from './setting-top-entry'

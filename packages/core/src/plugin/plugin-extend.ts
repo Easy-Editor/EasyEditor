@@ -1,23 +1,21 @@
-import type {
-  ComponentMeta,
-  Designer,
-  Detecting,
-  Document,
-  Dragon,
-  DropLocation,
-  History,
-  Materials,
-  Node,
-  NodeChildren,
-  OffsetObserver,
-  Project,
-  Prop,
-  Props,
-  Selection,
-  Setters,
-  Simulator,
-  Viewport,
-} from '..'
+import type { Designer } from '../designer/designer'
+import type { Detecting } from '../designer/detecting'
+import type { Dragon } from '../designer/dragon'
+import type { DropLocation } from '../designer/location'
+import type { OffsetObserver } from '../designer/offset-observer'
+import type { Selection } from '../designer/selection'
+import type { Document } from '../document/document'
+import type { History } from '../document/history'
+import type { Node } from '../document/node/node'
+import type { NodeChildren } from '../document/node/node-children'
+import type { Prop } from '../document/prop/prop'
+import type { Props } from '../document/prop/props'
+import type { ComponentMeta } from '../materials/component-meta'
+import type { Materials } from '../materials/materials'
+import type { Project } from '../project/project'
+import type { Setters } from '../setters/setters'
+import type { Simulator } from '../simulator/simulator'
+import type { Viewport } from '../simulator/viewport'
 import { type MobxExtendDescriptor, addMobxExtendProperty, isMobxExtendProperty } from './plugin-extend-mobx'
 
 export interface PrototypeExtensionRegistration {

@@ -1,19 +1,17 @@
 import EventEmitter from 'events'
 import { action, observable } from 'mobx'
+import { Config } from '../config'
+import type { Plugins } from '../plugin/plugins'
 import {
-  type Config,
   EDITOR_EVENT,
   type EditorConfig,
   type EditorGetResult,
   type EditorValueKey,
-  EventBus,
-  type EventDeliveryScheduler,
   type HookConfig,
   type Editor as IEditor,
-  type Plugins,
-  createLogger,
-  config as defaultEngineConfig,
-} from '..'
+} from '../types/editor'
+import { EventBus, type EventDeliveryScheduler } from '../utils/event-bus'
+import { createLogger } from '../utils/logger'
 
 const logger = createLogger('Editor')
 
@@ -58,16 +56,12 @@ export class Editor extends EventEmitter implements IEditor {
     }>
   >()
 
-  constructor(
-    config?: EditorConfig,
-    engineConfig: Config = defaultEngineConfig,
-    eventDelivery?: EventDeliveryScheduler,
-  ) {
+  constructor(config?: EditorConfig, engineConfig?: Config, eventDelivery?: EventDeliveryScheduler) {
     super()
     // set global emitter maxListeners
     this.setMaxListeners(200)
     this.eventBus = new EventBus(this, undefined, eventDelivery)
-    this.engineConfig = engineConfig
+    this.engineConfig = engineConfig || new Config()
 
     if (config) {
       this.init(config)

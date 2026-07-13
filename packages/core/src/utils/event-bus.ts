@@ -137,5 +137,3 @@ export const createEventBus = (name: string, maxListeners?: number, scheduleDeli
   }
   return new EventBus(emitter, name, scheduleDelivery)
 }
-
-export const commonEvent = new EventBus(new EventEmitter())

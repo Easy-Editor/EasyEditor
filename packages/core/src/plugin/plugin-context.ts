@@ -1,14 +1,12 @@
-import type { Event, Materials, Project, Setters } from '..'
 import type { Config } from '../config'
 import type { Clipboard } from '../designer/clipboard'
-import {
-  type Disposable,
-  type EventBus,
-  type EventDeliveryScheduler,
-  type Hotkey,
-  type Logger,
-  createEventBus,
-} from '../utils'
+import type { Materials } from '../materials/materials'
+import type { Project } from '../project/project'
+import type { Setters } from '../setters/setters'
+import type { Event } from '../utils/event'
+import { type EventBus, type EventDeliveryScheduler, createEventBus } from '../utils/event-bus'
+import type { Disposable, Hotkey } from '../utils/hotkey'
+import type { Logger } from '../utils/logger'
 import type { PluginContextApiAssembler, PluginMeta, Plugins } from './plugins'
 
 export interface PluginContextOptions {

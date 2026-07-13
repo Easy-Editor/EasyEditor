@@ -1,4 +1,6 @@
-import type { Editor, Node, Setters } from '../..'
+import type { Node } from '../../document/node/node'
+import type { Setters } from '../../setters/setters'
+import type { Editor } from '../../types/editor'
 import type { Designer } from '../designer'
 import type { SettingField } from './setting-field'
 

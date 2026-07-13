@@ -1,6 +1,9 @@
 import { action, computed, observable } from 'mobx'
-import { DESIGNER_EVENT, type Designer, type Editor, type Node, type Selection, generateSessionId } from '../..'
-import type { SettingTopEntry } from './setting-top-entry'
+import type { Node } from '../../document/node/node'
+import type { Editor } from '../../types/editor'
+import { DESIGNER_EVENT, type Designer } from '../designer'
+import type { Selection } from '../selection'
+import { type SettingTopEntry, generateSessionId } from './setting-top-entry'
 
 export class SettingsManager {
   _sessionId = ''

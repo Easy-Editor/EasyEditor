@@ -1,7 +1,7 @@
 import { action, observable } from 'mobx'
-import type { Designer } from '..'
 import type { Document, Node } from '../document'
 import type { EventBus } from '../utils'
+import type { Designer } from './designer'
 
 export enum DETECTING_EVENT {
   CHANGE = 'detecting:change',

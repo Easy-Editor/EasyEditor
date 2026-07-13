@@ -1,23 +1,21 @@
-import {
-  ComponentMeta,
-  Designer,
-  Detecting,
-  Document,
-  Dragon,
-  DropLocation,
-  History,
-  Materials,
-  Node,
-  NodeChildren,
-  OffsetObserver,
-  Project,
-  Prop,
-  Props,
-  Selection,
-  Setters,
-  Simulator,
-  Viewport,
-} from '..'
+import { Designer } from '../designer/designer'
+import { Detecting } from '../designer/detecting'
+import { Dragon } from '../designer/dragon'
+import { DropLocation } from '../designer/location'
+import { OffsetObserver } from '../designer/offset-observer'
+import { Selection } from '../designer/selection'
+import { Document } from '../document/document'
+import { History } from '../document/history'
+import { Node } from '../document/node/node'
+import { NodeChildren } from '../document/node/node-children'
+import { Prop } from '../document/prop/prop'
+import { Props } from '../document/prop/props'
+import { ComponentMeta } from '../materials/component-meta'
+import { Materials } from '../materials/materials'
+import { Project } from '../project/project'
+import { Setters } from '../setters/setters'
+import { Simulator } from '../simulator/simulator'
+import { Viewport } from '../simulator/viewport'
 import { createLogger } from '../utils'
 import type { PluginContextOptions } from './plugin-context'
 import { PluginContext } from './plugin-context'

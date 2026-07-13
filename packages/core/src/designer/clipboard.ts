@@ -133,5 +133,3 @@ export class Clipboard {
     this.waitFn = undefined
   }
 }
-
-export const clipboard = new Clipboard()

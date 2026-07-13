@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./agent-channel": "./src/agent-channel.ts"
+    "./agent-channel": "./src/agent-channel.ts",
+    "./instance": "./src/instance.ts"
   },
   "files": [
     "dist",
@@ -31,6 +32,11 @@
         "types": "./dist/agent-channel.d.ts",
         "import": "./dist/agent-channel.js",
         "require": "./dist/agent-channel.cjs"
+      },
+      "./instance": {
+        "types": "./dist/instance.d.ts",
+        "import": "./dist/instance.js",
+        "require": "./dist/instance.cjs"
       }
     }
   },

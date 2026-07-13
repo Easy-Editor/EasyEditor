@@ -1,4 +1,4 @@
-import { isPlainObject } from '..'
+import { isPlainObject } from './is'
 
 export const cloneDeep = (src: any): any => {
   const type = typeof src

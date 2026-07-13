@@ -1,6 +1,7 @@
 import { action } from 'mobx'
-import type { Component, Node } from '..'
 import type { SettingField } from '../designer'
+import type { Node } from '../document/node/node'
+import type { Component } from '../types/component'
 import { createLogger } from '../utils'
 
 const logger = createLogger('Setters')
