@@ -1,10 +1,12 @@
 import { uniqueId } from '../../utils/unique-id'
+import { AgentCapabilityError } from '../errors'
 import { deepFreezeAgentData } from '../strict-data-validator'
 import type {
   AgentCapability,
   AgentDomainEvent,
   AgentDomainEventListener,
   AgentMessagePort,
+  AgentPlanPreview,
   AgentPortSession,
   AgentPortSessionDescriptor,
   AgentPortSessionOptions,
@@ -25,6 +27,7 @@ const MAX_QUEUED_EVENT_BYTES = 256 * 1024
 
 export interface AgentPortHostSessionDependencies {
   readonly capability: AgentCapability
+  readonly denyPeerExecution?: (planId: string) => AgentCapabilityError
   readonly port: AgentMessagePort
   readonly options: AgentPortSessionOptions
   readonly subscribeEvents: (listener: AgentDomainEventListener) => () => void
@@ -46,6 +49,10 @@ export class AgentPortHostSession implements AgentPortSession {
 
   private queuedEventBytes = 0
 
+  private preparedPlanPreview?: AgentPlanPreview
+
+  private terminalPlanId?: string
+
   private unsubscribeEvents: () => void = () => {}
 
   private removePortListeners: () => void = () => {}
@@ -55,6 +62,7 @@ export class AgentPortHostSession implements AgentPortSession {
   constructor(private readonly dependencies: AgentPortHostSessionDependencies) {
     this.descriptor = deepFreezeAgentData({
       capability: dependencies.capability.descriptor,
+      executionAuthority: dependencies.options.executionAuthority ?? 'peer',
       isolation: 'structured-clone-object-capability' as const,
       protocol: AGENT_PORT_PROTOCOL,
       transport: 'message-port' as const,
@@ -96,6 +104,53 @@ export class AgentPortHostSession implements AgentPortSession {
     return this.currentState
   }
 
+  approveAndExecute(planId: string) {
+    if (this.currentState !== 'open') {
+      throw new AgentCapabilityError({
+        action: 'execute',
+        code: 'agent.transport.closed',
+        message: 'Cannot approve an Agent plan on a closed MessagePort session',
+        terminal: true,
+      })
+    }
+    try {
+      return this.dependencies.capability.execute(planId)
+    } finally {
+      this.retirePreparedPlan(planId)
+    }
+  }
+
+  getPreparedPlanPreview(planId: string): AgentPlanPreview {
+    if (this.currentState !== 'open') {
+      throw new AgentCapabilityError({
+        action: 'preview',
+        code: 'agent.transport.closed',
+        message: 'Cannot inspect an Agent plan on a closed MessagePort session',
+        terminal: true,
+      })
+    }
+    if (typeof planId !== 'string' || planId.length === 0) {
+      throw new AgentCapabilityError({
+        action: 'preview',
+        code: 'agent.plan.invalid',
+        message: 'planId is required',
+      })
+    }
+    if (this.preparedPlanPreview?.planId === planId) return this.preparedPlanPreview
+    if (this.terminalPlanId === planId) {
+      throw new AgentCapabilityError({
+        action: 'preview',
+        code: 'agent.plan.terminal',
+        message: 'The Agent plan is no longer prepared',
+      })
+    }
+    throw new AgentCapabilityError({
+      action: 'preview',
+      code: 'agent.plan.notFound',
+      message: 'The Agent plan was not prepared by this MessagePort session',
+    })
+  }
+
   close(): void {
     this.terminate('agent.transport.closed')
   }
@@ -112,6 +167,8 @@ export class AgentPortHostSession implements AgentPortSession {
     this.queuedEvents.length = 0
     this.queuedEventBytes = 0
     this.unacknowledgedEvents.clear()
+    this.preparedPlanPreview = undefined
+    this.terminalPlanId = undefined
     try {
       capability.close()
     } catch {
@@ -168,11 +225,27 @@ export class AgentPortHostSession implements AgentPortSession {
         if (typeof payload.documentId !== 'string') throw new AgentPortProtocolError('snapshot documentId is required')
         result = capability.snapshot(payload.documentId)
       } else if (message.operation === 'preview') {
-        result = capability.preview(message.payload as never)
+        const preview = capability.preview(message.payload as never)
+        this.rememberPreparedPlan(preview)
+        result = preview
       } else {
         const payload = this.requirePayload(message.payload, ['planId'])
         if (typeof payload.planId !== 'string') throw new AgentPortProtocolError('execute planId is required')
-        result = capability.execute(payload.planId)
+        if (this.descriptor.executionAuthority === 'host') {
+          throw (
+            this.dependencies.denyPeerExecution?.(payload.planId) ??
+            new AgentCapabilityError({
+              action: 'execute',
+              code: 'agent.execution.hostApprovalRequired',
+              message: 'The Agent plan requires explicit host approval before execution',
+            })
+          )
+        }
+        try {
+          result = capability.execute(payload.planId)
+        } finally {
+          this.retirePreparedPlan(payload.planId)
+        }
       }
     } catch (error) {
       if (error instanceof AgentPortProtocolError) throw error
@@ -216,6 +289,19 @@ export class AgentPortHostSession implements AgentPortSession {
       throw new AgentPortProtocolError('Agent operation payload contains unknown fields')
     }
     return record
+  }
+
+  private rememberPreparedPlan(preview: AgentPlanPreview): void {
+    if (this.preparedPlanPreview && this.preparedPlanPreview.planId !== preview.planId) {
+      this.terminalPlanId = this.preparedPlanPreview.planId
+    }
+    this.preparedPlanPreview = preview
+  }
+
+  private retirePreparedPlan(planId: string): void {
+    if (this.preparedPlanPreview?.planId !== planId) return
+    this.preparedPlanPreview = undefined
+    this.terminalPlanId = planId
   }
 
   private enqueueEvent(event: AgentDomainEvent): void {

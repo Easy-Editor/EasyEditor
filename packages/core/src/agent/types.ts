@@ -210,15 +210,20 @@ export interface AgentMessagePort {
   close(): void
 }
 
+export type AgentPortExecutionAuthority = 'peer' | 'host'
+
 export interface AgentPortSessionDescriptor {
   readonly protocol: 1
   readonly transport: 'message-port'
   readonly isolation: 'structured-clone-object-capability'
+  readonly executionAuthority: AgentPortExecutionAuthority
   readonly capability: AgentCapabilityDescriptor
 }
 
 export interface AgentPortSessionOptions {
   readonly signal: AbortSignal
+  /** Defaults to peer. Host authority keeps execution behind approveAndExecute(). */
+  readonly executionAuthority?: AgentPortExecutionAuthority
 }
 
 export interface AgentPortClientOptions {
@@ -233,6 +238,10 @@ export interface AgentPortClientOptions {
 export interface AgentPortSession {
   readonly descriptor: AgentPortSessionDescriptor
   readonly state: 'open' | 'closing' | 'closed'
+  /** Executes a prepared plan from the trusted host realm. */
+  approveAndExecute(planId: string): AgentExecutionReceipt
+  /** Returns the immutable Core preview currently prepared for this host session. */
+  getPreparedPlanPreview(planId: string): AgentPlanPreview
   close(): void
 }
 

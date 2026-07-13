@@ -14,6 +14,7 @@ import { planAgentCommands } from './command-planner'
 import { type AgentDocumentBaseline, AgentDocumentBaselineRegistry } from './document-baseline'
 import { AgentDomainEventPublisher } from './domain-events'
 import { AgentCapabilityError, AgentPlanStaleError, toAgentCapabilityError } from './errors'
+import { createAgentHostApprovalRequiredError } from './execution-authority'
 import { isSafeAgentExtraKey, isSafeAgentPropKey } from './policy'
 import { deepFreezeAgentData, prepareAgentData, serializeCanonicalAgentSnapshotData } from './strict-data-validator'
 import type {
@@ -688,13 +689,21 @@ export class AgentCapabilityManager {
         message: 'Cannot issue an Agent MessagePort session with an aborted signal',
       })
     }
+    const executionAuthority = options.executionAuthority ?? 'peer'
+    if (executionAuthority !== 'peer' && executionAuthority !== 'host') {
+      throw new AgentCapabilityError({
+        code: 'agent.transport.invalidOptions',
+        message: 'Agent MessagePort executionAuthority must be "peer" or "host"',
+      })
+    }
 
     const capability = this.issue(input)
     try {
       const session = new AgentPortHostSession({
         capability,
+        denyPeerExecution: planId => this.denyPeerExecution(capability.descriptor.capabilityId, planId),
         onClose: closed => this.portSessions.delete(closed),
-        options,
+        options: { executionAuthority, signal: options.signal },
         port,
         subscribeEvents: listener => this.subscribeDomainEvents(listener),
       })
@@ -1108,6 +1117,24 @@ export class AgentCapabilityManager {
       }
     }
     return this.finishCommitted(capability, plan, result, committedStatus, observerErrorCount)
+  }
+
+  private denyPeerExecution(capabilityId: string, planId: string): AgentCapabilityError {
+    const capability = this.requireCapability(capabilityId)
+    const plan = this.plans.get(planId)
+    const ownedPlan = plan?.capabilityId === capabilityId ? plan : undefined
+    const error = createAgentHostApprovalRequiredError()
+    this.auditFor(capability, {
+      action: 'execute',
+      baseRevision: ownedPlan?.baseRevision,
+      commands: ownedPlan?.summary,
+      decision: 'denied',
+      documentId: ownedPlan?.documentId,
+      error,
+      outcome: 'rejected',
+      planId,
+    })
+    return error
   }
 
   private finishCommitted(

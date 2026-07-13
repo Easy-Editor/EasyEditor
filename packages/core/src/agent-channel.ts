@@ -10,5 +10,8 @@ export type {
   AgentPlanRequest,
   AgentPortCapability,
   AgentPortClientOptions,
+  AgentPortExecutionAuthority,
+  AgentPortSession,
   AgentPortSessionDescriptor,
+  AgentPortSessionOptions,
 } from './agent/types'

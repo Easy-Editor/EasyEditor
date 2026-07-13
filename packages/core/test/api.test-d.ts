@@ -1,10 +1,13 @@
 import { MessageChannel as NodeMessageChannel } from 'node:worker_threads'
+import type { AgentPortSession as AgentChannelPortSession } from '../src/agent-channel.js'
 import {
   type AgentAuditRecord,
   type AgentCapability,
   type AgentComponentPropPolicies,
   type AgentExecutionReceipt,
   type AgentPlanPreview,
+  type AgentPortExecutionAuthority,
+  type AgentPortSession,
   CURRENT_PROJECT_SCHEMA_VERSION,
   type EditorCommand,
   type EngineInstance,
@@ -106,6 +109,7 @@ const browserSession = engine.agentCapabilities.issuePort(
   { signal: browserController.signal },
 )
 const browserCapability = await connectAgentPort(browserChannel.port2)
+const browserExecutionAuthority: AgentPortExecutionAuthority = browserSession.descriptor.executionAuthority
 const disposeBrowserEvents = browserCapability.subscribe(event => {
   const type: 'agent.transaction.committed' = event.type
   void type
@@ -113,6 +117,37 @@ const disposeBrowserEvents = browserCapability.subscribe(event => {
 disposeBrowserEvents()
 browserCapability.close()
 browserSession.close()
+
+const hostApprovedChannel = new MessageChannel()
+const hostApprovedController = new AbortController()
+const hostApprovedSession = engine.agentCapabilities.issuePort(
+  {
+    subjectId: 'agent:host-approved-port',
+    documentIds: ['document-id'],
+    commandTypes: ['updateProps'],
+  },
+  hostApprovedChannel.port1,
+  { executionAuthority: 'host', signal: hostApprovedController.signal },
+)
+const hostExecutionAuthority: AgentPortExecutionAuthority = hostApprovedSession.descriptor.executionAuthority
+const typedHostApprovedSession: AgentPortSession = hostApprovedSession
+const channelHostApprovedSession: AgentChannelPortSession = hostApprovedSession
+const hostPreparedPreview: AgentPlanPreview = typedHostApprovedSession.getPreparedPlanPreview('plan-id')
+const hostApprovedReceipt: AgentExecutionReceipt = hostApprovedSession.approveAndExecute('plan-id')
+
+engine.agentCapabilities.issuePort(
+  {
+    subjectId: 'agent:invalid-authority-port',
+    documentIds: ['document-id'],
+    commandTypes: [],
+  },
+  hostApprovedChannel.port1,
+  {
+    // @ts-expect-error execution authority is limited to peer or host
+    executionAuthority: 'owner',
+    signal: hostApprovedController.signal,
+  },
+)
 
 const nodeChannel = new NodeMessageChannel()
 const nodeController = new AbortController()
@@ -131,6 +166,12 @@ void connectAgentPort(nodeChannel.port2, {
   requestTimeoutMs: 1000,
 })
 void receipt
+void browserExecutionAuthority
+void hostExecutionAuthority
+void typedHostApprovedSession
+void channelHostApprovedSession
+void hostPreparedPreview
+void hostApprovedReceipt
 void auditRecords
 void defaultEngine
 void PolicyViolation

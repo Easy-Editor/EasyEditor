@@ -31,7 +31,7 @@ The root `@easy-editor/core` entry still exports `defaultEngine`, `init`, `destr
 - **Schema**: the current version is `1.0.0`; legacy `0.0.1` input migrates explicitly and invalid input fails before the current project unloads.
 - **Transactions**: command batches commit as one undo/redo unit or roll back model, history, selection, material counts, and deferred events.
 - **Commands**: `insertNode`, `updateProps`, `removeNode`, `moveNode`, `replace`, `insertBefore`, `insertAfter`, `wrap`, and `unwrap` share one runtime/type catalog.
-- **Agent boundary**: grants independently restrict documents, component types, prop values, extra-field values, commands, and budgets. Prop/extra policies fail closed and recursively accept only bounded strings, finite ranged numbers, or exact objects; Worker transport exposes structured-clone DTOs rather than engine objects.
+- **Agent boundary**: grants independently restrict documents, component types, prop values, extra-field values, commands, and budgets. Prop/extra policies fail closed and recursively accept only bounded strings, finite ranged numbers, or exact objects; Worker transport exposes structured-clone DTOs rather than engine objects. Port sessions may opt into `executionAuthority: 'host'`, which lets the peer preview while the trusted host reads the authoritative record through `getPreparedPlanPreview(planId)` and reserves commit for `approveAndExecute(planId)`.
 - **Trust boundary**: `agentRestricted` fails closed for raw mutation, executable input, plugin prototype extensions, and remote access. `legacyTrusted` preserves compatibility but is not a security sandbox.
 
 See the [architecture overview](../../docs/en/design/overview.md) for the ownership and trust model.

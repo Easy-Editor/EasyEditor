@@ -73,6 +73,7 @@ test('MessagePort capability performs snapshot, preview and execute without expo
   assert.equal(session.descriptor.protocol, 1)
   assert.equal(session.descriptor.transport, 'message-port')
   assert.equal(session.descriptor.isolation, 'structured-clone-object-capability')
+  assert.equal(session.descriptor.executionAuthority, 'peer')
   assert.deepEqual(capability.descriptor, session.descriptor)
 
   const snapshot = await capability.snapshot(document.id)
@@ -106,6 +107,170 @@ test('MessagePort capability performs snapshot, preview and execute without expo
   assert.equal(session.state, 'closed')
   const closed = await captureFailure(() => capability.snapshot(document.id))
   assert.equal(closed.code, 'agent.transport.closed')
+})
+
+test('host execution authority lets the peer prepare a plan but only the host session can execute it', async t => {
+  const { core, document, engine } = await createReadyEngine(t)
+  const { port1, port2 } = new MessageChannel()
+  const controller = new AbortController()
+  t.after(() => controller.abort())
+
+  const session = engine.agentCapabilities.issuePort(grantFor(document), port1, {
+    executionAuthority: 'host',
+    signal: controller.signal,
+  })
+  const capability = await core.connectAgentPort(port2)
+
+  assert.equal(session.descriptor.executionAuthority, 'host')
+  assert.equal(capability.descriptor.executionAuthority, 'host')
+
+  const snapshot = await capability.snapshot(document.id)
+  const preview = await capability.preview({
+    documentId: document.id,
+    baseRevision: snapshot.revision,
+    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'host-approved' } }],
+  })
+
+  const denied = await captureFailure(() => capability.execute(preview.planId))
+  assert.equal(denied.code, 'agent.execution.hostApprovalRequired')
+  assert.equal(denied.action, 'execute')
+  assert.equal(denied.committed, false)
+  assert.equal(denied.terminal, false)
+  assert.equal(session.state, 'open')
+  assert.notEqual(document.root.getPropValue('title'), 'host-approved')
+
+  const receipt = session.approveAndExecute(preview.planId)
+  assert.equal(receipt.status, 'committed')
+  assert.equal(document.root.getPropValue('title'), 'host-approved')
+
+  const replay = await captureFailure(() => session.approveAndExecute(preview.planId))
+  assert.equal(replay.code, 'agent.plan.terminal')
+
+  session.close()
+  const closed = await captureFailure(() => session.approveAndExecute(preview.planId))
+  assert.equal(closed.code, 'agent.transport.closed')
+})
+
+test('the host session exposes only the authoritative current prepared plan preview', async t => {
+  const { core, document, engine } = await createReadyEngine(t)
+  const { port1, port2 } = new MessageChannel()
+  const controller = new AbortController()
+  t.after(() => controller.abort())
+  const session = engine.agentCapabilities.issuePort(grantFor(document), port1, {
+    executionAuthority: 'host',
+    signal: controller.signal,
+  })
+  const capability = await core.connectAgentPort(port2)
+
+  const unknown = await captureFailure(() => session.getPreparedPlanPreview('unknown-plan'))
+  assert.equal(unknown.code, 'agent.plan.notFound')
+
+  const snapshot = await capability.snapshot(document.id)
+  const first = await capability.preview({
+    documentId: document.id,
+    baseRevision: snapshot.revision,
+    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'first-preview' } }],
+  })
+  const authoritativeFirst = session.getPreparedPlanPreview(first.planId)
+  assert.notStrictEqual(authoritativeFirst, first)
+  assert.deepEqual(authoritativeFirst, first)
+  assert.equal(Object.isFrozen(authoritativeFirst), true)
+  assert.equal(Object.isFrozen(authoritativeFirst.effects), true)
+  assert.equal(Object.isFrozen(authoritativeFirst.effects[0]), true)
+
+  const second = await capability.preview({
+    documentId: document.id,
+    baseRevision: snapshot.revision,
+    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'second-preview' } }],
+  })
+  const superseded = await captureFailure(() => session.getPreparedPlanPreview(first.planId))
+  assert.equal(superseded.code, 'agent.plan.terminal')
+  assert.deepEqual(session.getPreparedPlanPreview(second.planId), second)
+
+  session.approveAndExecute(second.planId)
+  const terminal = await captureFailure(() => session.getPreparedPlanPreview(second.planId))
+  assert.equal(terminal.code, 'agent.plan.terminal')
+
+  const postCommitSnapshot = await capability.snapshot(document.id)
+  const third = await capability.preview({
+    documentId: document.id,
+    baseRevision: postCommitSnapshot.revision,
+    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'third-preview' } }],
+  })
+  assert.deepEqual(session.getPreparedPlanPreview(third.planId), third)
+
+  session.close()
+  const closed = await captureFailure(() => session.getPreparedPlanPreview(third.planId))
+  assert.equal(closed.code, 'agent.transport.closed')
+})
+
+test('host execution authority rejects a handcrafted peer execute request at the host boundary', async t => {
+  const { document, engine } = await createReadyEngine(t)
+  const { port1, port2 } = new MessageChannel()
+  const controller = new AbortController()
+  t.after(() => {
+    controller.abort()
+    port1.close()
+    port2.close()
+  })
+  const session = engine.agentCapabilities.issuePort(grantFor(document), port1, {
+    executionAuthority: 'host',
+    signal: controller.signal,
+  })
+  const receive = () => new Promise(resolve => port2.once('message', resolve))
+  const ready = await receive()
+
+  port2.postMessage({
+    version: 1,
+    kind: 'request',
+    sessionId: ready.sessionId,
+    sequence: 1,
+    operation: 'snapshot',
+    payload: { documentId: document.id },
+  })
+  const snapshotResponse = await receive()
+  assert.equal(snapshotResponse.ok, true)
+
+  port2.postMessage({
+    version: 1,
+    kind: 'request',
+    sessionId: ready.sessionId,
+    sequence: 2,
+    operation: 'preview',
+    payload: {
+      documentId: document.id,
+      baseRevision: snapshotResponse.result.revision,
+      commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'raw-peer-denied' } }],
+    },
+  })
+  const previewResponse = await receive()
+  assert.equal(previewResponse.ok, true)
+
+  port2.postMessage({
+    version: 1,
+    kind: 'request',
+    sessionId: ready.sessionId,
+    sequence: 3,
+    operation: 'execute',
+    payload: { planId: previewResponse.result.planId },
+  })
+  const executeResponse = await receive()
+
+  assert.equal(executeResponse.ok, false)
+  assert.equal(executeResponse.error.code, 'agent.execution.hostApprovalRequired')
+  assert.equal(executeResponse.error.committed, false)
+  assert.notEqual(document.root.getPropValue('title'), 'raw-peer-denied')
+
+  const deniedAudit = engine.agentCapabilities
+    .getAuditRecords()
+    .find(record => record.action === 'execute' && record.planId === previewResponse.result.planId)
+  assert.equal(deniedAudit?.decision, 'denied')
+  assert.equal(deniedAudit?.outcome, 'rejected')
+  assert.equal(deniedAudit?.error?.code, 'agent.execution.hostApprovalRequired')
+
+  const receipt = session.approveAndExecute(previewResponse.result.planId)
+  assert.equal(receipt.status, 'committed')
+  assert.equal(document.root.getPropValue('title'), 'raw-peer-denied')
 })
 
 test('host domain events are immutable, asynchronous and emitted only for committed executions', async t => {
@@ -250,6 +415,44 @@ test('the client handshake has a bounded timeout when the runtime exposes no clo
   assert.equal(silentPort.onmessageerror, null)
 })
 
+test('the client rejects an unsupported execution authority in the host descriptor', async t => {
+  const core = await loadCore()
+  const { port1, port2 } = new MessageChannel()
+  t.after(() => {
+    port1.close()
+    port2.close()
+  })
+  port1.postMessage({
+    version: 1,
+    kind: 'ready',
+    sessionId: 'fake-session',
+    descriptor: { ...createFakeDescriptor(), executionAuthority: 'owner' },
+  })
+
+  const error = await captureFailure(() => core.connectAgentPort(port2))
+  assert.equal(error.code, 'agent.transport.closed')
+})
+
+test('issuing a MessagePort capability rejects an unsupported execution authority before creating a session', async t => {
+  const { document, engine } = await createReadyEngine(t)
+  const { port1, port2 } = new MessageChannel()
+  const controller = new AbortController()
+  t.after(() => {
+    controller.abort()
+    port1.close()
+    port2.close()
+  })
+
+  const error = await captureFailure(() =>
+    engine.agentCapabilities.issuePort(grantFor(document), port1, {
+      executionAuthority: 'owner',
+      signal: controller.signal,
+    }),
+  )
+
+  assert.equal(error.code, 'agent.transport.invalidOptions')
+})
+
 test('an abrupt peer close during execute reports outcome unknown', async () => {
   const core = await loadCore()
   const { port1, port2 } = new MessageChannel()
@@ -265,6 +468,32 @@ test('an abrupt peer close during execute reports outcome unknown', async () => 
   assert.equal(error.code, 'agent.transport.outcomeUnknown')
   assert.equal(error.committed, 'unknown')
   assert.equal(error.operation, 'execute')
+})
+
+test('a lost host-authority execute denial remains known not committed', async t => {
+  const core = await loadCore()
+  const { port1, port2 } = new MessageChannel()
+  t.after(() => {
+    port1.close()
+    port2.close()
+  })
+  port1.on('message', message => {
+    if (message.kind === 'request' && message.operation === 'execute') port1.close()
+  })
+  port1.postMessage({
+    version: 1,
+    kind: 'ready',
+    sessionId: 'fake-session',
+    descriptor: { ...createFakeDescriptor(), executionAuthority: 'host' },
+  })
+
+  const capability = await core.connectAgentPort(port2, { requestTimeoutMs: 250 })
+  const error = await captureFailure(() => capability.execute('host-controlled-plan'))
+
+  assert.equal(error.name, 'AgentCapabilityError')
+  assert.equal(error.code, 'agent.execution.hostApprovalRequired')
+  assert.equal(error.committed, false)
+  assert.equal(error.action, 'execute')
 })
 
 test('an abrupt client peer close terminates the host session and revokes its capability', async t => {

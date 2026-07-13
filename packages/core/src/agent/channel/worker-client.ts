@@ -1,4 +1,5 @@
 import { AgentCapabilityError } from '../errors'
+import { createAgentHostApprovalRequiredError } from '../execution-authority'
 import { deepFreezeAgentData, prepareAgentSnapshotData } from '../strict-data-validator'
 import type {
   AgentDocumentSnapshot,
@@ -405,7 +406,12 @@ class AgentPortClient implements AgentPortCapability {
     if (typeof message.sessionId !== 'string' || !isRecord(message.descriptor)) {
       throw closedError('The Agent ready message is invalid')
     }
-    const descriptor = cloneInbound(message.descriptor, '$.ready.descriptor') as unknown as AgentPortSessionDescriptor
+    const clonedDescriptor = cloneInbound(message.descriptor, '$.ready.descriptor') as Record<string, unknown>
+    const executionAuthority = clonedDescriptor.executionAuthority ?? 'peer'
+    if (executionAuthority !== 'peer' && executionAuthority !== 'host') {
+      throw closedError('The Agent host execution authority is unsupported')
+    }
+    const descriptor = { ...clonedDescriptor, executionAuthority } as unknown as AgentPortSessionDescriptor
     if (
       descriptor.protocol !== AGENT_PORT_PROTOCOL ||
       descriptor.transport !== 'message-port' ||
@@ -496,7 +502,13 @@ class AgentPortClient implements AgentPortCapability {
     if (!this.sessionId) this.rejectConnected(error)
     for (const request of this.pending.values()) {
       clearTimeout(request.timer)
-      request.reject(request.operation === 'execute' ? new AgentTransportOutcomeUnknownError() : error)
+      request.reject(
+        request.operation === 'execute'
+          ? this.descriptor?.executionAuthority === 'host'
+            ? createAgentHostApprovalRequiredError()
+            : new AgentTransportOutcomeUnknownError()
+          : error,
+      )
     }
     this.pending.clear()
     try {
