@@ -17,6 +17,7 @@ interface DisposalEntry {
   active: boolean
   disposer: Disposer
   label: string
+  promise?: Promise<void>
 }
 
 /**
@@ -30,37 +31,53 @@ export class DisposalLedger {
 
   private disposing = false
 
+  private rollingBack = false
+
+  private sealed = false
+
   private disposed = false
+
+  private disposePromise?: Promise<void>
+
+  private rollbackPromise?: Promise<void>
 
   get isDisposed() {
     return this.disposed
   }
 
   add(disposer: Disposer, label = 'anonymous'): Disposer {
-    if (this.disposing || this.disposed) {
+    if (this.disposing || this.rollingBack || this.sealed || this.disposed) {
       throw new Error(`Cannot register "${label}" on a disposed lifecycle scope`)
     }
 
     const entry: DisposalEntry = { active: true, disposer, label }
     this.entries.push(entry)
 
-    return async () => {
-      if (!entry.active) return
-      entry.active = false
-      await entry.disposer()
-    }
+    return () => this.disposeEntry(entry)
   }
 
   checkpoint(): number {
     return this.entries.length
   }
 
-  async rollback(checkpoint: number): Promise<void> {
-    if (this.disposing || this.disposed) return
-    const failures = await this.disposeRange(Math.max(0, checkpoint))
-    if (failures.length > 0) {
-      throw new DisposalError(failures)
-    }
+  rollback(checkpoint: number): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.disposePromise) return this.disposePromise
+    if (this.sealed) return Promise.reject(new Error('Cannot roll back a lifecycle scope after disposal has started'))
+    if (this.rollbackPromise) return this.rollbackPromise
+
+    this.rollingBack = true
+    const rollbackPromise = Promise.resolve()
+      .then(async () => {
+        const failures = await this.disposeRange(Math.max(0, checkpoint))
+        if (failures.length > 0) throw new DisposalError(failures)
+      })
+      .finally(() => {
+        this.rollingBack = false
+        this.rollbackPromise = undefined
+      })
+    this.rollbackPromise = rollbackPromise
+    return rollbackPromise
   }
 
   child(label: string): DisposalLedger {
@@ -69,15 +86,25 @@ export class DisposalLedger {
     return child
   }
 
-  async dispose(): Promise<void> {
-    if (this.disposing || this.disposed) return
+  dispose(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.disposePromise) return this.disposePromise
+
+    this.sealed = true
     this.disposing = true
-    const failures = await this.disposeRange(0)
-    this.disposing = false
-    this.disposed = true
-    if (failures.length > 0) {
-      throw new DisposalError(failures)
-    }
+    const disposePromise = Promise.resolve()
+      .then(async () => {
+        if (this.rollbackPromise) await this.rollbackPromise
+        const failures = await this.disposeRange(0)
+        if (failures.length > 0) throw new DisposalError(failures)
+        this.disposed = true
+      })
+      .finally(() => {
+        this.disposing = false
+        this.disposePromise = undefined
+      })
+    this.disposePromise = disposePromise
+    return disposePromise
   }
 
   private async disposeRange(start: number): Promise<DisposalFailure[]> {
@@ -87,14 +114,44 @@ export class DisposalLedger {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]
       if (!entry.active) continue
-      entry.active = false
       try {
-        await entry.disposer()
+        await this.disposeEntry(entry)
       } catch (cause) {
         failures.push({ cause, label: entry.label })
       }
     }
 
+    this.entries.push(...entries.filter(entry => entry.active))
+
     return failures
+  }
+
+  private disposeEntry(entry: DisposalEntry): Promise<void> {
+    if (!entry.active) return Promise.resolve()
+    if (entry.promise) return entry.promise
+
+    let resolveAttempt!: () => void
+    let rejectAttempt!: (cause: unknown) => void
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve
+      rejectAttempt = reject
+    })
+    entry.promise = promise
+
+    const clearAttempt = () => {
+      if (entry.promise === promise) entry.promise = undefined
+    }
+    void promise.then(clearAttempt, clearAttempt)
+
+    try {
+      Promise.resolve(entry.disposer()).then(() => {
+        entry.active = false
+        resolveAttempt()
+      }, rejectAttempt)
+    } catch (cause) {
+      rejectAttempt(cause)
+    }
+
+    return promise
   }
 }
