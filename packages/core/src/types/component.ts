@@ -1,4 +1,4 @@
-import { NpmInfo } from './npm-info'
+import type { NpmInfo } from './npm-info'
 
 // export type ComponentInstance = Element
 export type ComponentInstance = any

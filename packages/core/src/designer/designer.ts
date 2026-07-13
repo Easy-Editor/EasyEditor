@@ -1,9 +1,9 @@
-import { computed, observable } from 'mobx'
+import { computed, observable, reaction } from 'mobx'
 import { type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
 import type { Materials } from '../materials'
 import { Project } from '../project'
 import type { ComponentMetadata, Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
-import { createEventBus, createLogger } from '../utils'
+import { type EventBus, type EventDeliveryScheduler, createEventBus, createLogger } from '../utils'
 import { ActiveTracker } from './active-tracker'
 import { Detecting } from './detecting'
 import type { DragObject } from './dragon'
@@ -27,6 +27,7 @@ export type PropsTransducer = (
 
 export interface DesignerProps {
   editor: Editor
+  eventDelivery?: EventDeliveryScheduler
   defaultSchema?: ProjectSchema
   hotkeys?: object
   simulatorProps?: Record<string, any> | ((project: Project) => object)
@@ -68,9 +69,9 @@ export enum DESIGNER_EVENT {
 }
 
 export class Designer {
-  private emitter = createEventBus('Designer')
+  private emitter: EventBus
 
-  readonly activeTracker = new ActiveTracker()
+  readonly activeTracker: ActiveTracker
 
   readonly editor: Editor
 
@@ -96,6 +97,14 @@ export class Designer {
 
   private oobxList: OffsetObserver[] = []
 
+  private mounted = false
+
+  private disposers: Array<() => void> = []
+
+  private historyDispose?: () => void
+
+  private readonly eventDelivery?: EventDeliveryScheduler
+
   @observable.ref private accessor _simulatorProps: Record<string, any> | ((project: Project) => object)
 
   @observable.ref private accessor _suspended = false
@@ -109,6 +118,9 @@ export class Designer {
   }
 
   constructor(props: DesignerProps) {
+    this.eventDelivery = props.eventDelivery
+    this.emitter = createEventBus('Designer', undefined, this.eventDelivery)
+    this.activeTracker = new ActiveTracker(this)
     this.setProps(props)
     this.editor = props.editor
     this.project = new Project(this, props?.defaultSchema)
@@ -117,98 +129,119 @@ export class Designer {
     this.selection = new Selection(this)
     this.settingsManager = new SettingsManager(this.editor)
 
-    this.dragon.onDragstart(e => {
-      this.detecting.enable = false
-      const { dragObject } = e
-      if (isDragNodeObject(dragObject)) {
-        if (dragObject.nodes.length === 1) {
-          if (dragObject.nodes[0].parent) {
-            // ensure current selecting
-            dragObject.nodes[0].select()
-          } else {
-            this.selection.clear()
-          }
-        }
-      } else {
-        this.selection.clear()
-      }
-      this.postEvent(DESIGNER_EVENT.DRAG_START, e)
-    })
-
-    this.dragon.onDrag(e => {
-      this.postEvent(DESIGNER_EVENT.DRAG, e)
-    })
-
-    // TODO: 这一块逻辑是否需要抽出来
-    // insert node
-    this.dragon.onDragend(e => {
-      const { dragObject } = e
-      const loc = this._dropLocation
-      if (loc) {
-        this.postEvent(DESIGNER_EVENT.INSERT_NODE_BEFORE, loc)
-        if (isLocationChildrenDetail(loc.detail) && loc.detail.valid !== false) {
-          let nodes: Node[] | undefined
-          if (isDragNodeObject(dragObject)) {
-            // TODO: 插入逻辑在 dashboard 不需要
-            // nodes = insertChildren(loc.target, [...dragObject.nodes], loc.detail.index, copy)
-          } else if (isDragNodeDataObject(dragObject)) {
-            // process nodeData
-            const nodeData = Array.isArray(dragObject.data) ? dragObject.data : [dragObject.data]
-            const isNotNodeSchema = nodeData.find(item => !isNodeSchema(item))
-            if (isNotNodeSchema) {
-              return
-            }
-            nodes = insertChildren(loc.target, nodeData, loc.detail.index)
-          }
-          if (nodes) {
-            this.selection.selectAll(nodes.map(o => o.id))
-          }
-        }
-        this.postEvent(DESIGNER_EVENT.INSERT_NODE_AFTER, loc)
-      }
-      this.detecting.enable = true
-      this.postEvent(DESIGNER_EVENT.DRAG_END, e)
-    })
-
-    this.activeTracker.onChange(({ node, detail }) => {
-      node.document?.simulator?.scrollToNode(node, detail)
-    })
-
-    let historyDispose: undefined | (() => void)
-    const setupHistory = () => {
-      if (historyDispose) {
-        historyDispose()
-        historyDispose = undefined
-      }
-      this.postEvent(DESIGNER_EVENT.CURRENT_HISTORY_CHANGE, this.currentHistory)
-      if (this.currentHistory) {
-        const { currentHistory } = this
-        historyDispose = currentHistory.onStateChange(() => {
-          this.postEvent(DESIGNER_EVENT.CURRENT_DOCUMENT_CHANGE, this.currentDocument)
-          this.postEvent(DESIGNER_EVENT.CURRENT_HISTORY_CHANGE, this.currentHistory)
-          setupHistory()
-        })
-      }
-    }
-
-    this.selection.onSelectionChange(ids => {
-      this.postEvent(DESIGNER_EVENT.SELECTION_CHANGE, ids)
-    })
-
-    // select root node
-    this.project.onCurrentDocumentChange(() => {
-      this.selection.clear()
-
-      if (this.selection && this.selection.selected.length === 0) {
-        const rootNode = this.project.currentDocument?.getRoot()
-        if (rootNode) {
-          this.selection.select(rootNode.id)
-        }
-      }
-    })
-
+    this.mount()
     this.init()
     this.postEvent(DESIGNER_EVENT.INIT, this)
+  }
+
+  createEventBus(name: string, maxListeners?: number): EventBus {
+    return createEventBus(name, maxListeners, this.eventDelivery)
+  }
+
+  deferEvent(deliver: () => void): boolean {
+    return this.eventDelivery?.(deliver) ?? false
+  }
+
+  /**
+   * Rebind the instance-owned subscriptions after a lifecycle restart.
+   * EventBus disposal only removes listeners, so all owned buses remain reusable.
+   */
+  mount(): void {
+    if (this.mounted) return
+    this.mounted = true
+    this.settingsManager.mount()
+
+    this.disposers.push(
+      this.dragon.onDragstart(e => {
+        this.detecting.enable = false
+        const { dragObject } = e
+        if (isDragNodeObject(dragObject)) {
+          if (dragObject.nodes.length === 1) {
+            if (dragObject.nodes[0].parent) {
+              // ensure current selecting
+              dragObject.nodes[0].select()
+            } else {
+              this.selection.clear()
+            }
+          }
+        } else {
+          this.selection.clear()
+        }
+        this.postEvent(DESIGNER_EVENT.DRAG_START, e)
+      }),
+      this.dragon.onDrag(e => {
+        this.postEvent(DESIGNER_EVENT.DRAG, e)
+      }),
+      // TODO: 这一块逻辑是否需要抽出来
+      // insert node
+      this.dragon.onDragend(e => {
+        const { dragObject } = e
+        const loc = this._dropLocation
+        if (loc) {
+          this.postEvent(DESIGNER_EVENT.INSERT_NODE_BEFORE, loc)
+          if (isLocationChildrenDetail(loc.detail) && loc.detail.valid !== false) {
+            let nodes: Node[] | undefined
+            if (isDragNodeObject(dragObject)) {
+              // TODO: 插入逻辑在 dashboard 不需要
+              // nodes = insertChildren(loc.target, [...dragObject.nodes], loc.detail.index, copy)
+            } else if (isDragNodeDataObject(dragObject)) {
+              // process nodeData
+              const nodeData = Array.isArray(dragObject.data) ? dragObject.data : [dragObject.data]
+              const isNotNodeSchema = nodeData.find(item => !isNodeSchema(item))
+              if (isNotNodeSchema) {
+                return
+              }
+              nodes = insertChildren(loc.target, nodeData, loc.detail.index)
+            }
+            if (nodes) {
+              this.selection.selectAll(nodes.map(o => o.id))
+            }
+          }
+          this.postEvent(DESIGNER_EVENT.INSERT_NODE_AFTER, loc)
+        }
+        this.detecting.enable = true
+        this.postEvent(DESIGNER_EVENT.DRAG_END, e)
+      }),
+      this.activeTracker.onChange(({ node, detail }) => {
+        node.document?.simulator?.scrollToNode(node, detail)
+      }),
+      this.selection.onSelectionChange(ids => {
+        this.postEvent(DESIGNER_EVENT.SELECTION_CHANGE, ids)
+      }),
+      // Select the root node and follow its history when the active document changes.
+      // Project.onCurrentDocumentChange historically listened on a different bus
+      // than Project.checkExclusive emits, so ownership is explicit here.
+      reaction(
+        () => this.project.currentDocument,
+        () => {
+          this.selection.clear()
+
+          if (this.selection.selected.length === 0) {
+            const rootNode = this.project.currentDocument?.getRoot()
+            if (rootNode) {
+              this.selection.select(rootNode.id)
+            }
+          }
+          this.bindCurrentHistory()
+        },
+        { fireImmediately: true },
+      ),
+    )
+
+    this.bindCurrentHistory()
+  }
+
+  private bindCurrentHistory(): void {
+    this.historyDispose?.()
+    this.historyDispose = undefined
+    this.postEvent(DESIGNER_EVENT.CURRENT_HISTORY_CHANGE, this.currentHistory)
+
+    const history = this.currentHistory
+    if (!history) return
+    this.historyDispose = history.onStateChange(() => {
+      this.postEvent(DESIGNER_EVENT.CURRENT_DOCUMENT_CHANGE, this.currentDocument)
+      this.postEvent(DESIGNER_EVENT.CURRENT_HISTORY_CHANGE, this.currentHistory)
+    })
   }
 
   /**
@@ -396,11 +429,51 @@ export class Designer {
     return new SettingTopEntry(this.editor, nodes)
   }
 
-  purge() {
-    // TODO
-    this.props = undefined
+  purge(): void {
+    const failures: unknown[] = []
+    const cleanup = (operation: () => void) => {
+      try {
+        operation()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+
+    this.mounted = false
+    cleanup(() => this.historyDispose?.())
+    this.historyDispose = undefined
+    for (const dispose of this.disposers.splice(0).reverse()) {
+      cleanup(dispose)
+    }
+
+    // Drop public and plugin listeners before resetting child state so disposal
+    // cannot publish partial teardown events.
+    cleanup(() => this.emitter.dispose())
+    cleanup(() => this.settingsManager.purge())
+    cleanup(() => this.dragon.dispose())
+    cleanup(() => this.selection.dispose())
+    cleanup(() => this.detecting.dispose())
+    cleanup(() => this.activeTracker.dispose())
+
+    if (this._dropLocation?.document) {
+      this._dropLocation.document.dropLocation = null
+    }
+    this._dropLocation = undefined
     this.propsReducers.clear()
-    this.oobxList.forEach(item => item.purge())
-    this.oobxList = []
+
+    const retainedObservers: OffsetObserver[] = []
+    for (const observer of this.oobxList) {
+      try {
+        observer.purge()
+      } catch (error) {
+        failures.push(error)
+        retainedObservers.push(observer)
+      }
+    }
+    this.oobxList = retainedObservers
+
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Designer disposal completed with errors')
+    }
   }
 }

@@ -1,6 +1,6 @@
 import type { Designer } from '../designer'
 import type { ComponentMetadata, NpmInfo } from '../types'
-import { createEventBus } from '../utils'
+import type { EventBus } from '../utils'
 
 export enum COMPONENT_META_EVENT {
   CHANGE = 'componentMeta:metadata.change',
@@ -11,7 +11,7 @@ export class ComponentMeta {
 
   private _npm?: NpmInfo
 
-  private emitter = createEventBus('ComponentMeta')
+  private emitter: EventBus
 
   get npm() {
     return this._npm
@@ -73,6 +73,7 @@ export class ComponentMeta {
     readonly designer: Designer,
     metadata: ComponentMetadata,
   ) {
+    this.emitter = designer.createEventBus('ComponentMeta')
     this.parseMetadata(metadata)
   }
 

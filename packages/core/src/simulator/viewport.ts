@@ -1,6 +1,7 @@
 import { action, computed, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type Point } from '../designer'
 import { ScrollTarget } from '../designer/scroller'
+import type { Disposable } from '../utils'
 
 export type AutoFit = '100%'
 export const AutoFit: AutoFit = '100%'
@@ -10,13 +11,18 @@ export class Viewport {
 
   private _bounds?: DOMRect
 
+  private boundsFrame?: number
+
   get bounds(): DOMRect {
     if (this._bounds) {
       return this._bounds
     }
     this._bounds = this.viewportElement!.getBoundingClientRect()
-    requestAnimationFrame(() => {
+    const view = this.viewportElement?.ownerDocument.defaultView
+    const requestFrame = view?.requestAnimationFrame?.bind(view) || globalThis.requestAnimationFrame
+    this.boundsFrame = requestFrame(() => {
       this._bounds = undefined
+      this.boundsFrame = undefined
     })
     return this._bounds
   }
@@ -136,6 +142,8 @@ export class Viewport {
 
   private _scrollTarget?: ScrollTarget
 
+  private scrollDisposer?: Disposable
+
   /**
    * 滚动对象
    */
@@ -149,13 +157,14 @@ export class Viewport {
     return this._scrolling
   }
 
-  setScrollTarget(target: Window) {
+  setScrollTarget(target: Window): Disposable {
+    this.clearScrollTarget()
     const scrollTarget = new ScrollTarget(target)
     this._scrollX = scrollTarget.left
     this._scrollY = scrollTarget.top
 
     let scrollTimer: any
-    target.addEventListener('scroll', () => {
+    const onScroll = () => {
       this._scrollX = scrollTarget.left
       this._scrollY = scrollTarget.top
       this._scrolling = true
@@ -165,9 +174,47 @@ export class Viewport {
       scrollTimer = setTimeout(() => {
         this._scrolling = false
       }, 80)
-    })
-    target.addEventListener('resize', () => this.touch())
+    }
+    const onResize = () => this.touch()
+    target.addEventListener('scroll', onScroll)
+    target.addEventListener('resize', onResize)
     this._scrollTarget = scrollTarget
+
+    let disposed = false
+    const dispose = () => {
+      if (disposed) {
+        return
+      }
+      disposed = true
+      target.removeEventListener('scroll', onScroll)
+      target.removeEventListener('resize', onResize)
+      if (scrollTimer) {
+        clearTimeout(scrollTimer)
+      }
+      if (this.scrollDisposer === dispose) {
+        this.scrollDisposer = undefined
+        this._scrollTarget = undefined
+        this._scrolling = false
+      }
+    }
+    this.scrollDisposer = dispose
+    return dispose
+  }
+
+  clearScrollTarget(): void {
+    this.scrollDisposer?.()
+  }
+
+  dispose(): void {
+    this.clearScrollTarget()
+    const view = this.viewportElement?.ownerDocument.defaultView
+    if (this.boundsFrame !== undefined) {
+      const cancelFrame = view?.cancelAnimationFrame?.bind(view) || globalThis.cancelAnimationFrame
+      cancelFrame(this.boundsFrame)
+      this.boundsFrame = undefined
+    }
+    this._bounds = undefined
+    this.viewportElement = undefined
   }
 
   toGlobalPoint(point: Point): Point {

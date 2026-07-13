@@ -1,8 +1,10 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
 import { action, autorun, computed, observable, reaction } from 'mobx'
 import { config } from '..'
+import type { Config } from '../config'
 import type { Designer, LocateEvent, LocationChildrenDetail, LocationData, NodeInstance } from '../designer'
 import {
+  type Clipboard,
   DESIGNER_EVENT,
   DragObjectType,
   LocationDetailType,
@@ -16,7 +18,7 @@ import { type Node, getClosestClickableNode, getClosestNode } from '../document'
 import type { Project } from '../project'
 import type { ComponentInstance, DataSourceEngine, Snippet } from '../types'
 import type { Asset } from '../types/assets'
-import { type Hotkey, createEventBus, isDOMNodeVisible, isElementNode } from '../utils'
+import { type Disposable, type EventBus, type Hotkey, isDOMNodeVisible, isElementNode } from '../utils'
 import type { SimulatorRenderer } from './simulator-renderer'
 import { Viewport } from './viewport'
 
@@ -51,7 +53,7 @@ export interface DeviceStyleProps {
 }
 
 export class Simulator {
-  readonly emitter = createEventBus('Simulator')
+  readonly emitter: EventBus
 
   isSimulator = true
 
@@ -100,23 +102,23 @@ export class Simulator {
   @computed
   get dataSourceEngine(): DataSourceEngine | undefined {
     // renderer 依赖
-    return config.get('dataSourceEngine')
+    return this.engineConfig.get('dataSourceEngine')
   }
 
   get enableStrictNotFoundMode(): any {
-    return config.get('enableStrictNotFoundMode') ?? false
+    return this.engineConfig.get('enableStrictNotFoundMode') ?? false
   }
 
   get excuteLifeCycleInDesignMode(): any {
-    return config.get('excuteLifeCycleInDesignMode') ?? false
+    return this.engineConfig.get('excuteLifeCycleInDesignMode') ?? false
   }
 
   get notFoundComponent(): any {
-    return config.get('notFoundComponent') ?? null
+    return this.engineConfig.get('notFoundComponent') ?? null
   }
 
   get faultComponent(): any {
-    return config.get('faultComponent') ?? null
+    return this.engineConfig.get('faultComponent') ?? null
   }
 
   @computed get componentsAsset(): Asset | undefined {
@@ -168,22 +170,37 @@ export class Simulator {
 
   private sensing = false
 
+  private readonly lifetimeDisposers = new Set<Disposable>()
+
+  private readonly frameDisposers = new Set<Disposable>()
+
   get currentDocument() {
     return this.project.currentDocument
+  }
+
+  private get engineConfig(): Config {
+    return (this.editor as typeof this.editor & { engineConfig?: Config }).engineConfig || config
+  }
+
+  private get engineClipboard(): Clipboard {
+    return this.editor.get<Clipboard>('clipboard') || clipboard
   }
 
   constructor(project: Project, designer: Designer) {
     this.designer = designer
     this.project = project
+    this.emitter = designer.createEventBus('Simulator')
     this.viewport = new Viewport(designer)
     this.scroller = this.designer.createScroller(this.viewport)
-    this.autoRender = !config.get('disableAutoRender', false)
-    this._appHelper = config.get('appHelper')
+    this.autoRender = !this.engineConfig.get('disableAutoRender', false)
+    this._appHelper = this.engineConfig.get('appHelper')
 
-    config.onGot('appHelper', data => {
-      // appHelper被config.set修改后触发injectionConsumer.consume回调
-      this._appHelper = data
-    })
+    this.lifetimeDisposers.add(
+      this.engineConfig.onGot('appHelper', data => {
+        // appHelper被config.set修改后触发injectionConsumer.consume回调
+        this._appHelper = data
+      }),
+    )
   }
 
   @action
@@ -209,7 +226,7 @@ export class Simulator {
     options?: IReactionOptions<unknown, boolean>,
   ) {
     this._renderer = renderer
-    return autorun(effect, options)
+    return this.trackLifetime(autorun(effect, options))
   }
 
   reaction(
@@ -217,26 +234,101 @@ export class Simulator {
     effect: (value: unknown, prev: unknown, reaction: IReactionPublic) => void,
     opts?: IReactionOptions<unknown, boolean>,
   ): IReactionDisposer {
-    return reaction(expression, effect, opts)
+    return this.trackLifetime(reaction(expression, effect, opts))
   }
 
   autorun(
     effect: (reaction: IReactionPublic) => void,
     options?: IReactionOptions<unknown, boolean>,
   ): IReactionDisposer {
-    return autorun(effect, options)
+    return this.trackLifetime(autorun(effect, options))
   }
 
   @action
   purge() {
-    this._renderer = undefined
-    this._contentDocument = undefined
-    this._contentWindow = undefined
+    const errors: unknown[] = []
+    try {
+      this.disposeFrame()
+    } catch (error) {
+      errors.push(error)
+    }
+    let rendererDisposed = true
+    try {
+      this._renderer?.dispose?.()
+    } catch (error) {
+      rendererDisposed = false
+      errors.push(error)
+    }
+    for (const dispose of [...this.lifetimeDisposers].reverse()) {
+      try {
+        dispose()
+      } catch (error) {
+        errors.push(error)
+      } finally {
+        this.lifetimeDisposers.delete(dispose)
+      }
+    }
+    try {
+      this.viewport.dispose()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.scroller.cancel()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.emitter.dispose()
+    } catch (error) {
+      errors.push(error)
+    }
+    if (rendererDisposed) {
+      this._renderer = undefined
+    }
 
     for (const docId in this.instancesMap) {
       this.instancesMap[docId].clear()
     }
     this.instancesMap = {}
+    if (errors.length) {
+      throw new AggregateError(errors, 'Simulator disposal completed with errors')
+    }
+  }
+
+  dispose() {
+    this.purge()
+  }
+
+  private disposeFrame(): void {
+    const errors: unknown[] = []
+    for (const dispose of [...this.frameDisposers].reverse()) {
+      try {
+        dispose()
+      } catch (error) {
+        errors.push(error)
+      } finally {
+        this.frameDisposers.delete(dispose)
+      }
+    }
+    this.iframe = undefined
+    this._contentDocument = undefined
+    this._contentWindow = undefined
+    if (errors.length) {
+      throw new AggregateError(errors, 'Simulator frame disposal completed with errors')
+    }
+  }
+
+  private trackLifetime<T extends Disposable>(disposer: T): T {
+    let disposed = false
+    const tracked = () => {
+      if (disposed) return
+      disposed = true
+      this.lifetimeDisposers.delete(tracked)
+      disposer()
+    }
+    this.lifetimeDisposers.add(tracked)
+    return tracked as T
   }
 
   /**
@@ -251,9 +343,10 @@ export class Simulator {
     if (!iframe || this.iframe === iframe) {
       return
     }
+    this.disposeFrame()
     this.iframe = iframe
 
-    if (iframe instanceof HTMLIFrameElement) {
+    if (typeof HTMLIFrameElement !== 'undefined' && iframe instanceof HTMLIFrameElement) {
       this._contentWindow = iframe.contentWindow!
       this._contentDocument = this._contentWindow.document
     } else {
@@ -265,13 +358,17 @@ export class Simulator {
     this._renderer?.run()
 
     // init events, overlays
-    this.viewport.setScrollTarget(this._contentWindow)
-    this.setupEvents()
+    this.frameDisposers.add(this.viewport.setScrollTarget(this._contentWindow))
+    for (const dispose of this.setupEvents()) {
+      this.frameDisposers.add(dispose)
+    }
 
     // bind hotkey & clipboard
     const hotkey = this.editor.get<Hotkey>('hotkey')
-    hotkey?.mount(this._contentWindow)
-    clipboard.injectCopyPaster(this._contentDocument!)
+    if (hotkey) {
+      this.frameDisposers.add(hotkey.mount(this._contentWindow))
+    }
+    this.frameDisposers.add(this.engineClipboard.injectCopyPaster(this._contentDocument!))
   }
 
   postEvent(eventName: string, ...data: any[]) {
@@ -289,111 +386,118 @@ export class Simulator {
     return false
   }
 
-  setupEvents() {
-    this.setupDragAndClick()
-    this.setupDetecting()
+  setupEvents(): Disposable[] {
+    return [this.setupDragAndClick(), this.setupDetecting()]
   }
 
-  setupDragAndClick() {
+  setupDragAndClick(): Disposable {
     const { designer } = this
     const doc = this.contentDocument!
+    const pendingMouseups = new Set<(event: MouseEvent) => void>()
 
-    doc.addEventListener(
-      'mousedown',
-      (downEvent: MouseEvent) => {
-        const documentModel = this.project.currentDocument
-        if (!documentModel) {
-          return
-        }
-        const { selection } = this.designer
-        let isMulti = false
-        if (this.designMode === 'design') {
-          isMulti = downEvent.metaKey || downEvent.ctrlKey
-        } else if (!downEvent.metaKey) {
-          return
-        }
-        const nodeInst = this.getNodeInstanceFromElement(downEvent.target as Element)
-        const { rootNode } = documentModel
-        // const node = getClosestClickableNode(nodeInst?.node || rootNode, downEvent)
-        // TODO: 默认不选择根节点，不然点击外部任意位置，都会选中根节点，后面想想有没有其他办法
-        const node = getClosestClickableNode(nodeInst?.node, downEvent)
-        // 如果找不到可点击的节点，直接返回
-        if (!node) {
-          return
-        }
+    const onMouseDown = (downEvent: MouseEvent) => {
+      const documentModel = this.project.currentDocument
+      if (!documentModel) {
+        return
+      }
+      const { selection } = this.designer
+      let isMulti = false
+      if (this.designMode === 'design') {
+        isMulti = downEvent.metaKey || downEvent.ctrlKey
+      } else if (!downEvent.metaKey) {
+        return
+      }
+      const nodeInst = this.getNodeInstanceFromElement(downEvent.target as Element)
+      const { rootNode } = documentModel
+      // const node = getClosestClickableNode(nodeInst?.node || rootNode, downEvent)
+      // TODO: 默认不选择根节点，不然点击外部任意位置，都会选中根节点，后面想想有没有其他办法
+      const node = getClosestClickableNode(nodeInst?.node, downEvent)
+      // 如果找不到可点击的节点，直接返回
+      if (!node) {
+        return
+      }
 
-        // 触发 onMouseDownHook 钩子
-        const onMouseDownHook = node.componentMeta.advanced.callbacks?.onMouseDownHook
-        if (onMouseDownHook) {
-          onMouseDownHook(downEvent, node)
-        }
-        // stop response document focus event
-        // TODO: ?? 阻止了 linkSnippet 事件 - mousedown 事件
-        // downEvent.stopPropagation()
-        // TODO: ?? 阻止了 linkSnippet 事件 - dragstart 事件
-        // downEvent.preventDefault()
+      // 触发 onMouseDownHook 钩子
+      const onMouseDownHook = node.componentMeta.advanced.callbacks?.onMouseDownHook
+      if (onMouseDownHook) {
+        onMouseDownHook(downEvent, node)
+      }
+      // stop response document focus event
+      // TODO: ?? 阻止了 linkSnippet 事件 - mousedown 事件
+      // downEvent.stopPropagation()
+      // TODO: ?? 阻止了 linkSnippet 事件 - dragstart 事件
+      // downEvent.preventDefault()
 
-        const isLeftButton = downEvent.button === 0
-        const checkSelect = (e: MouseEvent) => {
-          doc.removeEventListener('mouseup', checkSelect, true)
+      const isLeftButton = downEvent.button === 0
+      const checkSelect = (e: MouseEvent) => {
+        doc.removeEventListener('mouseup', checkSelect, true)
+        pendingMouseups.delete(checkSelect)
 
-          const isLeftButtonSelect = e.button === 0
-          // 鼠标是否移动 ? - 鼠标抖动应该也需要支持选中事件，偶尔点击不能选中，磁帖块移除 shaken 检测
-          if (!isShaken(downEvent, e) && isLeftButtonSelect) {
-            const { id } = node
-            if (isMulti && rootNode && !node.contains(rootNode) && selection.has(id)) {
-              selection.remove(id)
-            } else {
-              if (rootNode) {
-                selection.select(node.contains(rootNode) ? rootNode.id : id)
-              }
-
-              // dirty code should refector
-              const selected = node?.componentMeta?.componentName || ''
-              this.designer.postEvent(DESIGNER_EVENT.SIMULATOR_SELECT, {
-                selected,
-              })
-            }
-          }
-        }
-
-        if (isLeftButton && rootNode && !node.contains(rootNode)) {
-          let nodes: Node[] = [node]
-          let ignoreUpSelected = false
-          if (isMulti) {
-            // multi select mode, directily add
-            if (!selection.has(node.id)) {
-              selection.add(node.id)
-              ignoreUpSelected = true
-            }
-            rootNode?.id && selection.remove(rootNode.id)
-            // 获得顶层 nodes
-            nodes = selection.getTopNodes()
-          } else if (selection.containsNode(node, true)) {
-            nodes = selection.getTopNodes()
+        const isLeftButtonSelect = e.button === 0
+        // 鼠标是否移动 ? - 鼠标抖动应该也需要支持选中事件，偶尔点击不能选中，磁帖块移除 shaken 检测
+        if (!isShaken(downEvent, e) && isLeftButtonSelect) {
+          const { id } = node
+          if (isMulti && rootNode && !node.contains(rootNode) && selection.has(id)) {
+            selection.remove(id)
           } else {
-            // will clear current selection & select dragment in dragstart
-          }
-          designer.dragon.boost(
-            {
-              type: DragObjectType.Node,
-              nodes,
-            },
-            downEvent,
-          )
-          if (ignoreUpSelected) {
-            // multi select mode has add selected, should return
-            return
+            if (rootNode) {
+              selection.select(node.contains(rootNode) ? rootNode.id : id)
+            }
+
+            // dirty code should refector
+            const selected = node?.componentMeta?.componentName || ''
+            this.designer.postEvent(DESIGNER_EVENT.SIMULATOR_SELECT, {
+              selected,
+            })
           }
         }
+      }
 
-        doc.addEventListener('mouseup', checkSelect, true)
-      },
-      true,
-    )
+      if (isLeftButton && rootNode && !node.contains(rootNode)) {
+        let nodes: Node[] = [node]
+        let ignoreUpSelected = false
+        if (isMulti) {
+          // multi select mode, directily add
+          if (!selection.has(node.id)) {
+            selection.add(node.id)
+            ignoreUpSelected = true
+          }
+          rootNode?.id && selection.remove(rootNode.id)
+          // 获得顶层 nodes
+          nodes = selection.getTopNodes()
+        } else if (selection.containsNode(node, true)) {
+          nodes = selection.getTopNodes()
+        } else {
+          // will clear current selection & select dragment in dragstart
+        }
+        designer.dragon.boost(
+          {
+            type: DragObjectType.Node,
+            nodes,
+          },
+          downEvent,
+        )
+        if (ignoreUpSelected) {
+          // multi select mode has add selected, should return
+          return
+        }
+      }
+
+      doc.addEventListener('mouseup', checkSelect, true)
+      pendingMouseups.add(checkSelect)
+    }
+
+    doc.addEventListener('mousedown', onMouseDown, true)
+    return () => {
+      doc.removeEventListener('mousedown', onMouseDown, true)
+      for (const checkSelect of pendingMouseups) {
+        doc.removeEventListener('mouseup', checkSelect, true)
+      }
+      pendingMouseups.clear()
+    }
   }
 
-  setupDetecting() {
+  setupDetecting(): Disposable {
     const doc = this.contentDocument!
     const { detecting, dragon } = this.designer
     const hover = (e: MouseEvent) => {
@@ -414,20 +518,22 @@ export class Simulator {
     const leave = () => {
       this.project.currentDocument && detecting.leave(this.project.currentDocument)
     }
+    const stopDraggingPropagation = (e: Event) => {
+      if (dragon.dragging) {
+        e.stopPropagation()
+      }
+    }
 
     doc.addEventListener('mouseover', hover, true)
     doc.addEventListener('mouseleave', leave, false)
 
     // TODO: refactor this line, contains click, mousedown, mousemove
-    doc.addEventListener(
-      'mousemove',
-      (e: Event) => {
-        if (dragon.dragging) {
-          e.stopPropagation()
-        }
-      },
-      true,
-    )
+    doc.addEventListener('mousemove', stopDraggingPropagation, true)
+    return () => {
+      doc.removeEventListener('mouseover', hover, true)
+      doc.removeEventListener('mouseleave', leave, false)
+      doc.removeEventListener('mousemove', stopDraggingPropagation, true)
+    }
   }
 
   @action

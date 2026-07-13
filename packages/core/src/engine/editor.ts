@@ -1,16 +1,18 @@
 import EventEmitter from 'events'
 import { action, observable } from 'mobx'
 import {
+  type Config,
   EDITOR_EVENT,
   type EditorConfig,
   type EditorGetResult,
   type EditorValueKey,
   EventBus,
+  type EventDeliveryScheduler,
   type HookConfig,
   type Editor as IEditor,
   type Plugins,
-  config,
   createLogger,
+  config as defaultEngineConfig,
 } from '..'
 
 const logger = createLogger('Editor')
@@ -26,6 +28,12 @@ const keyBlacklist = [
   'material',
   'innerHotkey',
   'innerPlugins',
+  'engine',
+  'clipboard',
+  'remote',
+  'trustPolicy',
+  'transactions',
+  'commands',
 ]
 
 export class Editor extends EventEmitter implements IEditor {
@@ -34,6 +42,8 @@ export class Editor extends EventEmitter implements IEditor {
   config?: EditorConfig
 
   eventBus: EventBus
+
+  readonly engineConfig: Config
 
   components?: IEditor['components']
 
@@ -47,11 +57,16 @@ export class Editor extends EventEmitter implements IEditor {
     }>
   >()
 
-  constructor(config?: EditorConfig) {
+  constructor(
+    config?: EditorConfig,
+    engineConfig: Config = defaultEngineConfig,
+    eventDelivery?: EventDeliveryScheduler,
+  ) {
     super()
     // set global emitter maxListeners
     this.setMaxListeners(200)
-    this.eventBus = new EventBus(this)
+    this.eventBus = new EventBus(this, undefined, eventDelivery)
+    this.engineConfig = engineConfig
 
     if (config) {
       this.init(config)
@@ -72,7 +87,7 @@ export class Editor extends EventEmitter implements IEditor {
   set(key: EditorValueKey, data: any): void | Promise<void> {
     // store the data to engineConfig while invoking editor.set()
     if (!keyBlacklist.includes(key as string)) {
-      config.set(key as any, data)
+      this.engineConfig.set(key as any, data)
     }
     this.context.set(key, data)
     this.notifyGot(key)
@@ -151,20 +166,31 @@ export class Editor extends EventEmitter implements IEditor {
     }
   }
 
-  destroy() {
-    if (!this.config) {
-      return
+  destroy(): void {
+    this.unregisterHooks()
+
+    if (this.config) {
+      try {
+        const { lifeCycles = {} } = this.config
+        lifeCycles?.destroy?.(this)
+      } catch (err) {
+        logger.warn(err)
+      }
     }
 
     try {
-      const { lifeCycles = {} } = this.config
-      this.unregisterHooks()
-      lifeCycles?.destroy?.(this)
+      this.eventBus.emit(EDITOR_EVENT.DESTROY, this)
     } catch (err) {
       logger.warn(err)
     }
 
-    this.eventBus.emit(EDITOR_EVENT.DESTROY)
+    this.waits.clear()
+    this.context.clear()
+    this.hooks = []
+    this.config = undefined
+    this.components = undefined
+    this.eventBus.dispose()
+    this.removeAllListeners()
   }
 
   async extend(pluginManager: Plugins) {
@@ -294,6 +320,6 @@ export class Editor extends EventEmitter implements IEditor {
   }
 }
 
-export const createEasyEditor = (config?: EditorConfig) => {
-  return new Editor(config)
+export const createEasyEditor = (config?: EditorConfig, engineConfig?: Config) => {
+  return new Editor(config, engineConfig)
 }

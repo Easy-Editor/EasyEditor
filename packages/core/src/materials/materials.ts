@@ -2,7 +2,12 @@ import { action, computed } from 'mobx'
 import type { Designer } from '../designer'
 import type { Component, ComponentMetadata, Editor } from '../types'
 import { type ComponentMeta, isComponentMeta } from './component-meta'
-import { MaterialRegistry, MaterialSource, type RegisterOptions } from './registry'
+import {
+  MaterialRegistry,
+  type MaterialRegistryTransactionState,
+  MaterialSource,
+  type RegisterOptions,
+} from './registry'
 
 export class Materials {
   /** 物料注册表（新架构核心） */
@@ -69,8 +74,7 @@ export class Materials {
     // 警告：如果有使用中的实例
     if (entry.usageCount > 0) {
       console.warn(
-        `[Materials] Removing "${componentName}" with ${entry.usageCount} instances in use. ` +
-          'This may cause rendering errors. Consider using registry.unload() with force option.',
+        `[Materials] Removing "${componentName}" with ${entry.usageCount} instances in use. This may cause rendering errors. Consider using registry.unload() with force option.`,
       )
     }
 
@@ -146,6 +150,18 @@ export class Materials {
    */
   canUnload(componentName: string): boolean {
     return this.registry.canUnload(componentName)
+  }
+
+  getUsageCount(componentName: string): number {
+    return this.registry.getUsageCount(componentName)
+  }
+
+  captureTransactionState(): MaterialRegistryTransactionState {
+    return this.registry.captureTransactionState()
+  }
+
+  restoreTransactionState(snapshot: MaterialRegistryTransactionState): void {
+    this.registry.restoreTransactionState(snapshot)
   }
 
   /**

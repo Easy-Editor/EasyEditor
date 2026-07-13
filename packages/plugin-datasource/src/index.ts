@@ -43,6 +43,7 @@ interface DataSourcePluginOptions {
 const DataSourcePlugin: PluginCreator<DataSourcePluginOptions> = options => {
   return {
     name: 'DataSourcePlugin',
+    extensionFingerprint: 'DataSourcePlugin:v1',
     deps: [],
     init(ctx) {
       const { config } = ctx

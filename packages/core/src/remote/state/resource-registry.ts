@@ -128,6 +128,10 @@ export class ResourceRegistry {
     this.setters.clear()
   }
 
+  dispose(): void {
+    this.clearAll()
+  }
+
   /**
    * 获取资源映射
    */

@@ -168,14 +168,14 @@ export class Logger {
 
   constructor(_options: Partial<Options>) {
     const options = { ...defaultOptions, ..._options }
-    const _location = location || ({} as any)
+    const _location = typeof location === 'undefined' ? ({} as Location) : location
     /**
      * __logConf__ 格式为 logLevel[:bizName], bizName is used as: targetBizName like '%bizName%'
      *   1. __logConf__=log  or __logConf__=warn,  etc.
      *   2. __logConf__=log:*  or __logConf__=warn:*,  etc.
      *   3. __logConf__=log:bizName  or __logConf__=warn:partOfBizName,  etc.
      */
-    const logConf = (/__(?:logConf|logLevel)__=([^#/&]*)/.exec(_location.href) || [])[1]
+    const logConf = (/__(?:logConf|logLevel)__=([^#/&]*)/.exec(_location.href || '') || [])[1]
     const targetOptions = parseLogConf(logConf, options)
 
     this.bizName = options.bizName

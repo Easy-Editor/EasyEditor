@@ -9,7 +9,7 @@ import { type MemoryHistory, createMemoryHistory } from 'history'
 import { isPlainObject } from 'lodash-es'
 import { action, computed, observable, runInAction, untracked } from 'mobx'
 import { type ReactInstance, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { type Root, createRoot } from 'react-dom/client'
 import { SimulatorRendererView } from './RendererView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
 import { buildComponents, getClientRects, reactFindDOMNodes, withQueryParams } from './utils'
@@ -77,16 +77,50 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
   private _running = false
 
-  host: Simulator
+  private _root?: Root
+
+  private _host?: Simulator
+
+  get host(): Simulator {
+    if (!this._host) {
+      throw new Error('SimulatorRendererContainer must be mounted before use')
+    }
+    return this._host
+  }
 
   mount(host: Simulator) {
-    this.host = host
-    this.init()
+    if (this._host === host) {
+      return
+    }
+    if (this._host) {
+      this.dispose()
+    }
+    this._host = host
+    try {
+      this.init()
+    } catch (error) {
+      try {
+        this.dispose()
+      } catch (disposeError) {
+        throw new AggregateError([error, disposeError], 'Simulator renderer mount rollback completed with errors')
+      }
+      throw error
+    }
   }
 
   @action
   init() {
     this.autoRender = this.host.autoRender
+    this.autoRepaintNode = true
+
+    const history = createMemoryHistory({ initialEntries: ['/'] })
+    this.history = history
+    this.disposeFunctions.push(
+      history.listen(({ location }) => {
+        const docId = location.pathname.slice(1)
+        docId && this.host.project.open(docId)
+      }),
+    )
 
     this.disposeFunctions.push(
       this.host.connect(this, () => {
@@ -144,13 +178,6 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
         }
       }),
     )
-
-    const history = createMemoryHistory({ initialEntries: ['/'] })
-    this.history = history
-    history.listen(({ location }) => {
-      const docId = location.pathname.slice(1)
-      docId && this.host.project.open(docId)
-    })
 
     this._appContext = {
       utils: {
@@ -277,8 +304,8 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     if (this._running) {
       return
     }
-    this._running = true
-    let container = this.host.iframe
+    const host = this.host
+    let container = host.iframe
     if (!container) {
       const containerId = 'easy-editor'
       container = document.getElementById(containerId)!
@@ -289,13 +316,26 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       }
     }
 
-    createRoot(container).render(
-      createElement(SimulatorRendererView, {
-        simulatorRenderer: this,
-      }),
-    )
-
-    this.host.project.setRendererReady(this)
+    const root = createRoot(container)
+    try {
+      root.render(
+        createElement(SimulatorRendererView, {
+          simulatorRenderer: this,
+        }),
+      )
+      this._root = root
+      this._running = true
+      host.project.setRendererReady(this)
+    } catch (error) {
+      this._root = undefined
+      this._running = false
+      try {
+        root.unmount()
+      } catch (disposeError) {
+        throw new AggregateError([error, disposeError], 'Simulator renderer startup rollback completed with errors')
+      }
+      throw error
+    }
   }
 
   /**
@@ -316,13 +356,52 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
   }
 
   dispose() {
-    this.disposeFunctions.forEach(fn => fn())
-    this.documentInstances.forEach(docInst => docInst.dispose())
+    const errors: unknown[] = []
+
+    const root = this._root
+    this._root = undefined
+    if (root) {
+      try {
+        root.unmount()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    const disposeFunctions = this.disposeFunctions.splice(0).reverse()
+    for (const dispose of disposeFunctions) {
+      try {
+        dispose()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    const documentInstances = [...this.documentInstances].reverse()
+    for (const documentInstance of documentInstances) {
+      try {
+        documentInstance.dispose()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
     untracked(() => {
+      this._documentInstances = []
+      this._layout = null
+      this._libraryMap = {}
       this._componentsMap = {}
       this._components = null
       this._appContext = {}
+      this._dataSourceEngine = undefined
     })
+    this._running = false
+    this._host = undefined
+    this.autoRepaintNode = true
+
+    if (errors.length) {
+      throw new AggregateError(errors, 'Simulator renderer disposal completed with errors')
+    }
   }
 }
 

@@ -236,6 +236,12 @@ export class Config {
       this.waits.delete(key)
     }
   }
+
+  dispose(options: { preserve?: string[] } = {}) {
+    const preserved = new Set(options.preserve || [])
+    this.config = Object.fromEntries(Object.entries(this.config).filter(([key]) => preserved.has(key)))
+    this.waits.clear()
+  }
 }
 
 export const config = new Config()

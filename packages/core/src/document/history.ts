@@ -1,6 +1,6 @@
 import { reaction, untracked } from 'mobx'
 import type { RootSchema } from '../types'
-import { createEventBus, createLogger } from '../utils'
+import { type EventBus, createEventBus, createLogger } from '../utils'
 import type { Document } from './document'
 
 const logger = createLogger('History')
@@ -16,7 +16,7 @@ export enum HISTORY_EVENT {
 }
 
 export class History<T = RootSchema> {
-  emitter = createEventBus('History')
+  emitter: EventBus
 
   /** current record */
   private session: Session
@@ -25,9 +25,15 @@ export class History<T = RootSchema> {
   private records: Session[]
 
   /** as a cursor of records to go back and forward */
-  private point = 0
+  private savePointSession: Session | null = null
 
   private asleep = false
+
+  private transactionDepth = 0
+
+  private transactionStartData?: string
+
+  private transactionPendingData?: string
 
   /** current recorded data */
   get hotData() {
@@ -52,25 +58,32 @@ export class History<T = RootSchema> {
   private disposer: () => void
 
   constructor(
-    dataFn: () => T | null,
+    private readonly dataFn: () => T | null,
     private redoer: (data: T) => void,
     readonly document?: Document,
   ) {
+    this.emitter = document?.designer.createEventBus('History') || createEventBus('History')
     this.session = new Session(0, '', this.timeGap)
     this.records = [this.session]
+    this.savePointSession = this.session
 
     /**
      * listen the change of schema
      */
     this.disposer = reaction(
       (): any => {
-        return dataFn()
+        return this.dataFn()
       },
       (data: T) => {
         if (this.asleep) return
 
         untracked(() => {
           const log = this.serialization.serialize(data)
+
+          if (this.transactionDepth > 0) {
+            this.transactionPendingData = log
+            return
+          }
 
           if (this.hotData === log) {
             return
@@ -101,7 +114,7 @@ export class History<T = RootSchema> {
    * check if there is unsaved change for history
    */
   isSavePoint(): boolean {
-    return this.point !== this.session.cursor
+    return this.savePointSession !== this.session
   }
 
   private sleep() {
@@ -132,14 +145,18 @@ export class History<T = RootSchema> {
     const hotData = session.data
 
     this.sleep()
+    let restored = false
     try {
       this.redoer(this.serialization.unserialize(hotData))
       this.emitter.emit(HISTORY_EVENT.CURSOR_CHANGE, hotData)
+      restored = true
     } catch (e) {
       logger.error('History', e)
+    } finally {
+      this.wakeup()
     }
 
-    this.wakeup()
+    if (!restored) return
     this.session = session
     this.emitter.emit(HISTORY_EVENT.STATE_CHANGE, this.getState())
   }
@@ -165,13 +182,78 @@ export class History<T = RootSchema> {
       return
     }
     this.session.end()
-    this.point = this.session.cursor
+    this.savePointSession = this.session
     this.emitter.emit(HISTORY_EVENT.STATE_CHANGE, this.getState())
   }
 
+  /**
+   * Start an explicit history boundary. Nested boundaries join the outer one.
+   */
+  beginTransaction() {
+    if (this.transactionDepth === 0) {
+      this.session.end()
+      this.transactionStartData = this.session.data
+      this.transactionPendingData = this.session.data
+    }
+    this.transactionDepth += 1
+  }
+
+  /**
+   * Commit the outer transaction as exactly one, immediately closed session.
+   */
+  commitTransaction() {
+    if (this.transactionDepth < 1) {
+      throw new Error('No active history transaction')
+    }
+    this.transactionDepth -= 1
+    if (this.transactionDepth > 0) return
+
+    const startData = this.transactionStartData
+    const currentData = this.dataFn()
+    const pendingData = currentData == null ? this.transactionPendingData : this.serialization.serialize(currentData)
+    this.clearTransactionState()
+    if (pendingData === undefined || pendingData === startData) return
+
+    const lastState = this.getState()
+    const cursor = this.session.cursor + 1
+    const session = new Session(cursor, pendingData, this.timeGap)
+    session.end()
+    this.session = session
+    this.records.splice(cursor, this.records.length - cursor, session)
+
+    const currentState = this.getState()
+    if (currentState !== lastState) {
+      this.emitter.emit(HISTORY_EVENT.STATE_CHANGE, currentState)
+    }
+  }
+
+  /** Restore the exact pre-transaction snapshot without adding a history unit. */
+  rollbackTransaction() {
+    if (this.transactionDepth < 1) return
+    const startData = this.transactionStartData
+    this.clearTransactionState()
+    if (startData === undefined) return
+
+    this.sleep()
+    try {
+      this.redoer(this.serialization.unserialize(startData))
+    } finally {
+      this.wakeup()
+    }
+  }
+
+  private clearTransactionState() {
+    this.transactionDepth = 0
+    this.transactionStartData = undefined
+    this.transactionPendingData = undefined
+  }
+
   destroy() {
+    this.records.forEach(record => record.end())
+    this.clearTransactionState()
     this.records = []
     this.disposer()
+    this.emitter.dispose()
   }
 
   /**
@@ -195,7 +277,7 @@ export class History<T = RootSchema> {
       state -= 2
     }
     // modified ?
-    if (this.point === cursor) {
+    if (this.savePointSession === this.session) {
       state -= 4
     }
     return state

@@ -5,18 +5,26 @@ import { createLogger } from './logger'
 const logger = createLogger('event-bus')
 const moduleLogger = createLogger('module-event-bus')
 
+export type EventDeliveryScheduler = (deliver: () => void) => boolean
+
 export class EventBus {
   private readonly eventEmitter: EventEmitter
   private readonly name?: string
+  private scheduleDelivery?: EventDeliveryScheduler
 
   /**
    * 内核触发的事件名
    */
   readonly names = []
 
-  constructor(emitter: EventEmitter, name?: string) {
+  constructor(emitter: EventEmitter, name?: string, scheduleDelivery?: EventDeliveryScheduler) {
     this.eventEmitter = emitter
     this.name = name
+    this.scheduleDelivery = scheduleDelivery
+  }
+
+  setDeliveryScheduler(scheduleDelivery?: EventDeliveryScheduler): void {
+    this.scheduleDelivery = scheduleDelivery
   }
 
   private getMsgPrefix(type: string): string {
@@ -72,8 +80,29 @@ export class EventBus {
    * @returns
    */
   emit(event: string, ...args: any[]) {
-    this.eventEmitter.emit(event, ...args)
+    if (this.scheduleDelivery?.(() => this.emitImmediately(event, args))) return
+    this.emitImmediately(event, args)
+  }
+
+  private emitImmediately(event: string, args: any[]) {
+    const listeners = this.eventEmitter.rawListeners(event)
+    if (listeners.length === 0 && event === 'error') {
+      this.eventEmitter.emit(event, ...args)
+      return
+    }
+
+    const errors: unknown[] = []
+    for (const listener of listeners) {
+      try {
+        Reflect.apply(listener, this.eventEmitter, args)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
     this.getLogger().debug(`${this.getMsgPrefix('emit')} name: ${event}, args: `, ...args)
+    if (errors.length) {
+      throw new AggregateError(errors, `One or more listeners for "${event}" failed`)
+    }
   }
 
   removeListener(event: string | symbol, listener: (...args: any[]) => void) {
@@ -91,18 +120,22 @@ export class EventBus {
   removeAllListeners(event?: string | symbol) {
     return this.eventEmitter.removeAllListeners(event)
   }
+
+  dispose(): void {
+    this.eventEmitter.removeAllListeners()
+  }
 }
 
 /**
  * 创建一个独立模块事件总线
  * @param name 模块名称
  */
-export const createEventBus = (name: string, maxListeners?: number) => {
+export const createEventBus = (name: string, maxListeners?: number, scheduleDelivery?: EventDeliveryScheduler) => {
   const emitter = new EventEmitter()
   if (maxListeners) {
     emitter.setMaxListeners(maxListeners)
   }
-  return new EventBus(emitter, name)
+  return new EventBus(emitter, name, scheduleDelivery)
 }
 
 export const commonEvent = new EventBus(new EventEmitter())

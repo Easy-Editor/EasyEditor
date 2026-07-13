@@ -22,15 +22,19 @@ export class SettingsManager {
     return this._settings
   }
 
-  private disposeListener: () => void
+  private disposeEditorListener?: () => void
+
+  private disposeSelectionListener?: () => void
 
   private designer?: Designer
 
   constructor(readonly editor: Editor) {
-    this.init()
+    this.mount()
   }
 
-  private async init() {
+  mount(): void {
+    if (this.disposeEditorListener) return
+
     const setupSelection = (selection?: Selection) => {
       if (selection) {
         this.setup(selection.getNodes())
@@ -38,12 +42,15 @@ export class SettingsManager {
         this.setup([])
       }
     }
-    const designer = await this.editor.onceGot<Designer>('designer')!
-    this.designer = designer
-    setupSelection(designer.selection)
-    this.disposeListener = designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, () => {
+
+    this.disposeEditorListener = this.editor.onGot<Designer>('designer', designer => {
+      this.disposeSelectionListener?.()
+      this.designer = designer
       setupSelection(designer.selection)
-    })!
+      this.disposeSelectionListener = designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, () => {
+        setupSelection(designer.selection)
+      })
+    })
   }
 
   @action
@@ -78,7 +85,14 @@ export class SettingsManager {
     }
   }
 
-  purge() {
-    this.disposeListener()
+  @action
+  purge(): void {
+    this.disposeSelectionListener?.()
+    this.disposeSelectionListener = undefined
+    this.disposeEditorListener?.()
+    this.disposeEditorListener = undefined
+    this._sessionId = ''
+    this._settings = undefined
+    this.designer = undefined
   }
 }

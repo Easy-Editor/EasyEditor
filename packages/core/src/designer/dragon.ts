@@ -4,7 +4,7 @@ import type { Node } from '../document'
 import type { Simulator } from '../simulator'
 import { isSimulator } from '../simulator'
 import type { ComponentInstance, NodeSchema } from '../types'
-import { createEventBus } from '../utils'
+import type { EventBus } from '../utils'
 import type { LocateEvent } from './location'
 import type { Sensor } from './sensor'
 
@@ -110,9 +110,11 @@ export const getSourceSensor = (dragObject: DragObject): Simulator | null => {
 }
 
 export class Dragon {
-  emitter = createEventBus('Dragon')
+  emitter: EventBus
 
   private sensors: Sensor[] = []
+
+  private disposeDragSession?: () => void
 
   /** current active sensor */
   @observable.ref private accessor _activeSensor: Sensor | undefined
@@ -127,7 +129,9 @@ export class Dragon {
     return this._dragging
   }
 
-  constructor(readonly designer: Designer) {}
+  constructor(readonly designer: Designer) {
+    this.emitter = designer.createEventBus('Dragon')
+  }
 
   /**
    * Quick listen a shell(container element) drag behavior
@@ -179,6 +183,8 @@ export class Dragon {
    */
   @action
   boost(dragObject: DragObject, boostEvent: MouseEvent | DragEvent, shell?: HTMLElement) {
+    this.disposeDragSession?.()
+
     const { designer } = this
     const masterSensors = this.getMasterSensors()
     const handleEvents = makeEventsHandler(boostEvent, masterSensors)
@@ -268,8 +274,41 @@ export class Dragon {
       didDrop = true
     }
 
+    const removeEventListeners = () => {
+      handleEvents(doc => {
+        if (isBoostFromDragAPI) {
+          doc.removeEventListener('dragover', move, true)
+          doc.removeEventListener('dragend', over, true)
+          doc.removeEventListener('drop', drop, true)
+        } else {
+          doc.removeEventListener('mousemove', move, true)
+          doc.removeEventListener('mouseup', over, true)
+        }
+        doc.removeEventListener('mousedown', over, true)
+        doc.removeEventListener('keydown', checkEsc, false)
+      })
+    }
+
+    let sessionDisposed = false
+    const disposeSession = () => {
+      if (sessionDisposed) return
+      sessionDisposed = true
+      lastSensor?.deactiveSensor()
+      lastSensor = undefined
+      runInAction(() => {
+        this._activeSensor = undefined
+        this._dragging = false
+      })
+      designer.clearLocation()
+      removeEventListeners()
+      if (this.disposeDragSession === disposeSession) {
+        this.disposeDragSession = undefined
+      }
+    }
+
     // drag end
     const over = (e?: any) => {
+      if (sessionDisposed) return
       if (e && isDragEvent(e)) {
         e.preventDefault()
       }
@@ -296,18 +335,11 @@ export class Dragon {
       }
       designer.clearLocation()
 
-      handleEvents(doc => {
-        if (isBoostFromDragAPI) {
-          doc.removeEventListener('dragover', move, true)
-          doc.removeEventListener('dragend', over, true)
-          doc.removeEventListener('drop', drop, true)
-        } else {
-          doc.removeEventListener('mousemove', move, true)
-          doc.removeEventListener('mouseup', over, true)
-        }
-        doc.removeEventListener('mousedown', over, true)
-        doc.removeEventListener('keydown', checkEsc, false)
-      })
+      sessionDisposed = true
+      removeEventListeners()
+      if (this.disposeDragSession === disposeSession) {
+        this.disposeDragSession = undefined
+      }
 
       if (exception) {
         throw exception
@@ -392,6 +424,8 @@ export class Dragon {
       return sensor
     }
 
+    this.disposeDragSession = disposeSession
+
     if (isDragEvent(boostEvent)) {
       const { dataTransfer } = boostEvent
 
@@ -407,6 +441,8 @@ export class Dragon {
 
       dragstart()
     }
+
+    if (sessionDisposed) return
 
     handleEvents(doc => {
       if (isBoostFromDragAPI) {
@@ -499,6 +535,16 @@ export class Dragon {
     return () => {
       this.emitter.off(DRAGON_EVENT.DRAGEND, func)
     }
+  }
+
+  dispose(): void {
+    this.disposeDragSession?.()
+    this.disposeDragSession = undefined
+    this._activeSensor?.deactiveSensor()
+    this._activeSensor = undefined
+    this._dragging = false
+    this.sensors = []
+    this.emitter.dispose()
   }
 }
 

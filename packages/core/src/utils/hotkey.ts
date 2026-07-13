@@ -134,7 +134,7 @@ const SPECIAL_ALIASES: CtrlKeyMap = {
   return: 'enter',
   escape: 'esc',
   plus: '+',
-  mod: /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? 'meta' : 'ctrl',
+  mod: typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? 'meta' : 'ctrl',
 }
 
 let REVERSE_MAP: CtrlKeyMap
@@ -389,25 +389,84 @@ export class Hotkey {
 
   private isActivate = true
 
-  constructor(readonly viewName: string = 'global') {
-    this.mount(window)
-  }
+  private mountedDocuments = new Map<
+    Document,
+    {
+      references: number
+      dispose: Disposable
+    }
+  >()
+
+  constructor(readonly viewName: string = 'global') {}
 
   activate(activate: boolean): void {
     this.isActivate = activate
   }
 
-  mount(window: Window) {
+  mount(window: Window): Disposable {
     const { document } = window
+    const mounted = this.mountedDocuments.get(document)
+    if (mounted) {
+      mounted.references += 1
+      let released = false
+      return () => {
+        if (released) {
+          return
+        }
+        released = true
+        mounted.references -= 1
+        if (mounted.references === 0) {
+          mounted.dispose()
+        }
+      }
+    }
+
     const handleKeyEvent = this.handleKeyEvent.bind(this)
     document.addEventListener('keypress', handleKeyEvent, false)
     document.addEventListener('keydown', handleKeyEvent, false)
     document.addEventListener('keyup', handleKeyEvent, false)
-    return () => {
+
+    let disposed = false
+    const dispose = () => {
+      if (disposed) {
+        return
+      }
+      disposed = true
       document.removeEventListener('keypress', handleKeyEvent, false)
       document.removeEventListener('keydown', handleKeyEvent, false)
       document.removeEventListener('keyup', handleKeyEvent, false)
+      this.mountedDocuments.delete(document)
     }
+    const mountedDocument = { references: 1, dispose }
+    this.mountedDocuments.set(document, mountedDocument)
+    let released = false
+    return () => {
+      if (released) {
+        return
+      }
+      released = true
+      mountedDocument.references -= 1
+      if (mountedDocument.references === 0) {
+        mountedDocument.dispose()
+      }
+    }
+  }
+
+  dispose(): void {
+    for (const mounted of [...this.mountedDocuments.values()]) {
+      mounted.dispose()
+    }
+    this.mountedDocuments.clear()
+    if (this.resetTimer) {
+      clearTimeout(this.resetTimer)
+      this.resetTimer = 0
+    }
+    this.callBacks = {}
+    this.directMap = {}
+    this.sequenceLevels = {}
+    this.ignoreNextKeyup = false
+    this.ignoreNextKeypress = false
+    this.nextExpectedAction = false
   }
 
   /**
@@ -440,12 +499,16 @@ export class Hotkey {
     combinations.forEach(combination => {
       const info: KeyInfo = getKeyInfo(combination, action)
       const { key, modifiers } = info
-      const idx = this.callBacks[key].findIndex(info => {
+      const callbacks = this.callBacks[key]
+      if (!callbacks) {
+        return
+      }
+      const idx = callbacks.findIndex(info => {
         // @ts-ignore
         return isEqual(info.modifiers, modifiers) && info.callback === callback
       })
       if (idx !== -1) {
-        this.callBacks[key].splice(idx, 1)
+        callbacks.splice(idx, 1)
       }
     })
   }
@@ -614,7 +677,7 @@ export class Hotkey {
     if (this.resetTimer) {
       clearTimeout(this.resetTimer)
     }
-    this.resetTimer = window.setTimeout(this.resetSequences, 1000)
+    this.resetTimer = globalThis.setTimeout(() => this.resetSequences(), 1000) as unknown as number
   }
 
   private bindSequence(combo: string, keys: string[], callback: HotkeyCallback, action?: string): void {

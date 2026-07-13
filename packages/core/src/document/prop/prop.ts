@@ -1,5 +1,4 @@
 import { action, computed, isObservableArray, observable, set, untracked } from 'mobx'
-import { config } from '../..'
 import { DESIGNER_EVENT } from '../../designer'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { isObject, isPlainObject, uniqueId } from '../../utils'
@@ -300,7 +299,7 @@ export class Prop {
 
     if (stage === TRANSFORM_STAGE.RENDER && this.key === getConvertedExtraKey('condition')) {
       // 在设计器里，所有组件默认需要展示，除非开启了 enableCondition 配置
-      if (config?.get('enableCondition') !== true) {
+      if (this.owner.document.designer.editor.engineConfig.get('enableCondition') !== true) {
         return true
       }
       return this._value as boolean

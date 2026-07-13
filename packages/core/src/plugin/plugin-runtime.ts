@@ -64,22 +64,54 @@ export class PluginRuntime {
   async init(forceInit?: boolean) {
     if (this._inited && !forceInit) return
     this.logger.log('method init called')
-    await this.config.init?.call(undefined, this.ctx)
-    this._inited = true
+    try {
+      await this.config.init?.call(undefined, this.ctx)
+      this._inited = true
+    } catch (error) {
+      this._inited = false
+      try {
+        this.ctx.dispose()
+      } catch (disposeError) {
+        throw new AggregateError([error, disposeError], `Plugin "${this.name}" init and context rollback both failed`)
+      }
+      throw error
+    }
   }
 
   async destroy() {
     if (!this._inited) return
     this.logger.log('method destroy called')
-    await this.config?.destroy?.call(undefined, this.ctx)
-    this._inited = false
+    const errors: unknown[] = []
+    try {
+      await this.config?.destroy?.call(undefined, this.ctx)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.ctx.dispose()
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, `Plugin "${this.name}" failed to destroy`)
+    } else {
+      this._inited = false
+    }
+  }
+
+  async prepareExtension(pluginExtend: PluginExtend): Promise<boolean> {
+    if (this._extended) return false
+    this.logger.log('method extend called')
+    await this.config?.extend?.call(undefined, pluginExtend)
+    return true
+  }
+
+  markExtended(): void {
+    this._extended = true
   }
 
   async extend(pluginExtend: PluginExtend) {
-    if (this._extended) return
-    this.logger.log('method extend called')
-    await this.config?.extend?.call(undefined, pluginExtend)
-    this._extended = true
+    if (await this.prepareExtension(pluginExtend)) this.markExtended()
   }
 
   setDisabled(flag = true) {

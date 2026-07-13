@@ -54,6 +54,8 @@ export interface SimulatorRenderer {
    */
   run(): void
 
+  dispose?(): void
+
   // TODO
   // load(asset: Asset): Promise<any>;
   // loadAsyncLibrary(asyncMap: { [index: string]: any }): void

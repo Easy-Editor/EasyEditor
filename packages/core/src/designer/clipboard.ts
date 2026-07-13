@@ -20,13 +20,15 @@ function getDataFromPasteEvent(event: ClipboardEvent) {
   }
 }
 
-class Clipboard {
+export class Clipboard {
   private copyPasters: HTMLTextAreaElement[] = []
+
+  private injectedDocuments = new Map<Document, () => void>()
 
   private waitFn?: (data: any, e: ClipboardEvent) => void
 
   isCopyPasteEvent(e: Event) {
-    this.isCopyPaster(e.target)
+    return this.isCopyPaster(e.target)
   }
 
   private isCopyPaster(el: any) {
@@ -56,28 +58,45 @@ class Clipboard {
     }
   }
 
-  injectCopyPaster(document: Document) {
-    if (this.copyPasters.find(x => x.ownerDocument === document)) {
-      return
+  injectCopyPaster(document: Document): () => void {
+    const existingDispose = this.injectedDocuments.get(document)
+    if (existingDispose) {
+      return existingDispose
     }
 
     const copyPaster = document.createElement<'textarea'>('textarea')
     copyPaster.style.cssText = 'position: absolute;left: -9999px;top:-100px'
 
-    if (document.body) {
-      document.body.appendChild(copyPaster)
-    } else {
-      document.addEventListener('DOMContentLoaded', () => {
+    const append = () => {
+      if (document.body && !copyPaster.parentNode) {
         document.body.appendChild(copyPaster)
-      })
+      }
     }
 
-    const dispose = this.initCopyPaster(copyPaster)
-
-    return () => {
-      dispose()
-      document.removeChild(copyPaster)
+    let removeReadyListener: (() => void) | undefined
+    if (document.body) {
+      append()
+    } else {
+      const onReady = () => append()
+      document.addEventListener('DOMContentLoaded', onReady)
+      removeReadyListener = () => document.removeEventListener('DOMContentLoaded', onReady)
     }
+
+    const disposeCopyPaster = this.initCopyPaster(copyPaster)
+
+    let disposed = false
+    const dispose = () => {
+      if (disposed) {
+        return
+      }
+      disposed = true
+      removeReadyListener?.()
+      disposeCopyPaster()
+      copyPaster.remove()
+      this.injectedDocuments.delete(document)
+    }
+    this.injectedDocuments.set(document, dispose)
+    return dispose
   }
 
   async setData(data: any): Promise<void> {
@@ -88,7 +107,7 @@ class Clipboard {
 
     copyPaster.value = typeof data === 'string' ? data : JSON.stringify(data)
     copyPaster.select()
-    await navigator.clipboard.writeText(copyPaster.value)
+    await copyPaster.ownerDocument.defaultView?.navigator.clipboard?.writeText(copyPaster.value)
 
     copyPaster.blur()
   }
@@ -103,6 +122,15 @@ class Clipboard {
       copyPaster.select()
       this.waitFn = cb
     }
+  }
+
+  dispose(): void {
+    for (const dispose of [...this.injectedDocuments.values()]) {
+      dispose()
+    }
+    this.injectedDocuments.clear()
+    this.copyPasters = []
+    this.waitFn = undefined
   }
 }
 

@@ -1,6 +1,6 @@
 import { action, observable } from 'mobx'
 import { type Node, PositionNO, comparePosition } from '../document'
-import { createEventBus } from '../utils'
+import type { EventBus } from '../utils'
 import type { Designer } from './designer'
 
 export enum SELECTION_EVENT {
@@ -8,7 +8,7 @@ export enum SELECTION_EVENT {
 }
 
 export class Selection {
-  private emitter = createEventBus('Selection')
+  private emitter: EventBus
 
   @observable.shallow private accessor _selected: string[] = []
 
@@ -16,7 +16,9 @@ export class Selection {
     return this.designer.project.currentDocument!
   }
 
-  constructor(readonly designer: Designer) {}
+  constructor(readonly designer: Designer) {
+    this.emitter = designer.createEventBus('Selection')
+  }
 
   get selected(): string[] {
     return this._selected
@@ -166,5 +168,11 @@ export class Selection {
     return () => {
       this.emitter.off(SELECTION_EVENT.CHANGE, listener)
     }
+  }
+
+  @action
+  dispose(): void {
+    this._selected = []
+    this.emitter.dispose()
   }
 }

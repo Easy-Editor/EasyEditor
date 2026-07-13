@@ -40,6 +40,9 @@ export class LoadingStateManager {
   /** 状态变化监听器 */
   private listeners = new Set<StateChangeListener>()
 
+  /** 等待任务的取消器，确保销毁时不会遗留定时器 */
+  private waitCancels = new Set<() => void>()
+
   /**
    * 是否有资源正在加载
    */
@@ -227,16 +230,29 @@ export class LoadingStateManager {
         return
       }
 
-      const timeoutId = setTimeout(() => {
+      let settled = false
+      let unsubscribe = () => {}
+      const finish = (error?: Error) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(timeoutId)
         unsubscribe()
-        reject(new Error(`Wait timeout after ${timeout}ms`))
-      }, timeout)
-
-      const unsubscribe = this.subscribe(() => {
-        if (condition()) {
-          clearTimeout(timeoutId)
-          unsubscribe()
+        this.waitCancels.delete(cancel)
+        if (error) {
+          reject(error)
+        } else {
           resolve()
+        }
+      }
+      const cancel = () => finish(new Error('Loading state manager disposed'))
+      const timeoutId = setTimeout(() => finish(new Error(`Wait timeout after ${timeout}ms`)), timeout)
+      this.waitCancels.add(cancel)
+
+      unsubscribe = this.subscribe(() => {
+        if (condition()) {
+          finish()
         }
       })
     })
@@ -253,6 +269,16 @@ export class LoadingStateManager {
         console.error('[LoadingStateManager] Listener error:', error)
       }
     }
+  }
+
+  @action
+  dispose(): void {
+    for (const cancel of [...this.waitCancels]) {
+      cancel()
+    }
+    this.waitCancels.clear()
+    this.listeners.clear()
+    this.states.clear()
   }
 }
 

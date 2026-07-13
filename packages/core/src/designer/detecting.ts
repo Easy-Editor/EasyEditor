@@ -1,14 +1,14 @@
 import { action, observable } from 'mobx'
 import type { Designer } from '..'
 import type { Document, Node } from '../document'
-import { createEventBus } from '../utils'
+import type { EventBus } from '../utils'
 
 export enum DETECTING_EVENT {
   CHANGE = 'detecting:change',
 }
 
 export class Detecting {
-  private emitter = createEventBus('Detecting')
+  private emitter: EventBus
 
   @observable.ref private accessor _enable = true
 
@@ -34,7 +34,9 @@ export class Detecting {
     return this._current
   }
 
-  constructor(readonly designer: Designer) {}
+  constructor(readonly designer: Designer) {
+    this.emitter = designer.createEventBus('Detecting')
+  }
 
   @action
   capture(node: Node | null) {
@@ -65,5 +67,12 @@ export class Detecting {
     return () => {
       this.emitter.off(DETECTING_EVENT.CHANGE, fn)
     }
+  }
+
+  @action
+  dispose(): void {
+    this._enable = true
+    this._current = null
+    this.emitter.dispose()
   }
 }

@@ -1,4 +1,5 @@
 import type EventEmitter from 'events'
+import type { Config } from '../config'
 import type { Plugin, Plugins } from '../plugin'
 import type { EventBus } from '../utils'
 import type { Component } from './component'
@@ -66,6 +67,7 @@ export enum EDITOR_EVENT {
 export interface Editor extends EventEmitter {
   config?: EditorConfig
   eventBus: EventBus
+  readonly engineConfig: Config
   components?: Record<string, Component>
 
   get<T = undefined, KeyOrType extends EditorValueKey = any>(

@@ -3,6 +3,7 @@ import {
   type ComponentMeta,
   DESIGNER_EVENT,
   type Designer,
+  type EventBus,
   type FieldExtraProps,
   type Node,
   type PropKey,
@@ -41,7 +42,7 @@ export class SettingPropEntry implements SettingEntry {
 
   readonly id = uniqueId('entry')
 
-  readonly emitter = createEventBus('SettingPropEntry')
+  readonly emitter: EventBus
 
   @observable.ref private accessor _name: PropKey | undefined
 
@@ -88,6 +89,7 @@ export class SettingPropEntry implements SettingEntry {
     this.isMultiple = parent.isMultiple
     this.isSingle = parent.isSingle
     this.designer = parent.designer
+    this.emitter = this.designer?.createEventBus('SettingPropEntry') || createEventBus('SettingPropEntry')
     this.top = parent.top
   }
 

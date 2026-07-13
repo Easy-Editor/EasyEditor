@@ -1,7 +1,7 @@
+import { createRequire } from 'node:module'
 import babel from '@rollup/plugin-babel'
 import nodeResolve from '@rollup/plugin-node-resolve'
 import replace from '@rollup/plugin-replace'
-import { createRequire } from 'node:module'
 import cleanup from 'rollup-plugin-cleanup'
 
 const require = createRequire(import.meta.url)

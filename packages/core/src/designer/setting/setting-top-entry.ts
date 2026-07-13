@@ -3,6 +3,7 @@ import {
   DESIGNER_EVENT,
   type Designer,
   type Editor,
+  type EventBus,
   type Node,
   type PropKey,
   type Setters,
@@ -19,7 +20,7 @@ export const generateSessionId = (nodes: Node[]) => {
 }
 
 export class SettingTopEntry implements SettingEntry {
-  private emitter = createEventBus('SettingTopEntry')
+  private emitter: EventBus
 
   private _items: SettingField[] = []
 
@@ -92,6 +93,7 @@ export class SettingTopEntry implements SettingEntry {
     this.id = generateSessionId(nodes)
     this.first = nodes[0]
     this.designer = this.first.document?.designer
+    this.emitter = this.designer?.createEventBus('SettingTopEntry') || createEventBus('SettingTopEntry')
     this.setters = editor.get<Setters>('setterManager')!
 
     // setups

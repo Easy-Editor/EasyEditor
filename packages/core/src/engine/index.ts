@@ -2,12 +2,12 @@
  * TODO: 从 core 中抽离出来
  */
 
-import { config } from '..'
+import { defaultEngine } from './engine'
 
 export * from './engine'
 
 export const version = '_EASY_EDITOR_VERSION_'
-config.set('VERSION', version)
+defaultEngine.config.set('VERSION', version)
 
 console.log(
   `%c EasyEditor %c v${version} `,

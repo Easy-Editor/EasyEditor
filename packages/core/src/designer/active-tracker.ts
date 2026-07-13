@@ -1,7 +1,8 @@
-import { observable } from 'mobx'
+import { action, observable } from 'mobx'
 import { type Node, isNode } from '../document'
 import type { ComponentInstance } from '../types'
-import { createEventBus } from '../utils'
+import type { EventBus } from '../utils'
+import type { Designer } from './designer'
 import type { LocationDetail } from './location'
 
 export interface ActiveTarget {
@@ -11,9 +12,13 @@ export interface ActiveTarget {
 }
 
 export class ActiveTracker {
-  @observable.ref private accessor _target: ActiveTarget | Node
+  @observable.ref private accessor _target: ActiveTarget | Node | undefined
 
-  private emitter = createEventBus('ActiveTracker')
+  private emitter: EventBus
+
+  constructor(designer: Designer) {
+    this.emitter = designer.createEventBus('ActiveTracker')
+  }
 
   track(originalTarget: ActiveTarget | Node) {
     let target = originalTarget
@@ -41,5 +46,11 @@ export class ActiveTracker {
     return () => {
       this.emitter.off('change', fn)
     }
+  }
+
+  @action
+  dispose(): void {
+    this._target = undefined
+    this.emitter.dispose()
   }
 }

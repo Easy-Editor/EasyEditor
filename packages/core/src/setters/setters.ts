@@ -101,6 +101,10 @@ export class Setters {
       props,
     }
   }
+
+  dispose(): void {
+    this.settersMap.clear()
+  }
 }
 
 const getInitialFromSetter = (setter: any) => {

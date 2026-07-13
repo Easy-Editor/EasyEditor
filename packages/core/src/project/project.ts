@@ -1,9 +1,11 @@
-import { action, computed, observable } from 'mobx'
+import { action, computed, observable, runInAction } from 'mobx'
 import type { Designer } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
+import { SchemaValidator } from '../schema'
 import type { Simulator } from '../simulator'
+import { resolveTrustPolicy } from '../trust'
 import { type ComponentsMap, type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
-import { createEventBus, createLogger, isLowCodeComponentType, isProCodeComponentType } from '../utils'
+import { type EventBus, createLogger, isLowCodeComponentType, isProCodeComponentType } from '../utils'
 
 const logger = createLogger('Project')
 
@@ -13,7 +15,7 @@ export enum PROJECT_EVENT {
 }
 
 export class Project {
-  private emitter = createEventBus('Project')
+  private emitter: EventBus
 
   private data: ProjectSchema = {
     version: '0.0.1',
@@ -43,6 +45,8 @@ export class Project {
 
   private _simulator?: Simulator
 
+  private readonly schemaValidator: SchemaValidator
+
   get simulator() {
     return this._simulator || null
   }
@@ -51,6 +55,9 @@ export class Project {
     readonly designer: Designer,
     schema?: ProjectSchema,
   ) {
+    this.emitter = designer.createEventBus('Project')
+    this.schemaValidator =
+      this.designer.get('schemaValidator') || new SchemaValidator(resolveTrustPolicy('legacyTrusted'))
     this.load(schema)
   }
 
@@ -100,13 +107,17 @@ export class Project {
    */
   @action
   load(schema?: ProjectSchema, autoOpen?: boolean | string) {
+    // Validation and normalization must complete before the current project is
+    // unloaded. A rejected schema therefore has no observable side effects.
+    const preparedSchema = schema ? this.schemaValidator.prepare(schema) : undefined
+
     this.unload()
 
     this.data = {
       ...this.data,
-      ...schema,
+      ...preparedSchema,
     }
-    this._config = schema?.config ?? this.config
+    this._config = preparedSchema?.config ?? this.config
 
     // perf: 在 open 的时候才创建 document
     // if (schema?.documents) {
@@ -119,7 +130,7 @@ export class Project {
       if (autoOpen === true) {
         // auto open first document or open a blank page
         const documentInstances = this.data.componentsTree.map(data => this.createDocument(data))
-        documentInstances[0].open()
+        documentInstances[0]?.open()
       } else {
         // auto open should be string of fileName
         this.open(autoOpen)
@@ -137,9 +148,59 @@ export class Project {
     }
   }
 
+  async dispose() {
+    const failures: unknown[] = []
+    const simulator = this._simulator as (Simulator & { dispose?: () => void | Promise<void> }) | undefined
+    let simulatorDisposed = true
+    try {
+      if (simulator?.dispose) {
+        await simulator.dispose()
+      } else {
+        simulator?.purge()
+      }
+    } catch (error) {
+      simulatorDisposed = false
+      failures.push(error)
+    }
+
+    for (const document of [...this.documents].reverse()) {
+      try {
+        document.remove()
+      } catch (error) {
+        failures.push(error)
+        try {
+          document.purge()
+        } catch (purgeError) {
+          failures.push(purgeError)
+        }
+        this.removeDocument(document)
+      }
+    }
+
+    runInAction(() => {
+      if (simulatorDisposed) {
+        this._simulator = undefined
+      }
+      this.documents = []
+      this.documentsMap.clear()
+      this.data = {
+        version: '0.0.1',
+        componentsMap: [],
+        componentsTree: [],
+      }
+      this._config = undefined
+      this.isRendererReady = false
+      this.emitter.dispose()
+    })
+    if (failures.length) {
+      throw new AggregateError(failures, 'Project disposal completed with errors')
+    }
+  }
+
   @action
   createDocument(schema?: RootSchema) {
-    const doc = new Document(this, schema)
+    const preparedSchema = schema ? (this.schemaValidator.prepareNode(schema, '$.document') as RootSchema) : undefined
+    const doc = new Document(this, preparedSchema)
     this.documents.push(doc)
     this.documentsMap.set(doc.id, doc)
 
@@ -175,6 +236,10 @@ export class Project {
 
   getDocumentByFileName(fileName: string) {
     return this.documents.find(doc => doc.fileName === fileName)
+  }
+
+  prepareDocumentSchema(schema: RootSchema): RootSchema {
+    return this.schemaValidator.prepareNode(schema, '$.document') as RootSchema
   }
 
   /**

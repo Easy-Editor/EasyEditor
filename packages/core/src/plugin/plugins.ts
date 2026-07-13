@@ -21,7 +21,13 @@ import {
 import { createLogger } from '../utils'
 import type { PluginContextOptions } from './plugin-context'
 import { PluginContext } from './plugin-context'
-import { type PluginExtend, type PluginExtendClass, extend } from './plugin-extend'
+import {
+  type PluginExtend,
+  type PluginExtendClass,
+  type PrototypeExtensionOperation,
+  applyPrototypeExtensionBatch,
+  assertProcessPrototypeExtensionsAllowed,
+} from './plugin-extend'
 import { PluginRuntime } from './plugin-runtime'
 import { sequencify } from './sequencify'
 
@@ -31,6 +37,8 @@ export interface Plugin {
   name: string
   deps?: string[]
   eventPrefix?: string
+  /** Stable identity for process-wide prototype extensions. */
+  extensionFingerprint?: string
   init(ctx: PluginContext): Promise<void> | void
   destroy?(ctx: PluginContext): Promise<void> | void
   extend?(ctx: PluginExtend): void
@@ -75,14 +83,27 @@ export interface PluginContextApiAssembler {
 export class Plugins {
   private plugins: PluginRuntime[] = []
 
+  private initialized = false
+
   pluginsMap: Map<string, PluginRuntime> = new Map()
   pluginContextMap: Map<string, PluginContext> = new Map()
 
-  private contextApiAssembler: PluginContextApiAssembler
+  private contextApiAssembler: PluginContextApiAssembler = {
+    assembleApis() {},
+  }
 
-  constructor(contextApiAssembler?: PluginContextApiAssembler) {
+  private contextOptions: Omit<PluginContextOptions, 'pluginName' | 'meta'> = {}
+
+  constructor(
+    contextApiAssembler?: PluginContextApiAssembler,
+    contextOptions?: Omit<PluginContextOptions, 'pluginName' | 'meta'>,
+    private readonly assertPrototypeExtensionsAllowed: (origin: string) => void = () => {},
+  ) {
     if (contextApiAssembler) {
       this.setContextApiAssembler(contextApiAssembler)
+    }
+    if (contextOptions) {
+      this.contextOptions = contextOptions
     }
   }
 
@@ -90,11 +111,15 @@ export class Plugins {
     this.contextApiAssembler = contextApiAssembler
   }
 
+  setContextOptions(contextOptions: Omit<PluginContextOptions, 'pluginName' | 'meta'>) {
+    this.contextOptions = contextOptions
+  }
+
   getPluginContext = (options: PluginContextOptions) => {
     const { pluginName } = options
     let context = this.pluginContextMap.get(pluginName)
     if (!context) {
-      context = new PluginContext(options, this.contextApiAssembler)
+      context = new PluginContext({ ...this.contextOptions, ...options }, this.contextApiAssembler)
       this.pluginContextMap.set(pluginName, context)
     }
     return context
@@ -113,6 +138,9 @@ export class Plugins {
       logger.error('pluginConfigCreator.pluginName required', pluginModel)
       return
     }
+    if (typeof config.extend === 'function') {
+      this.assertPrototypeExtensionsAllowed('plugins.register')
+    }
     const meta: PluginMeta = { dependencies: deps, eventPrefix }
     const allowOverride = registerOptions?.override === true
 
@@ -125,7 +153,13 @@ export class Plugins {
           ' will be destroyed, config:',
           originalPlugin?.config,
         )
-        originalPlugin?.destroy()
+        await originalPlugin?.destroy()
+        const index = originalPlugin ? this.plugins.indexOf(originalPlugin) : -1
+        if (index >= 0) {
+          this.plugins.splice(index, 1)
+        }
+        this.pluginContextMap.get(pluginName)?.dispose()
+        this.pluginContextMap.delete(pluginName)
         this.pluginsMap.delete(pluginName)
       } else {
         throw new Error(`Plugin with name ${pluginName} exists`)
@@ -133,11 +167,26 @@ export class Plugins {
     }
 
     const plugin = new PluginRuntime(pluginName, this, config)
-    if (registerOptions?.autoInit) {
-      await plugin.init()
-    }
     this.plugins.push(plugin)
     this.pluginsMap.set(pluginName, plugin)
+    if (registerOptions?.autoInit) {
+      try {
+        if (!this.initialized) {
+          throw new Error('Plugin autoInit requires an initialized plugin manager')
+        }
+        if (typeof config.extend === 'function') {
+          throw new Error('Prototype-extension plugins cannot use autoInit; restart the engine to preflight them')
+        }
+        this.preflight()
+        await plugin.init()
+      } catch (error) {
+        this.plugins.pop()
+        this.pluginsMap.delete(pluginName)
+        this.pluginContextMap.get(pluginName)?.dispose()
+        this.pluginContextMap.delete(pluginName)
+        throw error
+      }
+    }
     logger.log(`plugin registered with pluginName: ${pluginName}, config: `, config, 'meta:', meta)
   }
 
@@ -168,10 +217,50 @@ export class Plugins {
     await plugin.destroy()
     const idx = this.plugins.indexOf(plugin)
     this.plugins.splice(idx, 1)
+    this.pluginContextMap.get(pluginName)?.dispose()
+    this.pluginContextMap.delete(pluginName)
     return this.pluginsMap.delete(pluginName)
   }
 
   async init() {
+    const sequence = this.preflight()
+
+    logger.log('load plugin sequence:', sequence)
+
+    const initialized: PluginRuntime[] = []
+    try {
+      for (const pluginName of sequence) {
+        const plugin = this.pluginsMap.get(pluginName)!
+        const wasInited = plugin.isInited()
+        await plugin.init()
+        if (!wasInited && plugin.isInited()) {
+          initialized.push(plugin)
+        }
+      }
+      this.initialized = true
+    } catch (error) {
+      this.initialized = false
+      const rollbackErrors: unknown[] = []
+      for (const plugin of initialized.reverse()) {
+        try {
+          await plugin.destroy()
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError)
+        }
+      }
+      if (rollbackErrors.length) {
+        const message = error instanceof Error ? error.message : String(error)
+        const aggregate = new AggregateError(
+          [error, ...rollbackErrors],
+          `Plugin initialization failed: ${message}; rollback also failed`,
+        )
+        throw aggregate
+      }
+      throw error
+    }
+  }
+
+  preflight(): string[] {
     const pluginNames: string[] = []
     const pluginObj: Record<string, PluginRuntime> = {}
     this.plugins.forEach(plugin => {
@@ -180,33 +269,41 @@ export class Plugins {
     })
 
     // check plugin dependency
-    const { missingTasks, sequence } = sequencify(pluginObj, pluginNames)
+    const { missingTasks, recursiveDependencies, sequence } = sequencify(pluginObj, pluginNames)
     if (missingTasks.length) {
-      logger.error('plugin dependency missing', missingTasks)
-      return
+      throw new Error(`Plugin dependency missing: ${missingTasks.join(', ')}`)
     }
-    logger.log('load plugin sequence:', sequence)
-
-    for (const pluginName of sequence) {
-      try {
-        await this.pluginsMap.get(pluginName)!.init()
-      } catch (e) {
-        logger.error(`Failed to init plugin:${pluginName}, it maybe affect those plugins which depend on this.`)
-        logger.error(e)
-      }
+    if (recursiveDependencies.length) {
+      throw new Error(
+        `Plugin dependency cycle detected: ${recursiveDependencies.map(items => items.join(' -> ')).join(', ')}`,
+      )
     }
+    return sequence
   }
 
   /**
    * destroy all plugins
    */
   async destroy() {
-    for (const plugin of this.plugins) {
-      await plugin.destroy()
+    const errors: unknown[] = []
+    for (const plugin of [...this.plugins].reverse()) {
+      try {
+        await plugin.destroy()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    this.initialized = false
+    if (errors.length) {
+      throw new AggregateError(errors, 'One or more plugins failed to destroy')
     }
   }
 
   async extend() {
+    if (this.hasPrototypeExtensions()) {
+      this.assertPrototypeExtensionsAllowed('plugins.extend')
+      assertProcessPrototypeExtensionsAllowed()
+    }
     const extendClass: PluginExtendClass = {
       Simulator,
       Viewport,
@@ -232,12 +329,49 @@ export class Plugins {
     }
     const extendMap: Record<keyof PluginExtendClass, PluginExtendClass[keyof PluginExtendClass]> = extendClass
 
+    const operations: PrototypeExtensionOperation[] = []
+    const preparedPlugins: PluginRuntime[] = []
     for (const plugin of this.plugins) {
-      await plugin.extend({
+      const extensionFingerprint =
+        plugin.config.extensionFingerprint ||
+        `${plugin.name}:${typeof plugin.config.extend === 'function' ? Function.prototype.toString.call(plugin.config.extend) : 'no-extension'}`
+      const prepared = await plugin.prepareExtension({
         extendClass,
-        // @ts-ignore
-        extend: (extendClass, properties) => extend(extendMap, extendClass, properties),
+        extend: (targetClass, properties) =>
+          operations.push({
+            extendClass: targetClass,
+            // The public API preserves the target-specific generic; the batch
+            // stores the same runtime class map for deferred atomic application.
+            extendMap: extendMap as any,
+            properties,
+            registration: {
+              fingerprint: extensionFingerprint,
+              pluginName: plugin.name,
+            },
+          }),
       })
+      if (prepared) preparedPlugins.push(plugin)
+    }
+    applyPrototypeExtensionBatch(operations)
+    preparedPlugins.forEach(plugin => plugin.markExtended())
+  }
+
+  hasPrototypeExtensions(): boolean {
+    return this.plugins.some(plugin => typeof plugin.config.extend === 'function')
+  }
+
+  clearContexts(): void {
+    const errors: unknown[] = []
+    for (const context of this.pluginContextMap.values()) {
+      try {
+        context.dispose()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    this.pluginContextMap.clear()
+    if (errors.length) {
+      throw new AggregateError(errors, 'One or more plugin contexts failed to dispose')
     }
   }
 
@@ -254,9 +388,25 @@ export class Plugins {
    * reset plugin manager
    */
   async dispose() {
-    await this.destroy()
-    this.plugins = []
-    this.pluginsMap.clear()
+    let destroyError: unknown
+    let contextError: unknown
+    try {
+      await this.destroy()
+    } catch (error) {
+      destroyError = error
+    } finally {
+      try {
+        this.clearContexts()
+      } catch (error) {
+        contextError = error
+      }
+      this.plugins = []
+      this.pluginsMap.clear()
+    }
+    const errors = [destroyError, contextError].filter(error => error !== undefined)
+    if (errors.length) {
+      throw new AggregateError(errors, 'Plugin manager failed to dispose cleanly')
+    }
   }
 
   toProxy() {

@@ -14,8 +14,8 @@ import {
   MaterialStatus,
   type RegisterOptions,
   type RegistryEvent,
-  RegistryEventType,
   type RegistryEventListener,
+  RegistryEventType,
   type UnloadOptions,
 } from './types'
 
@@ -24,6 +24,11 @@ const COMPONENT_NAME_REGEX = /^[A-Za-z_$][A-Za-z0-9_$.@]*$/
 
 /** 最大组件名称长度 */
 const MAX_COMPONENT_NAME_LENGTH = 255
+
+export interface MaterialRegistryTransactionState {
+  entries: Map<string, number>
+  pendingEntries: Map<string, number>
+}
 
 /**
  * 物料注册表
@@ -73,13 +78,16 @@ export class MaterialRegistry implements IMaterialRegistry {
       ...event,
       timestamp: Date.now(),
     }
-    this.listeners.forEach(listener => {
-      try {
-        listener(fullEvent)
-      } catch (error) {
-        console.error('[MaterialRegistry] Event listener error:', error)
-      }
-    })
+    const deliver = () => {
+      this.listeners.forEach(listener => {
+        try {
+          listener(fullEvent)
+        } catch (error) {
+          console.error('[MaterialRegistry] Event listener error:', error)
+        }
+      })
+    }
+    if (!this.designer.deferEvent(deliver)) deliver()
   }
 
   /**
@@ -113,19 +121,19 @@ export class MaterialRegistry implements IMaterialRegistry {
 
     if (entry) {
       // 已存在：更新元数据
-      if (!options.override) {
+      if (options.override) {
+        // 覆盖模式：创建新的 ComponentMeta
+        entry.meta = new ComponentMeta(this.designer, metadata)
+        entry.component = options.component
+        entry.status = options.component ? MaterialStatus.ACTIVE : MaterialStatus.REGISTERED
+        entry.lastAccessedAt = Date.now()
+      } else {
         entry.meta.setMetadata(metadata)
         entry.lastAccessedAt = Date.now()
         if (options.component) {
           entry.component = options.component
           entry.status = MaterialStatus.ACTIVE
         }
-      } else {
-        // 覆盖模式：创建新的 ComponentMeta
-        entry.meta = new ComponentMeta(this.designer, metadata)
-        entry.component = options.component
-        entry.status = options.component ? MaterialStatus.ACTIVE : MaterialStatus.REGISTERED
-        entry.lastAccessedAt = Date.now()
       }
     } else {
       // 检查是否在 pending 中
@@ -281,6 +289,35 @@ export class MaterialRegistry implements IMaterialRegistry {
       return false
     }
     return entry.usageCount === 0
+  }
+
+  getUsageCount(componentName: string): number {
+    return (this.entries.get(componentName) || this.pendingEntries.get(componentName))?.usageCount || 0
+  }
+
+  captureTransactionState(): MaterialRegistryTransactionState {
+    return {
+      entries: new Map(Array.from(this.entries, ([key, entry]) => [key, entry.usageCount])),
+      pendingEntries: new Map(Array.from(this.pendingEntries, ([key, entry]) => [key, entry.usageCount])),
+    }
+  }
+
+  @action
+  restoreTransactionState(snapshot: MaterialRegistryTransactionState): void {
+    const restore = (target: Map<string, MaterialEntry>, usageCounts: Map<string, number>) => {
+      for (const [key, entry] of target) {
+        const usageCount = usageCounts.get(key)
+        if (usageCount === undefined) {
+          entry.meta.dispose?.()
+          target.delete(key)
+        } else {
+          entry.usageCount = usageCount
+        }
+      }
+    }
+
+    restore(this.entries, snapshot.entries)
+    restore(this.pendingEntries, snapshot.pendingEntries)
   }
 
   subscribe(listener: RegistryEventListener): () => void {

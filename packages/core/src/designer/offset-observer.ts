@@ -189,10 +189,23 @@ export class OffsetObserver {
   }
 
   purge() {
-    if (this.pid) {
+    if (this.pid != null) {
       cancelAnimationFrame(this.pid)
     }
     this.pid = undefined
+    this.lastOffsetLeft = undefined
+    this.lastOffsetTop = undefined
+    this.lastOffsetHeight = undefined
+    this.lastOffsetWidth = undefined
+    runInAction(() => {
+      this.hasOffset = false
+      this._height = 0
+      this._width = 0
+      this._left = 0
+      this._top = 0
+      this._right = 0
+      this._bottom = 0
+    })
   }
 
   isPurged() {

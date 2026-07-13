@@ -3,7 +3,7 @@ import { DESIGNER_EVENT, type Designer, type DropLocation } from '../designer'
 import type { Project } from '../project'
 import type { Simulator } from '../simulator'
 import { type ComponentsMap, type NodeSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
-import { createEventBus, uniqueId } from '../utils'
+import { type EventBus, uniqueId } from '../utils'
 import { History } from './history'
 import { NODE_EVENT, Node, insertChild, insertChildren } from './node/node'
 
@@ -17,7 +17,7 @@ export enum DOCUMENT_EVENT {
 export class Document {
   readonly isDocument = true
 
-  private emitter = createEventBus('Document')
+  private emitter: EventBus
 
   id: string
 
@@ -121,31 +121,35 @@ export class Document {
   constructor(project: Project, schema?: RootSchema) {
     this.project = project
     this.designer = project.designer
+    this.emitter = this.designer.createEventBus('Document')
     this.id = schema?.docId ?? uniqueId('doc')
+
+    if (schema) {
+      this.rootNode = this.createNode(schema)
+      this._blank = false
+    }
+
     this.history = new History(
-      () => this.export(TRANSFORM_STAGE.SERIALIZE),
+      () => (this.rootNode ? this.export(TRANSFORM_STAGE.SERIALIZE) : null),
       schema => {
         this.import(schema, true)
         this.simulator?.rerender()
       },
       this,
     )
-
-    if (schema) {
-      this.rootNode = this.createNode(schema)
-      this._blank = false
-    }
   }
 
   @action
   import(schema?: RootSchema, checkId = false) {
+    const preparedSchema = schema ? this.project.prepareDocumentSchema(schema) : undefined
+
     this.nodes.forEach(node => {
       if (node.isRoot) return
       this.internalRemoveNode(node, true)
     })
 
-    if (schema) {
-      this.rootNode?.import(schema, checkId)
+    if (preparedSchema) {
+      this.rootNode?.import(preparedSchema, checkId)
       this._blank = false
     } else {
       this._blank = true

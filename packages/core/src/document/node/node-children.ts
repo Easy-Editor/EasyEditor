@@ -1,6 +1,6 @@
 import { action, computed, observable } from 'mobx'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
-import { createEventBus } from '../../utils'
+import type { EventBus } from '../../utils'
 import { NODE_EVENT, type Node, isNodeSchema } from './node'
 
 export enum NODE_CHILDREN_EVENT {
@@ -9,7 +9,7 @@ export enum NODE_CHILDREN_EVENT {
 }
 
 export class NodeChildren {
-  private emitter = createEventBus('NodeChildren')
+  private emitter: EventBus
 
   readonly owner: Node
 
@@ -34,6 +34,7 @@ export class NodeChildren {
 
   constructor(owner: Node, data?: NodeSchema[]) {
     this.owner = owner
+    this.emitter = owner.document.designer.createEventBus('NodeChildren')
     this.children = (Array.isArray(data) ? data : []).map(child => {
       return this.owner.document.createNode(child)
     })

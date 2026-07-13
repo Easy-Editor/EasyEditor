@@ -1,7 +1,7 @@
 import { action, computed, observable, runInAction } from 'mobx'
 import { DESIGNER_EVENT, type SettingTopEntry } from '../../designer'
-import { type NodeSchema, NpmInfo, TRANSFORM_STAGE } from '../../types'
-import { createEventBus, isObject, isRemoteComponent, uniqueId } from '../../utils'
+import { type NodeSchema, type NpmInfo, TRANSFORM_STAGE } from '../../types'
+import { type EventBus, isObject, isRemoteComponent, uniqueId } from '../../utils'
 import type { Document } from '../document'
 import { type PropValue, type PropsMap, isJSExpression } from '../prop/prop'
 import { Props, getConvertedExtraKey } from '../prop/props'
@@ -16,7 +16,7 @@ export enum NODE_EVENT {
 }
 
 export class Node<Schema extends NodeSchema = NodeSchema> {
-  protected emitter = createEventBus('Node')
+  protected emitter: EventBus
 
   readonly isNode = true
 
@@ -117,6 +117,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     readonly document: Document,
     Schema: Schema,
   ) {
+    this.emitter = document.designer.createEventBus('Node')
     const { id, componentName, children, props, ...extras } = Schema
 
     this.id = id || uniqueId('node')

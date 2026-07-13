@@ -1,6 +1,7 @@
 import {
   type ComponentMetadata,
   DESIGNER_EVENT,
+  type Designer,
   type Document,
   DragObjectType,
   type DropLocation,
@@ -56,6 +57,13 @@ interface DashboardPluginOptions {
   }
 }
 
+// Prototype descriptors are process-owned, so their backing state must be
+// process-stable but keyed by the concrete Designer instance. This prevents
+// both cross-engine sharing and stale cached helpers after an engine restart.
+const dashboardGuidelines = new WeakMap<Designer, GuideLine>()
+const dashboardAlignments = new WeakMap<Designer, Alignment>()
+const dashboardMarqueeSelections = new WeakMap<Designer, MarqueeSelection>()
+
 const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
   const { group } = options || {}
   const { meta: groupMeta, initSchema: groupInitSchema } = group || {}
@@ -66,10 +74,15 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
   return {
     name: 'DashboardPlugin',
+    extensionFingerprint: `DashboardPlugin:v1:${JSON.stringify(groupInitSchema)}`,
     deps: [],
     init(ctx) {
       const { materials, project } = ctx
       const { designer } = project
+
+      dashboardGuidelines.delete(designer)
+      dashboardAlignments.delete(designer)
+      dashboardMarqueeSelections.delete(designer)
 
       // add group componentMeta
       materials.createComponentMeta(groupMeta)
@@ -229,31 +242,31 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       const { Node } = extendClass
 
       /* -------------------------------- Designer -------------------------------- */
-      let guideline: GuideLine | null = null
-      let alignment: Alignment | null = null
-      let marqueeSelection: MarqueeSelection | null = null
       extend('Designer', {
         guideline: {
           get() {
-            if (!guideline) {
-              guideline = new GuideLine(this)
-            }
+            const existing = dashboardGuidelines.get(this)
+            if (existing) return existing
+            const guideline = new GuideLine(this)
+            dashboardGuidelines.set(this, guideline)
             return guideline
           },
         },
         alignment: {
           get() {
-            if (!alignment) {
-              alignment = new Alignment(this)
-            }
+            const existing = dashboardAlignments.get(this)
+            if (existing) return existing
+            const alignment = new Alignment(this)
+            dashboardAlignments.set(this, alignment)
             return alignment
           },
         },
         marqueeSelection: {
           get() {
-            if (!marqueeSelection) {
-              marqueeSelection = new MarqueeSelection(this)
-            }
+            const existing = dashboardMarqueeSelections.get(this)
+            if (existing) return existing
+            const marqueeSelection = new MarqueeSelection(this)
+            dashboardMarqueeSelections.set(this, marqueeSelection)
             return marqueeSelection
           },
         },
