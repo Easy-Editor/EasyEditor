@@ -1,0 +1,166 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - release
+      - 'release/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality gates (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['18.20.8', '20']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify Core kernel
+        run: |
+          pnpm --filter @easy-editor/core lint
+          pnpm --filter @easy-editor/core test-types
+          pnpm --filter @easy-editor/core test
+          pnpm --filter @easy-editor/core build
+          pnpm --filter @easy-editor/core types
+
+      - name: Verify instance-based plugin and renderer graph
+        run: |
+          pnpm --filter @easy-editor/plugin-dashboard lint
+          pnpm --filter @easy-editor/plugin-dashboard test-types
+          pnpm --filter @easy-editor/plugin-dashboard build
+          pnpm --filter @easy-editor/plugin-dashboard types
+
+          pnpm --filter @easy-editor/plugin-datasource lint
+          pnpm --filter @easy-editor/plugin-datasource test-types
+          pnpm --filter @easy-editor/plugin-datasource test
+          pnpm --filter @easy-editor/plugin-datasource build
+          pnpm --filter @easy-editor/plugin-datasource types
+
+          pnpm --filter @easy-editor/plugin-hotkey lint
+          pnpm --filter @easy-editor/plugin-hotkey test-types
+          pnpm --filter @easy-editor/plugin-hotkey test
+          pnpm --filter @easy-editor/plugin-hotkey build
+          pnpm --filter @easy-editor/plugin-hotkey types
+
+          pnpm --filter @easy-editor/renderer-core lint
+          pnpm --filter @easy-editor/renderer-core test-types
+          pnpm --filter @easy-editor/renderer-core test
+          pnpm --filter @easy-editor/renderer-core build
+          pnpm --filter @easy-editor/renderer-core types
+
+          pnpm --filter @easy-editor/react-renderer lint
+          pnpm --filter @easy-editor/react-renderer test-types
+          pnpm --filter @easy-editor/react-renderer test
+          pnpm --filter @easy-editor/react-renderer build
+          pnpm --filter @easy-editor/react-renderer types
+
+      - name: Verify Dashboard renderer
+        run: |
+          pnpm --filter @easy-editor/react-renderer-dashboard lint
+          pnpm --filter @easy-editor/react-renderer-dashboard test-types
+          pnpm --filter @easy-editor/react-renderer-dashboard test
+          pnpm --filter @easy-editor/react-renderer-dashboard build
+          pnpm --filter @easy-editor/react-renderer-dashboard types
+
+      - name: Verify project generator
+        run: |
+          pnpm exec biome check \
+            packages/create-easy-editor/template/dashboard/react/src/editor/index.ts \
+            packages/create-easy-editor/template/dashboard/react/src/editor/materials/basic/text/component.tsx \
+            packages/create-easy-editor/template/dashboard/react/src/editor/plugins/plugin-hotkey-move-node/index.ts \
+            packages/create-easy-editor/template/dashboard/react/src/editor/runtime.ts \
+            packages/create-easy-editor/template/dashboard/react/src/lib/schema.ts \
+            packages/create-easy-editor/template/dashboard/react/src/pages/editor/ContextMenu.tsx \
+            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Header.tsx \
+            packages/create-easy-editor/template/dashboard/react/src/pages/editor/SettingRenderer.tsx \
+            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Sidebar/Components.tsx \
+            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Sidebar/Outline.tsx \
+            packages/create-easy-editor/test/template-pack-smoke.mjs \
+            packages/create-easy-editor/test/template-engine-contract.test.mjs
+          pnpm exec biome format \
+            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Renderer.tsx
+          pnpm --filter @easy-editor/create test
+          pnpm --filter @easy-editor/create types
+          pnpm --filter @easy-editor/create build
+          pnpm --filter @easy-editor/create test:template-pack
+
+      - name: Verify Dashboard runtime boundaries
+        run: |
+          pnpm exec biome check \
+            examples/dashboard/scripts/verify-ai-bundle.mjs \
+            examples/dashboard/package.json \
+            examples/dashboard/server/ai-chat-gateway.mjs \
+            examples/dashboard/server/index.mjs \
+            examples/dashboard/server/server-env.mjs \
+            examples/dashboard/src/components/ai-chat/agent-request-boundary.d.mts \
+            examples/dashboard/src/components/ai-chat/agent-request-boundary.mjs \
+            examples/dashboard/src/components/ai-chat/agent-request-slot.d.mts \
+            examples/dashboard/src/components/ai-chat/agent-request-slot.mjs \
+            examples/dashboard/src/components/ai-chat/AiChatDialog.tsx \
+            examples/dashboard/src/components/ai-chat/use-custom-chat.ts \
+            examples/dashboard/src/components/ai-chat/commands.d.mts \
+            examples/dashboard/src/components/ai-chat/commands.mjs \
+            examples/dashboard/src/components/ai-chat/response-body-boundary.d.mts \
+            examples/dashboard/src/components/ai-chat/response-body-boundary.mjs \
+            examples/dashboard/src/editor/agent.ts \
+            examples/dashboard/src/editor/agent.worker.ts \
+            examples/dashboard/src/editor/index.ts \
+            examples/dashboard/src/editor/materials/basic/text/component.tsx \
+            examples/dashboard/src/editor/plugins/plugin-hotkey-move-node/index.ts \
+            examples/dashboard/src/editor/runtime.ts \
+            examples/dashboard/src/editor/remote \
+            examples/dashboard/src/globals.ts \
+            examples/dashboard/src/jsx-runtime-global.d.mts \
+            examples/dashboard/src/jsx-runtime-global.mjs \
+            examples/dashboard/src/lib/schema.ts \
+            examples/dashboard/src/main.tsx \
+            examples/dashboard/src/pages/editor/ContextMenu.tsx \
+            examples/dashboard/src/pages/editor/Header.tsx \
+            examples/dashboard/src/pages/editor/SettingRenderer.tsx \
+            examples/dashboard/src/pages/editor/Sidebar/Components.tsx \
+            examples/dashboard/src/pages/editor/Sidebar/index.tsx \
+            examples/dashboard/src/pages/editor/Sidebar/Outline.tsx \
+            examples/dashboard/src/pages/editor/Sidebar/RemoteSnippet.tsx \
+            examples/dashboard/test/agent-outcome-contract.test.mjs \
+            examples/dashboard/test/agent-request-boundary.test.mjs \
+            examples/dashboard/test/agent-request-slot.test.mjs \
+            examples/dashboard/test/ai-chat-gateway.test.mjs \
+            examples/dashboard/test/ai-chat-privacy.test.mjs \
+            examples/dashboard/test/dashboard-runtime-boundary.test.mjs \
+            examples/dashboard/test/jsx-runtime-global.test.mjs \
+            examples/dashboard/test/response-body-boundary.test.mjs \
+            examples/dashboard/test/side-effect-free-runtime.test.mjs \
+            examples/dashboard/vite.config.mts
+          pnpm exec biome format examples/dashboard/src/pages/editor/Renderer.tsx
+          pnpm --dir examples/dashboard test
+          pnpm --dir examples/dashboard build
+          pnpm --dir examples/dashboard verify:ai-bundle
+
+      - name: Build documentation
+        run: pnpm --dir docs docs:build
