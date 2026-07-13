@@ -37,6 +37,8 @@ export const SetterPlaceholder = ({ setterType }: SetterPlaceholderProps) => {
 const LoadingSpinner = () => {
   return (
     <svg
+      aria-label='Loading'
+      role='img'
       width='14'
       height='14'
       viewBox='0 0 24 24'

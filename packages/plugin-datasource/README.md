@@ -37,13 +37,18 @@ Transform and process fetched data with customizable handlers:
 ## Usage Example
 
 ```typescript
-import DataSourcePlugin from '@easy-editor/plugin-datasource';
+import DataSourcePlugin, {
+  createDenyExpressionEvaluator,
+  createTrustedExpressionEvaluator,
+} from '@easy-editor/plugin-datasource';
 
 // Initialize the plugin with default configuration
 const plugin = DataSourcePlugin();
 
 // Or with custom request handlers
 const customPlugin = DataSourcePlugin({
+  // Required trust decision for JSExpression/JSFunction datasource fields.
+  expressionEvaluator: createTrustedExpressionEvaluator(),
   requestHandlersMap: {
     // Override default fetch handler
     fetch: (options) => {
@@ -60,6 +65,12 @@ const customPlugin = DataSourcePlugin({
     // Transform all responses
     return response.data.results;
   }
+});
+
+// Hosts that do not trust executable datasource schema can deny it before
+// datasource construction. PolicyViolation is propagated and no request runs.
+const restrictedPlugin = DataSourcePlugin({
+  expressionEvaluator: createDenyExpressionEvaluator(),
 });
 ```
 
@@ -128,6 +139,21 @@ By default, the plugin includes a `fetch` handler that uses the `universal-reque
   ) => Promise<any>
 }
 ```
+
+### Expression Evaluator
+
+```typescript
+{
+  expressionEvaluator?: ExpressionEvaluator
+}
+```
+
+For backward compatibility, omitting this option selects the explicitly named
+`legacyTrustedExpressionEvaluator`. This applies only when the option is absent;
+an explicitly owned `expressionEvaluator: undefined` is a missing evaluator and
+produces a structured `PolicyViolation`. Restricted or multi-tenant hosts should
+inject a deny or isolated evaluator instead. Policy denials propagate before
+datasource construction and never fall through to dynamic execution.
 
 ## API
 

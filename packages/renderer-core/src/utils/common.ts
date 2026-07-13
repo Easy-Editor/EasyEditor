@@ -1,8 +1,30 @@
 import { type NodeSchema, isJSExpression } from '@easy-editor/core'
 import { forEach } from 'lodash-es'
+import {
+  type ExpressionEvaluationKind,
+  type ExpressionEvaluator,
+  evaluateExpression,
+  isPolicyViolation,
+  legacyTrustedExpressionEvaluator,
+} from '../expression-evaluator'
 import { logger } from './logger'
 
 const PropTypes2 = true
+
+const getEvaluationFailureDetails = (
+  evaluator: ExpressionEvaluator | null | undefined,
+  kind: ExpressionEvaluationKind,
+  sourceLength: number,
+  error: unknown,
+) => ({
+  code:
+    typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : 'EXPRESSION_EVALUATION_FAILED',
+  policy: evaluator?.policy ?? 'missing',
+  kind,
+  sourceLength,
+})
 
 export const inSameDomain = () => {
   try {
@@ -86,18 +108,23 @@ export const transformArrayToMap = (arr: any[], key: string, overwrite = true) =
   return res
 }
 
-interface IParseOptions {
+export interface ParseDataOptions {
   logScope?: string
+  expressionEvaluator?: ExpressionEvaluator
 }
 
-export const parseData = (schema: unknown, self: any, options: IParseOptions = {}): any => {
+export const parseData = (schema: unknown, self: any, options: ParseDataOptions = {}): any => {
   if (isJSExpression(schema)) {
-    return parseExpression({
+    const parseOptions: ParseExpressionOptions = {
       str: schema,
       self,
       thisRequired: true,
       logScope: options.logScope,
-    })
+    }
+    if (Object.hasOwn(options, 'expressionEvaluator')) {
+      parseOptions.evaluator = options.expressionEvaluator
+    }
+    return parseExpression(parseOptions)
   }
   if (typeof schema === 'string') {
     return schema.trim()
@@ -134,10 +161,40 @@ export const isUseLoop = (loop: null | any[], isDesignMode: boolean): boolean =>
   return loop.length > 0
 }
 
-export const checkPropTypes = (value: any, name: string, rule: any, componentName: string): boolean => {
+export function checkPropTypes(value: any, name: string, rule: any, componentName: string): boolean
+export function checkPropTypes(
+  value: any,
+  name: string,
+  rule: any,
+  componentName: string,
+  evaluator: ExpressionEvaluator | undefined,
+): boolean
+export function checkPropTypes(
+  value: any,
+  name: string,
+  rule: any,
+  componentName: string,
+  ...evaluatorArgs: [] | [ExpressionEvaluator | undefined]
+): boolean {
+  const selectedEvaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
   let ruleFunction = rule
   if (typeof rule === 'string') {
-    ruleFunction = new Function(`"use strict"; const PropTypes = arguments[0]; return ${rule}`)(PropTypes2)
+    try {
+      ruleFunction = evaluateExpression(selectedEvaluator, {
+        source: rule,
+        kind: 'prop-type-rule',
+        bindings: { PropTypes: PropTypes2 },
+      })
+    } catch (error) {
+      if (isPolicyViolation(error)) {
+        throw error
+      }
+      logger.warn(
+        'checkPropTypes could not evaluate the string rule',
+        getEvaluationFailureDetails(selectedEvaluator, 'prop-type-rule', rule.length, error),
+      )
+      return true
+    }
   }
   if (!ruleFunction || typeof ruleFunction !== 'function') {
     logger.warn('checkPropTypes should have a function type rule argument')
@@ -164,15 +221,17 @@ export const checkPropTypes = (value: any, name: string, rule: any, componentNam
  * @param str function in string form
  * @returns funtion
  */
-export const transformStringToFunction = (str: string) => {
+export function transformStringToFunction(str: string): any
+export function transformStringToFunction(str: string, evaluator: ExpressionEvaluator | undefined): any
+export function transformStringToFunction(str: string, ...evaluatorArgs: [] | [ExpressionEvaluator | undefined]) {
   if (typeof str !== 'string') {
     return str
   }
-  if (inSameDomain() && (window.parent as any).__newFunc) {
-    return (window.parent as any).__newFunc(`"use strict"; return ${str}`)()
-  } else {
-    return new Function(`"use strict"; return ${str}`)()
-  }
+  const selectedEvaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
+  return evaluateExpression(selectedEvaluator, {
+    source: str,
+    kind: 'function',
+  })
 }
 
 /**
@@ -181,49 +240,49 @@ export const transformStringToFunction = (str: string) => {
  * @param self scope object
  * @returns funtion
  */
-function parseExpression(options: {
+export interface ParseExpressionOptions {
   str: any
   self: any
   thisRequired?: boolean
   logScope?: string
-}): any
+  evaluator?: ExpressionEvaluator
+}
+
+function parseExpression(options: ParseExpressionOptions): any
 function parseExpression(str: any, self: any, thisRequired?: boolean): any
-function parseExpression(a: any, b?: any, c = false) {
+function parseExpression(str: any, self: any, thisRequired: boolean, evaluator: ExpressionEvaluator | undefined): any
+function parseExpression(a: any, b?: any, c = false, ...evaluatorArgs: [] | [ExpressionEvaluator | undefined]) {
   let str: any
   let self: any
   let thisRequired: boolean
-  let logScope: string
+  let evaluator: ExpressionEvaluator | undefined
   if (typeof a === 'object' && b === undefined) {
     str = a.str
     self = a.self
     thisRequired = a.thisRequired
-    logScope = a.logScope
+    evaluator = Object.hasOwn(a, 'evaluator') ? a.evaluator : legacyTrustedExpressionEvaluator
   } else {
     str = a
     self = b
     thisRequired = c
+    evaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
   }
+  let sourceLength = 0
   try {
-    const contextArr = ['"use strict";', 'var __self = arguments[0];']
-    contextArr.push('return ')
-    let tarStr: string
-
-    tarStr = (str.value || '').trim()
-
-    // NOTE: use __self replace 'this' in the original function str
-    // may be wrong in extreme case which contains '__self' already
-    tarStr = tarStr.replace(/this(\W|$)/g, (_a: any, b: any) => `__self${b}`)
-    tarStr = contextArr.join('\n') + tarStr
-
-    // 默认调用顶层窗口的parseObj, 保障new Function的window对象是顶层的window对象
-    if (inSameDomain() && (window.parent as any).__newFunc) {
-      return (window.parent as any).__newFunc(tarStr)(self)
-    }
-    const code = `with(${thisRequired ? '{}' : '$scope || {}'}) { ${tarStr} }`
-    return new Function('$scope', code)(self)
+    const source = (str.value || '').trim()
+    sourceLength = source.length
+    return evaluateExpression(evaluator, {
+      source,
+      kind: 'expression',
+      scope: thisRequired ? undefined : self,
+      thisValue: self,
+      allowScopeAccess: !thisRequired,
+    })
   } catch (err) {
-    // @ts-ignore
-    logger.error(`${logScope || ''} parseExpression.error`, err, str, self?.__self ?? self)
+    if (isPolicyViolation(err)) {
+      throw err
+    }
+    logger.error('parseExpression.error', getEvaluationFailureDetails(evaluator, 'expression', sourceLength, err))
     return undefined
   }
 }

@@ -1,4 +1,5 @@
 import type { PluginCreator } from '@easy-editor/core'
+import { type ExpressionEvaluator, legacyTrustedExpressionEvaluator } from './expression-evaluator'
 import { createFetchHandler } from './handlers/fetch'
 import createInterpret from './interpret/DataSourceEngineFactory'
 import createRuntime from './runtime/RuntimeDataSourceEngineFactory'
@@ -6,6 +7,7 @@ import type { DataHandler, IDataSourceRuntimeContext, InterpretDataSource, Reque
 
 export { createInterpret, createRuntime }
 
+export * from './expression-evaluator'
 export * from './type'
 export * from './types'
 
@@ -18,13 +20,18 @@ export const createDataSourceEngine = (
   engine: IDataSourceRuntimeContext,
   options?: DataSourcePluginOptions,
 ) => {
+  const expressionEvaluator =
+    options && Object.hasOwn(options, 'expressionEvaluator')
+      ? options.expressionEvaluator
+      : legacyTrustedExpressionEvaluator
   return createInterpret(dataSource, engine, {
     ...options,
+    expressionEvaluator,
     requestHandlersMap: options?.requestHandlersMap || defaultRequestHandlersMap,
   })
 }
 
-interface DataSourcePluginOptions {
+export interface DataSourcePluginOptions {
   /**
    * 请求处理器映射
    * @default
@@ -38,6 +45,9 @@ interface DataSourcePluginOptions {
    * 默认数据处理器
    */
   defaultDataHandler?: DataHandler
+
+  /** Policy boundary for executable expressions embedded in datasource schema. */
+  expressionEvaluator?: ExpressionEvaluator
 }
 
 const DataSourcePlugin: PluginCreator<DataSourcePluginOptions> = options => {

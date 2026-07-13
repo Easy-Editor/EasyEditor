@@ -13,3 +13,12 @@ React renderer implementation for EasyEditor. This package provides the React-sp
 - **State Management**: Integration with React's state system
 - **Event Handling**: React-specific event binding from schema definitions
 
+## Expression trust boundary
+
+Executable schema fields are routed through the `expressionEvaluator` renderer
+prop. Omitting the prop preserves the deprecated legacy trusted behavior for
+backward compatibility. Supplying the prop explicitly, including as `undefined`,
+is an explicit policy decision: a deny or missing evaluator raises a structured
+`PolicyViolation` through state/data parsing, custom methods, lifecycle methods,
+dynamic props, and prop-type rules. It does not silently fall back to trusted
+execution.

@@ -88,14 +88,34 @@ The renderer-core provides utilities for handling data and expressions:
 ### Expression Parsing
 
 ```typescript
-import { parseExpression } from '@easy-editor/renderer-core';
+import {
+  createDenyExpressionEvaluator,
+  createTrustedExpressionEvaluator,
+  parseExpression,
+} from '@easy-editor/renderer-core';
 
-// Convert JSExpression objects into actual values
+// Legacy-compatible execution must be an explicit trust decision.
+const evaluator = createTrustedExpressionEvaluator();
 const result = parseExpression({
-  type: 'JSExpression',
-  value: '(function(){ return this.state.count + 1; })'
-}, context);
+  str: {
+    type: 'JSExpression',
+    value: 'this.state.count + 1',
+  },
+  self: context,
+  evaluator,
+});
+
+// Restricted hosts can deny executable schema expressions before they run.
+const denyEvaluator = createDenyExpressionEvaluator();
 ```
+
+The legacy overloads still select the named `legacyTrustedExpressionEvaluator`
+for backward compatibility. This applies only when the evaluator field or
+argument is omitted. An explicitly owned evaluator field containing `undefined`
+is treated as missing and raises a structured `PolicyViolation`; it never falls
+back to dynamic execution. New hosts should always inject a trusted, denied, or
+isolated evaluator explicitly. Policy denials propagate through data parsing and
+prop-type validation rather than being converted to compatibility fallbacks.
 
 ### Data Source Types
 
@@ -118,4 +138,3 @@ export interface DataSource {
   dataHandler?: JSExpression;
 }
 ```
-

@@ -1,6 +1,7 @@
 import { RuntimeDataSourceItem } from '../core/RuntimeDataSourceItem'
 import { adapt2Runtime } from '../core/adapter'
 import { reloadDataSourceFactory } from '../core/reloadDataSourceFactory'
+import { type ExpressionEvaluator, legacyTrustedExpressionEvaluator } from '../expression-evaluator'
 import { getRequestHandler } from '../helpers'
 import type {
   DataHandler,
@@ -24,12 +25,17 @@ export default (
   extraConfig: {
     requestHandlersMap: RequestHandlersMap<{ data: unknown }>
     defaultDataHandler?: DataHandler
+    expressionEvaluator?: ExpressionEvaluator
   } = { requestHandlersMap: {} },
 ) => {
   const { requestHandlersMap } = extraConfig
+  const expressionEvaluator = Object.hasOwn(extraConfig, 'expressionEvaluator')
+    ? extraConfig.expressionEvaluator
+    : legacyTrustedExpressionEvaluator
 
   const runtimeDataSource: RuntimeDataSource = adapt2Runtime(dataSource, context, {
     defaultDataHandler: extraConfig.defaultDataHandler,
+    expressionEvaluator,
   })
 
   const dataSourceMap = runtimeDataSource.list.reduce(

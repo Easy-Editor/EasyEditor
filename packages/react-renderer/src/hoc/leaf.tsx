@@ -186,7 +186,7 @@ export const leafWrapper: ComponentConstruct = (Comp, { schema, baseRenderer, co
 
     static displayName = schema.componentName
 
-    disposeFunctions: Array<(() => void) | Function> = []
+    disposeFunctions: Array<(...args: any[]) => unknown> = []
 
     __component_tag = 'leafWrapper'
 

@@ -1,5 +1,6 @@
 import { type DataSource, type DataSourceItem, isJSFunction } from '@easy-editor/core'
 import { isEmpty } from 'lodash-es'
+import { type ExpressionEvaluator, legacyTrustedExpressionEvaluator } from '../expression-evaluator'
 import type { RendererAppHelper } from '../types'
 import { parseExpression, transformArrayToMap, transformStringToFunction } from './common'
 import { logger } from './logger'
@@ -86,15 +87,22 @@ export class DataHelper {
 
   appHelper: RendererAppHelper
 
+  expressionEvaluator: ExpressionEvaluator | undefined
+
   constructor(comp: any, config: DataSource, appHelper: RendererAppHelper, parser: any) {
     this.host = comp
     this.config = config || {}
     this.parser = parser
     this.ajaxList = config?.list || []
     this.ajaxMap = transformArrayToMap(this.ajaxList, 'id')
-    this.dataSourceMap = this.generateDataSourceMap()
     this.appHelper = appHelper
-    this.dataHandler = config?.dataHandler ? parseExpression(config?.dataHandler, comp, true) : undefined
+    this.expressionEvaluator = Object.hasOwn(appHelper, 'expressionEvaluator')
+      ? appHelper.expressionEvaluator
+      : legacyTrustedExpressionEvaluator
+    this.dataSourceMap = this.generateDataSourceMap()
+    this.dataHandler = config?.dataHandler
+      ? parseExpression(config?.dataHandler, comp, true, this.expressionEvaluator)
+      : undefined
   }
 
   // 更新config，只会更新配置，状态保存；
@@ -311,7 +319,7 @@ export class DataHelper {
   handleData(id: string | null, dataHandler: any, data: any, error: any) {
     let dataHandlerFun = dataHandler
     if (isJSFunction(dataHandler)) {
-      dataHandlerFun = transformStringToFunction(dataHandler.value)
+      dataHandlerFun = transformStringToFunction(dataHandler.value, this.expressionEvaluator)
     }
     if (!dataHandlerFun || typeof dataHandlerFun !== 'function') {
       return data

@@ -11,11 +11,13 @@ import {
 import {
   type BaseRendererProps,
   DataHelper,
+  type ExpressionEvaluator,
   type NodeInfo,
   checkPropTypes,
   classnames,
   getFileCssName,
   getValue,
+  isPolicyViolation,
   isSchema,
   isUseLoop,
   logger,
@@ -34,7 +36,13 @@ import type { BaseRendererComponent, BaseRendererContext } from './types'
 /**
  * execute method in schema.lifeCycles with context
  */
-export function executeLifeCycleMethod(context: any, schema: RootSchema, method: string, args: any): any {
+export function executeLifeCycleMethod(
+  context: any,
+  schema: RootSchema,
+  method: string,
+  args: any,
+  ...expressionEvaluatorArgs: [] | [ExpressionEvaluator | undefined]
+): any {
   if (!context || !isSchema(schema) || !method) {
     return
   }
@@ -47,7 +55,10 @@ export function executeLifeCycleMethod(context: any, schema: RootSchema, method:
 
   // TODO: cache
   if (isJSExpression(fn) || isJSFunction(fn)) {
-    fn = parseExpression(fn, context, true)
+    fn =
+      expressionEvaluatorArgs.length === 0
+        ? parseExpression(fn, context, true)
+        : parseExpression(fn, context, true, expressionEvaluatorArgs[0])
   }
 
   if (typeof fn !== 'function') {
@@ -58,6 +69,9 @@ export function executeLifeCycleMethod(context: any, schema: RootSchema, method:
   try {
     return fn.apply(context, args)
   } catch (e) {
+    if (isPolicyViolation(e)) {
+      throw e
+    }
     logger.error(`[${schema.componentName}]生命周期${method}出错`, e)
   }
 }
@@ -122,7 +136,16 @@ export function baseRendererFactory(): BaseRendererComponent {
     constructor(props: BaseRendererProps) {
       super(props)
       this.__parseExpression = (str: string, self: any) => {
-        return parseExpression({ str, self, logScope: props.componentName })
+        const options = { str, self, logScope: this.props.componentName } as {
+          str: string
+          self: any
+          logScope?: string
+          evaluator?: ExpressionEvaluator
+        }
+        if (Object.hasOwn(this.props, 'expressionEvaluator')) {
+          options.evaluator = this.props.expressionEvaluator
+        }
+        return parseExpression(options)
       }
       this.__beforeInit(props)
       this.__init(props)
@@ -141,7 +164,15 @@ export function baseRendererFactory(): BaseRendererComponent {
     __afterInit(props: BaseRendererProps) {}
 
     static getDerivedStateFromProps(props: BaseRendererProps, state: any) {
-      const result = executeLifeCycleMethod(this, props?.__schema, 'getDerivedStateFromProps', [props, state])
+      const result = Object.hasOwn(props, 'expressionEvaluator')
+        ? executeLifeCycleMethod(
+            BaseRenderer,
+            props?.__schema,
+            'getDerivedStateFromProps',
+            [props, state],
+            props.expressionEvaluator,
+          )
+        : executeLifeCycleMethod(BaseRenderer, props?.__schema, 'getDerivedStateFromProps', [props, state])
       return result === undefined ? null : result
     }
 
@@ -217,6 +248,10 @@ export function baseRendererFactory(): BaseRendererComponent {
         }
       }
 
+      if (Object.hasOwn(this.props, 'expressionEvaluator')) {
+        executeLifeCycleMethod(this, this.props.__schema, method, args, this.props.expressionEvaluator)
+        return
+      }
       executeLifeCycleMethod(this, this.props.__schema, method, args)
     }
 
@@ -270,7 +305,14 @@ export function baseRendererFactory(): BaseRendererComponent {
 
     __parseData = (data: any, ctx?: Record<string, any>) => {
       const { __ctx, componentName } = this.props
-      return parseData(data, ctx || __ctx || this, { logScope: componentName })
+      const options = { logScope: componentName } as {
+        logScope?: string
+        expressionEvaluator?: ExpressionEvaluator
+      }
+      if (Object.hasOwn(this.props, 'expressionEvaluator')) {
+        options.expressionEvaluator = this.props.expressionEvaluator
+      }
+      return parseData(data, ctx || __ctx || this, options)
     }
 
     __initDataSource = (props: BaseRendererProps) => {
@@ -309,7 +351,9 @@ export function baseRendererFactory(): BaseRendererComponent {
         }
         this.dataSourceMap = this.__dataHelper.updateConfig(dataSource)
       } else {
-        const appHelper = props.__appHelper || {}
+        const appHelper = Object.hasOwn(props, 'expressionEvaluator')
+          ? { ...(props.__appHelper || {}), expressionEvaluator: props.expressionEvaluator }
+          : props.__appHelper || {}
         this.__dataHelper = new DataHelper(this, dataSource, appHelper, (config: any) => this.__parseData(config))
         this.dataSourceMap = this.__dataHelper.dataSourceMap
         this.reloadDataSource = () =>
@@ -477,6 +521,10 @@ export function baseRendererFactory(): BaseRendererComponent {
             }
           : {}
 
+        if (Object.hasOwn(this.props, 'expressionEvaluator')) {
+          otherProps.expressionEvaluator = this.props.expressionEvaluator
+        }
+
         if (!Comp) {
           logger.error(
             `${schema.componentName} component is not found in components list! component list is:`,
@@ -586,6 +634,9 @@ export function baseRendererFactory(): BaseRendererComponent {
           this.__getSchemaChildrenVirtualDom(schema, scope, Comp, condition),
         )
       } catch (e) {
+        if (isPolicyViolation(e)) {
+          throw e
+        }
         return engine.createElement(engine.getFaultComponent(), {
           error: e,
           schema,
@@ -705,7 +756,10 @@ export function baseRendererFactory(): BaseRendererComponent {
         if (!propType) {
           return value
         }
-        return checkPropTypes(value, path, propType, componentInfo.name) ? value : undefined
+        const isValid = Object.hasOwn(this.props, 'expressionEvaluator')
+          ? checkPropTypes(value, path, propType, componentInfo.name, this.props.expressionEvaluator)
+          : checkPropTypes(value, path, propType, componentInfo.name)
+        return isValid ? value : undefined
       }
 
       const parseReactNode = (data: any, params: any) => {
@@ -738,7 +792,9 @@ export function baseRendererFactory(): BaseRendererComponent {
       }
 
       if (isJSFunction(props)) {
-        props = transformStringToFunction(props.value)
+        props = Object.hasOwn(this.props, 'expressionEvaluator')
+          ? transformStringToFunction(props.value, this.props.expressionEvaluator)
+          : transformStringToFunction(props.value)
       }
 
       // 兼容通过componentInfo判断的情况

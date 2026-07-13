@@ -1,3 +1,4 @@
+import { legacyTrustedExpressionEvaluator } from '../expression-evaluator'
 import { defaultDataHandler, defaultWillFetch } from '../helpers'
 import type {
   DataSourceMap,
@@ -15,8 +16,11 @@ const adapt2Runtime = (
   extraConfig: ExtraConfig,
 ) => {
   const { list: interpretConfigList, dataHandler: interpretDataHandler } = dataSource
+  const expressionEvaluator = Object.hasOwn(extraConfig, 'expressionEvaluator')
+    ? extraConfig.expressionEvaluator
+    : legacyTrustedExpressionEvaluator
   const dataHandler: (dataMap?: DataSourceMap) => void = interpretDataHandler
-    ? getRuntimeJsValue(interpretDataHandler, context)
+    ? getRuntimeJsValue(interpretDataHandler, context, expressionEvaluator)
     : undefined
 
   // 为空判断
@@ -31,15 +35,17 @@ const adapt2Runtime = (
     const finalDataHandler = customDataHandler || defaultDataHandler
     return {
       id: el.id,
-      isInit: getRuntimeValueFromConfig('boolean', el.isInit, context), // 默认 true
-      isSync: getRuntimeValueFromConfig('boolean', el.isSync, context), // 默认 false
+      isInit: getRuntimeValueFromConfig('boolean', el.isInit, context, expressionEvaluator), // 默认 true
+      isSync: getRuntimeValueFromConfig('boolean', el.isSync, context, expressionEvaluator), // 默认 false
       type: el.type || 'fetch',
-      willFetch: el.willFetch ? getRuntimeJsValue(el.willFetch, context) : defaultWillFetch,
-      shouldFetch: buildShouldFetch(el, context),
-      dataHandler: el.dataHandler ? getRuntimeJsValue(el.dataHandler, context) : finalDataHandler,
-      errorHandler: el.errorHandler ? getRuntimeJsValue(el.errorHandler, context) : undefined,
-      requestHandler: el.requestHandler ? getRuntimeJsValue(el.requestHandler, context) : undefined,
-      options: buildOptions(el, context),
+      willFetch: el.willFetch ? getRuntimeJsValue(el.willFetch, context, expressionEvaluator) : defaultWillFetch,
+      shouldFetch: buildShouldFetch(el, context, expressionEvaluator),
+      dataHandler: el.dataHandler ? getRuntimeJsValue(el.dataHandler, context, expressionEvaluator) : finalDataHandler,
+      errorHandler: el.errorHandler ? getRuntimeJsValue(el.errorHandler, context, expressionEvaluator) : undefined,
+      requestHandler: el.requestHandler
+        ? getRuntimeJsValue(el.requestHandler, context, expressionEvaluator)
+        : undefined,
+      options: buildOptions(el, context, expressionEvaluator),
     }
   })
 

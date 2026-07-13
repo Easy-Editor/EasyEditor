@@ -70,7 +70,7 @@ export const post = (dataAPI: any, params = {}, headers: any = {}, otherProps = 
  * @param {*} [otherProps={}]
  * @returns
  */
-export const request = (dataAPI: any, method = 'GET', data: any, headers = {}, otherProps: any = {}) => {
+export const request = (dataAPI: any, method = 'GET', data: any = undefined, headers = {}, otherProps: any = {}) => {
   let processedHeaders = headers || {}
   let payload = data
   if (method === 'PUT' || method === 'DELETE') {

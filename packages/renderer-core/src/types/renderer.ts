@@ -9,6 +9,7 @@ import type {
   Simulator,
   SimulatorRenderer,
 } from '@easy-editor/core'
+import type { ExpressionEvaluator } from '../expression-evaluator'
 import type { FaultComponentProps, GeneralComponent, NotFoundComponentProps } from './components'
 
 export type Schema = NodeSchema | RootSchema
@@ -39,6 +40,9 @@ export interface RendererProps {
 
   /** 主要用于设置渲染模块的全局上下文，里面定义的内容可以在低代码中通过 this 来访问，比如 this.utils */
   appHelper?: RendererAppHelper
+
+  /** Explicit policy boundary for executable expressions embedded in schema. */
+  expressionEvaluator?: ExpressionEvaluator
 
   /**
    * 配置规范参见《低代码搭建组件描述协议》https://lowcode-engine.cn/lowcode
@@ -155,6 +159,9 @@ export interface LocationLike {
 }
 
 export interface RendererAppHelper {
+  /** Explicit policy boundary for datasource handlers evaluated by renderer-core. */
+  expressionEvaluator?: ExpressionEvaluator
+
   /** 全局公共函数 */
   utils?: Record<string, any>
 

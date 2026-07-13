@@ -48,7 +48,7 @@ export interface IRuntimeDataSource<TParams = unknown, TResultData = unknown> {
    * 加载数据 (无论是否曾经加载过)
    * 注意：若提供 params，则会和默认配置的参数做浅合并；否则会使用默认配置的参数。
    */
-  load(params?: TParams): Promise<TResultData | void>
+  load(params?: TParams): Promise<TResultData | undefined>
 }
 
 /**

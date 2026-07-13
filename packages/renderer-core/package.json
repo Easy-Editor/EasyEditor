@@ -61,6 +61,7 @@
     "build:js": "rollup -c",
     "types": "npm-run-all -nl types:*",
     "types:src": "tsc --project tsconfig.build.json",
+    "test": "pnpm build:js && rimraf .test-dist && rollup -c rollup.test.config.js && node --test test/*.test.mjs && rimraf .test-dist",
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {

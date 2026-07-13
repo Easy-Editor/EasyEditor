@@ -56,4 +56,14 @@ export default [
     plugins,
     external,
   },
+  {
+    input: 'src/expression-evaluator.ts',
+    output: [
+      {
+        file: 'dist/expression-evaluator.js',
+        format: 'es',
+      },
+    ],
+    plugins,
+  },
 ]

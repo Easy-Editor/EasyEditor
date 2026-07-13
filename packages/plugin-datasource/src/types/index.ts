@@ -1,3 +1,4 @@
+import type { ExpressionEvaluator } from '../expression-evaluator'
 import type { DataHandler } from './data-source-runtime'
 
 export * from './data-source'
@@ -7,4 +8,5 @@ export * from './data-source-runtime'
 
 export interface ExtraConfig {
   defaultDataHandler?: DataHandler
+  expressionEvaluator?: ExpressionEvaluator
 }

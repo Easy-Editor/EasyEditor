@@ -2,6 +2,9 @@
   "extends": "../../tsconfig.test.json",
   "compilerOptions": {
     "baseUrl": "",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": []
   },
   "include": ["./test", "./web/test", "./store/test"]
 }
