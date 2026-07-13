@@ -133,6 +133,8 @@ jobs:
             examples/dashboard/src/components/ai-chat/response-body-boundary.d.mts \
             examples/dashboard/src/components/ai-chat/response-body-boundary.mjs \
             examples/dashboard/src/editor/agent.ts \
+            examples/dashboard/src/editor/agent-plan-coordinator.d.mts \
+            examples/dashboard/src/editor/agent-plan-coordinator.mjs \
             examples/dashboard/src/editor/agent.worker.ts \
             examples/dashboard/src/editor/index.ts \
             examples/dashboard/src/editor/materials/basic/text/component.tsx \
@@ -153,6 +155,7 @@ jobs:
             examples/dashboard/src/pages/editor/Sidebar/RemoteSnippet.tsx \
             examples/dashboard/test/agent-outcome-contract.test.mjs \
             examples/dashboard/test/agent-plan-confirmation.test.mjs \
+            examples/dashboard/test/agent-plan-coordinator.test.mjs \
             examples/dashboard/test/agent-plan-summary.test.mjs \
             examples/dashboard/test/agent-request-boundary.test.mjs \
             examples/dashboard/test/agent-request-slot.test.mjs \

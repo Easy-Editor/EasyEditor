@@ -120,7 +120,7 @@ Host -> safe result DTO -> UI
 
 宿主按请求签发最小 grant：允许的文档、组件、命令、额外字段和大小上限。组件类型、组件 prop 和额外字段是三组独立授权；prop/额外字段默认拒绝，只有通过递归值策略验证的有限字符串、有限数值或精确对象才可进入命令。Dashboard 当前只允许受限的 `Text.text`，并要求插入节点携带经过数值范围验证的 `$dashboard.rect`。
 
-`preview` 固化 revision、生成 ID、effects 和预期结果；`execute(planId)` 在提交前检查 stale 状态，在提交后校验精确结果。Dashboard 的 Worker session 使用 `executionAuthority: 'host'`：peer 的 `execute` 会 fail-closed，只有可信宿主持有的 `approveAndExecute(planId)` 能提交。Host 按 plan ID 读取自己保存的权威 preview，再向 UI 派生命令数量、操作类型和受影响节点数量；Worker 不能用伪造 effects 替换确认摘要。UI 不会拿到 plan ID、节点 ID 或命令。拒绝、超时、关闭窗口和 stale 都不会静默重新 preview 或自动重试。
+`preview` 固化 revision、生成 ID、effects 和预期结果；`execute(planId)` 在提交前检查 stale 状态，在提交后校验精确结果。Dashboard 的 Worker session 使用 `executionAuthority: 'host'`：peer 的 `execute` 会 fail-closed，只有可信宿主持有的 `approveAndExecute(planId)` 能提交。Host 按 plan ID 读取自己保存的权威 preview，再向 UI 派生命令数量、操作类型和受影响节点数量；Worker 不能用伪造 effects 替换确认摘要。UI 不会拿到 plan ID、节点 ID 或命令。拒绝、超时、关闭窗口和 stale 都不会静默重新 preview 或自动重试。由该入口产生的 receipt、audit record 和 committed event 都携带 `approvalSource: 'host'`；它只证明可信 Host 调用了批准入口，不证明某个具体用户的身份。
 
 Dashboard 宿主只检查并复制最近 10 条消息，单条 UTF-8 上限 2 KiB、总计 12 KiB，并在创建 Worker 前拒绝越界输入。若执行错误表明已经提交或无法证明完整回滚，则返回 `outcome: unknown`；调用者必须重新读取画布，不能自动重试。
 

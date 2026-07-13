@@ -28,6 +28,7 @@ const MAX_QUEUED_EVENT_BYTES = 256 * 1024
 export interface AgentPortHostSessionDependencies {
   readonly capability: AgentCapability
   readonly denyPeerExecution?: (planId: string) => AgentCapabilityError
+  readonly executeHostApproved: (planId: string) => ReturnType<AgentCapability['execute']>
   readonly port: AgentMessagePort
   readonly options: AgentPortSessionOptions
   readonly subscribeEvents: (listener: AgentDomainEventListener) => () => void
@@ -114,7 +115,7 @@ export class AgentPortHostSession implements AgentPortSession {
       })
     }
     try {
-      return this.dependencies.capability.execute(planId)
+      return this.dependencies.executeHostApproved(planId)
     } finally {
       this.retirePreparedPlan(planId)
     }

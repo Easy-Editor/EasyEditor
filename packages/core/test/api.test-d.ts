@@ -134,6 +134,10 @@ const typedHostApprovedSession: AgentPortSession = hostApprovedSession
 const channelHostApprovedSession: AgentChannelPortSession = hostApprovedSession
 const hostPreparedPreview: AgentPlanPreview = typedHostApprovedSession.getPreparedPlanPreview('plan-id')
 const hostApprovedReceipt: AgentExecutionReceipt = hostApprovedSession.approveAndExecute('plan-id')
+if (hostApprovedReceipt.approvalSource) {
+  const approvalSource: 'host' = hostApprovedReceipt.approvalSource
+  void approvalSource
+}
 
 engine.agentCapabilities.issuePort(
   {

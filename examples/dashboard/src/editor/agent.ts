@@ -1,7 +1,8 @@
 import type { AgentExtraValuePolicies, AgentPortSession } from '@easy-editor/core'
 import { AgentCapabilityError } from '@easy-editor/core/instance'
-import { type DashboardAgentPlanSummary, createAgentPlanSummary } from '../components/ai-chat/agent-plan-summary.mjs'
+import type { DashboardAgentPlanSummary } from '../components/ai-chat/agent-plan-summary.mjs'
 import { AgentRequestBoundaryError, prepareAgentWorkerMessages } from '../components/ai-chat/agent-request-boundary.mjs'
+import { AgentPlanCoordinatorError, coordinatePreparedAgentPlan } from './agent-plan-coordinator.mjs'
 import { engine } from './runtime'
 
 const DASHBOARD_AGENT_COMPONENT_NAMES = [
@@ -185,57 +186,6 @@ const parseWorkerResponse = (value: unknown, requestId: string): AgentWorkerFail
   }
 }
 
-const awaitProposalConfirmation = async (
-  confirmProposal: DashboardAgentRequestOptions['confirmProposal'],
-  proposal: DashboardAgentProposal,
-  signal: AbortSignal,
-): Promise<boolean> =>
-  new Promise<boolean>((resolve, reject) => {
-    let settled = false
-    const settle = (operation: () => void) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      signal.removeEventListener('abort', handleAbort)
-      operation()
-    }
-    const handleAbort = () =>
-      settle(() => reject(new DashboardAgentError('dashboard.agent.aborted', 'Agent 请求已取消。')))
-    const timeout = setTimeout(
-      () =>
-        settle(() =>
-          reject(new DashboardAgentError('dashboard.agent.confirmationExpired', 'Agent 提案已过期，请重新生成。')),
-        ),
-      Math.max(0, proposal.expiresAt - Date.now()),
-    )
-
-    signal.addEventListener('abort', handleAbort, { once: true })
-    if (signal.aborted) {
-      handleAbort()
-      return
-    }
-    let confirmation: Promise<boolean>
-    try {
-      confirmation = Promise.resolve(confirmProposal(proposal, { signal }))
-    } catch (error) {
-      settle(() => reject(error))
-      return
-    }
-    confirmation.then(
-      decision =>
-        settle(() => {
-          if (typeof decision !== 'boolean') {
-            reject(
-              new DashboardAgentError('dashboard.agent.invalidConfirmation', 'Agent 提案确认回调必须返回明确决定。'),
-            )
-            return
-          }
-          resolve(decision)
-        }),
-      error => settle(() => reject(error)),
-    )
-  })
-
 const toExecutionFailure = (error: unknown): DashboardAgentError => {
   if (error instanceof DashboardAgentError) return error
   if (error instanceof AgentCapabilityError) {
@@ -385,39 +335,35 @@ export const runDashboardAgentRequest = async (
       throw new DashboardAgentError(response.error.code, response.error.message)
     }
 
-    let preview: ReturnType<AgentPortSession['getPreparedPlanPreview']>
-    try {
-      preview = session.getPreparedPlanPreview(response.planId)
-    } catch (error) {
-      if (error instanceof AgentCapabilityError) {
-        throw new DashboardAgentError(error.code, 'Agent 提案已不可用，画布未发生变化。')
-      }
-      throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了未知提案。')
-    }
-    if (preview.documentId !== documentId || preview.planId !== response.planId) {
-      throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 提案不属于当前请求。')
-    }
-    const proposal = Object.freeze({
-      expiresAt: Date.now() + AGENT_CONFIRMATION_TIMEOUT_MS,
-      message: response.message,
-      proposalId: requestId,
-      summary: createAgentPlanSummary(preview),
-    }) satisfies DashboardAgentProposal
-    const confirmed = await awaitProposalConfirmation(options.confirmProposal, proposal, controller.signal)
-    if (!confirmed) {
-      throw new DashboardAgentError('dashboard.agent.rejected', '已取消执行，画布未发生变化。')
-    }
-    if (controller.signal.aborted) {
-      throw new DashboardAgentError('dashboard.agent.aborted', 'Agent 请求已取消。')
-    }
-    if (Date.now() >= proposal.expiresAt) {
-      throw new DashboardAgentError('dashboard.agent.confirmationExpired', 'Agent 提案已过期，请重新生成。')
-    }
-
+    const requestSession = session
     let receipt: ReturnType<AgentPortSession['approveAndExecute']>
     try {
-      receipt = session.approveAndExecute(preview.planId)
+      receipt = await coordinatePreparedAgentPlan({
+        authority: {
+          approveAndExecute: planId => requestSession.approveAndExecute(planId),
+          getPreparedPlanPreview: planId => {
+            try {
+              return requestSession.getPreparedPlanPreview(planId)
+            } catch (error) {
+              if (error instanceof AgentCapabilityError) {
+                throw new DashboardAgentError(error.code, 'Agent 提案已不可用，画布未发生变化。')
+              }
+              throw new DashboardAgentError('dashboard.agent.invalidWorkerResponse', 'Agent Worker 返回了未知提案。')
+            }
+          },
+        },
+        confirmationTimeoutMs: AGENT_CONFIRMATION_TIMEOUT_MS,
+        confirmProposal: options.confirmProposal,
+        documentId,
+        message: response.message,
+        planId: response.planId,
+        proposalId: requestId,
+        signal: controller.signal,
+      })
     } catch (error) {
+      if (error instanceof AgentPlanCoordinatorError) {
+        throw new DashboardAgentError(error.code, error.message)
+      }
       throw toExecutionFailure(error)
     }
     return Object.freeze({

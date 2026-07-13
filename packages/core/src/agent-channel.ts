@@ -5,6 +5,7 @@ export type {
   AgentDomainEvent,
   AgentDomainEventListener,
   AgentExecutionReceipt,
+  AgentExecutionApprovalSource,
   AgentMessagePort,
   AgentPlanPreview,
   AgentPlanRequest,

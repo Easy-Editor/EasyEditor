@@ -119,6 +119,12 @@ export interface AgentPlanPreview {
 
 export type AgentExecutionStatus = 'committed' | 'committed_with_observer_errors'
 
+/**
+ * Provenance for an execution that crossed the trusted host approval entry.
+ * This proves only that the host called approveAndExecute(), not who approved it.
+ */
+export type AgentExecutionApprovalSource = 'host'
+
 export interface AgentExecutionReceipt {
   readonly planId: string
   readonly documentId: string
@@ -128,6 +134,7 @@ export interface AgentExecutionReceipt {
   readonly commandCount: number
   readonly affectedNodeIds: readonly string[]
   readonly observerErrorCount: number
+  readonly approvalSource?: AgentExecutionApprovalSource
 }
 
 export type AgentAuditAction = 'issue' | 'snapshot' | 'preview' | 'execute' | 'revoke'
@@ -167,6 +174,7 @@ export interface AgentAuditRecord {
   readonly hostTrust: string
   readonly documentId?: string
   readonly planId?: string
+  readonly approvalSource?: AgentExecutionApprovalSource
   readonly baseRevision?: string
   readonly currentRevision?: string
   readonly commands?: AgentCommandAuditSummary
@@ -198,6 +206,7 @@ export interface AgentTransactionCommittedEvent {
   readonly commandTypes: readonly AgentCommandType[]
   readonly affectedNodeIds: readonly string[]
   readonly observerErrorCount: number
+  readonly approvalSource?: AgentExecutionApprovalSource
 }
 
 export type AgentDomainEvent = AgentTransactionCommittedEvent

@@ -31,6 +31,7 @@ import type {
   AgentCommandAuditSummary,
   AgentDocumentSnapshot,
   AgentDomainEventListener,
+  AgentExecutionApprovalSource,
   AgentExecutionReceipt,
   AgentExtraValuePolicies,
   AgentMessagePort,
@@ -212,6 +213,7 @@ interface AuditInput {
   error?: unknown
   errorCode?: string
   committed?: boolean
+  approvalSource?: AgentExecutionApprovalSource
 }
 
 const normalizeStringList = (value: unknown, path: string): readonly string[] => {
@@ -702,6 +704,7 @@ export class AgentCapabilityManager {
       const session = new AgentPortHostSession({
         capability,
         denyPeerExecution: planId => this.denyPeerExecution(capability.descriptor.capabilityId, planId),
+        executeHostApproved: planId => this.execute(capability.descriptor.capabilityId, planId, 'host'),
         onClose: closed => this.portSessions.delete(closed),
         options: { executionAuthority, signal: options.signal },
         port,
@@ -949,7 +952,11 @@ export class AgentCapabilityManager {
     }
   }
 
-  private execute(capabilityId: string, planId: string): AgentExecutionReceipt {
+  private execute(
+    capabilityId: string,
+    planId: string,
+    approvalSource?: AgentExecutionApprovalSource,
+  ): AgentExecutionReceipt {
     const capability = this.requireCapability(capabilityId)
     if (typeof planId !== 'string' || planId.length === 0) {
       const error = new AgentCapabilityError({
@@ -957,7 +964,13 @@ export class AgentCapabilityManager {
         code: 'agent.plan.invalid',
         message: 'planId is required',
       })
-      this.auditFor(capability, { action: 'execute', decision: 'denied', error, outcome: 'rejected' })
+      this.auditFor(capability, {
+        action: 'execute',
+        approvalSource,
+        decision: 'denied',
+        error,
+        outcome: 'rejected',
+      })
       throw error
     }
     const plan = this.plans.get(planId)
@@ -971,6 +984,7 @@ export class AgentCapabilityManager {
         })
         this.auditFor(capability, {
           action: 'execute',
+          approvalSource,
           baseRevision: terminal.baseRevision,
           commands: terminal.summary,
           decision: 'denied',
@@ -988,6 +1002,7 @@ export class AgentCapabilityManager {
       })
       this.auditFor(capability, {
         action: 'execute',
+        approvalSource,
         decision: 'denied',
         error,
         outcome: 'rejected',
@@ -1003,6 +1018,7 @@ export class AgentCapabilityManager {
       })
       this.auditFor(capability, {
         action: 'execute',
+        approvalSource,
         baseRevision: plan.baseRevision,
         commands: plan.summary,
         decision: 'denied',
@@ -1065,6 +1081,7 @@ export class AgentCapabilityManager {
         this.retirePlan(capability, plan, 'stale')
         this.auditFor(capability, {
           action: 'execute',
+          approvalSource,
           baseRevision: plan.baseRevision,
           commands: plan.summary,
           currentRevision: error.currentRevision,
@@ -1087,6 +1104,7 @@ export class AgentCapabilityManager {
         })
         this.auditFor(capability, {
           action: 'execute',
+          approvalSource,
           baseRevision: plan.baseRevision,
           commands: plan.summary,
           decision: 'denied',
@@ -1105,6 +1123,7 @@ export class AgentCapabilityManager {
         })
         this.auditFor(capability, {
           action: 'execute',
+          approvalSource,
           baseRevision: plan.baseRevision,
           commands: plan.summary,
           decision: 'denied',
@@ -1116,7 +1135,7 @@ export class AgentCapabilityManager {
         throw safeError
       }
     }
-    return this.finishCommitted(capability, plan, result, committedStatus, observerErrorCount)
+    return this.finishCommitted(capability, plan, result, committedStatus, observerErrorCount, approvalSource)
   }
 
   private denyPeerExecution(capabilityId: string, planId: string): AgentCapabilityError {
@@ -1143,6 +1162,7 @@ export class AgentCapabilityManager {
     result: TransactionResult,
     status: AgentExecutionReceipt['status'],
     observerErrorCount: number,
+    approvalSource?: AgentExecutionApprovalSource,
   ): AgentExecutionReceipt {
     let revision: string | undefined
     let verificationError: unknown
@@ -1180,6 +1200,7 @@ export class AgentCapabilityManager {
           })
         : undefined
     const receipt = deepFreezeAgentData({
+      ...(approvalSource ? { approvalSource } : {}),
       affectedNodeIds: [...result.affectedNodeIds],
       commandCount: result.commandCount,
       committed: true,
@@ -1191,6 +1212,7 @@ export class AgentCapabilityManager {
     }) as AgentExecutionReceipt
     this.auditFor(capability, {
       action: 'execute',
+      approvalSource,
       baseRevision: plan.baseRevision,
       commands: plan.summary,
       committed: true,
@@ -1203,6 +1225,7 @@ export class AgentCapabilityManager {
       planId: plan.planId,
     })
     this.domainEvents.publishCommitted({
+      ...(approvalSource ? { approvalSource } : {}),
       affectedNodeIds: [...receipt.affectedNodeIds],
       baseRevision: plan.baseRevision,
       capabilityId: capability.descriptor.capabilityId,
@@ -1375,6 +1398,7 @@ export class AgentCapabilityManager {
   private audit(input: AuditInput): void {
     const record = deepFreezeAgentData({
       action: input.action,
+      ...(input.approvalSource ? { approvalSource: input.approvalSource } : {}),
       assurance: input.assurance,
       auditId: uniqueId('audit'),
       baseRevision: safeAuditIdentifier(input.baseRevision),

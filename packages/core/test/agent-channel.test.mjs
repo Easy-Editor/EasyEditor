@@ -90,6 +90,7 @@ test('MessagePort capability performs snapshot, preview and execute without expo
   const receipt = await capability.execute(preview.planId)
 
   assert.equal(receipt.status, 'committed')
+  assert.equal(Object.hasOwn(receipt, 'approvalSource'), false)
   assert.equal(document.root.getPropValue('title'), 'from-worker-port')
   assert.equal(events.length, 0, 'the committed event must not overtake the execute response')
   await nextTurn()
@@ -97,6 +98,7 @@ test('MessagePort capability performs snapshot, preview and execute without expo
   assert.equal(events[0].type, 'agent.transaction.committed')
   assert.equal(events[0].documentId, document.id)
   assert.equal(events[0].planId, preview.planId)
+  assert.equal(Object.hasOwn(events[0], 'approvalSource'), false)
   assert.equal(Object.isFrozen(events[0]), true)
   assert.deepEqual(events[0].affectedNodeIds, [document.root.id])
   assert.equal(Object.hasOwn(events[0], 'document'), false)
@@ -120,6 +122,9 @@ test('host execution authority lets the peer prepare a plan but only the host se
     signal: controller.signal,
   })
   const capability = await core.connectAgentPort(port2)
+  const events = []
+  const unsubscribe = capability.subscribe(event => events.push(event))
+  t.after(unsubscribe)
 
   assert.equal(session.descriptor.executionAuthority, 'host')
   assert.equal(capability.descriptor.executionAuthority, 'host')
@@ -141,10 +146,27 @@ test('host execution authority lets the peer prepare a plan but only the host se
 
   const receipt = session.approveAndExecute(preview.planId)
   assert.equal(receipt.status, 'committed')
+  assert.equal(receipt.approvalSource, 'host')
   assert.equal(document.root.getPropValue('title'), 'host-approved')
+  await nextTurn()
+  assert.equal(events.length, 1)
+  assert.equal(events[0].planId, preview.planId)
+  assert.equal(events[0].approvalSource, 'host')
+
+  const executeAudits = engine.agentCapabilities
+    .getAuditRecords()
+    .filter(record => record.action === 'execute' && record.planId === preview.planId)
+  assert.equal(executeAudits.length, 2)
+  assert.equal(executeAudits[0].decision, 'denied')
+  assert.equal(Object.hasOwn(executeAudits[0], 'approvalSource'), false)
+  assert.equal(executeAudits[1].decision, 'allowed')
+  assert.equal(executeAudits[1].approvalSource, 'host')
 
   const replay = await captureFailure(() => session.approveAndExecute(preview.planId))
   assert.equal(replay.code, 'agent.plan.terminal')
+  const replayAudit = engine.agentCapabilities.getAuditRecords().at(-1)
+  assert.equal(replayAudit.error.code, 'agent.plan.terminal')
+  assert.equal(replayAudit.approvalSource, 'host')
 
   session.close()
   const closed = await captureFailure(() => session.approveAndExecute(preview.planId))
@@ -267,9 +289,11 @@ test('host execution authority rejects a handcrafted peer execute request at the
   assert.equal(deniedAudit?.decision, 'denied')
   assert.equal(deniedAudit?.outcome, 'rejected')
   assert.equal(deniedAudit?.error?.code, 'agent.execution.hostApprovalRequired')
+  assert.equal(Object.hasOwn(deniedAudit, 'approvalSource'), false)
 
   const receipt = session.approveAndExecute(previewResponse.result.planId)
   assert.equal(receipt.status, 'committed')
+  assert.equal(receipt.approvalSource, 'host')
   assert.equal(document.root.getPropValue('title'), 'raw-peer-denied')
 })
 
