@@ -14,6 +14,27 @@ import { SimulatorRendererView } from './RendererView'
 import { DocumentInstance, REACT_KEY, SYMBOL_VDID, SYMBOL_VNID, cacheReactKey } from './document-instance'
 import { buildComponents, getClientRects, reactFindDOMNodes, withQueryParams } from './utils'
 
+type RenderLifecycleState = 'idle' | 'starting' | 'running' | 'disposing'
+
+const FALLBACK_CONTAINER_OWNER = Symbol.for('@easy-editor/react-renderer-dashboard/fallback-owner')
+const RENDER_CONTAINER_LEASE = Symbol.for('@easy-editor/react-renderer-dashboard/container-lease')
+
+interface RenderResourceScope {
+  readonly generation: number
+  leasedContainer?: Element
+  root?: Root
+  ownedFallbackContainer?: HTMLElement
+}
+
+const hasOwnMarker = (target: object, marker: symbol): boolean =>
+  Object.getOwnPropertyDescriptor(target, marker) !== undefined
+
+const hasCommittedOutcome = (error: unknown): error is { readonly committed: true } => {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return false
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'committed')
+  return !!descriptor && 'value' in descriptor && descriptor.value === true
+}
+
 export class SimulatorRendererContainer implements ISimulatorRenderer {
   readonly isSimulatorRenderer = true
 
@@ -75,9 +96,11 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
    */
   autoRepaintNode = true
 
-  private _running = false
+  #renderState: RenderLifecycleState = 'idle'
 
-  private _root?: Root
+  #renderGeneration = 0
+
+  #renderResources?: RenderResourceScope
 
   private _host?: Simulator
 
@@ -89,10 +112,16 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
   }
 
   mount(host: Simulator) {
-    if (this._host === host) {
-      return
+    if (this.#renderState === 'disposing') {
+      throw new Error('SimulatorRendererContainer cannot mount while disposal is in progress')
     }
-    if (this._host) {
+    if (this._host === host) {
+      if (this.#renderState !== 'idle' || !this.#renderResources) {
+        return
+      }
+      this.dispose()
+    }
+    if (this._host || this.#renderResources) {
       this.dispose()
     }
     this._host = host
@@ -301,41 +330,172 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
   // }
 
   run() {
-    if (this._running) {
+    if (this.#renderState !== 'idle') {
       return
     }
-    const host = this.host
-    let container = host.iframe
-    if (!container) {
-      const containerId = 'easy-editor'
-      container = document.getElementById(containerId)!
-      if (!container) {
-        container = document.createElement('div')
-        document.body.appendChild(container)
-        container.id = containerId
+
+    const retainedResources = this.#renderResources
+    if (retainedResources) {
+      this.#renderState = 'disposing'
+      const cleanupErrors = this.#releaseRenderResources(retainedResources)
+      this.#renderState = 'idle'
+      if (cleanupErrors.length) {
+        throw new AggregateError(cleanupErrors, 'Simulator renderer retained-resource cleanup completed with errors')
       }
     }
 
-    const root = createRoot(container)
+    const host = this.host
+    const generation = ++this.#renderGeneration
+    const resources: RenderResourceScope = { generation }
+    this.#renderResources = resources
+    this.#renderState = 'starting'
+
     try {
+      const container = this.#acquireRenderContainer(host, resources)
+      const root = createRoot(container)
+      resources.root = root
       root.render(
         createElement(SimulatorRendererView, {
           simulatorRenderer: this,
         }),
       )
-      this._root = root
-      this._running = true
-      host.project.setRendererReady(this)
-    } catch (error) {
-      this._root = undefined
-      this._running = false
+
+      if (this.#renderGeneration !== resources.generation || this.#renderResources !== resources) {
+        return
+      }
+
+      this.#renderState = 'running'
       try {
-        root.unmount()
-      } catch (disposeError) {
-        throw new AggregateError([error, disposeError], 'Simulator renderer startup rollback completed with errors')
+        return host.project.setRendererReady(this)
+      } catch (error) {
+        if (!hasCommittedOutcome(error)) throw error
+        return Object.freeze({
+          committed: true as const,
+          observerErrors: Object.freeze([error]),
+          status: 'committed_with_observer_errors' as const,
+        })
+      }
+    } catch (error) {
+      if (this.#renderGeneration === resources.generation) {
+        this.#renderState = 'disposing'
+      }
+      const cleanupErrors = this.#releaseRenderResources(resources)
+      if (this.#renderGeneration === resources.generation) {
+        this.#renderState = 'idle'
+      }
+      if (cleanupErrors.length) {
+        throw new AggregateError([error, ...cleanupErrors], 'Simulator renderer startup rollback completed with errors')
       }
       throw error
     }
+  }
+
+  #acquireRenderContainer(host: Simulator, resources: RenderResourceScope): Element {
+    if (host.iframe) {
+      this.#claimRenderContainer(host.iframe, resources)
+      return host.iframe
+    }
+
+    const containerId = 'easy-editor'
+    const existingContainer = document.getElementById(containerId)
+    if (
+      existingContainer &&
+      !hasOwnMarker(existingContainer, FALLBACK_CONTAINER_OWNER) &&
+      !hasOwnMarker(existingContainer, RENDER_CONTAINER_LEASE)
+    ) {
+      this.#claimRenderContainer(existingContainer, resources)
+      return existingContainer
+    }
+
+    const ownedContainer = document.createElement('div')
+    resources.ownedFallbackContainer = ownedContainer
+    Object.defineProperty(ownedContainer, FALLBACK_CONTAINER_OWNER, {
+      configurable: false,
+      enumerable: false,
+      value: resources,
+      writable: false,
+    })
+    if (!existingContainer) {
+      ownedContainer.id = containerId
+    }
+    document.body.appendChild(ownedContainer)
+    this.#claimRenderContainer(ownedContainer, resources)
+    return ownedContainer
+  }
+
+  #claimRenderContainer(container: Element, resources: RenderResourceScope): void {
+    const existingLease = Object.getOwnPropertyDescriptor(container, RENDER_CONTAINER_LEASE)
+    if (existingLease) {
+      const owner = 'value' in existingLease ? existingLease.value : undefined
+      if (owner !== resources) {
+        throw new Error('Simulator render container is already leased by another renderer')
+      }
+    } else {
+      Object.defineProperty(container, RENDER_CONTAINER_LEASE, {
+        configurable: true,
+        enumerable: false,
+        value: resources,
+        writable: false,
+      })
+    }
+    resources.leasedContainer = container
+  }
+
+  #releaseRenderResources(resources: RenderResourceScope): unknown[] {
+    const errors: unknown[] = []
+    const root = resources.root
+    if (root) {
+      try {
+        root.unmount()
+        if (resources.root === root) {
+          resources.root = undefined
+        }
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    const leasedContainer = resources.leasedContainer
+    if (!resources.root && leasedContainer) {
+      const lease = Object.getOwnPropertyDescriptor(leasedContainer, RENDER_CONTAINER_LEASE)
+      if (!lease || !('value' in lease) || lease.value !== resources) {
+        resources.leasedContainer = undefined
+      } else {
+        try {
+          if (!Reflect.deleteProperty(leasedContainer, RENDER_CONTAINER_LEASE)) {
+            throw new Error('Simulator render container lease could not be released')
+          }
+          if (resources.leasedContainer === leasedContainer) {
+            resources.leasedContainer = undefined
+          }
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+    }
+
+    const ownedFallbackContainer = resources.ownedFallbackContainer
+    if (ownedFallbackContainer) {
+      try {
+        ownedFallbackContainer.remove()
+        if (resources.ownedFallbackContainer === ownedFallbackContainer) {
+          resources.ownedFallbackContainer = undefined
+        }
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    if (
+      !resources.root &&
+      !resources.leasedContainer &&
+      !resources.ownedFallbackContainer &&
+      this.#renderResources === resources
+    ) {
+      this.#renderResources = undefined
+    }
+
+    return errors
   }
 
   /**
@@ -356,16 +516,17 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
   }
 
   dispose() {
-    const errors: unknown[] = []
+    if (this.#renderState === 'disposing') {
+      return
+    }
 
-    const root = this._root
-    this._root = undefined
-    if (root) {
-      try {
-        root.unmount()
-      } catch (error) {
-        errors.push(error)
-      }
+    const errors: unknown[] = []
+    ++this.#renderGeneration
+    this.#renderState = 'disposing'
+
+    const renderResources = this.#renderResources
+    if (renderResources) {
+      errors.push(...this.#releaseRenderResources(renderResources))
     }
 
     const disposeFunctions = this.disposeFunctions.splice(0).reverse()
@@ -386,18 +547,22 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       }
     }
 
-    untracked(() => {
-      this._documentInstances = []
-      this._layout = null
-      this._libraryMap = {}
-      this._componentsMap = {}
-      this._components = null
-      this._appContext = {}
-      this._dataSourceEngine = undefined
-    })
-    this._running = false
+    try {
+      untracked(() => {
+        this._documentInstances = []
+        this._layout = null
+        this._libraryMap = {}
+        this._componentsMap = {}
+        this._components = null
+        this._appContext = {}
+        this._dataSourceEngine = undefined
+      })
+    } catch (error) {
+      errors.push(error)
+    }
     this._host = undefined
     this.autoRepaintNode = true
+    this.#renderState = 'idle'
 
     if (errors.length) {
       throw new AggregateError(errors, 'Simulator renderer disposal completed with errors')

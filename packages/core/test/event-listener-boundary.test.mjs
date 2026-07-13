@@ -200,6 +200,33 @@ test('Project ready subscriptions keep immediate delivery and return their regis
   assert.equal(rendererDeliveries, 2)
 })
 
+test('Project renderer-ready reports committed observer failures without reverting readiness', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+
+  const observerFailure = new Error('renderer ready observer failed')
+  const disposeFailingObserver = engine.project.onRendererReady(() => {
+    throw observerFailure
+  })
+
+  const receipt = engine.project.setRendererReady({ id: 'committed-renderer' })
+  assert.equal(receipt.committed, true)
+  assert.equal(receipt.status, 'committed_with_observer_errors')
+  assert.equal(Object.isFrozen(receipt), true)
+  assert.equal(Object.isFrozen(receipt.observerErrors), true)
+  assert.deepEqual(receipt.observerErrors, [observerFailure])
+
+  disposeFailingObserver()
+  let immediateDeliveries = 0
+  const disposeImmediateObserver = engine.project.onRendererReady(() => {
+    immediateDeliveries += 1
+  })
+  assert.equal(immediateDeliveries, 1, 'the committed ready state must survive observer failure')
+  disposeImmediateObserver()
+})
+
 test('Config, Editor, and LoadingState disposers cannot remove same-callback registrations after restart', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })

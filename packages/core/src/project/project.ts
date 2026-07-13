@@ -65,6 +65,18 @@ export enum PROJECT_EVENT {
   SIMULATOR_READY = 'simulator:ready',
 }
 
+export interface RendererReadyReceipt {
+  readonly committed: true
+  readonly observerErrors: readonly unknown[]
+  readonly status: 'committed' | 'committed_with_observer_errors'
+}
+
+const RENDERER_READY_COMMITTED: RendererReadyReceipt = Object.freeze({
+  committed: true,
+  observerErrors: Object.freeze([]),
+  status: 'committed',
+})
+
 interface ActiveDocumentMutationBoundary {
   readonly document: Document
   readonly token: object
@@ -517,10 +529,20 @@ export class Project {
 
   private isRendererReady = false
 
-  setRendererReady(renderer: any) {
+  setRendererReady(renderer: any): RendererReadyReceipt {
     this.assertProjectMutationAllowed()
     this.isRendererReady = true
-    this.emitter.emit(PROJECT_EVENT.RENDERER_READY, renderer)
+    try {
+      this.emitter.emit(PROJECT_EVENT.RENDERER_READY, renderer)
+      return RENDERER_READY_COMMITTED
+    } catch (error) {
+      const observerErrors = error instanceof AggregateError ? [...error.errors] : [error]
+      return Object.freeze({
+        committed: true,
+        observerErrors: Object.freeze(observerErrors),
+        status: 'committed_with_observer_errors',
+      })
+    }
   }
 
   mountSimulator(simulator: Simulator) {
