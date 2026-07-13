@@ -41,6 +41,8 @@ export class DisposalLedger {
 
   private rollbackPromise?: Promise<void>
 
+  private rollbackCheckpoint?: number
+
   get isDisposed() {
     return this.disposed
   }
@@ -64,16 +66,26 @@ export class DisposalLedger {
     if (this.disposed) return Promise.resolve()
     if (this.disposePromise) return this.disposePromise
     if (this.sealed) return Promise.reject(new Error('Cannot roll back a lifecycle scope after disposal has started'))
-    if (this.rollbackPromise) return this.rollbackPromise
+    const normalizedCheckpoint = Math.max(0, checkpoint)
+    if (this.rollbackPromise) {
+      if (this.rollbackCheckpoint === normalizedCheckpoint) return this.rollbackPromise
+      return Promise.reject(
+        new Error(
+          `A rollback is already in progress at checkpoint ${this.rollbackCheckpoint}; checkpoint ${normalizedCheckpoint} was not applied`,
+        ),
+      )
+    }
 
     this.rollingBack = true
+    this.rollbackCheckpoint = normalizedCheckpoint
     const rollbackPromise = Promise.resolve()
       .then(async () => {
-        const failures = await this.disposeRange(Math.max(0, checkpoint))
+        const failures = await this.disposeRange(normalizedCheckpoint)
         if (failures.length > 0) throw new DisposalError(failures)
       })
       .finally(() => {
         this.rollingBack = false
+        this.rollbackCheckpoint = undefined
         this.rollbackPromise = undefined
       })
     this.rollbackPromise = rollbackPromise
@@ -94,7 +106,15 @@ export class DisposalLedger {
     this.disposing = true
     const disposePromise = Promise.resolve()
       .then(async () => {
-        if (this.rollbackPromise) await this.rollbackPromise
+        if (this.rollbackPromise) {
+          try {
+            await this.rollbackPromise
+          } catch {
+            // Failed rollback entries remain active in the ledger. Full
+            // disposal retries them while still attempting every unrelated
+            // cleanup entry, preserving best-effort teardown semantics.
+          }
+        }
         const failures = await this.disposeRange(0)
         if (failures.length > 0) throw new DisposalError(failures)
         this.disposed = true

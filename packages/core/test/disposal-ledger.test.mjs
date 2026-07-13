@@ -101,3 +101,62 @@ test('rollback preserves failed post-checkpoint entries for a later retry', asyn
   await ledger.dispose()
   assert.deepEqual(order, ['flaky:1', 'successful', 'flaky:2', 'base'])
 })
+
+test('concurrent rollbacks with different checkpoints cannot report false success', async () => {
+  const ledger = new DisposalLedger()
+  const gate = deferred()
+  const started = deferred()
+  const order = []
+
+  ledger.add(() => order.push('base'), 'base')
+  const earliestCheckpoint = ledger.checkpoint()
+  ledger.add(() => order.push('middle'), 'middle')
+  const latestCheckpoint = ledger.checkpoint()
+  ledger.add(async () => {
+    order.push('late')
+    started.resolve()
+    await gate.promise
+  }, 'late')
+
+  const latestRollback = ledger.rollback(latestCheckpoint)
+  await started.promise
+  const earlierRollback = ledger.rollback(earliestCheckpoint)
+  const earlierRejected = assert.rejects(earlierRollback, /rollback.*already in progress/i)
+
+  gate.resolve()
+  await Promise.all([latestRollback, earlierRejected])
+  assert.deepEqual(order, ['late'])
+
+  await ledger.rollback(earliestCheckpoint)
+  assert.deepEqual(order, ['late', 'middle'])
+  await ledger.dispose()
+  assert.deepEqual(order, ['late', 'middle', 'base'])
+})
+
+test('full disposal continues after an overlapping rollback fails', async () => {
+  const ledger = new DisposalLedger()
+  const gate = deferred()
+  const started = deferred()
+  const order = []
+
+  ledger.add(() => order.push('base'), 'base')
+  const checkpoint = ledger.checkpoint()
+  ledger.add(async () => {
+    order.push('failing')
+    if (order.filter(item => item === 'failing').length === 1) {
+      started.resolve()
+      await gate.promise
+    }
+    throw new Error('cleanup failed')
+  }, 'failing')
+
+  const rollback = ledger.rollback(checkpoint)
+  await started.promise
+  const disposal = ledger.dispose()
+  gate.resolve()
+
+  await assert.rejects(rollback, error => error instanceof DisposalError)
+  await assert.rejects(disposal, error => error instanceof DisposalError)
+  assert.deepEqual(order, ['failing', 'failing', 'base'])
+  assert.equal(ledger.isDisposed, false)
+})

@@ -122,6 +122,24 @@ test('invalid schema reports structured JSON paths before mutating the loaded pr
   assert.equal(beforeDocument.history.getState(), beforeHistoryState)
 })
 
+test('falsy schemas are rejected before unloading the current project', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  engine.loadProject(createProjectSchema(), true)
+  const beforeExport = structuredClone(engine.project.export())
+  const beforeDocument = engine.project.currentDocument
+
+  for (const invalidSchema of [null, false, 0, '']) {
+    const error = await captureFailure(() => engine.loadProject(invalidSchema, true))
+
+    assert.equal(error.name, 'SchemaValidationError')
+    assert.ok(error.issues.some(issue => issue.code === 'project.type' && issue.path === '$'))
+    assert.deepEqual(engine.project.export(), beforeExport)
+    assert.strictEqual(engine.project.currentDocument, beforeDocument)
+  }
+})
+
 test('invalid descendant nodes identify their exact JSON path', async t => {
   const core = await loadCore()
   assertKernelApi(core)

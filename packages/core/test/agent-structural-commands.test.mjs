@@ -190,3 +190,19 @@ test('a prepared structural plan is stale after any intervening host mutation', 
   assert.deepEqual(document.exportRaw(), beforeExecute)
   assert.equal(document.getNode('stale-agent-node'), null)
 })
+
+test('Agent moveNode without at previews and commits the same append operation', async t => {
+  const { capability, document } = await createHarness(t, { commandTypes: ['moveNode'] })
+  const snapshot = capability.snapshot(document.id)
+  const plan = capability.preview({
+    documentId: document.id,
+    baseRevision: snapshot.revision,
+    commands: [{ type: 'moveNode', nodeId: 'target', parentId: document.root.id }],
+  })
+
+  assert.deepEqual(childIds(document.root), ['replace-me', 'target', 'tail'])
+  const receipt = capability.execute(plan.planId)
+
+  assert.equal(receipt.status, 'committed')
+  assert.deepEqual(childIds(document.root), ['replace-me', 'tail', 'target'])
+})

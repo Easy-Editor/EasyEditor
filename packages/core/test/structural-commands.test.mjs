@@ -145,6 +145,16 @@ test('generated structural IDs are returned and stable in the committed schema',
   assert.equal(document.getNode(replacementId).getPropValue('generated'), 'replacement')
 })
 
+test('moveNode without at appends consistently within the same parent', async t => {
+  const { document, engine } = await createHarness(t)
+
+  engine.commands.execute({ type: 'moveNode', nodeId: 'target', parentId: document.root.id })
+
+  assert.deepEqual(childIds(document.root), ['left', 'right', 'replace-me', 'target'])
+  document.history.back()
+  assert.deepEqual(childIds(document.root), ['left', 'target', 'right', 'replace-me'])
+})
+
 test('root, missing, foreign, wrapper-shape, and ID violations reject before durable effects', async t => {
   const { core, document, engine } = await createHarness(t)
   const foreignEngine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })

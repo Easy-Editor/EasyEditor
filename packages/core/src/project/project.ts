@@ -184,7 +184,7 @@ export class Project {
     // Validation, migration, and normalization must complete before the
     // current project is unloaded. A rejected schema therefore has no
     // observable side effects.
-    const preparedSchema = schema ? this.schemaValidator.prepare(schema) : createEmptyProjectSchema()
+    const preparedSchema = schema === undefined ? createEmptyProjectSchema() : this.schemaValidator.prepare(schema)
 
     this.unload()
 

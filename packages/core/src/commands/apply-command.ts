@@ -114,7 +114,7 @@ export const applyCommand = (
       if (node.contains(parent)) {
         throw new Error(`Cannot move node "${node.id}" into itself or its descendant`)
       }
-      insertAt(parent, node, command.at, invokeNodeCallbacks)
+      insertAt(parent, node, command.at ?? -1, invokeNodeCallbacks)
       return { affectedNodeIds: [node.id, parent.id], command }
     }
     case 'replace': {
