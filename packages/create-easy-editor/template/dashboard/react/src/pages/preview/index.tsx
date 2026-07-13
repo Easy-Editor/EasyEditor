@@ -7,14 +7,14 @@ const Preview = () => {
   const [schema, setSchema] = useState<any>(null)
   const pageInfoRef = useRef(getPageInfoFromLocalStorage())
 
-  const navigate = (path?: string) => {
+  useEffect(() => {
     const pageInfo = pageInfoRef.current
     if (pageInfo.length === 0) {
       console.warn('pageInfo is empty')
       return
     }
 
-    const pageSchema = getPageSchemaFromLocalStorage(path || pageInfo[0].path)
+    const pageSchema = getPageSchemaFromLocalStorage(pageInfo[0].path)
     if (!pageSchema) {
       console.warn('pageSchema is empty')
       return
@@ -22,10 +22,6 @@ const Preview = () => {
 
     setSchema(pageSchema?.componentsTree[0])
     console.log(pageInfo, pageSchema)
-  }
-
-  useEffect(() => {
-    navigate()
   }, [])
 
   return (

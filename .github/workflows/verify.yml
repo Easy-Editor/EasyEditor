@@ -90,21 +90,8 @@ jobs:
 
       - name: Verify project generator
         run: |
-          pnpm exec biome check \
-            packages/create-easy-editor/template/dashboard/react/src/editor/index.ts \
-            packages/create-easy-editor/template/dashboard/react/src/editor/materials/basic/text/component.tsx \
-            packages/create-easy-editor/template/dashboard/react/src/editor/plugins/plugin-hotkey-move-node/index.ts \
-            packages/create-easy-editor/template/dashboard/react/src/editor/runtime.ts \
-            packages/create-easy-editor/template/dashboard/react/src/lib/schema.ts \
-            packages/create-easy-editor/template/dashboard/react/src/pages/editor/ContextMenu.tsx \
-            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Header.tsx \
-            packages/create-easy-editor/template/dashboard/react/src/pages/editor/SettingRenderer.tsx \
-            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Sidebar/Components.tsx \
-            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Sidebar/Outline.tsx \
-            packages/create-easy-editor/test/template-pack-smoke.mjs \
-            packages/create-easy-editor/test/template-engine-contract.test.mjs
-          pnpm exec biome format \
-            packages/create-easy-editor/template/dashboard/react/src/pages/editor/Renderer.tsx
+          pnpm --filter @easy-editor/create lint
+          pnpm --dir packages/create-easy-editor/template/dashboard/react lint
           pnpm --filter @easy-editor/create test
           pnpm --filter @easy-editor/create types
           pnpm --filter @easy-editor/create build

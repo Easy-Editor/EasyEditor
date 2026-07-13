@@ -1,8 +1,8 @@
-import * as prompts from '@clack/prompts'
-import mri from 'mri'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import * as prompts from '@clack/prompts'
+import mri from 'mri'
 import { FRAMEWORKS, SCENARIOS, defaultTargetDir, helpMessage, renameFiles } from './const'
 import {
   copy,

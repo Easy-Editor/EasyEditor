@@ -1,0 +1,20 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "extends": ["../../biome.json"],
+  "files": {
+    "ignore": [
+      "dist/*",
+      "node_modules/*",
+      "template/dashboard/react/dist/*",
+      "template/dashboard/react/node_modules/*",
+      "template/dashboard/react/public/*",
+      "template/dashboard/react/src/components/ui/**"
+    ]
+  },
+  "json": {
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": true
+    }
+  }
+}

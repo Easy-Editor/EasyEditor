@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["dist/*", "node_modules/*", ".vscode/*", "public/*"]
+    "ignore": ["dist/*", "node_modules/*", ".vscode/*", "public/*", "src/components/ui/**"]
   },
   "organizeImports": {
     "enabled": true,
@@ -61,6 +61,12 @@
     },
     "parser": {
       "unsafeParameterDecoratorsEnabled": true
+    }
+  },
+  "json": {
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": true
     }
   }
 }
