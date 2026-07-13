@@ -1,4 +1,4 @@
-import { action, computed, observable, runInAction } from 'mobx'
+import { action, computed, intercept, observable, observe, runInAction } from 'mobx'
 import type { Designer } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
 import { SchemaValidator } from '../schema'
@@ -14,6 +14,18 @@ export enum PROJECT_EVENT {
   SIMULATOR_READY = 'simulator:ready',
 }
 
+export interface DocumentMutationBoundary {
+  allowMutations(): void
+  seal(): void
+  release(): void
+}
+
+interface ActiveDocumentMutationBoundary {
+  readonly document: Document
+  readonly token: object
+  mutationsAllowed: boolean
+}
+
 export class Project {
   private emitter: EventBus
 
@@ -26,6 +38,10 @@ export class Project {
   @observable.shallow accessor documents: Document[] = []
 
   private documentsMap = new Map<string, Document>()
+
+  private documentMutationBoundary?: ActiveDocumentMutationBoundary
+
+  private documentsMutationDisposer: () => void = () => {}
 
   @computed
   get currentDocument() {
@@ -58,7 +74,23 @@ export class Project {
     this.emitter = designer.createEventBus('Project')
     this.schemaValidator =
       this.designer.get('schemaValidator') || new SchemaValidator(resolveTrustPolicy('legacyTrusted'))
+    this.trackDocumentCollectionMutations()
+    intercept(this, 'documents', change => {
+      this.assertProjectMutationAllowed()
+      return change
+    })
+    observe(this, 'documents', () => {
+      this.trackDocumentCollectionMutations()
+    })
     this.load(schema)
+  }
+
+  private trackDocumentCollectionMutations(): void {
+    this.documentsMutationDisposer()
+    this.documentsMutationDisposer = intercept(this.documents, change => {
+      this.assertProjectMutationAllowed()
+      return change
+    })
   }
 
   import(schema: ProjectSchema) {
@@ -107,6 +139,7 @@ export class Project {
    */
   @action
   load(schema?: ProjectSchema, autoOpen?: boolean | string) {
+    this.assertProjectMutationAllowed()
     // Validation and normalization must complete before the current project is
     // unloaded. A rejected schema therefore has no observable side effects.
     const preparedSchema = schema ? this.schemaValidator.prepare(schema) : undefined
@@ -140,6 +173,7 @@ export class Project {
 
   @action
   unload() {
+    this.assertProjectMutationAllowed()
     if (this.documents.length < 1) {
       return
     }
@@ -149,6 +183,7 @@ export class Project {
   }
 
   async dispose() {
+    this.assertProjectMutationAllowed()
     const failures: unknown[] = []
     const simulator = this._simulator as (Simulator & { dispose?: () => void | Promise<void> }) | undefined
     let simulatorDisposed = true
@@ -199,6 +234,7 @@ export class Project {
 
   @action
   createDocument(schema?: RootSchema) {
+    this.assertProjectMutationAllowed()
     const preparedSchema = schema ? (this.schemaValidator.prepareNode(schema, '$.document') as RootSchema) : undefined
     const doc = new Document(this, preparedSchema)
     this.documents.push(doc)
@@ -210,6 +246,7 @@ export class Project {
 
   @action
   removeDocument(idOrDoc: string | Document) {
+    this.assertProjectMutationAllowed()
     let document: Document | undefined
     if (typeof idOrDoc === 'string') {
       document = this.documents.find(document => document.id === idOrDoc)
@@ -234,6 +271,61 @@ export class Project {
     return this.documents.find(doc => doc.id === id)
   }
 
+  /** Internal guard that prevents ambient hooks from mutating another document. */
+  beginDocumentMutationBoundary(document: Document): DocumentMutationBoundary {
+    if (this.documentMutationBoundary) {
+      throw new Error('A document mutation boundary is already active')
+    }
+    if (this.getDocument(document.id) !== document) {
+      throw new Error('The document mutation boundary requires a project-owned document')
+    }
+    const token = {}
+    this.documentMutationBoundary = { document, mutationsAllowed: false, token }
+    const requireActiveBoundary = (): ActiveDocumentMutationBoundary => {
+      const boundary = this.documentMutationBoundary
+      if (!boundary || boundary.token !== token) {
+        throw new Error('The document mutation boundary is no longer active')
+      }
+      return boundary
+    }
+    return {
+      allowMutations: () => {
+        requireActiveBoundary().mutationsAllowed = true
+      },
+      release: () => {
+        if (this.documentMutationBoundary?.token === token) this.documentMutationBoundary = undefined
+      },
+      seal: () => {
+        requireActiveBoundary().mutationsAllowed = false
+      },
+    }
+  }
+
+  assertDocumentMutationAllowed(document: Document): void {
+    const boundary = this.documentMutationBoundary
+    if (boundary && (boundary.document !== document || !boundary.mutationsAllowed)) {
+      throw new Error(`Document mutation is blocked while document "${boundary.document.id}" is isolated`)
+    }
+  }
+
+  /** Internal guard for project document identity and lifecycle changes. */
+  assertProjectMutationAllowed(): void {
+    const boundary = this.documentMutationBoundary
+    if (boundary) {
+      throw new Error(`Project mutation is blocked while document "${boundary.document.id}" is isolated`)
+    }
+  }
+
+  /** Internal guard for operations that detach, purge, open, or close a document. */
+  assertDocumentLifecycleMutationAllowed(document: Document): void {
+    const boundary = this.documentMutationBoundary
+    if (boundary) {
+      throw new Error(
+        `Document "${document.id}" lifecycle mutation is blocked while document "${boundary.document.id}" is isolated`,
+      )
+    }
+  }
+
   getDocumentByFileName(fileName: string) {
     return this.documents.find(doc => doc.fileName === fileName)
   }
@@ -246,6 +338,7 @@ export class Project {
    * open or create a document
    */
   open(idOrDoc?: string | Document | RootSchema) {
+    this.assertProjectMutationAllowed()
     if (!idOrDoc) {
       const got = this.documents.find(item => item.isBlank())
       if (got) {
@@ -281,6 +374,7 @@ export class Project {
    * @param curDoc current active document
    */
   checkExclusive(curDoc: Document) {
+    this.assertProjectMutationAllowed()
     for (const doc of this.documents) {
       if (doc !== curDoc) {
         doc.suspense()
@@ -291,6 +385,7 @@ export class Project {
   }
 
   closeOthers(opened: Document) {
+    this.assertProjectMutationAllowed()
     this.documents.forEach(doc => {
       if (doc !== opened) {
         doc.close()

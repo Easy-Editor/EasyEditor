@@ -2,13 +2,14 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
+import { createDashboardAgentContext } from '@/editor/agent'
 import { cn } from '@/lib/utils'
 import { Bot, ChevronDown, ChevronUp, Lightbulb, Send, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { categorizedSuggestions, quickSuggestions, systemPrompt } from './prompt'
+import { type Suggestion, categorizedSuggestions, quickSuggestions, systemPrompt } from './prompt'
 import { useCustomChat } from './use-custom-chat'
-import { executeAiOperations, filterMessageContent } from './utils'
+import { executeAiCommands, filterMessageContent } from './utils'
 
 interface AiChatDialogProps {
   isOpen: boolean
@@ -25,6 +26,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
     body: {
       model: 'gpt-4o',
     },
+    createAgentContext: createDashboardAgentContext,
     initialMessages: [
       {
         id: '0',
@@ -40,10 +42,8 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
         createdAt: new Date(),
       },
     ],
-    onFinish(message) {
-      console.log('✅ Custom onFinish triggered - message:', message)
-      // 执行 AI 返回的配置操作
-      executeAiOperations(message.content)
+    onFinish(message, context) {
+      executeAiCommands(message.content, context)
     },
     onError(error) {
       console.error('❌ Custom chat error:', error)
@@ -62,6 +62,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [isSuggestionsCollapsed, setIsSuggestionsCollapsed] = useState(true)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when either the message list or loading state changes
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages.length, isLoading])

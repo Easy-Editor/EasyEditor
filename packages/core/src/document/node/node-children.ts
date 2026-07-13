@@ -1,7 +1,7 @@
-import { action, computed, observable } from 'mobx'
+import { action, computed, intercept, observable, observe } from 'mobx'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import type { EventBus } from '../../utils'
-import { NODE_EVENT, type Node, isNodeSchema } from './node'
+import { NODE_EVENT, type Node, type NodeModelOptions, isNodeSchema } from './node'
 
 export enum NODE_CHILDREN_EVENT {
   CHANGE = 'nodeChildren:change',
@@ -19,6 +19,12 @@ export class NodeChildren {
 
   @observable.shallow accessor children: Node[] = []
 
+  private childrenMutationDisposer: () => void = () => {}
+
+  private childrenReferenceDisposer: () => void = () => {}
+
+  private childrenReferenceObserverDisposer: () => void = () => {}
+
   @computed
   get size(): number {
     return this.children.length
@@ -32,13 +38,29 @@ export class NodeChildren {
     return this.isEmptyNode
   }
 
-  constructor(owner: Node, data?: NodeSchema[]) {
+  constructor(owner: Node, data?: NodeSchema[], options: NodeModelOptions = {}) {
     this.owner = owner
     this.emitter = owner.document.designer.createEventBus('NodeChildren')
     this.children = (Array.isArray(data) ? data : []).map(child => {
-      return this.owner.document.createNode(child)
+      return this.owner.document.createNode(child, true, options)
+    })
+    this.trackChildrenMutations()
+    this.childrenReferenceDisposer = intercept(this, 'children', change => {
+      this.owner.document.markSchemaMutation()
+      return change
+    })
+    this.childrenReferenceObserverDisposer = observe(this, 'children', () => {
+      this.trackChildrenMutations()
     })
     this.internalInitParent()
+  }
+
+  private trackChildrenMutations(): void {
+    this.childrenMutationDisposer()
+    this.childrenMutationDisposer = intercept(this.children, change => {
+      this.owner.document.markSchemaMutation()
+      return change
+    })
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE) {
@@ -49,7 +71,8 @@ export class NodeChildren {
   }
 
   @action
-  import(data?: NodeSchema | NodeSchema[], checkId = false) {
+  import(data?: NodeSchema | NodeSchema[], checkId = false, options: NodeModelOptions = {}) {
+    this.owner.document.markSchemaMutation()
     data = (data ? (Array.isArray(data) ? data : [data]) : []).filter(d => !!d)
 
     const originChildren = this.children.slice()
@@ -63,9 +86,9 @@ export class NodeChildren {
       let node: Node | undefined | null
       if (isNodeSchema(item) && !checkId && child && child.componentName === item.componentName) {
         node = child
-        node.import(item)
+        node.import(item, checkId, options)
       } else {
-        node = this.owner.document?.createNode(item, checkId)
+        node = this.owner.document?.createNode(item, checkId, options)
       }
       children[i] = node
     }
@@ -91,6 +114,9 @@ export class NodeChildren {
       return
     }
     this.purged = true
+    this.childrenMutationDisposer()
+    this.childrenReferenceDisposer()
+    this.childrenReferenceObserverDisposer()
     this.children.forEach(child => {
       child.purge()
     })
@@ -109,6 +135,7 @@ export class NodeChildren {
       return false
     }
 
+    this.owner.document.markSchemaMutation()
     this.children.splice(i, 1)
     return true
   }
@@ -197,6 +224,7 @@ export class NodeChildren {
 
     // node is not in the children
     if (index < 0) {
+      this.owner.document.markSchemaMutation()
       if (i < children.length) {
         children.splice(i, 0, node)
       } else {
@@ -208,6 +236,7 @@ export class NodeChildren {
         return
       }
 
+      this.owner.document.markSchemaMutation()
       children.splice(index, 1)
       children.splice(i, 0, node)
     }
@@ -259,6 +288,7 @@ export class NodeChildren {
       changed = true
     }
     if (changed) {
+      this.owner.document.markSchemaMutation()
       this.emitter.emit(NODE_CHILDREN_EVENT.CHANGE)
     }
   }
@@ -278,6 +308,7 @@ export class NodeChildren {
   }
 
   reverse(): Node[] {
+    if (this.children.length > 1) this.owner.document.markSchemaMutation()
     return this.children.reverse()
   }
 

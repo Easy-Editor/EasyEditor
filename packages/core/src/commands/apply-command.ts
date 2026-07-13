@@ -1,6 +1,10 @@
 import type { Document } from '../document'
 import type { CommandResult, EditorCommand } from './types'
 
+export interface ApplyCommandOptions {
+  readonly invokeNodeCallbacks?: boolean
+}
+
 const requireNode = (document: Document, nodeId: string) => {
   const node = document.getNode(nodeId)
   if (!node) {
@@ -9,7 +13,11 @@ const requireNode = (document: Document, nodeId: string) => {
   return node
 }
 
-export const applyCommand = (document: Document, command: EditorCommand): CommandResult => {
+export const applyCommand = (
+  document: Document,
+  command: EditorCommand,
+  options: ApplyCommandOptions = {},
+): CommandResult => {
   if (command.documentId && command.documentId !== document.id) {
     throw new Error(`Cross-document command is not allowed in V1: ${command.documentId}`)
   }
@@ -24,18 +32,23 @@ export const applyCommand = (document: Document, command: EditorCommand): Comman
         throw new Error(`Command node id "${command.node.id}" already exists`)
       }
       const nodeSchema = structuredClone(command.node)
-      const inserted = document.insertNode(parent, nodeSchema, command.at)
-      if (!inserted) {
+      const inserted =
+        options.invokeNodeCallbacks === false
+          ? document.createNode(nodeSchema, true, { invokeMaterialHooks: false })
+          : undefined
+      if (inserted) parent.children?.internalInsert(inserted, command.at, false)
+      const committedNode = inserted ?? document.insertNode(parent, nodeSchema, command.at)
+      if (!committedNode) {
         throw new Error(`Unable to insert node under "${command.parentId}"`)
       }
-      return { affectedNodeIds: [inserted.id], command }
+      return { affectedNodeIds: [committedNode.id], command }
     }
     case 'updateProps': {
       const node = requireNode(document, command.nodeId)
       if (node.isLocked) {
         throw new Error(`Cannot update locked node "${node.id}"`)
       }
-      node.mergeProps(command.props)
+      node.mergeProps(command.props ?? {}, command.extras)
       return { affectedNodeIds: [node.id], command }
     }
     case 'removeNode': {
@@ -61,7 +74,11 @@ export const applyCommand = (document: Document, command: EditorCommand): Comman
       if (node.contains(parent)) {
         throw new Error(`Cannot move node "${node.id}" into itself or its descendant`)
       }
-      document.insertNode(parent, node, command.at)
+      if (options.invokeNodeCallbacks === false) {
+        parent.children?.internalInsert(node, command.at, false)
+      } else {
+        document.insertNode(parent, node, command.at)
+      }
       return { affectedNodeIds: [node.id, parent.id], command }
     }
   }

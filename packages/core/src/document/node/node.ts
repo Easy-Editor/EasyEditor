@@ -7,6 +7,11 @@ import { type PropValue, type PropsMap, isJSExpression } from '../prop/prop'
 import { Props, getConvertedExtraKey } from '../prop/props'
 import { NodeChildren } from './node-children'
 
+export interface NodeModelOptions {
+  /** Disable executable material reducers and initialChildren hooks. */
+  readonly invokeMaterialHooks?: boolean
+}
+
 export enum NODE_EVENT {
   ADD = 'node:add',
   REMOVE = 'node:remove',
@@ -116,6 +121,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   constructor(
     readonly document: Document,
     Schema: Schema,
+    options: NodeModelOptions = {},
   ) {
     this.emitter = document.designer.createEventBus('Node')
     const { id, componentName, children, props, ...extras } = Schema
@@ -123,9 +129,13 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     this.id = id || uniqueId('node')
     this.componentName = componentName
     this.props = new Props(this, props, extras)
-    this.props.merge(this.upgradeProps(this.initProps(props || {})), this.upgradeProps(extras))
+    if (options.invokeMaterialHooks !== false) {
+      this.props.merge(this.upgradeProps(this.initProps(props || {})), this.upgradeProps(extras))
+    }
     this.initBuiltinProps()
-    this._children = new NodeChildren(this, this.initialChildren(children))
+    const initialChildren =
+      options.invokeMaterialHooks === false ? this.explicitChildren(children) : this.initialChildren(children)
+    this._children = new NodeChildren(this, initialChildren, options)
 
     this.onVisibleChange(visible => {
       this.document.designer.postEvent(DESIGNER_EVENT.NODE_VISIBLE_CHANGE, this, visible)
@@ -141,11 +151,11 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     })
   }
 
-  import(data: Schema, checkId = false) {
+  import(data: Schema, checkId = false, options: NodeModelOptions = {}) {
     const { componentName, id, children, props, ...extras } = data
 
     this.props.import(props, extras)
-    this._children?.import(children, checkId)
+    this._children?.import(children, checkId, options)
   }
 
   export<T = NodeSchema>(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): T {
@@ -175,11 +185,27 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     return schema
   }
 
+  /** Deterministic snapshot that never executes material reducers. */
+  exportRaw<T = NodeSchema>(): T {
+    const { props, extras } = this.props.export(TRANSFORM_STAGE.SERIALIZE)
+    const schema: Record<string, unknown> = {
+      componentName: this.componentName,
+      id: this.id,
+      props: props ?? {},
+      ...(extras ?? {}),
+    }
+    if (this.children && this.children.size > 0) {
+      schema.children = this.children.children.map(child => child.exportRaw())
+    }
+    return schema as T
+  }
+
   purge() {
     if (this.purged) {
       return
     }
     this.purged = true
+    this._children?.purge()
     this.props.purge()
   }
 
@@ -235,6 +261,11 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     }
 
     return [children]
+  }
+
+  private explicitChildren(children: NodeSchema | NodeSchema[] | undefined): NodeSchema[] {
+    if (children == null) return []
+    return Array.isArray(children) ? children : [children]
   }
 
   /**
@@ -437,12 +468,15 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     this.getProp(path, false)?.unset()
   }
 
-  mergeProps(props: PropsMap) {
-    this.props.merge(props)
+  mergeProps(props: PropsMap, extras?: PropsMap) {
+    this.props.merge(props, extras)
   }
 
   setProps(props?: PropsMap | Props | null) {
     if (props instanceof Props) {
+      if (this.props === props) return
+      this.document.markSchemaMutation()
+      this.props.purge()
       this.props = props
       return
     }

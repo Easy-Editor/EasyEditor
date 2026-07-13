@@ -191,7 +191,6 @@ export class History<T = RootSchema> {
    */
   beginTransaction() {
     if (this.transactionDepth === 0) {
-      this.session.end()
       this.transactionStartData = this.session.data
       this.transactionPendingData = this.session.data
     }
@@ -214,6 +213,9 @@ export class History<T = RootSchema> {
     this.clearTransactionState()
     if (pendingData === undefined || pendingData === startData) return
 
+    // Keep the current coalescing window intact until a transaction actually
+    // commits. A rejected or net-zero transaction must be history-transparent.
+    this.session.end()
     const lastState = this.getState()
     const cursor = this.session.cursor + 1
     const session = new Session(cursor, pendingData, this.timeGap)
@@ -240,6 +242,12 @@ export class History<T = RootSchema> {
     } finally {
       this.wakeup()
     }
+  }
+
+  /** Close an untouched transaction without rebuilding the document model. */
+  cancelTransaction() {
+    if (this.transactionDepth < 1) return
+    this.clearTransactionState()
   }
 
   private clearTransactionState() {

@@ -15,7 +15,8 @@ export interface InsertNodeCommand extends DocumentScopedCommand {
 export interface UpdatePropsCommand extends DocumentScopedCommand {
   type: 'updateProps'
   nodeId: string
-  props: PropsMap
+  props?: PropsMap
+  extras?: PropsMap
 }
 
 export interface RemoveNodeCommand extends DocumentScopedCommand {

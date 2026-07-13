@@ -1,4 +1,5 @@
 import EventEmitter from 'events'
+import { AgentCapabilityManager } from '../agent'
 import { CommandManager, TransactionManager } from '../commands'
 import { Config, type ConfigOptions, config as legacyConfig } from '../config'
 import { Clipboard, Designer, clipboard as legacyClipboard } from '../designer'
@@ -93,6 +94,8 @@ export class EngineInstance {
 
   readonly commands: CommandManager
 
+  readonly agentCapabilities: AgentCapabilityManager
+
   private readonly hostWindow?: Window | null
 
   private readonly remoteAdapter?: RemoteAdapter
@@ -163,11 +166,10 @@ export class EngineInstance {
     )
     this.plugins = this.innerPlugins.toProxy()
 
-    this.wireEditorContext()
     this.transactions = new TransactionManager(this, this.eventTransactions)
     this.commands = new CommandManager(this.transactions)
-    this.editor.set('transactions', this.transactions)
-    this.editor.set('commands', this.commands)
+    this.agentCapabilities = new AgentCapabilityManager(this)
+    this.wireEditorContext()
 
     this.hostWindow = options.hostWindow
   }
@@ -232,6 +234,7 @@ export class EngineInstance {
       await this.plugins.extend()
       await this.plugins.init()
       this.lifecycleState = 'ready'
+      this.agentCapabilities.activate()
       this.logger.info('Engine initialization successfully')
     } catch (error) {
       const rollbackErrors: unknown[] = []
@@ -289,6 +292,7 @@ export class EngineInstance {
       }
     }
 
+    await cleanup(() => this.agentCapabilities.revokeAll('engine.lifecycle'))
     const initScope = this.initScope
     await cleanup(() => initScope?.dispose())
     this.initScope = undefined
@@ -308,6 +312,9 @@ export class EngineInstance {
     await cleanup(() => this.editor.destroy())
     await cleanup(() => this.eventBus.dispose())
     await cleanup(() => this.config.dispose({ preserve: ['VERSION'] }))
+    // Plugins can run arbitrary teardown hooks; finish with a final capability
+    // and audit-subscriber sweep so no late teardown registration survives.
+    await cleanup(() => this.agentCapabilities.revokeAll('engine.lifecycle.finalize'))
 
     if (failures.length > 0) {
       this.lifecycleState = 'failed'
@@ -405,6 +412,9 @@ export class EngineInstance {
     this.editor.set('trustPolicy', this.trustPolicy)
     this.editor.set('innerPlugins', this.innerPlugins)
     this.editor.set('plugins', this.plugins)
+    this.editor.set('transactions', this.transactions)
+    this.editor.set('commands', this.commands)
+    this.editor.set('agentCapabilities', this.agentCapabilities)
   }
 }
 

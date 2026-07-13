@@ -44,6 +44,191 @@ test('insertNode and updateProps commit as exactly one undoable history unit', a
   assert.equal(document.getNode('child-1').getPropValue('color'), 'blue')
 })
 
+test('updateProps accepts props, extras, or both but rejects an empty patch command', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  const document = setupDocument(engine)
+  const root = document.root
+
+  engine.commands.execute({
+    type: 'updateProps',
+    nodeId: root.id,
+    extras: { $dashboard: { layout: 'grid' } },
+  })
+  assert.deepEqual(root.getExtraPropValue('$dashboard'), { layout: 'grid' })
+
+  engine.commands.execute({
+    type: 'updateProps',
+    nodeId: root.id,
+    props: { title: 'with-extra' },
+    extras: { title: 'Display title' },
+  })
+  assert.equal(root.getPropValue('title'), 'with-extra')
+  assert.equal(root.getExtraPropValue('title'), 'Display title')
+
+  const before = structuredClone(document.export())
+  const error = await captureFailure(() => engine.commands.execute({ type: 'updateProps', nodeId: root.id }))
+  assert.equal(error.name, 'CommandValidationError')
+  assert.ok(error.issues.some(issue => issue.code === 'updateProps.empty'))
+  assert.deepEqual(document.export(), before)
+})
+
+test('runOnDocument binds an explicit document and checks its precondition before applying commands', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  const current = setupDocument(engine)
+  const other = engine.project.createDocument({
+    docId: 'page-2',
+    id: 'root-2',
+    componentName: 'Page',
+    props: { title: 'other-before' },
+    children: [],
+  })
+  let checked = 0
+
+  const result = engine.transactions.runOnDocument(
+    other,
+    [
+      {
+        type: 'updateProps',
+        documentId: other.id,
+        nodeId: other.root.id,
+        props: { title: 'other-after' },
+      },
+    ],
+    boundDocument => {
+      checked += 1
+      assert.strictEqual(boundDocument, other)
+      assert.equal(boundDocument.root.getPropValue('title'), 'other-before')
+    },
+  )
+
+  assert.equal(result.ok, true)
+  assert.equal(checked, 1)
+  assert.strictEqual(engine.project.currentDocument, current)
+  assert.equal(current.root.getPropValue('title'), 'before')
+  assert.equal(other.root.getPropValue('title'), 'other-after')
+  assert.equal(current.history.isUndoable(), false)
+  assert.equal(other.history.isUndoable(), true)
+  other.history.back()
+  assert.equal(other.root.getPropValue('title'), 'other-before', 'one undo must consume the bound transaction')
+
+  engine.transactions.runOnDocument(other.id, [
+    { type: 'updateProps', nodeId: other.root.id, props: { title: 'resolved-by-id' } },
+  ])
+  assert.equal(other.root.getPropValue('title'), 'resolved-by-id')
+})
+
+test('runOnDocument rejects stale or foreign bindings without mutation or observer events', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  const foreignEngine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(async () => {
+    await engine.destroy()
+    await foreignEngine.destroy()
+  })
+  const document = setupDocument(engine)
+  const foreignDocument = setupDocument(foreignEngine)
+  const before = structuredClone(document.export())
+  const beforeRoot = document.root
+  const beforeTitleProp = document.root.getProp('title', false)
+  const beforePropsItems = document.root.props.items
+  const beforeMutationVersion = document.mutationVersion
+  let propEvents = 0
+  const disposeEvent = engine.designer.onEvent(core.DESIGNER_EVENT.NODE_PROPS_CHANGE, () => {
+    propEvents += 1
+  })
+  t.after(disposeEvent)
+
+  const stale = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'must-not-commit' } }],
+      () => {
+        throw new Error('stale plan')
+      },
+    ),
+  )
+  assert.match(stale.message, /stale plan/)
+  assert.deepEqual(document.export(), before)
+  assert.strictEqual(document.root, beforeRoot)
+  assert.strictEqual(document.root.getProp('title', false), beforeTitleProp)
+  assert.strictEqual(document.root.props.items, beforePropsItems)
+  assert.equal(document.mutationVersion, beforeMutationVersion)
+  assert.equal(document.history.isUndoable(), false)
+  assert.equal(propEvents, 0)
+
+  const mutatingPrecondition = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'command-must-not-commit' } }],
+      boundDocument => {
+        boundDocument.root.setPropValue('title', 'precondition-must-roll-back')
+        throw new Error('mutating precondition failed')
+      },
+    ),
+  )
+  assert.match(mutatingPrecondition.message, /mutating precondition failed/)
+  assert.deepEqual(document.export(), before)
+  assert.equal(document.history.isUndoable(), false)
+
+  let asyncPreconditionCalled = false
+  const asynchronous = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document.id,
+      [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'also-must-not-commit' } }],
+      async () => {
+        asyncPreconditionCalled = true
+      },
+    ),
+  )
+  assert.equal(asynchronous.name, 'AsyncTransactionNotSupportedError')
+  assert.equal(asyncPreconditionCalled, false)
+  assert.deepEqual(document.export(), before)
+  assert.equal(document.history.isUndoable(), false)
+  assert.equal(propEvents, 0)
+
+  const foreign = await captureFailure(() =>
+    engine.transactions.runOnDocument(foreignDocument, [
+      { type: 'updateProps', nodeId: foreignDocument.root.id, props: { title: 'cross-engine' } },
+    ]),
+  )
+  assert.match(foreign.message, /does not belong/i)
+  assert.equal(foreignDocument.root.getPropValue('title'), 'before')
+})
+
+test('a rejected pure precondition preserves the current history coalescing window', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  const document = setupDocument(engine)
+  const root = document.root
+  document.history.savePoint()
+
+  root.setPropValue('title', 'coalesced-a')
+  const error = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: root.id, props: { title: 'must-not-commit' } }],
+      () => {
+        throw new Error('pure precondition rejected')
+      },
+    ),
+  )
+  assert.match(error.message, /pure precondition rejected/)
+  root.setPropValue('title', 'coalesced-b')
+
+  assert.equal(root.getPropValue('title'), 'coalesced-b')
+  document.history.back()
+  assert.equal(
+    root.getPropValue('title'),
+    'before',
+    'direct edits around a rejected pure precondition must remain one undo group',
+  )
+})
+
 test('removeNode is available through the canonical command API', async t => {
   const core = await loadCore()
   assertKernelApi(core)
@@ -162,6 +347,11 @@ test('post-commit listener failures do not roll committed model state back', asy
 
   assert.equal(error.name, 'TransactionCommittedError')
   assert.equal(error.committed, true)
+  assert.deepEqual(error.result, {
+    affectedNodeIds: [root.id],
+    commandCount: 1,
+    ok: true,
+  })
   assert.ok(error.errors.some(cause => /listener failed/.test(cause?.message)))
   assert.equal(root.getPropValue('title'), 'committed')
   assert.equal(document.history.isUndoable(), true)

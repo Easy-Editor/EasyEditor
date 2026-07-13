@@ -393,6 +393,8 @@ export class Prop {
 
   @action
   unset() {
+    if (this._type === 'unset') return
+    this.owner.document.markSchemaMutation()
     this._type = 'unset'
   }
 
@@ -429,6 +431,7 @@ export class Prop {
   setValue(val: PropValue) {
     if (val === this._value) return
 
+    this.owner.document.markSchemaMutation()
     const oldValue = this._value
     this._value = val
     const t = typeof val
@@ -554,11 +557,13 @@ export class Prop {
         // replace
         const i = items.indexOf(orig)
         if (i > -1) {
+          this.owner.document.markSchemaMutation()
           items.splice(i, 1, prop)[0].purge()
         }
         maps?.set(key, prop)
       } else {
         // push
+        this.owner.document.markSchemaMutation()
         items.push(prop)
         this._items = items
         maps?.set(key, prop)
@@ -576,6 +581,7 @@ export class Prop {
     if (this._items) {
       const i = this._items.indexOf(prop)
       if (i > -1) {
+        this.owner.document.markSchemaMutation()
         this._items.splice(i, 1)
         prop.purge()
       }
@@ -597,6 +603,7 @@ export class Prop {
 
     const prop = new Prop(this, key, value)
     this._items = this._items || []
+    this.owner.document.markSchemaMutation()
     this._items.push(prop)
     return prop
   }

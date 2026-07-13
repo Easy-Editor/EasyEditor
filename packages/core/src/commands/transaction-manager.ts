@@ -32,14 +32,46 @@ export class AsyncTransactionNotSupportedError extends Error {
   }
 }
 
-export class TransactionCommittedError extends AggregateError {
+export class TransactionCommittedError<T = unknown> extends AggregateError {
   readonly name = 'TransactionCommittedError'
 
   readonly committed = true
 
-  constructor(errors: readonly unknown[]) {
+  constructor(
+    errors: readonly unknown[],
+    readonly result: T,
+  ) {
     super(errors, 'The transaction committed, but one or more post-commit observers failed')
   }
+}
+
+export class TransactionRollbackIncompleteError extends AggregateError {
+  readonly name = 'TransactionRollbackIncompleteError'
+
+  readonly rollbackComplete = false
+
+  constructor(
+    readonly cause: unknown,
+    readonly rollbackErrors: readonly unknown[],
+  ) {
+    super([cause, ...rollbackErrors], 'The transaction failed and rollback was incomplete')
+  }
+}
+
+export type TransactionPrecondition = (document: Document) => void
+
+export type TransactionPostcondition = (document: Document, result: TransactionResult) => void
+
+export interface BoundTransactionOptions {
+  readonly precondition?: TransactionPrecondition
+  readonly postcondition?: TransactionPostcondition
+  /** Re-run a pure invariant after MobX reactions settle but before commit. */
+  readonly settledPostcondition?: TransactionPostcondition
+  readonly invokeNodeCallbacks?: boolean
+  /** Agent boundaries discard executable domain-event observers. */
+  readonly publishEvents?: boolean
+  /** Block writes to every project document except the explicitly bound one. */
+  readonly restrictDocumentMutations?: boolean
 }
 
 export class TransactionManager {
@@ -52,16 +84,44 @@ export class TransactionManager {
 
   run(commands: readonly EditorCommand[]): TransactionResult {
     this.assertMutable()
-    if (!Array.isArray(commands) || commands.length < 1) {
-      throw new Error('A transaction requires at least one command')
-    }
-
+    this.assertCommands(commands)
     const document = this.requireDocument()
+    return this.executeCommands(document, commands)
+  }
+
+  runOnDocument(
+    documentOrId: Document | string,
+    commands: readonly EditorCommand[],
+    preconditionOrOptions?: TransactionPrecondition | BoundTransactionOptions,
+  ): TransactionResult {
+    this.assertMutable()
+    this.assertCommands(commands)
+    if (this.active) {
+      throw new Error('runOnDocument requires an independent top-level transaction')
+    }
+    const document = this.requireBoundDocument(documentOrId)
+    const options = this.normalizeBoundOptions(preconditionOrOptions)
+    return this.executeCommands(document, commands, options)
+  }
+
+  private executeCommands(
+    document: Document,
+    commands: readonly EditorCommand[],
+    options: BoundTransactionOptions = {},
+  ): TransactionResult {
     this.preflight(commands, document)
-    return this.withTransaction(document, () => {
-      const results = commands.map(command => applyCommand(document, command))
-      return this.createResult(results)
-    })
+    return this.withTransaction(
+      document,
+      () => {
+        const results = commands.map(command =>
+          applyCommand(document, command, { invokeNodeCallbacks: options.invokeNodeCallbacks }),
+        )
+        const result = this.createResult(results)
+        this.runSynchronousBoundary(options.postcondition, [document, result], 'postcondition')
+        return result
+      },
+      options,
+    )
   }
 
   runSync<T>(operation: () => T): T {
@@ -91,7 +151,7 @@ export class TransactionManager {
     })
   }
 
-  private withTransaction<T>(document: Document, operation: () => T): T {
+  private withTransaction<T>(document: Document, operation: () => T, options: BoundTransactionOptions = {}): T {
     if (this.active) {
       if (this.active.failure.occurred) throw this.active.failure.error
       try {
@@ -106,11 +166,22 @@ export class TransactionManager {
 
     const selection = document.designer.selection.selected.slice()
     const materialState = this.host.materials.captureTransactionState()
+    const startSchema = JSON.stringify(document.exportRaw())
+    const startMutationVersion = document.mutationVersion
     const context: ActiveTransaction = {
       document,
       failure: { error: undefined, occurred: false },
     }
-    const eventTransaction = this.events.begin()
+    const mutationBoundary = options.restrictDocumentMutations
+      ? this.host.project.beginDocumentMutationBoundary(document)
+      : undefined
+    let eventTransaction: ReturnType<EventTransactionCoordinator['begin']>
+    try {
+      eventTransaction = this.events.begin()
+    } catch (error) {
+      mutationBoundary?.release()
+      throw error
+    }
     this.active = context
     let result!: T
     let failed = false
@@ -118,43 +189,110 @@ export class TransactionManager {
     let modelCommitted = false
     let mobxExitError: unknown
     const rollbackErrors: unknown[] = []
+    let historyStarted = false
+    let rollbackAttempted = false
+    const delayCommitUntilSettled =
+      options.restrictDocumentMutations === true || options.settledPostcondition !== undefined
+
+    const rollbackModel = (restoreDocument = true) => {
+      if (rollbackAttempted) return
+      rollbackAttempted = true
+      if (historyStarted) {
+        try {
+          if (restoreDocument) document.history.rollbackTransaction()
+          else document.history.cancelTransaction()
+          historyStarted = false
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError)
+        }
+      }
+      try {
+        this.host.materials.restoreTransactionState(materialState)
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+      try {
+        document.designer.selection.clear()
+        document.designer.selection.selectAll(selection)
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+      try {
+        if (JSON.stringify(document.exportRaw()) !== startSchema) {
+          rollbackErrors.push(new Error('Transaction rollback did not restore the original document schema'))
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+
+    const rollbackWithinMobx = () => {
+      try {
+        mobxTransaction(() => {
+          mutationBoundary?.allowMutations()
+          try {
+            rollbackModel()
+          } finally {
+            mutationBoundary?.seal()
+          }
+        })
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+
     try {
       try {
         mobxTransaction(() => {
-          let historyStarted = false
           try {
+            if (mutationBoundary) {
+              this.runSynchronousBoundary(options.precondition, [document], 'precondition')
+            }
             document.history.beginTransaction()
             historyStarted = true
+            if (!mutationBoundary) {
+              this.runSynchronousBoundary(options.precondition, [document], 'precondition')
+            }
+            mutationBoundary?.allowMutations()
             result = operation()
             if (context.failure.occurred) throw context.failure.error
-            document.history.commitTransaction()
-            historyStarted = false
-            modelCommitted = true
+            if (!delayCommitUntilSettled) {
+              document.history.commitTransaction()
+              historyStarted = false
+              modelCommitted = true
+            }
           } catch (error) {
             failed = true
             failure = error
-            if (historyStarted) {
-              try {
-                document.history.rollbackTransaction()
-              } catch (rollbackError) {
-                rollbackErrors.push(rollbackError)
-              }
-            }
-            try {
-              this.host.materials.restoreTransactionState(materialState)
-            } catch (rollbackError) {
-              rollbackErrors.push(rollbackError)
-            }
-            try {
-              document.designer.selection.clear()
-              document.designer.selection.selectAll(selection)
-            } catch (rollbackError) {
-              rollbackErrors.push(rollbackError)
-            }
+            if (historyStarted) rollbackModel(document.mutationVersion !== startMutationVersion)
+          } finally {
+            mutationBoundary?.seal()
           }
         })
       } catch (error) {
         mobxExitError = error
+      }
+
+      if (modelCommitted) {
+        // Legacy/general transactions preserve their established contract:
+        // MobX reaction failures after the model commit are observer errors.
+      } else if (!failed && mobxExitError) {
+        failed = true
+        failure = mobxExitError
+        rollbackWithinMobx()
+      } else if (!failed) {
+        try {
+          this.runSynchronousBoundary(options.settledPostcondition, [document, result], 'settled postcondition')
+          document.history.commitTransaction()
+          historyStarted = false
+          modelCommitted = true
+        } catch (error) {
+          failed = true
+          failure = error
+          rollbackWithinMobx()
+        }
+      } else if (mobxExitError) {
+        rollbackErrors.push(mobxExitError)
       }
     } finally {
       this.active = undefined
@@ -164,7 +302,8 @@ export class TransactionManager {
       const postCommitErrors: unknown[] = []
       if (mobxExitError) postCommitErrors.push(mobxExitError)
       try {
-        this.events.commit(eventTransaction)
+        if (options.publishEvents === false) this.events.rollback(eventTransaction)
+        else this.events.commit(eventTransaction)
       } catch (error) {
         if (error instanceof AggregateError) {
           postCommitErrors.push(...error.errors)
@@ -172,16 +311,11 @@ export class TransactionManager {
           postCommitErrors.push(error)
         }
       }
-      if (postCommitErrors.length) throw new TransactionCommittedError(postCommitErrors)
-      return result
-    }
-
-    if (mobxExitError) {
-      if (failed) {
-        rollbackErrors.push(mobxExitError)
-      } else {
-        failed = true
-        failure = mobxExitError
+      try {
+        if (postCommitErrors.length) throw new TransactionCommittedError(postCommitErrors, result)
+        return result
+      } finally {
+        mutationBoundary?.release()
       }
     }
 
@@ -190,9 +324,11 @@ export class TransactionManager {
         this.events.rollback(eventTransaction)
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
+      } finally {
+        mutationBoundary?.release()
       }
       if (rollbackErrors.length) {
-        throw new AggregateError([failure, ...rollbackErrors], 'Transaction failed and rollback was incomplete')
+        throw new TransactionRollbackIncompleteError(failure, rollbackErrors)
       }
       throw failure
     }
@@ -201,6 +337,8 @@ export class TransactionManager {
       this.events.rollback(eventTransaction)
     } catch (rollbackError) {
       throw new AggregateError([rollbackError], 'Transaction exited without a commit and event cleanup failed')
+    } finally {
+      mutationBoundary?.release()
     }
     throw new Error('Transaction exited without committing or reporting a failure')
   }
@@ -216,12 +354,65 @@ export class TransactionManager {
     }
   }
 
+  private assertCommands(commands: readonly EditorCommand[]): void {
+    if (!Array.isArray(commands) || commands.length < 1) {
+      throw new Error('A transaction requires at least one command')
+    }
+  }
+
   private requireDocument(): Document {
     const document = this.active?.document || this.host.project.currentDocument
+    return this.requireUsableDocument(document)
+  }
+
+  private requireBoundDocument(documentOrId: Document | string): Document {
+    const document =
+      typeof documentOrId === 'string'
+        ? this.host.project.getDocument(documentOrId)
+        : documentOrId && typeof documentOrId === 'object'
+          ? documentOrId
+          : undefined
+
+    if (!document || this.host.project.getDocument(document.id) !== document) {
+      throw new Error('The bound document does not belong to this engine project')
+    }
+    return this.requireUsableDocument(document)
+  }
+
+  private requireUsableDocument(document?: Document): Document {
     if (!document?.root) {
       throw new Error('A V1 transaction requires an active document with a root node')
     }
     return document
+  }
+
+  private normalizeBoundOptions(
+    value: TransactionPrecondition | BoundTransactionOptions | undefined,
+  ): BoundTransactionOptions {
+    if (value === undefined) return {}
+    if (typeof value === 'function') return { precondition: value }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Bound transaction options must be an object or precondition function')
+    }
+    return value
+  }
+
+  private runSynchronousBoundary(
+    boundary: TransactionPrecondition | TransactionPostcondition | undefined,
+    args: unknown[],
+    name: string,
+  ): void {
+    if (boundary === undefined) return
+    if (typeof boundary !== 'function') {
+      throw new Error(`Transaction ${name} must be a function`)
+    }
+    if (boundary.constructor.name === 'AsyncFunction') {
+      throw new AsyncTransactionNotSupportedError()
+    }
+    const result = Reflect.apply(boundary, undefined, args)
+    if (result && typeof (result as { then?: unknown }).then === 'function') {
+      throw new AsyncTransactionNotSupportedError()
+    }
   }
 
   private preflight(commands: readonly EditorCommand[], document: Document) {

@@ -5,7 +5,7 @@ import type { Simulator } from '../simulator'
 import { type ComponentsMap, type NodeSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
 import { type EventBus, uniqueId } from '../utils'
 import { History } from './history'
-import { NODE_EVENT, Node, insertChild, insertChildren } from './node/node'
+import { NODE_EVENT, Node, type NodeModelOptions, insertChild, insertChildren } from './node/node'
 
 export enum DOCUMENT_EVENT {
   ADD = 'document:add',
@@ -16,6 +16,18 @@ export enum DOCUMENT_EVENT {
 
 export class Document {
   readonly isDocument = true
+
+  private schemaMutationVersion = 0
+
+  get mutationVersion(): number {
+    return this.schemaMutationVersion
+  }
+
+  /** Internal monotonic clock for every attempted schema write, including ABA and rollback. */
+  markSchemaMutation(): void {
+    this.project.assertDocumentMutationAllowed(this)
+    this.schemaMutationVersion += 1
+  }
 
   private emitter: EventBus
 
@@ -130,9 +142,9 @@ export class Document {
     }
 
     this.history = new History(
-      () => (this.rootNode ? this.export(TRANSFORM_STAGE.SERIALIZE) : null),
+      () => (this.rootNode ? this.exportRaw() : null),
       schema => {
-        this.import(schema, true)
+        this.import(schema, true, { invokeMaterialHooks: false })
         this.simulator?.rerender()
       },
       this,
@@ -140,7 +152,8 @@ export class Document {
   }
 
   @action
-  import(schema?: RootSchema, checkId = false) {
+  import(schema?: RootSchema, checkId = false, options: NodeModelOptions = {}) {
+    this.markSchemaMutation()
     const preparedSchema = schema ? this.project.prepareDocumentSchema(schema) : undefined
 
     this.nodes.forEach(node => {
@@ -149,7 +162,7 @@ export class Document {
     })
 
     if (preparedSchema) {
-      this.rootNode?.import(preparedSchema, checkId)
+      this.rootNode?.import(preparedSchema, checkId, options)
       this._blank = false
     } else {
       this._blank = true
@@ -160,8 +173,14 @@ export class Document {
     return this.rootNode!.export<RootSchema>(stage)
   }
 
+  /** Pure raw snapshot for history, transactions, and capability boundaries. */
+  exportRaw(): RootSchema {
+    return this.rootNode!.exportRaw<RootSchema>()
+  }
+
   @action
   remove() {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
     this.history.destroy()
     this.designer.postEvent(DOCUMENT_EVENT.REMOVE, { id: this.id })
     this.purge()
@@ -170,6 +189,8 @@ export class Document {
 
   @action
   purge() {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
+    this.markSchemaMutation()
     // 追踪物料使用：批量减少所有节点的使用计数
     for (const node of this.nodes) {
       if (node.componentName) {
@@ -184,7 +205,8 @@ export class Document {
   }
 
   @action
-  createNode(schema: NodeSchema, checkId = true) {
+  createNode(schema: NodeSchema, checkId = true, options: NodeModelOptions = {}) {
+    this.markSchemaMutation()
     if (schema?.id && this.hasNode(schema.id)) {
       schema.id = undefined
     }
@@ -198,14 +220,14 @@ export class Document {
         if (node.parent) {
           node.internalSetParent(null, false)
         }
-        node.import(schema, checkId)
+        node.import(schema, checkId, options)
       } else if (node) {
         node = null
       }
     }
 
     if (!node) {
-      node = new Node(this, schema)
+      node = new Node(this, schema, options)
       isNewNode = true
     }
 
@@ -309,6 +331,7 @@ export class Document {
    */
   @action
   private setSuspense(flag: boolean) {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
     if (!this._opened && !flag) {
       return
     }
@@ -320,15 +343,18 @@ export class Document {
   }
 
   suspense() {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
     this.setSuspense(true)
   }
 
   activate() {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
     this.setSuspense(false)
   }
 
   @action
   open() {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
     const originState = this._opened
     this._opened = true
     // only emit when document is suspense
@@ -345,6 +371,7 @@ export class Document {
 
   @action
   close() {
+    this.project.assertDocumentLifecycleMutationAllowed(this)
     this.setSuspense(true)
     this._opened = false
   }

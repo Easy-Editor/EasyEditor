@@ -34,6 +34,7 @@ const keyBlacklist = [
   'trustPolicy',
   'transactions',
   'commands',
+  'agentCapabilities',
 ]
 
 export class Editor extends EventEmitter implements IEditor {

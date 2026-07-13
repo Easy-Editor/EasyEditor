@@ -1,4 +1,4 @@
-import { action, computed, observable } from 'mobx'
+import { action, computed, intercept, observable, observe } from 'mobx'
 import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
 import type { Node } from '../node/node'
@@ -54,6 +54,12 @@ export class Props {
 
   @observable.shallow accessor items: Prop[] = []
 
+  private itemsMutationDisposer: () => void = () => {}
+
+  private itemsReferenceDisposer: () => void = () => {}
+
+  private itemsReferenceObserverDisposer: () => void = () => {}
+
   @computed
   private get maps() {
     const maps = new Map<PropKey, Prop>()
@@ -85,12 +91,29 @@ export class Props {
         this.items.push(new Prop(this, getConvertedExtraKey(key), extras[key]))
       })
     }
+    this.trackItemMutations()
+    this.itemsReferenceDisposer = intercept(this, 'items', change => {
+      this.owner.document.markSchemaMutation()
+      return change
+    })
+    this.itemsReferenceObserverDisposer = observe(this, 'items', () => {
+      this.trackItemMutations()
+    })
+  }
+
+  private trackItemMutations(): void {
+    this.itemsMutationDisposer()
+    this.itemsMutationDisposer = intercept(this.items, change => {
+      this.owner.document.markSchemaMutation()
+      return change
+    })
   }
 
   @action
   import(props?: PropsMap | null, extras?: PropsMap) {
     // TODO: 是否需要继承之前相同的 key，来保持响应式
 
+    this.owner.document.markSchemaMutation()
     const originItems = this.items
     if (props != null) {
       this.type = 'map'
@@ -152,6 +175,9 @@ export class Props {
       return
     }
     this.purged = true
+    this.itemsMutationDisposer()
+    this.itemsReferenceDisposer()
+    this.itemsReferenceObserverDisposer()
     for (const item of this.items) {
       item.purge()
     }
@@ -194,6 +220,7 @@ export class Props {
   delete(prop: Prop) {
     const index = this.items.indexOf(prop)
     if (index > -1) {
+      this.owner.document.markSchemaMutation()
       this.items.splice(index, 1)
       prop.purge()
     }
@@ -213,6 +240,7 @@ export class Props {
   @action
   add(key: PropKey, value?: PropValue | UNSET) {
     const prop = new Prop(this, key, value)
+    this.owner.document.markSchemaMutation()
     this.items.push(prop)
     return prop
   }

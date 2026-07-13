@@ -1,4 +1,4 @@
-import { project } from '@easy-editor/core'
+import type { DashboardAgentContext } from '@/editor/agent'
 import { useCallback, useState } from 'react'
 
 interface Message {
@@ -8,15 +8,27 @@ interface Message {
   createdAt: Date
 }
 
-// 自定义聊天Hook作为备选方案
-export const useCustomChat = (config: {
+interface CustomChatConfig {
   api: string
   headers: Record<string, string>
-  body: Record<string, any>
+  body: Record<string, unknown>
   initialMessages: Message[]
-  onFinish: (message: Message) => void
+  createAgentContext: () => DashboardAgentContext
+  onFinish: (message: Message, context: DashboardAgentContext) => Promise<void> | void
   onError: (error: Error) => void
-}) => {
+}
+
+interface ChatCompletionResponse {
+  id?: string
+  choices?: Array<{
+    message?: {
+      content?: string
+    }
+  }>
+}
+
+// 自定义聊天Hook作为备选方案
+export const useCustomChat = (config: CustomChatConfig) => {
   const [messages, setMessages] = useState<Message[]>(config.initialMessages)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -29,6 +41,8 @@ export const useCustomChat = (config: {
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isLoading) return
 
+    let agentContext: DashboardAgentContext | undefined
+
     const userMessage: Message = {
       id: Date.now().toString(),
       content: input.trim(),
@@ -36,21 +50,29 @@ export const useCustomChat = (config: {
       createdAt: new Date(),
     }
 
-    // 每次用户输入需求后，会自动带上当前画布的 JSON 信息，请根据画布的信息，进行提炼，生成组件配置。
-    const systemMessage: Message = {
-      id: Date.now().toString(),
-      content: `当前画布的 JSON 信息：\n${JSON.stringify(project.currentDocument?.export())}`,
-      role: 'system',
-      createdAt: new Date(),
-    }
-
-    setMessages(prev => [...prev, userMessage, systemMessage])
     setInput('')
     setIsLoading(true)
     setError(null)
 
     try {
-      console.log('🚀 Sending request to:', config.api)
+      // 在请求发出前固定文档身份和修订版本；响应回来后不再读取全局项目状态。
+      agentContext = config.createAgentContext()
+      const { snapshot } = agentContext
+      const systemMessage: Message = {
+        id: `${Date.now()}-canvas`,
+        content: `当前画布上下文：\n${JSON.stringify({
+          documentId: snapshot.documentId,
+          revision: snapshot.revision,
+          schema: snapshot.schema,
+        })}`,
+        role: 'system',
+        createdAt: new Date(),
+      }
+
+      setMessages(prev => [...prev, userMessage])
+
+      const systemInstructions = config.initialMessages.filter(message => message.role === 'system')
+      const conversation = messages.filter(message => message.role !== 'system')
 
       const response = await fetch(config.api, {
         method: 'POST',
@@ -60,7 +82,7 @@ export const useCustomChat = (config: {
         },
         body: JSON.stringify({
           ...config.body,
-          messages: [...messages, userMessage, systemMessage].map(msg => ({
+          messages: [...systemInstructions, ...conversation, userMessage, systemMessage].map(msg => ({
             role: msg.role,
             content: msg.content,
           })),
@@ -68,34 +90,29 @@ export const useCustomChat = (config: {
         }),
       })
 
-      console.log('📡 Response status:', response.status)
-      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()))
-
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const data = await response.json()
-      console.log('📡 Response data:', data)
+      const data = (await response.json()) as ChatCompletionResponse
 
       const assistantMessage: Message = {
         id: data.id || Date.now().toString(),
-        content: data.choices[0]?.message?.content || '抱歉，我无法理解您的请求。',
+        content: data.choices?.[0]?.message?.content || '抱歉，我无法理解您的请求。',
         role: 'assistant',
         createdAt: new Date(),
       }
 
       setMessages(prev => [...prev, assistantMessage])
 
-      // 确保调用 onFinish
-      console.log('✅ Calling onFinish with message:', assistantMessage)
-      config.onFinish(assistantMessage)
+      await config.onFinish(assistantMessage, agentContext)
     } catch (err) {
       console.error('❌ Chat error:', err)
       const error = err instanceof Error ? err : new Error('Unknown error')
       setError(error)
       config.onError(error)
     } finally {
+      agentContext?.capability.close()
       setIsLoading(false)
     }
   }, [input, isLoading, messages, config])

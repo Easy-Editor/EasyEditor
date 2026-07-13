@@ -30,6 +30,17 @@ const validateAt = (value: unknown, path: string, issues: CommandValidationIssue
   }
 }
 
+const validateOptionalNodeId = (value: unknown, path: string, issues: CommandValidationIssue[]): void => {
+  if (value === undefined) return
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 256) {
+    issues.push({
+      code: 'node.id.invalid',
+      message: 'node id must be a non-empty string no longer than 256 characters',
+      path,
+    })
+  }
+}
+
 const validateNode = (
   value: unknown,
   path: string,
@@ -45,6 +56,7 @@ const validateNode = (
     return
   }
   ancestors.add(value)
+  validateOptionalNodeId(value.id, `${path}.id`, issues)
   requireString(value.componentName, `${path}.componentName`, 'componentName', issues)
   if (value.children !== undefined && !Array.isArray(value.children)) {
     issues.push({ code: 'node.children.type', message: 'children must be an array', path: `${path}.children` })
@@ -75,8 +87,18 @@ export function validateCommands(commands: readonly unknown[]): asserts commands
         break
       case 'updateProps':
         requireString(command.nodeId, `${path}.nodeId`, 'nodeId', issues)
-        if (!isRecord(command.props)) {
+        if (command.props === undefined && command.extras === undefined) {
+          issues.push({
+            code: 'updateProps.empty',
+            message: 'updateProps requires props, extras, or both',
+            path,
+          })
+        }
+        if (command.props !== undefined && !isRecord(command.props)) {
           issues.push({ code: 'props.type', message: 'props must be an object', path: `${path}.props` })
+        }
+        if (command.extras !== undefined && !isRecord(command.extras)) {
+          issues.push({ code: 'extras.type', message: 'extras must be an object', path: `${path}.extras` })
         }
         break
       case 'removeNode':
