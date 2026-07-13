@@ -1,5 +1,9 @@
 import { action, computed, observable } from 'mobx'
 import type { Node } from '../../document/node/node'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  installLifecycleTeardownOperation,
+} from '../../lifecycle/teardown-boundary'
 import type { Editor } from '../../types/editor'
 import { DESIGNER_EVENT, type Designer } from '../designer'
 import type { Selection } from '../selection'
@@ -32,6 +36,10 @@ export class SettingsManager {
   private designer?: Designer
 
   constructor(readonly editor: Editor) {
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#purgeInternal()),
+    )
     this.mount()
   }
 
@@ -90,6 +98,11 @@ export class SettingsManager {
 
   @action
   purge(): void {
+    assertPublicLifecycleTeardownAllowed(this, 'settingsManager.purge')
+    this.#purgeInternal()
+  }
+
+  #purgeInternal(): void {
     this.disposeSelectionListener?.()
     this.disposeSelectionListener = undefined
     this.disposeEditorListener?.()

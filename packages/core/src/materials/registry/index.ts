@@ -3,10 +3,13 @@
  * 物料注册表模块导出
  */
 
-export { MaterialRegistry, type MaterialRegistryTransactionState } from './material-registry'
+export { MaterialRegistry } from './material-registry'
+export type { MaterialRegistryTransactionState } from './transaction-boundary'
 export {
   type IMaterialRegistry,
   type MaterialEntry,
+  type MaterialRegistryEntrySnapshot,
+  type MaterialRegistrySnapshot,
   MaterialSource,
   MaterialStatus,
   type RegisterOptions,

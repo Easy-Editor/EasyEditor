@@ -1,7 +1,15 @@
 import { computed, observable, reaction } from 'mobx'
 import { type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
+import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { Materials } from '../materials'
 import { Project } from '../project'
+import { withoutProjectMutationAuthority } from '../project/mutation-authority'
 import type { ComponentMetadata, Editor, ProjectSchema, TRANSFORM_STAGE } from '../types'
 import { type EventBus, type EventDeliveryScheduler, createEventBus, createLogger } from '../utils'
 import { ActiveTracker } from './active-tracker'
@@ -118,8 +126,10 @@ export class Designer {
   }
 
   constructor(props: DesignerProps) {
+    installLifecycleTeardownOperation(this, () => this.#purgeInternal())
     this.eventDelivery = props.eventDelivery
     this.emitter = createEventBus('Designer', undefined, this.eventDelivery)
+    inheritEngineTeardownOwnership(this, this.emitter)
     this.activeTracker = new ActiveTracker(this)
     this.setProps(props)
     this.editor = props.editor
@@ -128,6 +138,9 @@ export class Designer {
     this.detecting = new Detecting(this)
     this.selection = new Selection(this)
     this.settingsManager = new SettingsManager(this.editor)
+    for (const service of [this.activeTracker, this.dragon, this.detecting, this.selection, this.settingsManager]) {
+      inheritEngineTeardownOwnership(this, service)
+    }
 
     this.mount()
     this.init()
@@ -135,7 +148,10 @@ export class Designer {
   }
 
   createEventBus(name: string, maxListeners?: number): EventBus {
-    return createEventBus(name, maxListeners, this.eventDelivery)
+    assertLifecycleMutationAllowed(this, 'designer.createEventBus')
+    const eventBus = createEventBus(name, maxListeners, this.eventDelivery)
+    inheritLifecycleMutationGuard(this, eventBus)
+    return eventBus
   }
 
   deferEvent(deliver: () => void): boolean {
@@ -147,6 +163,7 @@ export class Designer {
    * EventBus disposal only removes listeners, so all owned buses remain reusable.
    */
   mount(): void {
+    assertLifecycleMutationAllowed(this, 'designer.mount')
     if (this.mounted) return
     this.mounted = true
     this.settingsManager.mount()
@@ -250,6 +267,7 @@ export class Designer {
   init() {}
 
   setProps(nextProps: Partial<DesignerProps>) {
+    assertLifecycleMutationAllowed(this, 'designer.setProps')
     const props = this.props ? { ...this.props, ...nextProps } : nextProps
 
     if (this.props) {
@@ -286,14 +304,12 @@ export class Designer {
   }
 
   onEvent(event: string, listener: (...args: any[]) => void) {
-    this.emitter.on(event, listener)
-
-    return () => {
-      this.emitter.off(event, listener)
-    }
+    assertLifecycleMutationAllowed(this, 'designer.onEvent')
+    return this.emitter.on(event, listener)
   }
 
   createLocation(locationData: LocationData<Node>): DropLocation {
+    assertLifecycleMutationAllowed(this, 'designer.createLocation')
     const loc = new DropLocation(locationData)
     if (this._dropLocation && this._dropLocation.document && this._dropLocation.document !== loc.document) {
       this._dropLocation.document.dropLocation = null
@@ -307,6 +323,7 @@ export class Designer {
   }
 
   clearLocation() {
+    assertLifecycleMutationAllowed(this, 'designer.clearLocation')
     if (this._dropLocation && this._dropLocation.document) {
       this._dropLocation.document.dropLocation = null
     }
@@ -315,10 +332,12 @@ export class Designer {
   }
 
   createScroller(scrollable: Scrollable) {
+    assertLifecycleMutationAllowed(this, 'designer.createScroller')
     return new Scroller(scrollable)
   }
 
   createOffsetObserver(nodeInstance: NodeSelector): OffsetObserver | null {
+    assertLifecycleMutationAllowed(this, 'designer.createOffsetObserver')
     const oobx = createOffsetObserver(nodeInstance)
     this.clearOobxList()
     if (oobx) {
@@ -339,11 +358,13 @@ export class Designer {
   }
 
   touchOffsetObserver() {
+    assertLifecycleMutationAllowed(this, 'designer.touchOffsetObserver')
     this.clearOobxList(true)
     this.oobxList.forEach(item => item.compute())
   }
 
   onInit(listener: (designer: Designer) => void) {
+    assertLifecycleMutationAllowed(this, 'designer.onInit')
     this.onEvent(DESIGNER_EVENT.INIT, listener)
   }
 
@@ -380,6 +401,7 @@ export class Designer {
   }
 
   set suspended(flag: boolean) {
+    assertLifecycleMutationAllowed(this, 'designer.suspended')
     this._suspended = flag
     // Todo afterwards...
     if (flag) {
@@ -388,6 +410,7 @@ export class Designer {
   }
 
   setSchema(schema: ProjectSchema) {
+    assertLifecycleMutationAllowed(this, 'designer.setSchema')
     this.project.import(schema)
   }
 
@@ -404,7 +427,9 @@ export class Designer {
 
     return reducers.reduce<PropsMap>((transformedProps, reducer) => {
       try {
-        return reducer(transformedProps, node, { stage }) as PropsMap
+        return withoutProjectMutationAuthority(node.document.project, () =>
+          reducer(transformedProps, node, { stage }),
+        ) as PropsMap
       } catch (e) {
         logger.error('Error transforming props:', e)
         return transformedProps
@@ -413,6 +438,7 @@ export class Designer {
   }
 
   addPropsReducer(reducer: PropsTransducer, stage: TRANSFORM_STAGE) {
+    assertLifecycleMutationAllowed(this, 'designer.addPropsReducer')
     if (!reducer) {
       logger.error('reducer is not available')
       return
@@ -426,10 +452,16 @@ export class Designer {
   }
 
   createSettingEntry(nodes: Node[]) {
+    assertLifecycleMutationAllowed(this, 'designer.createSettingEntry')
     return new SettingTopEntry(this.editor, nodes)
   }
 
   purge(): void {
+    assertPublicLifecycleTeardownAllowed(this, 'designer.purge')
+    this.#purgeInternal()
+  }
+
+  #purgeInternal(): void {
     const failures: unknown[] = []
     const cleanup = (operation: () => void) => {
       try {
@@ -448,12 +480,12 @@ export class Designer {
 
     // Drop public and plugin listeners before resetting child state so disposal
     // cannot publish partial teardown events.
-    cleanup(() => this.emitter.dispose())
-    cleanup(() => this.settingsManager.purge())
-    cleanup(() => this.dragon.dispose())
-    cleanup(() => this.selection.dispose())
-    cleanup(() => this.detecting.dispose())
-    cleanup(() => this.activeTracker.dispose())
+    cleanup(() => runInternalLifecycleTeardown(this.emitter))
+    cleanup(() => runInternalLifecycleTeardown(this.settingsManager))
+    cleanup(() => runInternalLifecycleTeardown(this.dragon))
+    cleanup(() => runInternalLifecycleTeardown(this.selection))
+    cleanup(() => runInternalLifecycleTeardown(this.detecting))
+    cleanup(() => runInternalLifecycleTeardown(this.activeTracker))
 
     if (this._dropLocation?.document) {
       this._dropLocation.document.dropLocation = null

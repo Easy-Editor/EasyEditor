@@ -1,5 +1,12 @@
 import { action, observable } from 'mobx'
 import { type Node, isNode } from '../document'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { ComponentInstance } from '../types'
 import type { EventBus } from '../utils'
 import type { Designer } from './designer'
@@ -16,11 +23,17 @@ export class ActiveTracker {
 
   private emitter: EventBus
 
-  constructor(designer: Designer) {
+  constructor(private readonly designer: Designer) {
     this.emitter = designer.createEventBus('ActiveTracker')
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#disposeInternal()),
+    )
+    inheritEngineTeardownOwnership(this, this.emitter)
   }
 
   track(originalTarget: ActiveTarget | Node) {
+    assertLifecycleMutationAllowed(this.designer, 'activeTracker.track')
     let target = originalTarget
     if (isNode(originalTarget)) {
       target = { node: originalTarget as Node }
@@ -42,15 +55,18 @@ export class ActiveTracker {
   }
 
   onChange(fn: (target: ActiveTarget) => void): () => void {
-    this.emitter.on('change', fn)
-    return () => {
-      this.emitter.off('change', fn)
-    }
+    assertLifecycleMutationAllowed(this.designer, 'activeTracker.onChange')
+    return this.emitter.on('change', fn)
   }
 
   @action
   dispose(): void {
+    assertPublicLifecycleTeardownAllowed(this, 'activeTracker.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
     this._target = undefined
-    this.emitter.dispose()
+    runInternalLifecycleTeardown(this.emitter)
   }
 }

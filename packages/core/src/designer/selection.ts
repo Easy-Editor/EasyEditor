@@ -1,5 +1,12 @@
 import { action, observable } from 'mobx'
 import { type Node, PositionNO, comparePosition } from '../document'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { EventBus } from '../utils'
 import type { Designer } from './designer'
 
@@ -18,14 +25,20 @@ export class Selection {
 
   constructor(readonly designer: Designer) {
     this.emitter = designer.createEventBus('Selection')
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#disposeInternal()),
+    )
+    inheritEngineTeardownOwnership(this, this.emitter)
   }
 
   get selected(): string[] {
-    return this._selected
+    return [...this._selected]
   }
 
   @action
   select(id: string) {
+    assertLifecycleMutationAllowed(this.designer, 'selection.select')
     if (this._selected.length === 1 && this._selected.indexOf(id) > -1) {
       // avoid cause reaction
       return
@@ -38,11 +51,12 @@ export class Selection {
     }
 
     this._selected = [id]
-    this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
+    this.emitter.emit(SELECTION_EVENT.CHANGE, this.selected)
   }
 
   @action
   selectAll(ids: string[]) {
+    assertLifecycleMutationAllowed(this.designer, 'selection.selectAll')
     const selectIds: string[] = []
 
     for (const id of ids) {
@@ -54,17 +68,18 @@ export class Selection {
     }
 
     this._selected = selectIds
-    this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
+    this.emitter.emit(SELECTION_EVENT.CHANGE, this.selected)
   }
 
   @action
   clear() {
+    assertLifecycleMutationAllowed(this.designer, 'selection.clear')
     if (this._selected.length < 1) {
       return
     }
 
     this._selected = []
-    this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
+    this.emitter.emit(SELECTION_EVENT.CHANGE, this.selected)
   }
 
   /**
@@ -72,6 +87,7 @@ export class Selection {
    */
   @action
   tidy() {
+    assertLifecycleMutationAllowed(this.designer, 'selection.tidy')
     const l = this._selected.length
     let i = l
     while (i-- > 0) {
@@ -82,18 +98,19 @@ export class Selection {
     }
 
     if (this._selected.length !== l) {
-      this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
+      this.emitter.emit(SELECTION_EVENT.CHANGE, this.selected)
     }
   }
 
   @action
   add(id: string) {
+    assertLifecycleMutationAllowed(this.designer, 'selection.add')
     if (this._selected.indexOf(id) > -1) {
       return
     }
 
     this._selected.push(id)
-    this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
+    this.emitter.emit(SELECTION_EVENT.CHANGE, this.selected)
   }
 
   has(id: string) {
@@ -102,10 +119,11 @@ export class Selection {
 
   @action
   remove(id: string) {
+    assertLifecycleMutationAllowed(this.designer, 'selection.remove')
     const i = this._selected.indexOf(id)
     if (i > -1) {
       this._selected.splice(i, 1)
-      this.emitter.emit(SELECTION_EVENT.CHANGE, this._selected)
+      this.emitter.emit(SELECTION_EVENT.CHANGE, this.selected)
     }
   }
 
@@ -163,16 +181,18 @@ export class Selection {
   }
 
   onSelectionChange(listener: (ids: string[]) => void): () => void {
-    this.emitter.on(SELECTION_EVENT.CHANGE, listener)
-
-    return () => {
-      this.emitter.off(SELECTION_EVENT.CHANGE, listener)
-    }
+    assertLifecycleMutationAllowed(this.designer, 'selection.onSelectionChange')
+    return this.emitter.on(SELECTION_EVENT.CHANGE, listener)
   }
 
   @action
   dispose(): void {
+    assertPublicLifecycleTeardownAllowed(this, 'selection.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
     this._selected = []
-    this.emitter.dispose()
+    runInternalLifecycleTeardown(this.emitter)
   }
 }

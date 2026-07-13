@@ -254,7 +254,7 @@ test('root, missing, foreign, wrapper-shape, and ID violations reject before dur
 test('a later impossible structural command rolls schema, history, materials, and ordering back', async t => {
   const { core, document, engine } = await createHarness(t)
   const before = structuredClone(document.exportRaw())
-  const beforeMaterials = engine.materials.captureTransactionState()
+  const beforeMaterials = engine.materials.registry.getSnapshot()
   let childEvents = 0
   let materialEvents = 0
   const disposeChildren = engine.designer.onEvent(core.DESIGNER_EVENT.NODE_CHILDREN_CHANGE, () => {
@@ -281,7 +281,7 @@ test('a later impossible structural command rolls schema, history, materials, an
   assert.deepEqual(document.exportRaw(), before)
   assert.equal(document.getNode('temporary-structural-node'), null)
   assert.equal(document.history.isUndoable(), false)
-  assert.deepEqual(engine.materials.captureTransactionState(), beforeMaterials)
+  assert.deepEqual(engine.materials.registry.getSnapshot(), beforeMaterials)
   assert.equal(childEvents, 0)
   assert.equal(materialEvents, 0)
 })

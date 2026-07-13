@@ -1,8 +1,122 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createProjectSchema } from './fixtures/project-schema.mjs'
+import { isDeepStrictEqual } from 'node:util'
+import { createLoadedResource, createProjectSchema } from './fixtures/project-schema.mjs'
 import { createFakeWindow } from './helpers/fake-browser.mjs'
 import { assertKernelApi, captureFailure, loadCore } from './helpers/kernel.mjs'
+
+const countHotkeyCallbacks = hotkey =>
+  Object.values(hotkey.callBacks).reduce((count, callbacks) => count + callbacks.length, 0)
+
+const runServiceMutationMatrix = async ({ engine, hostWindow, materialRegistry, prefix, remoteCalls }) => {
+  let eventDeliveries = 0
+  const cases = [
+    {
+      label: 'engine.loadProject',
+      snapshot: () => engine.project.get('id'),
+      operation: () => engine.loadProject(createProjectSchema({ id: `${prefix}-engine-project` }), true),
+    },
+    {
+      label: 'project.load',
+      snapshot: () => engine.project.get('id'),
+      operation: () => engine.project.load(createProjectSchema({ id: `${prefix}-direct-project` }), true),
+    },
+    {
+      label: 'config.set',
+      snapshot: () => engine.config.get(`${prefix}-config`),
+      operation: () => engine.config.set(`${prefix}-config`, true),
+    },
+    {
+      label: 'setters.registerSetter',
+      snapshot: () => engine.setters.getSetter(`${prefix}-setter`),
+      operation: () => engine.setters.registerSetter(`${prefix}-setter`, function LifecycleSetter() {}),
+    },
+    {
+      label: 'materials.createComponentMeta',
+      operation: () => engine.materials.createComponentMeta({ componentName: `${prefix}FacadeMaterial` }),
+    },
+    {
+      label: 'materials.registry.register',
+      snapshot: () => materialRegistry.has(`${prefix}RegistryMaterial`),
+      operation: () => materialRegistry.register({ componentName: `${prefix}RegistryMaterial` }),
+    },
+    {
+      label: 'plugins.register',
+      snapshot: () => engine.plugins.has(`${prefix}-plugin`),
+      operation: () => engine.plugins.register({ name: `${prefix}-plugin`, init() {} }),
+    },
+    {
+      label: 'remote.request',
+      snapshot: () => remoteCalls.count,
+      operation: () => engine.remote.request({ name: `${prefix}-request`, type: 'material' }),
+    },
+    {
+      label: 'remote.registry.register',
+      snapshot: () => engine.remote.registry.has('material', `${prefix}-remote`),
+      operation: () => engine.remote.registry.register(createLoadedResource(`${prefix}-remote`)),
+    },
+    {
+      label: 'remote.loadingState.startLoading',
+      snapshot: () => engine.remote.loadingState.getState(`${prefix}-loading`),
+      operation: () => engine.remote.loadingState.startLoading(`${prefix}-loading`, 'material', `${prefix}-loading`),
+    },
+    {
+      label: 'event.on/emit',
+      snapshot: () => eventDeliveries,
+      operation: () => {
+        engine.event.on(`common:${prefix}-event`, () => {
+          eventDeliveries += 1
+        })
+        engine.event.emit(`${prefix}-event`)
+      },
+    },
+    {
+      label: 'eventBus.addListener/emit',
+      snapshot: () => eventDeliveries,
+      operation: () => {
+        engine.eventBus.addListener(`${prefix}:event-bus`, () => {
+          eventDeliveries += 1
+        })
+        engine.eventBus.emit(`${prefix}:event-bus`)
+      },
+    },
+    {
+      label: 'hotkey.bind',
+      snapshot: () => countHotkeyCallbacks(engine.hotkey),
+      operation: () => engine.hotkey.bind(`ctrl+${prefix.at(-1)}`, () => {}),
+    },
+    {
+      label: 'clipboard.injectCopyPaster',
+      snapshot: () => hostWindow.document.body.children.length,
+      operation: () => engine.clipboard.injectCopyPaster(hostWindow.document),
+    },
+  ]
+
+  const accepted = []
+  const mutated = []
+  const rejected = []
+  const unchanged = []
+  for (const mutationCase of cases) {
+    const before = mutationCase.snapshot?.()
+    let error
+    try {
+      await mutationCase.operation()
+    } catch (caught) {
+      error = caught
+    }
+    const after = mutationCase.snapshot?.()
+    const changed = mutationCase.snapshot ? !isDeepStrictEqual(after, before) : undefined
+    if (error) {
+      rejected.push(mutationCase.label)
+    } else {
+      accepted.push(mutationCase.label)
+    }
+    if (changed === true) mutated.push(mutationCase.label)
+    if (changed === false) unchanged.push(mutationCase.label)
+  }
+
+  return { accepted, mutated, rejected, unchanged }
+}
 
 test('init and destroy are idempotent and balance owned browser listeners', async () => {
   const core = await loadCore()
@@ -73,6 +187,146 @@ test('a destroyed engine can be initialized again without leaking browser listen
   assert.equal(hostWindow.document.addCount, hostWindow.document.removeCount)
 })
 
+test('legacyTrusted services reject revival during disposal and after disposal, then reactivate on init', async t => {
+  const core = await loadCore()
+  const hostWindow = createFakeWindow()
+  const remoteCalls = { count: 0 }
+  const engine = core.createEngine({
+    trustPolicy: 'legacyTrusted',
+    hostWindow,
+    remoteAdapter: {
+      request() {
+        remoteCalls.count += 1
+        return { ok: true }
+      },
+    },
+  })
+  const materialRegistry = engine.materials.registry
+  t.after(async () => {
+    await engine.destroy()
+  })
+  let signalDestroyStarted
+  let releaseDestroy
+  const destroyStarted = new Promise(resolve => {
+    signalDestroyStarted = resolve
+  })
+  const destroyReleased = new Promise(resolve => {
+    releaseDestroy = resolve
+  })
+  await engine.plugins.register({
+    name: 'lifecycle-destroy-blocker',
+    init() {},
+    async destroy() {
+      signalDestroyStarted()
+      await destroyReleased
+    },
+  })
+  await engine.init()
+
+  const destroying = engine.destroy()
+  await destroyStarted
+  let disposing
+  try {
+    assert.equal(engine.lifecycleState, 'disposing')
+    disposing = await runServiceMutationMatrix({
+      engine,
+      hostWindow,
+      materialRegistry,
+      prefix: 'disposing',
+      remoteCalls,
+    })
+  } finally {
+    releaseDestroy()
+    await destroying
+  }
+  assert.equal(engine.lifecycleState, 'disposed')
+
+  const disposed = await runServiceMutationMatrix({
+    engine,
+    hostWindow,
+    materialRegistry,
+    prefix: 'disposed',
+    remoteCalls,
+  })
+
+  await engine.init()
+  assert.equal(engine.lifecycleState, 'ready')
+  const restarted = await runServiceMutationMatrix({
+    engine,
+    hostWindow,
+    materialRegistry: engine.materials.registry,
+    prefix: 'restarted',
+    remoteCalls,
+  })
+  await engine.destroy()
+
+  assert.deepEqual(
+    {
+      acceptedAfterDispose: disposed.accepted,
+      acceptedWhileDisposing: disposing.accepted,
+      mutatedAfterDispose: disposed.mutated,
+      mutatedWhileDisposing: disposing.mutated,
+      rejectedAfterRestart: restarted.rejected,
+      unchangedAfterRestart: restarted.unchanged,
+    },
+    {
+      acceptedAfterDispose: [],
+      acceptedWhileDisposing: [],
+      mutatedAfterDispose: [],
+      mutatedWhileDisposing: [],
+      rejectedAfterRestart: [],
+      unchangedAfterRestart: [],
+    },
+  )
+})
+
+test('project teardown does not lend lifecycle authority to material listeners', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  engine.materials.createComponentMeta({ componentName: 'Page' })
+  engine.project.load(createProjectSchema({ id: 'teardown-listener-project' }), true)
+  let disposingDeliveries = 0
+  let registrationOutcome
+  const unsubscribe = engine.materials.registry.subscribe(() => {
+    if (engine.lifecycleState !== 'disposing') return
+    disposingDeliveries += 1
+    registrationOutcome = engine.plugins
+      .register({ name: 'teardown-listener-revival', init() {} })
+      .catch(error => error)
+  })
+
+  await engine.init()
+  await engine.destroy()
+  unsubscribe()
+  if (registrationOutcome) await registrationOutcome
+
+  assert.equal(disposingDeliveries, 0)
+  assert.equal(engine.plugins.has('teardown-listener-revival'), false)
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('public document removal cannot select the notification-free teardown path', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  engine.materials.createComponentMeta({ componentName: 'Page' })
+  engine.project.load(createProjectSchema({ id: 'public-removal-project' }), true)
+  const document = engine.project.currentDocument
+  const usageEvents = []
+  const unsubscribe = engine.materials.registry.subscribe(event => {
+    if (event.type === core.RegistryEventType.USAGE_CHANGED) usageEvents.push(event)
+  })
+  t.after(unsubscribe)
+
+  // JavaScript callers may still pass extra arguments, but they must not be
+  // interpreted as internal teardown authority.
+  document.remove(true)
+
+  assert.equal(engine.materials.getUsageCount('Page'), 0)
+  assert.equal(usageEvents.length, 1)
+  assert.equal(usageEvents[0].componentName, 'Page')
+})
+
 test('destroy waits for an in-flight init and tears the initialized plugin down once', async () => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
@@ -132,10 +386,45 @@ test('engine destroy owns simulator reactions and renderer disposal', async () =
   const beforeDestroy = reactionCalls
 
   await engine.destroy()
-  simulator.set('probe', 2)
+  assert.throws(() => simulator.set('probe', 2), /disposed/)
 
   assert.equal(reactionCalls, beforeDestroy)
   assert.equal(rendererDisposals, 1)
+})
+
+test('engine destroy retries only failed Simulator lifetime cleanup', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  engine.project.mountSimulator(simulator)
+
+  // This white-box seam isolates Simulator's lifetime ledger from MobX's
+  // non-throwing reaction disposer so failure and retry are deterministic.
+  const trackLifetime = simulator.trackLifetime.bind(simulator)
+  let successfulCleanupCalls = 0
+  let retryableCleanupCalls = 0
+  trackLifetime(() => {
+    successfulCleanupCalls += 1
+  })
+  trackLifetime(() => {
+    retryableCleanupCalls += 1
+    if (retryableCleanupCalls === 1) throw new Error('transient Simulator lifetime cleanup failure')
+  })
+
+  const firstFailure = await captureFailure(() => engine.destroy())
+
+  assert.equal(firstFailure.name, 'AggregateError')
+  assert.equal(engine.lifecycleState, 'failed')
+  assert.strictEqual(engine.project.simulator, simulator)
+  assert.equal(successfulCleanupCalls, 1)
+  assert.equal(retryableCleanupCalls, 1)
+
+  await engine.destroy()
+
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(engine.project.simulator, null)
+  assert.equal(successfulCleanupCalls, 1)
+  assert.equal(retryableCleanupCalls, 2)
 })
 
 test('project documents still purge when simulator disposal fails', async () => {

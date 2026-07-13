@@ -1,9 +1,42 @@
 import type { Designer } from '../designer'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { ComponentMetadata, NpmInfo } from '../types'
 import type { EventBus } from '../utils'
+import {
+  type ComponentMetaTransactionState,
+  installComponentMetaTransactionOperations,
+} from './component-meta-transaction'
 
 export enum COMPONENT_META_EVENT {
   CHANGE = 'componentMeta:metadata.change',
+}
+
+const cloneMetadataValue = <T>(value: T, visited = new Map<object, unknown>()): T => {
+  if (!value || typeof value !== 'object') return value
+  if (visited.has(value)) return visited.get(value) as T
+  if (Array.isArray(value)) {
+    const clone: unknown[] = []
+    visited.set(value, clone)
+    value.forEach(item => clone.push(cloneMetadataValue(item, visited)))
+    return clone as T
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return value
+  const clone = Object.create(prototype) as Record<PropertyKey, unknown>
+  visited.set(value, clone)
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+    if (!descriptor) continue
+    if ('value' in descriptor) descriptor.value = cloneMetadataValue(descriptor.value, visited)
+    Reflect.defineProperty(clone, key, descriptor)
+  }
+  return clone as T
 }
 
 export class ComponentMeta {
@@ -12,6 +45,10 @@ export class ComponentMeta {
   private _npm?: NpmInfo
 
   private emitter: EventBus
+
+  private disposeStarted = false
+
+  private disposeCompleted = false
 
   get npm() {
     return this._npm
@@ -73,11 +110,18 @@ export class ComponentMeta {
     readonly designer: Designer,
     metadata: ComponentMetadata,
   ) {
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
     this.emitter = designer.createEventBus('ComponentMeta')
+    inheritEngineTeardownOwnership(this, this.emitter)
+    installComponentMetaTransactionOperations(this, {
+      capture: () => this.#captureTransactionState(),
+      restore: state => this.#restoreTransactionState(state),
+    })
     this.parseMetadata(metadata)
   }
 
   setNpm(info: NpmInfo) {
+    this.assertUsable('materials.componentMeta.setNpm')
     if (!this._npm) {
       this._npm = info
     }
@@ -107,10 +151,12 @@ export class ComponentMeta {
   }
 
   refreshMetadata() {
+    this.assertUsable('materials.componentMeta.refreshMetadata')
     this.parseMetadata(this.getMetadata())
   }
 
   setMetadata(metadata: ComponentMetadata) {
+    this.assertUsable('materials.componentMeta.setMetadata')
     this.parseMetadata(metadata)
   }
 
@@ -119,17 +165,55 @@ export class ComponentMeta {
   }
 
   onMetadataChange(fn: (args: any) => void) {
-    this.emitter.on(COMPONENT_META_EVENT.CHANGE, fn)
-    return () => {
-      this.emitter.off(COMPONENT_META_EVENT.CHANGE, fn)
-    }
+    this.assertUsable('materials.componentMeta.onMetadataChange')
+    return this.emitter.on(COMPONENT_META_EVENT.CHANGE, fn)
   }
 
   /**
    * 销毁 ComponentMeta，清理事件监听器
    */
   dispose() {
-    this.emitter.removeAllListeners()
+    assertPublicLifecycleTeardownAllowed(this, 'materials.componentMeta.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal() {
+    if (this.disposeCompleted) return
+    this.disposeStarted = true
+    runInternalLifecycleTeardown(this.emitter)
+    this.disposeCompleted = true
+  }
+
+  #captureTransactionState(): ComponentMetaTransactionState {
+    return {
+      componentName: this._componentName,
+      descriptor: this._descriptor,
+      disposeCompleted: this.disposeCompleted,
+      disposeStarted: this.disposeStarted,
+      isContainer: this._isContainer,
+      isMinimalRenderUnit: this._isMinimalRenderUnit,
+      metadata: this._metadata ? cloneMetadataValue(this._metadata) : undefined,
+      npm: this._npm ? cloneMetadataValue(this._npm) : undefined,
+      title: this._title,
+    }
+  }
+
+  #restoreTransactionState(state: ComponentMetaTransactionState): void {
+    this._componentName = state.componentName
+    this._descriptor = state.descriptor
+    this.disposeCompleted = state.disposeCompleted
+    this.disposeStarted = state.disposeStarted
+    this._isContainer = state.isContainer
+    this._isMinimalRenderUnit = state.isMinimalRenderUnit
+    this._metadata = state.metadata ? cloneMetadataValue(state.metadata) : undefined
+    this._npm = state.npm ? cloneMetadataValue(state.npm) : undefined
+    this._title = state.title
+    this.emitter.emit(COMPONENT_META_EVENT.CHANGE)
+  }
+
+  private assertUsable(origin: string): void {
+    if (this.disposeStarted) throw new Error(`Cannot ${origin} on a disposed component metadata instance`)
+    assertLifecycleMutationAllowed(this, origin)
   }
 
   /**

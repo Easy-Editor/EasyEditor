@@ -1,12 +1,19 @@
 import { transaction as mobxTransaction } from 'mobx'
 import type { Document } from '../document'
 import type { Materials } from '../materials'
+import {
+  beginMaterialsTransaction,
+  commitMaterialsTransaction,
+  restoreMaterialsTransaction,
+} from '../materials/transaction-boundary'
 import type { Project } from '../project'
+import { beginDocumentMutationBoundary } from '../project/document-mutation-boundary'
 import { withProjectMutationAuthority } from '../project/mutation-authority'
 import { PolicyViolation, type TrustPolicy, findExecutableValue } from '../trust'
 import { EventTransactionCoordinator } from '../utils/event-transaction'
 import { applyCommand } from './apply-command'
 import { validateCommands } from './command-validator'
+import { installTransactionBoundaryOperations } from './transaction-boundary'
 import type { CommandResult, EditorCommand, TransactionResult } from './types'
 
 export interface TransactionHost {
@@ -84,7 +91,11 @@ export class TransactionManager {
   constructor(
     private readonly host: TransactionHost,
     private readonly events = new EventTransactionCoordinator(),
-  ) {}
+  ) {
+    installTransactionBoundaryOperations(this, {
+      runValidatedOnDocument: (document, commands, options) => this.runOnDocumentInternal(document, commands, options),
+    })
+  }
 
   run(commands: readonly EditorCommand[]): TransactionResult {
     this.assertMutable()
@@ -105,7 +116,19 @@ export class TransactionManager {
     }
     const document = this.requireBoundDocument(documentOrId)
     const options = this.normalizeBoundOptions(preconditionOrOptions)
+    this.assertExecutableBoundOptionsAllowed(options)
     return this.executeCommands(document, commands, options)
+  }
+
+  private runOnDocumentInternal(
+    document: Document,
+    commands: readonly EditorCommand[],
+    options: BoundTransactionOptions,
+  ): TransactionResult {
+    this.assertMutable()
+    this.assertCommands(commands)
+    if (this.active) throw new Error('runOnDocument requires an independent top-level transaction')
+    return this.executeCommands(this.requireBoundDocument(document), commands, options)
   }
 
   private executeCommands(
@@ -177,21 +200,50 @@ export class TransactionManager {
     }
 
     const selection = document.designer.selection.selected.slice()
-    const materialState = this.host.materials.captureTransactionState()
+    // Capture every pure preflight value before acquiring transaction-owned
+    // resources. A failing export must not strand the material registry lock.
     const startSchema = JSON.stringify(document.exportRaw())
     const startMutationVersion = document.mutationVersion
     const context: ActiveTransaction = {
       document,
       failure: { error: undefined, occurred: false },
     }
-    const mutationBoundary = options.restrictDocumentMutations
-      ? this.host.project.beginDocumentMutationBoundary(document)
-      : undefined
-    let eventTransaction: ReturnType<EventTransactionCoordinator['begin']>
+
+    let materialState!: ReturnType<typeof beginMaterialsTransaction>
+    let mutationBoundary: ReturnType<typeof beginDocumentMutationBoundary> | undefined
+    let eventTransaction!: ReturnType<EventTransactionCoordinator['begin']>
     try {
+      materialState = beginMaterialsTransaction(this.host.materials)
+      mutationBoundary = options.restrictDocumentMutations
+        ? beginDocumentMutationBoundary(this.host.project, document)
+        : undefined
       eventTransaction = this.events.begin()
     } catch (error) {
-      mutationBoundary?.release()
+      const acquisitionRollbackErrors: unknown[] = []
+      if (eventTransaction) {
+        try {
+          this.events.rollback(eventTransaction)
+        } catch (rollbackError) {
+          acquisitionRollbackErrors.push(rollbackError)
+        }
+      }
+      if (mutationBoundary) {
+        try {
+          mutationBoundary.release()
+        } catch (rollbackError) {
+          acquisitionRollbackErrors.push(rollbackError)
+        }
+      }
+      if (materialState) {
+        try {
+          restoreMaterialsTransaction(this.host.materials, materialState)
+        } catch (rollbackError) {
+          acquisitionRollbackErrors.push(rollbackError)
+        }
+      }
+      if (acquisitionRollbackErrors.length) {
+        throw new TransactionRollbackIncompleteError(error, acquisitionRollbackErrors)
+      }
       throw error
     }
     this.active = context
@@ -220,7 +272,7 @@ export class TransactionManager {
         }
       }
       try {
-        this.host.materials.restoreTransactionState(materialState)
+        restoreMaterialsTransaction(this.host.materials, materialState)
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
       }
@@ -309,6 +361,11 @@ export class TransactionManager {
     if (modelCommitted) {
       const postCommitErrors: unknown[] = []
       if (mobxExitError) postCommitErrors.push(mobxExitError)
+      try {
+        commitMaterialsTransaction(this.host.materials, materialState)
+      } catch (error) {
+        postCommitErrors.push(error)
+      }
       try {
         if (options.publishEvents === false) this.events.rollback(eventTransaction)
         else this.events.commit(eventTransaction)
@@ -403,6 +460,17 @@ export class TransactionManager {
       throw new Error('Bound transaction options must be an object or precondition function')
     }
     return value
+  }
+
+  private assertExecutableBoundOptionsAllowed(options: BoundTransactionOptions): void {
+    if (this.host.trustPolicy.allowExecutableCommands) return
+    if (!options.precondition && !options.postcondition && !options.settledPostcondition) return
+    throw new PolicyViolation({
+      capability: 'command.executable',
+      message: 'Executable transaction validators are disabled by the engine trust policy',
+      origin: 'transactions.runOnDocument',
+      rule: `${this.host.trustPolicy.name}.command.executable.deny`,
+    })
   }
 
   private runSynchronousBoundary(

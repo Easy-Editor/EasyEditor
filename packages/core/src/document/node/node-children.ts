@@ -350,6 +350,7 @@ export class NodeChildren {
   }
 
   onChange(listener: (info?: { type: string; node: Node }) => void) {
+    this.owner.document.project.assertDocumentGenerationActive(this.owner.document)
     this.emitter.on(NODE_CHILDREN_EVENT.CHANGE, listener)
     return () => {
       this.emitter.off(NODE_CHILDREN_EVENT.CHANGE, listener)
@@ -357,6 +358,7 @@ export class NodeChildren {
   }
 
   onInsert(listener: (node: Node) => void) {
+    this.owner.document.project.assertDocumentGenerationActive(this.owner.document)
     this.emitter.on(NODE_CHILDREN_EVENT.INSERT, listener)
     return () => {
       this.emitter.off(NODE_CHILDREN_EVENT.INSERT, listener)

@@ -1,4 +1,6 @@
 import EventEmitter from 'events'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import type { Disposable } from './hotkey'
 import { createLogger } from './logger'
 
@@ -7,8 +9,16 @@ const moduleLogger = createLogger('module-event-bus')
 
 export type EventDeliveryScheduler = (deliver: () => void) => boolean
 
+type EventListener = (...args: any[]) => void
+
+interface EventRegistration {
+  event: string | symbol
+  wrapped: EventListener
+}
+
 export class EventBus {
-  private readonly eventEmitter: EventEmitter
+  readonly #eventEmitter: EventEmitter
+  readonly #registrations = new Map<string | symbol, EventRegistration[]>()
   private readonly name?: string
   private scheduleDelivery?: EventDeliveryScheduler
 
@@ -18,12 +28,14 @@ export class EventBus {
   readonly names = []
 
   constructor(emitter: EventEmitter, name?: string, scheduleDelivery?: EventDeliveryScheduler) {
-    this.eventEmitter = emitter
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
+    this.#eventEmitter = emitter
     this.name = name
     this.scheduleDelivery = scheduleDelivery
   }
 
   setDeliveryScheduler(scheduleDelivery?: EventDeliveryScheduler): void {
+    assertLifecycleMutationAllowed(this, 'eventBus.setDeliveryScheduler')
     this.scheduleDelivery = scheduleDelivery
   }
 
@@ -47,19 +59,21 @@ export class EventBus {
    * @param event 事件名称
    * @param listener 事件回调
    */
-  on(event: string, listener: (...args: any[]) => void): Disposable {
-    this.eventEmitter.on(event, listener)
+  on(event: string, listener: EventListener): Disposable {
+    assertLifecycleMutationAllowed(this, 'eventBus.on')
+    const registration = this.#register(event, listener, false)
     this.getLogger().debug(`${this.getMsgPrefix('on')} ${event}`)
     return () => {
-      this.off(event, listener)
+      this.#removeRegistration(registration)
     }
   }
 
-  prependListener(event: string, listener: (...args: any[]) => void) {
-    this.eventEmitter.prependListener(event, listener)
+  prependListener(event: string, listener: EventListener): Disposable {
+    assertLifecycleMutationAllowed(this, 'eventBus.prependListener')
+    const registration = this.#register(event, listener, true)
     this.getLogger().debug(`${this.getMsgPrefix('prependListener')} ${event}`)
     return () => {
-      this.off(event, listener)
+      this.#removeRegistration(registration)
     }
   }
 
@@ -68,8 +82,9 @@ export class EventBus {
    * @param event 事件名称
    * @param listener 事件回调
    */
-  off(event: string, listener: (...args: any[]) => void) {
-    this.eventEmitter.off(event, listener)
+  off(event: string, listener: EventListener) {
+    this.#eventEmitter.off(event, listener)
+    this.#reconcileRegistrations(event)
     this.getLogger().debug(`${this.getMsgPrefix('off')} ${event}`)
   }
 
@@ -85,16 +100,16 @@ export class EventBus {
   }
 
   private emitImmediately(event: string, args: any[]) {
-    const listeners = this.eventEmitter.rawListeners(event)
+    const listeners = this.#eventEmitter.rawListeners(event)
     if (listeners.length === 0 && event === 'error') {
-      this.eventEmitter.emit(event, ...args)
+      this.#eventEmitter.emit(event, ...args)
       return
     }
 
     const errors: unknown[] = []
     for (const listener of listeners) {
       try {
-        Reflect.apply(listener, this.eventEmitter, args)
+        Reflect.apply(listener, this.#eventEmitter, args)
       } catch (error) {
         errors.push(error)
       }
@@ -105,24 +120,97 @@ export class EventBus {
     }
   }
 
-  removeListener(event: string | symbol, listener: (...args: any[]) => void) {
-    return this.eventEmitter.removeListener(event, listener)
+  removeListener(event: string | symbol, listener: EventListener) {
+    this.#eventEmitter.removeListener(event, listener)
+    this.#reconcileRegistrations(event)
+    return this
   }
 
-  addListener(event: string | symbol, listener: (...args: any[]) => void) {
-    return this.eventEmitter.addListener(event, listener)
+  addListener(event: string | symbol, listener: EventListener) {
+    assertLifecycleMutationAllowed(this, 'eventBus.addListener')
+    this.#register(event, listener, false)
+    return this
   }
 
   setMaxListeners(n: number) {
-    return this.eventEmitter.setMaxListeners(n)
+    assertLifecycleMutationAllowed(this, 'eventBus.setMaxListeners')
+    this.#eventEmitter.setMaxListeners(n)
+    return this
   }
 
   removeAllListeners(event?: string | symbol) {
-    return this.eventEmitter.removeAllListeners(event)
+    assertPublicLifecycleTeardownAllowed(this, 'eventBus.removeAllListeners')
+    this.#removeAllListenersInternal(event)
+    return this
+  }
+
+  /** Read-only diagnostics without exposing the mutable EventEmitter handle. */
+  listenerCount(event?: string | symbol): number {
+    if (event !== undefined) return this.#eventEmitter.listenerCount(event)
+    return this.#eventEmitter
+      .eventNames()
+      .reduce((count, eventName) => count + this.#eventEmitter.listenerCount(eventName), 0)
   }
 
   dispose(): void {
-    this.eventEmitter.removeAllListeners()
+    assertPublicLifecycleTeardownAllowed(this, 'eventBus.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    this.#removeAllListenersInternal()
+  }
+
+  #register(event: string | symbol, listener: EventListener, prepend: boolean): EventRegistration {
+    this.#reconcileRegistrations(event)
+    const wrapped = function (this: unknown, ...args: any[]) {
+      return Reflect.apply(listener, this, args)
+    }
+    Object.defineProperty(wrapped, 'listener', { value: listener })
+    const registration = { event, wrapped }
+    if (prepend) {
+      this.#eventEmitter.prependListener(event, wrapped)
+    } else {
+      this.#eventEmitter.on(event, wrapped)
+    }
+    const registrations = this.#registrations.get(event)
+    if (registrations) {
+      registrations.push(registration)
+    } else {
+      this.#registrations.set(event, [registration])
+    }
+    return registration
+  }
+
+  #removeRegistration(registration: EventRegistration): void {
+    const registrations = this.#registrations.get(registration.event)
+    if (!registrations?.includes(registration)) return
+    this.#eventEmitter.removeListener(registration.event, registration.wrapped)
+    const index = registrations.indexOf(registration)
+    if (index !== -1) registrations.splice(index, 1)
+    if (registrations.length === 0) this.#registrations.delete(registration.event)
+  }
+
+  #reconcileRegistrations(event: string | symbol): void {
+    const registrations = this.#registrations.get(event)
+    if (!registrations) return
+    const activeListeners = new Set(this.#eventEmitter.rawListeners(event))
+    const activeRegistrations = registrations.filter(registration => activeListeners.has(registration.wrapped))
+    if (activeRegistrations.length > 0) {
+      this.#registrations.set(event, activeRegistrations)
+    } else {
+      this.#registrations.delete(event)
+    }
+  }
+
+  #removeAllListenersInternal(event?: string | symbol): void {
+    if (event === undefined) {
+      EventEmitter.prototype.removeAllListeners.call(this.#eventEmitter)
+      this.#registrations.clear()
+    } else {
+      EventEmitter.prototype.removeAllListeners.call(this.#eventEmitter, event)
+      this.#registrations.delete(event)
+    }
   }
 }
 

@@ -145,7 +145,7 @@ test('inserted node IDs must be bounded strings throughout the complete subtree'
   assert.deepEqual(document.exportRaw(), before)
 })
 
-test('ambient onNodeAdd expansion beyond the grant is detected and atomically rolled back', async t => {
+test('Agent execution uses an unforgeable transaction seam instead of the mutable public method', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
   t.after(() => engine.destroy())
@@ -170,6 +170,7 @@ test('ambient onNodeAdd expansion beyond the grant is detected and atomically ro
       },
     },
   })
+  engine.materials.createComponentMeta({ componentName: 'Text' })
   engine.project.load(createProjectSchema(), true)
   const document = engine.project.currentDocument
   const capability = issueCapability(engine, document, {
@@ -188,9 +189,6 @@ test('ambient onNodeAdd expansion beyond the grant is detected and atomically ro
       },
     ],
   })
-  const beforeSchema = structuredClone(document.export())
-  const beforeHistoryData = document.history.hotData
-  const beforeHistoryState = document.history.getState()
   let nodeAddEvents = 0
   const disposeNodeAdd = document.onNodeAdd(() => {
     nodeAddEvents += 1
@@ -198,7 +196,9 @@ test('ambient onNodeAdd expansion beyond the grant is detected and atomically ro
   t.after(disposeNodeAdd)
 
   const originalRunOnDocument = engine.transactions.runOnDocument
+  let publicMethodCalls = 0
   engine.transactions.runOnDocument = function runWithAmbientCallbacks(boundDocument, commands, options) {
+    publicMethodCalls += 1
     return originalRunOnDocument.call(this, boundDocument, commands, {
       ...options,
       invokeNodeCallbacks: true,
@@ -206,22 +206,20 @@ test('ambient onNodeAdd expansion beyond the grant is detected and atomically ro
   }
 
   try {
-    const error = await captureFailure(() => capability.execute(plan.planId))
-    assertCapabilityError(error, /^agent\.execution\.postconditionFailed$/)
-    assert.ok(callbackCalls > 0, 'the adversarial fixture must exercise the ambient onNodeAdd callback')
-    assert.equal(document.getNode('agent-authorized-node'), null)
+    const receipt = capability.execute(plan.planId)
+    assert.equal(receipt.status, 'committed')
+    assert.equal(publicMethodCalls, 0)
+    assert.equal(callbackCalls, 0)
+    assert.ok(document.getNode('agent-authorized-node'))
     assert.equal(document.getNode('ambient-unauthorized-node'), null)
-    assert.deepEqual(document.export(), beforeSchema)
-    assert.equal(document.history.hotData, beforeHistoryData)
-    assert.equal(document.history.getState(), beforeHistoryState)
-    assert.equal(engine.materials.getUsageCount('Text'), 0)
+    assert.equal(document.history.isUndoable(), true)
+    assert.equal(engine.materials.getUsageCount('Text'), 1)
     assert.equal(engine.materials.getUsageCount('ForbiddenAmbientComponent'), 0)
-    assert.equal(nodeAddEvents, 0, 'rolled-back ambient mutations must not escape through deferred events')
+    assert.equal(nodeAddEvents, 0, 'Agent domain writes must not publish executable model callbacks')
 
     const audit = latestAudit(engine, record => record.action === 'execute' && record.planId === plan.planId)
-    assert.equal(audit.decision, 'denied')
-    assert.equal(audit.outcome, 'rolled_back')
-    assert.equal(audit.error.code, error.code)
+    assert.equal(audit.decision, 'allowed')
+    assert.equal(audit.outcome, 'committed')
 
     const replayError = await captureFailure(() => capability.execute(plan.planId))
     assertCapabilityError(replayError, /^agent\.plan\.terminal$/)

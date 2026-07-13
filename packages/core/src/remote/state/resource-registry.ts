@@ -4,6 +4,11 @@
  */
 
 import { action, computed, observable } from 'mobx'
+import { assertLifecycleMutationAllowed } from '../../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  installLifecycleTeardownOperation,
+} from '../../lifecycle/teardown-boundary'
 import type { ResourceType } from '../core/errors'
 
 /** 已加载资源条目 */
@@ -33,6 +38,13 @@ export class ResourceRegistry {
   /** 设置器资源 */
   @observable.shallow private accessor setters = new Map<string, LoadedResource>()
 
+  constructor() {
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#disposeInternal()),
+    )
+  }
+
   /**
    * 获取所有物料数量
    */
@@ -54,6 +66,7 @@ export class ResourceRegistry {
    */
   @action
   register<T>(resource: LoadedResource<T>): void {
+    assertLifecycleMutationAllowed(this, 'remote.registry.register')
     const map = this.getMap(resource.type)
     map.set(resource.name, resource as LoadedResource)
   }
@@ -79,6 +92,7 @@ export class ResourceRegistry {
    */
   @action
   unload(type: ResourceType, name: string): boolean {
+    assertLifecycleMutationAllowed(this, 'remote.registry.unload')
     const map = this.getMap(type)
     return map.delete(name)
   }
@@ -115,6 +129,7 @@ export class ResourceRegistry {
    */
   @action
   clearType(type: ResourceType): void {
+    assertLifecycleMutationAllowed(this, 'remote.registry.clearType')
     const map = this.getMap(type)
     map.clear()
   }
@@ -124,12 +139,19 @@ export class ResourceRegistry {
    */
   @action
   clearAll(): void {
+    assertLifecycleMutationAllowed(this, 'remote.registry.clearAll')
     this.materials.clear()
     this.setters.clear()
   }
 
   dispose(): void {
-    this.clearAll()
+    assertPublicLifecycleTeardownAllowed(this, 'remote.registry.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    this.materials.clear()
+    this.setters.clear()
   }
 
   /**

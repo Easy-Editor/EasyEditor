@@ -1,5 +1,12 @@
 import { action, observable } from 'mobx'
 import type { Document, Node } from '../document'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { EventBus } from '../utils'
 import type { Designer } from './designer'
 
@@ -22,6 +29,7 @@ export class Detecting {
 
   @action
   set enable(flag: boolean) {
+    assertLifecycleMutationAllowed(this.designer, 'detecting.enable')
     this._enable = flag
     if (!flag) {
       this._current = null
@@ -36,10 +44,16 @@ export class Detecting {
 
   constructor(readonly designer: Designer) {
     this.emitter = designer.createEventBus('Detecting')
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#disposeInternal()),
+    )
+    inheritEngineTeardownOwnership(this, this.emitter)
   }
 
   @action
   capture(node: Node | null) {
+    assertLifecycleMutationAllowed(this.designer, 'detecting.capture')
     if (this._current !== node) {
       this._current = node
       this.emitter.emit(DETECTING_EVENT.CHANGE, this.current)
@@ -48,6 +62,7 @@ export class Detecting {
 
   @action
   release(node: Node | null) {
+    assertLifecycleMutationAllowed(this.designer, 'detecting.release')
     if (this._current === node) {
       this._current = null
       this.emitter.emit(DETECTING_EVENT.CHANGE, this.current)
@@ -56,23 +71,26 @@ export class Detecting {
 
   @action
   leave(document: Document | undefined) {
+    assertLifecycleMutationAllowed(this.designer, 'detecting.leave')
     if (this.current && this.current.document === document) {
       this._current = null
     }
   }
 
   onDetectingChange(fn: (node: Node) => void) {
-    this.emitter.on(DETECTING_EVENT.CHANGE, fn)
-
-    return () => {
-      this.emitter.off(DETECTING_EVENT.CHANGE, fn)
-    }
+    assertLifecycleMutationAllowed(this.designer, 'detecting.onDetectingChange')
+    return this.emitter.on(DETECTING_EVENT.CHANGE, fn)
   }
 
   @action
   dispose(): void {
+    assertPublicLifecycleTeardownAllowed(this, 'detecting.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
     this._enable = true
     this._current = null
-    this.emitter.dispose()
+    runInternalLifecycleTeardown(this.emitter)
   }
 }

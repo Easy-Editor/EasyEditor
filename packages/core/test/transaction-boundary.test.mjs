@@ -189,8 +189,8 @@ test('Project.removeDocument performs the complete Document.remove lifecycle exa
   engine.project.removeDocument(document.id)
 
   assert.equal(removeCalls, 1, 'public removal must delegate once without recursion')
-  assert.equal(destroyCalls, 1)
-  assert.equal(purgeCalls, 1)
+  assert.equal(destroyCalls, 0, 'internal history teardown must not be interceptable through the public method')
+  assert.equal(purgeCalls, 0, 'document removal must use its non-interceptable internal purge path')
   assert.equal(document.root, null)
   assert.equal(document.getNodeCount(), 0)
   assert.equal(engine.project.getDocument(document.id), undefined)
@@ -198,4 +198,144 @@ test('Project.removeDocument performs the complete Document.remove lifecycle exa
   assert.deepEqual(removeEvents, [{ id: document.id }])
   assert.equal(engine.materials.getUsageCount('Page'), 0)
   assert.equal(engine.materials.getUsageCount('Text'), 0)
+})
+
+test('restricted public transactions cannot execute callback options and Project exposes no boundary token', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null })
+  t.after(async () => engine.destroy())
+  engine.loadProject(createProjectSchema({ id: 'restricted-callback-boundary' }), true)
+  await engine.init()
+  const document = engine.project.currentDocument
+  let callbackCalls = 0
+
+  assert.equal(engine.project.beginDocumentMutationBoundary, undefined)
+  const error = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'must-not-commit' } }],
+      {
+        precondition() {
+          callbackCalls += 1
+        },
+      },
+    ),
+  )
+
+  assert.equal(error.name, 'PolicyViolation')
+  assert.match(error.capability, /command\.executable/)
+  assert.equal(callbackCalls, 0)
+  assert.equal(document.root.getPropValue('title'), 'before')
+
+  const result = engine.transactions.runOnDocument(document, [
+    { type: 'updateProps', nodeId: document.root.id, props: { title: 'typed-only' } },
+  ])
+  assert.equal(result.ok, true)
+  assert.equal(document.root.getPropValue('title'), 'typed-only')
+})
+
+test('material registry metadata and structural state roll back atomically with a failed transaction', async t => {
+  const { engine } = await createReadyEngine(t)
+  engine.project.load(createProjectSchema({ id: 'material-rollback' }), true)
+  const document = engine.project.currentDocument
+  const registry = engine.materials.registry
+  const originalComponent = () => 'original'
+  const replacementComponent = () => 'replacement'
+  const originalMeta = registry.register(
+    { componentName: 'Page', title: 'before' },
+    { component: originalComponent, override: true, version: '1.0.0' },
+  )
+  const originalEntry = registry.get('Page')
+  originalEntry.extensions = new Map([['origin', 'before']])
+  let metadataChanges = 0
+  const disposeChange = originalMeta.onMetadataChange(() => {
+    metadataChanges += 1
+  })
+  t.after(disposeChange)
+  const beforeDocument = structuredClone(document.exportRaw())
+
+  const error = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'document-leak' } }],
+      {
+        postcondition() {
+          registry.register(
+            { componentName: 'Page', title: 'metadata-leak' },
+            { component: replacementComponent, override: true, version: '2.0.0' },
+          )
+          registry.register({ componentName: 'TransactionOnly', title: 'must-disappear' })
+          throw new Error('force material rollback')
+        },
+      },
+    ),
+  )
+
+  assert.match(error.message, /force material rollback/)
+  assert.deepEqual(document.exportRaw(), beforeDocument)
+  assert.equal(document.history.isUndoable(), false)
+  assert.equal(registry.has('TransactionOnly'), false)
+  const restoredEntry = registry.get('Page')
+  assert.strictEqual(restoredEntry, originalEntry)
+  assert.strictEqual(restoredEntry.meta, originalMeta)
+  assert.strictEqual(restoredEntry.component, originalComponent)
+  assert.equal(restoredEntry.version, '1.0.0')
+  assert.equal(restoredEntry.usageCount, 1)
+  assert.deepEqual([...restoredEntry.extensions], [['origin', 'before']])
+  assert.equal(originalMeta.title, 'before')
+
+  const changesAfterRollback = metadataChanges
+  originalMeta.setMetadata({ componentName: 'Page', title: 'listener-still-live' })
+  assert.equal(metadataChanges, changesAfterRollback + 1)
+})
+
+test('committed material replacement tombstones the old meta and releases the transaction lock', async t => {
+  const { engine } = await createReadyEngine(t)
+  engine.project.load(createProjectSchema({ id: 'material-commit' }), true)
+  const document = engine.project.currentDocument
+  const registry = engine.materials.registry
+  const originalMeta = registry.register({ componentName: 'Page', title: 'before' }, { override: true })
+
+  engine.transactions.runOnDocument(
+    document,
+    [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'first-commit' } }],
+    {
+      postcondition() {
+        registry.register({ componentName: 'Page', title: 'replacement' }, { override: true })
+      },
+    },
+  )
+
+  assert.equal(registry.get('Page').meta.title, 'replacement')
+  assert.throws(() => originalMeta.setMetadata({ componentName: 'Page', title: 'zombie' }), /disposed/)
+  const second = engine.transactions.runOnDocument(document, [
+    { type: 'updateProps', nodeId: document.root.id, props: { title: 'second-commit' } },
+  ])
+  assert.equal(second.ok, true)
+  assert.equal(document.root.getPropValue('title'), 'second-commit')
+})
+
+test('transaction preflight failure does not acquire or leak the material transaction lock', async t => {
+  const { engine } = await createReadyEngine(t)
+  engine.project.load(createProjectSchema({ id: 'transaction-preflight-failure' }), true)
+  const document = engine.project.currentDocument
+  const beforeDocument = structuredClone(document.exportRaw())
+  const originalExportRaw = document.exportRaw.bind(document)
+
+  document.exportRaw = () => {
+    throw new Error('preflight export failure')
+  }
+  try {
+    const error = await captureFailure(() => engine.transactions.runSync(() => 'must-not-run'))
+    assert.match(error.message, /preflight export failure/)
+  } finally {
+    document.exportRaw = originalExportRaw
+  }
+
+  assert.deepEqual(document.exportRaw(), beforeDocument)
+  const result = engine.transactions.runOnDocument(document, [
+    { type: 'updateProps', nodeId: document.root.id, props: { title: 'lock-released' } },
+  ])
+  assert.equal(result.ok, true)
+  assert.equal(document.root.getPropValue('title'), 'lock-released')
 })

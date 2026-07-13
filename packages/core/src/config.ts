@@ -1,3 +1,5 @@
+import { assertLifecycleMutationAllowed } from './lifecycle/mutation-barrier'
+import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from './lifecycle/teardown-boundary'
 import type { Component, DataSourceEngine } from './types'
 import { createLogger, isPlainObject } from './utils'
 
@@ -106,6 +108,7 @@ export class Config {
 
   constructor(config?: { [key: string]: any }) {
     this.config = config || {}
+    installLifecycleTeardownOperation(this, (options?: { preserve?: string[] }) => this.#disposeInternal(options))
   }
 
   /**
@@ -131,6 +134,7 @@ export class Config {
    * @param value
    */
   set(key: string, value: any) {
+    assertLifecycleMutationAllowed(this, 'config.set')
     this.config[key] = value
     this.notifyGot(key)
   }
@@ -140,6 +144,7 @@ export class Config {
    * @param config
    */
   setConfig(config: { [key: string]: any }) {
+    assertLifecycleMutationAllowed(this, 'config.setConfig')
     if (config) {
       Object.keys(config).forEach(key => {
         this.set(key, config[key])
@@ -153,6 +158,7 @@ export class Config {
    * @param {ConfigOptions} engineOptions
    */
   setEngineOptions(engineOptions: ConfigOptions) {
+    assertLifecycleMutationAllowed(this, 'config.setEngineOptions')
     if (!engineOptions || !isPlainObject(engineOptions)) {
       return
     }
@@ -182,13 +188,14 @@ export class Config {
    * @returns
    */
   onGot(key: string, fn: (data: any) => void): () => void {
+    assertLifecycleMutationAllowed(this, 'config.onGot')
     const val = this.config?.[key]
     if (val !== undefined) {
       fn(val)
     }
-    this.setWait(key, fn)
+    const registration = this.setWait(key, fn)
     return () => {
-      this.delWait(key, fn)
+      this.removeWait(key, registration)
     }
   }
 
@@ -213,12 +220,23 @@ export class Config {
   }
 
   setWait(key: string, resolve: (data: any) => void, once?: boolean) {
+    assertLifecycleMutationAllowed(this, 'config.setWait')
+    const registration = { resolve, once }
     const waits = this.waits.get(key)
     if (waits) {
-      waits.push({ resolve, once })
+      waits.push(registration)
     } else {
-      this.waits.set(key, [{ resolve, once }])
+      this.waits.set(key, [registration])
     }
+    return registration
+  }
+
+  private removeWait(key: string, registration: { once?: boolean; resolve: (data: any) => void }): void {
+    const waits = this.waits.get(key)
+    if (!waits) return
+    const index = waits.indexOf(registration)
+    if (index !== -1) waits.splice(index, 1)
+    if (waits.length < 1) this.waits.delete(key)
   }
 
   delWait(key: string, fn: any) {
@@ -238,6 +256,11 @@ export class Config {
   }
 
   dispose(options: { preserve?: string[] } = {}) {
+    assertPublicLifecycleTeardownAllowed(this, 'config.dispose')
+    this.#disposeInternal(options)
+  }
+
+  #disposeInternal(options: { preserve?: string[] } = {}) {
     const preserved = new Set(options.preserve || [])
     this.config = Object.fromEntries(Object.entries(this.config).filter(([key]) => preserved.has(key)))
     this.waits.clear()

@@ -56,6 +56,12 @@ created -> initializing -> ready -> disposing -> disposed
 - 初始化失败会逆序回滚已拥有的资源。
 - 销毁失败进入 `failed`，下一次 `destroy()` 会重试尚未成功的清理。
 - 一个实例销毁不会清理另一个实例的 Project、事件、热键、物料或远程资源。
+- `lifecycleState` 是只读判定源；`disposing`、`disposed`、`failed` 状态拒绝新增写入和监听器，不能通过外部改写状态重新打开边界。
+- 一代从进入 `initializing` 开始，在进入 `disposing` 或初始化回滚时结束；只有代边界会使旧的异步写入票据失效。跨越销毁/重启才返回的插件注册、初始化或扩展结果不能提交到新代。
+- Config、Editor、Designer 等实例根服务只会在显式 `init()` 后重新启用；旧代 `Document`、`History`、物料 Registry/Meta 和 PluginContext 引用会永久 tombstone，重启不会复活。PluginContext 暴露的是绑定当前代的 capability view，而不是可跨代复用的原始服务引用。
+- 同代插件 `init()` / `destroy()` / `extend()` 调用共享进行中的 Promise；同名注册、覆盖、删除使用独占 reservation，候选插件先完成初始化，再原子替换已注册 runtime。
+- 销毁所需的内部清理权限不作为公共布尔参数暴露；引擎拥有的服务只能由 `EngineInstance.destroy()` 清理。宿主写权限会在事件、物料监听器和组件 Hook 执行前暂停，不能被回调借用。对外状态通知使用分离快照，不能保留内核 backing Map 或可变 Error 引用。
+- 受限策略下，公开事务入口拒绝可执行 validator；Agent 只能通过包内不可伪造能力执行校验事务。物料事务会恢复完整 Entry/ComponentMeta 状态，提交后才 tombstone 被替换的 Meta；`MaterialRegistry.getSnapshot()` 只提供冻结、确定序的验证数据，不暴露回滚令牌。
 
 `@easy-editor/core` 根入口仍保留 `defaultEngine`、`init`、`project` 等旧 facade 以兼容历史应用；新代码不应把它当作实例入口。
 
@@ -141,7 +147,7 @@ Dashboard 宿主只检查并复制最近 10 条消息，单条 UTF-8 上限 2 Ki
 
 | 契约 | 测试 |
 | --- | --- |
-| 实例隔离与生命周期 | `engine-isolation`、`engine-lifecycle` |
+| 实例隔离与生命周期 | `engine-instance`、`engine-lifecycle`、`engine-child-boundaries`、`engine-generation-boundary`、`engine-lifecycle-adversarial` |
 | Schema 迁移与失败原子性 | `schema-validation` |
 | 命令事务与结构命令 | `transaction`、`structural-commands` |
 | Agent grant、stale 与传输 | `agent-*` |

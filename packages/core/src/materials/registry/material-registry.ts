@@ -5,11 +5,30 @@
 
 import { action, computed, observable } from 'mobx'
 import type { Designer } from '../../designer'
+import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../../lifecycle/teardown-boundary'
 import type { ComponentMetadata } from '../../types'
 import { ComponentMeta } from '../component-meta'
 import {
+  captureComponentMetaTransactionState,
+  restoreComponentMetaTransactionState,
+} from '../component-meta-transaction'
+import { installMaterialRegistryTeardown } from './teardown'
+import {
+  type MaterialEntryTransactionState,
+  type MaterialRegistryTransactionState,
+  installMaterialRegistryTransactionOperations,
+} from './transaction-boundary'
+import {
   type IMaterialRegistry,
   type MaterialEntry,
+  type MaterialRegistryEntrySnapshot,
+  type MaterialRegistrySnapshot,
   MaterialSource,
   MaterialStatus,
   type RegisterOptions,
@@ -24,11 +43,6 @@ const COMPONENT_NAME_REGEX = /^[A-Za-z_$][A-Za-z0-9_$.@]*$/
 
 /** 最大组件名称长度 */
 const MAX_COMPONENT_NAME_LENGTH = 255
-
-export interface MaterialRegistryTransactionState {
-  entries: Map<string, number>
-  pendingEntries: Map<string, number>
-}
 
 /**
  * 物料注册表
@@ -47,10 +61,64 @@ export class MaterialRegistry implements IMaterialRegistry {
   /** 事件监听器 */
   private listeners = new Set<RegistryEventListener>()
 
-  /** 是否已销毁 */
-  private disposed = false
+  private disposeStarted = false
 
-  constructor(private readonly designer: Designer) {}
+  private disposeCompleted = false
+
+  private pendingMetaTeardowns = new Set<ComponentMeta>()
+
+  private activeTransaction?: {
+    readonly deferredMetaTeardowns: Set<ComponentMeta>
+    readonly state: MaterialRegistryTransactionState
+  }
+
+  constructor(private readonly designer: Designer) {
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#disposeInternal()),
+    )
+    installMaterialRegistryTeardown(this, componentName => {
+      const entry = this.entries.get(componentName) || this.pendingEntries.get(componentName)
+      if (entry && entry.usageCount > 0) entry.usageCount--
+    })
+    installMaterialRegistryTransactionOperations(this, {
+      begin: () => this.#beginTransaction(),
+      commit: state => this.#commitTransaction(state),
+      restore: state => this.#restoreTransaction(state),
+    })
+  }
+
+  private prepareMeta(meta: ComponentMeta): ComponentMeta {
+    inheritLifecycleMutationGuard(this, meta)
+    inheritEngineTeardownOwnership(this, meta)
+    return meta
+  }
+
+  private teardownMeta(meta: ComponentMeta): void {
+    if (this.activeTransaction) this.activeTransaction.deferredMetaTeardowns.add(meta)
+    else {
+      this.pendingMetaTeardowns.add(meta)
+      this.#flushPendingMetaTeardowns()
+    }
+  }
+
+  #flushPendingMetaTeardowns(): void {
+    const errors: unknown[] = []
+    for (const meta of this.pendingMetaTeardowns) {
+      try {
+        runInternalLifecycleTeardown(meta)
+        this.pendingMetaTeardowns.delete(meta)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (errors.length) throw new AggregateError(errors, 'One or more component metadata instances failed to dispose')
+  }
+
+  private assertUsable(origin: string): void {
+    if (this.disposeStarted) throw new Error(`Cannot ${origin} on a disposed material registry`)
+    assertLifecycleMutationAllowed(this, origin)
+  }
 
   /** 获取版本号 */
   get version(): number {
@@ -109,6 +177,7 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   register(metadata: ComponentMetadata, options: RegisterOptions = {}): ComponentMeta {
+    this.assertUsable('materials.registry.register')
     const componentName = metadata.componentName
 
     if (!this.validateComponentName(componentName)) {
@@ -123,7 +192,9 @@ export class MaterialRegistry implements IMaterialRegistry {
       // 已存在：更新元数据
       if (options.override) {
         // 覆盖模式：创建新的 ComponentMeta
-        entry.meta = new ComponentMeta(this.designer, metadata)
+        const previousMeta = entry.meta
+        entry.meta = this.prepareMeta(new ComponentMeta(this.designer, metadata))
+        this.teardownMeta(previousMeta)
         entry.component = options.component
         entry.status = options.component ? MaterialStatus.ACTIVE : MaterialStatus.REGISTERED
         entry.lastAccessedAt = Date.now()
@@ -152,7 +223,7 @@ export class MaterialRegistry implements IMaterialRegistry {
         isNew = true
       } else {
         // 全新创建
-        const meta = new ComponentMeta(this.designer, metadata)
+        const meta = this.prepareMeta(new ComponentMeta(this.designer, metadata))
         entry = this.createEntry(componentName, meta, options)
         isNew = true
       }
@@ -171,6 +242,7 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   async unload(componentName: string, options: UnloadOptions = {}): Promise<boolean> {
+    this.assertUsable('materials.registry.unload')
     const entry = this.entries.get(componentName)
 
     if (!entry) {
@@ -194,9 +266,7 @@ export class MaterialRegistry implements IMaterialRegistry {
     })
 
     // 清理 ComponentMeta
-    if (entry.meta.dispose) {
-      entry.meta.dispose()
-    }
+    this.teardownMeta(entry.meta)
 
     // 从映射中移除
     this.entries.delete(componentName)
@@ -223,6 +293,7 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   getOrCreate(componentName: string, generateMetadata?: () => ComponentMetadata | null): ComponentMeta {
+    this.assertUsable('materials.registry.getOrCreate')
     // 优先从活跃条目获取
     const entry = this.entries.get(componentName)
     if (entry) {
@@ -242,7 +313,7 @@ export class MaterialRegistry implements IMaterialRegistry {
       componentName,
       ...(generateMetadata ? generateMetadata() : null),
     }
-    const meta = new ComponentMeta(this.designer, metadata)
+    const meta = this.prepareMeta(new ComponentMeta(this.designer, metadata))
     const newEntry = this.createEntry(componentName, meta, {
       source: MaterialSource.BUILTIN,
     })
@@ -259,6 +330,7 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   incrementUsage(componentName: string): void {
+    this.assertUsable('materials.registry.incrementUsage')
     const entry = this.entries.get(componentName) || this.pendingEntries.get(componentName)
     if (entry) {
       entry.usageCount++
@@ -272,6 +344,7 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   decrementUsage(componentName: string): void {
+    this.assertUsable('materials.registry.decrementUsage')
     const entry = this.entries.get(componentName) || this.pendingEntries.get(componentName)
     if (entry && entry.usageCount > 0) {
       entry.usageCount--
@@ -295,32 +368,97 @@ export class MaterialRegistry implements IMaterialRegistry {
     return (this.entries.get(componentName) || this.pendingEntries.get(componentName))?.usageCount || 0
   }
 
-  captureTransactionState(): MaterialRegistryTransactionState {
+  #captureEntryTransactionState(entry: MaterialEntry): MaterialEntryTransactionState {
     return {
-      entries: new Map(Array.from(this.entries, ([key, entry]) => [key, entry.usageCount])),
-      pendingEntries: new Map(Array.from(this.pendingEntries, ([key, entry]) => [key, entry.usageCount])),
+      component: entry.component,
+      componentName: entry.componentName,
+      entry,
+      extensions: entry.extensions ? new Map(entry.extensions) : undefined,
+      lastAccessedAt: entry.lastAccessedAt,
+      loadedAt: entry.loadedAt,
+      meta: entry.meta,
+      metaState: captureComponentMetaTransactionState(entry.meta),
+      source: entry.source,
+      status: entry.status,
+      usageCount: entry.usageCount,
+      version: entry.version,
     }
+  }
+
+  #beginTransaction(): MaterialRegistryTransactionState {
+    this.assertUsable('materials.registry.transaction.begin')
+    if (this.activeTransaction) throw new Error('A material registry transaction is already active')
+    const state: MaterialRegistryTransactionState = {
+      entries: new Map(Array.from(this.entries, ([key, entry]) => [key, this.#captureEntryTransactionState(entry)])),
+      pendingEntries: new Map(
+        Array.from(this.pendingEntries, ([key, entry]) => [key, this.#captureEntryTransactionState(entry)]),
+      ),
+      token: {},
+      version: this._version,
+    }
+    this.activeTransaction = { deferredMetaTeardowns: new Set(), state }
+    return state
+  }
+
+  #requireTransaction(state: MaterialRegistryTransactionState) {
+    if (!this.activeTransaction || this.activeTransaction.state !== state) {
+      throw new Error('The material registry transaction is no longer active')
+    }
+    return this.activeTransaction
   }
 
   @action
-  restoreTransactionState(snapshot: MaterialRegistryTransactionState): void {
-    const restore = (target: Map<string, MaterialEntry>, usageCounts: Map<string, number>) => {
-      for (const [key, entry] of target) {
-        const usageCount = usageCounts.get(key)
-        if (usageCount === undefined) {
-          entry.meta.dispose?.()
-          target.delete(key)
-        } else {
-          entry.usageCount = usageCount
-        }
-      }
+  #commitTransaction(state: MaterialRegistryTransactionState): void {
+    const transaction = this.#requireTransaction(state)
+    const liveMetas = new Set([...this.entries.values(), ...this.pendingEntries.values()].map(entry => entry.meta))
+    for (const meta of transaction.deferredMetaTeardowns) {
+      if (liveMetas.has(meta)) continue
+      this.pendingMetaTeardowns.add(meta)
+    }
+    this.activeTransaction = undefined
+    this.#flushPendingMetaTeardowns()
+  }
+
+  @action
+  #restoreTransaction(state: MaterialRegistryTransactionState): void {
+    this.assertUsable('materials.registry.transaction.restore')
+    this.#requireTransaction(state)
+    const originalMetas = new Set(
+      [...state.entries.values(), ...state.pendingEntries.values()].map(snapshot => snapshot.meta),
+    )
+    const currentMetas = new Set([...this.entries.values(), ...this.pendingEntries.values()].map(entry => entry.meta))
+    for (const meta of currentMetas) {
+      if (originalMetas.has(meta)) continue
+      this.pendingMetaTeardowns.add(meta)
     }
 
-    restore(this.entries, snapshot.entries)
-    restore(this.pendingEntries, snapshot.pendingEntries)
+    const restoreMap = (target: Map<string, MaterialEntry>, snapshots: Map<string, MaterialEntryTransactionState>) => {
+      target.clear()
+      for (const [key, snapshot] of snapshots) {
+        const entry = snapshot.entry
+        entry.component = snapshot.component
+        entry.componentName = snapshot.componentName
+        entry.extensions = snapshot.extensions ? new Map(snapshot.extensions) : undefined
+        entry.lastAccessedAt = snapshot.lastAccessedAt
+        entry.loadedAt = snapshot.loadedAt
+        entry.meta = snapshot.meta
+        entry.source = snapshot.source
+        entry.status = snapshot.status
+        entry.usageCount = snapshot.usageCount
+        entry.version = snapshot.version
+        restoreComponentMetaTransactionState(snapshot.meta, snapshot.metaState)
+        target.set(key, entry)
+      }
+    }
+    restoreMap(this.entries, state.entries)
+    restoreMap(this.pendingEntries, state.pendingEntries)
+    this._version = state.version
+    this.activeTransaction = undefined
+    this.#flushPendingMetaTeardowns()
   }
 
   subscribe(listener: RegistryEventListener): () => void {
+    this.assertUsable('materials.registry.subscribe')
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
@@ -329,6 +467,31 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   getAll(): Map<string, MaterialEntry> {
     return new Map(this.entries)
+  }
+
+  getSnapshot(): MaterialRegistrySnapshot {
+    const snapshotEntries = (entries: Map<string, MaterialEntry>): readonly MaterialRegistryEntrySnapshot[] =>
+      Object.freeze(
+        [...entries.values()]
+          .sort((left, right) => left.componentName.localeCompare(right.componentName))
+          .map(entry =>
+            Object.freeze({
+              componentLoaded: entry.component !== undefined,
+              componentName: entry.componentName,
+              extensionKeys: Object.freeze([...(entry.extensions?.keys() || [])].sort()),
+              source: entry.source,
+              status: entry.status,
+              usageCount: entry.usageCount,
+              version: entry.version,
+            }),
+          ),
+      )
+
+    return Object.freeze({
+      entries: snapshotEntries(this.entries),
+      pendingEntries: snapshotEntries(this.pendingEntries),
+      version: this._version,
+    })
   }
 
   getBySource(source: MaterialSource): MaterialEntry[] {
@@ -343,6 +506,7 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   refresh(): void {
+    this.assertUsable('materials.registry.refresh')
     this._version++
     // 触发 MobX 响应式更新
     this.entries = new Map(this.entries)
@@ -390,26 +554,27 @@ export class MaterialRegistry implements IMaterialRegistry {
 
   @action
   dispose(): void {
-    if (this.disposed) {
-      return
-    }
-    this.disposed = true
+    assertPublicLifecycleTeardownAllowed(this, 'materials.registry.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    if (this.disposeCompleted) return
+    this.disposeStarted = true
 
     // 清理所有 ComponentMeta
     this.entries.forEach(entry => {
-      if (entry.meta.dispose) {
-        entry.meta.dispose()
-      }
+      this.pendingMetaTeardowns.add(entry.meta)
     })
     this.pendingEntries.forEach(entry => {
-      if (entry.meta.dispose) {
-        entry.meta.dispose()
-      }
+      this.pendingMetaTeardowns.add(entry.meta)
     })
 
     // 清空映射
     this.entries.clear()
     this.pendingEntries.clear()
     this.listeners.clear()
+    this.#flushPendingMetaTeardowns()
+    this.disposeCompleted = true
   }
 }

@@ -1,13 +1,23 @@
 import { action, computed } from 'mobx'
 import type { Designer } from '../designer'
+import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { Component, ComponentMetadata, Editor } from '../types'
 import { type ComponentMeta, isComponentMeta } from './component-meta'
+import { MaterialRegistry, MaterialSource, type RegisterOptions } from './registry'
+import { releaseMaterialRegistryUsageDuringTeardown } from './registry/teardown'
 import {
-  MaterialRegistry,
-  type MaterialRegistryTransactionState,
-  MaterialSource,
-  type RegisterOptions,
-} from './registry'
+  beginMaterialRegistryTransaction,
+  commitMaterialRegistryTransaction,
+  restoreMaterialRegistryTransaction,
+} from './registry/transaction-boundary'
+import { installMaterialsTeardown } from './teardown'
+import { installMaterialsTransactionOperations } from './transaction-boundary'
 
 export class Materials {
   /** 物料注册表（新架构核心） */
@@ -20,8 +30,11 @@ export class Materials {
   /** 获取物料注册表 */
   get registry(): MaterialRegistry {
     if (!this._registry) {
+      assertLifecycleMutationAllowed(this, 'materials.registry.create')
       this._registry = new MaterialRegistry(this.designer)
     }
+    inheritLifecycleMutationGuard(this, this._registry)
+    inheritEngineTeardownOwnership(this, this._registry)
     return this._registry
   }
 
@@ -30,12 +43,23 @@ export class Materials {
     return this.registry.version
   }
 
-  constructor(readonly editor: Editor) {}
+  constructor(readonly editor: Editor) {
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
+    installMaterialsTeardown(this, componentName => {
+      if (this._registry) releaseMaterialRegistryUsageDuringTeardown(this._registry, componentName)
+    })
+    installMaterialsTransactionOperations(this, {
+      begin: () => beginMaterialRegistryTransaction(this.registry),
+      commit: state => commitMaterialRegistryTransaction(this.registry, state),
+      restore: state => restoreMaterialRegistryTransaction(this.registry, state),
+    })
+  }
 
   /**
    * 批量构建组件元数据
    */
   buildComponentMetasMap = (metas: ComponentMetadata[]) => {
+    assertLifecycleMutationAllowed(this, 'materials.buildComponentMetasMap')
     for (const meta of metas) {
       this.createComponentMeta(meta)
     }
@@ -46,6 +70,7 @@ export class Materials {
    */
   @action
   createComponentMeta(data: ComponentMetadata, options?: RegisterOptions): ComponentMeta | null {
+    assertLifecycleMutationAllowed(this, 'materials.createComponentMeta')
     const key = data.componentName
     if (!key) {
       return null
@@ -62,6 +87,7 @@ export class Materials {
    */
   @action
   removeComponentMeta(componentName: string): boolean {
+    assertLifecycleMutationAllowed(this, 'materials.removeComponentMeta')
     if (!componentName) {
       return false
     }
@@ -87,6 +113,7 @@ export class Materials {
    * 获取组件元数据（带懒加载）
    */
   getComponentMeta(componentName: string, generateMetadata?: () => ComponentMetadata | null): ComponentMeta {
+    if (generateMetadata) assertLifecycleMutationAllowed(this, 'materials.getComponentMeta.generate')
     return this.registry.getOrCreate(componentName, generateMetadata)
   }
 
@@ -128,6 +155,7 @@ export class Materials {
    * 刷新映射，触发依赖更新
    */
   refreshComponentMetasMap() {
+    assertLifecycleMutationAllowed(this, 'materials.refreshComponentMetasMap')
     this.registry.refresh()
   }
 
@@ -135,6 +163,7 @@ export class Materials {
    * 增加组件使用计数
    */
   incrementUsage(componentName: string): void {
+    assertLifecycleMutationAllowed(this, 'materials.incrementUsage')
     this.registry.incrementUsage(componentName)
   }
 
@@ -142,6 +171,7 @@ export class Materials {
    * 减少组件使用计数
    */
   decrementUsage(componentName: string): void {
+    assertLifecycleMutationAllowed(this, 'materials.decrementUsage')
     this.registry.decrementUsage(componentName)
   }
 
@@ -156,14 +186,6 @@ export class Materials {
     return this.registry.getUsageCount(componentName)
   }
 
-  captureTransactionState(): MaterialRegistryTransactionState {
-    return this.registry.captureTransactionState()
-  }
-
-  restoreTransactionState(snapshot: MaterialRegistryTransactionState): void {
-    this.registry.restoreTransactionState(snapshot)
-  }
-
   /**
    * 检查是否为 ComponentMeta
    */
@@ -175,7 +197,12 @@ export class Materials {
    * 销毁 Materials 实例
    */
   dispose() {
-    this._registry?.dispose()
+    assertPublicLifecycleTeardownAllowed(this, 'materials.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    if (this._registry) runInternalLifecycleTeardown(this._registry)
     this._registry = null
   }
 }

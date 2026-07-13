@@ -1,6 +1,9 @@
 import { action } from 'mobx'
 import type { SettingField } from '../designer'
 import type { Node } from '../document/node/node'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { createMutationGuardedMapView } from '../lifecycle/mutation-guarded-map'
+import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import type { Component } from '../types/component'
 import { createLogger } from '../utils'
 
@@ -30,7 +33,15 @@ interface RegisterSetterOption {
 }
 
 export class Setters {
-  settersMap = new Map<string, Setter & { type: string }>()
+  private readonly registeredSetters = new Map<string, Setter & { type: string }>()
+
+  readonly settersMap = createMutationGuardedMapView(this.registeredSetters, () =>
+    assertLifecycleMutationAllowed(this, 'setters.map.mutate'),
+  )
+
+  constructor() {
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
+  }
 
   getSetter(type: string) {
     return this.settersMap.get(type)
@@ -46,8 +57,9 @@ export class Setters {
     setter?: Component | Setter,
     option?: RegisterSetterOption,
   ) {
+    assertLifecycleMutationAllowed(this, 'setters.registerSetter')
     if (typeof typeOrMaps === 'object') {
-      const checkpoint = new Map(this.settersMap)
+      const checkpoint = new Map(this.registeredSetters)
       const descriptors = Object.getOwnPropertyDescriptors(typeOrMaps)
       try {
         for (const type of Object.keys(typeOrMaps)) {
@@ -58,8 +70,8 @@ export class Setters {
           this.registerSetter(type, descriptor.value)
         }
       } catch (error) {
-        this.settersMap.clear()
-        for (const [type, registeredSetter] of checkpoint) this.settersMap.set(type, registeredSetter)
+        this.registeredSetters.clear()
+        for (const [type, registeredSetter] of checkpoint) this.registeredSetters.set(type, registeredSetter)
         throw error
       }
       return
@@ -98,7 +110,7 @@ export class Setters {
       }
     }
 
-    this.settersMap.set(typeOrMaps, { type: typeOrMaps, ...normalizedSetter })
+    this.registeredSetters.set(typeOrMaps, { type: typeOrMaps, ...normalizedSetter })
   }
 
   createSetterContent = (setter: any, props: Record<string, any>): Component => {
@@ -123,7 +135,12 @@ export class Setters {
   }
 
   dispose(): void {
-    this.settersMap.clear()
+    assertPublicLifecycleTeardownAllowed(this, 'setters.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    this.registeredSetters.clear()
   }
 }
 

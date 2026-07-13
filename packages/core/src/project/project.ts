@@ -1,16 +1,30 @@
 import { action, computed, intercept, observable, observe, runInAction } from 'mobx'
 import type { Designer } from '../designer'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
+import {
+  purgeDocumentDuringTeardown,
+  removeDocumentDuringTeardown,
+  retireDocumentDuringTeardown,
+} from '../document/teardown'
+import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import { SchemaValidator } from '../schema'
 import { createEmptyProjectSchema } from '../schema/schema-migration'
-import type { Simulator } from '../simulator'
+import { Simulator } from '../simulator'
 import { type TrustPolicy, resolveTrustPolicy } from '../trust'
 import { type ComponentsMap, type ProjectSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
 import { type EventBus, createLogger, isLowCodeComponentType, isProCodeComponentType } from '../utils'
+import { type DocumentMutationBoundary, installDocumentMutationBoundary } from './document-mutation-boundary'
 import {
   assertProjectMutationAuthority,
   installProjectMutationAuthority,
   withProjectMutationAuthority,
+  withProjectTeardownAuthority,
 } from './mutation-authority'
 
 const logger = createLogger('Project')
@@ -51,16 +65,15 @@ export enum PROJECT_EVENT {
   SIMULATOR_READY = 'simulator:ready',
 }
 
-export interface DocumentMutationBoundary {
-  allowMutations(): void
-  seal(): void
-  release(): void
-}
-
 interface ActiveDocumentMutationBoundary {
   readonly document: Document
   readonly token: object
   mutationsAllowed: boolean
+}
+
+interface LegacySimulatorLifecycle {
+  dispose?: () => void | Promise<void>
+  purge?: () => void | Promise<void>
 }
 
 export class Project {
@@ -111,9 +124,13 @@ export class Project {
     readonly designer: Designer,
     schema?: ProjectSchema,
   ) {
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
+    inheritEngineTeardownOwnership(this.designer, this)
     this.emitter = designer.createEventBus('Project')
+    inheritEngineTeardownOwnership(this, this.emitter)
     this.trustPolicy = this.designer.editor.get<TrustPolicy>('trustPolicy') || resolveTrustPolicy('legacyTrusted')
     installProjectMutationAuthority(this, this.trustPolicy)
+    installDocumentMutationBoundary(this, document => this.#beginDocumentMutationBoundary(document))
     this.schemaValidator = this.designer.get('schemaValidator') || new SchemaValidator(this.trustPolicy)
     this.trackDocumentCollectionMutations()
     intercept(this, 'documents', change => {
@@ -225,37 +242,46 @@ export class Project {
   }
 
   async dispose() {
+    assertPublicLifecycleTeardownAllowed(this, 'project.dispose')
     this.assertProjectMutationAllowed()
+    await this.#disposeInternal()
+  }
+
+  async #disposeInternal(): Promise<void> {
     const failures: unknown[] = []
-    const simulator = this._simulator as (Simulator & { dispose?: () => void | Promise<void> }) | undefined
+    const simulator: unknown = this._simulator
+    const legacySimulator = simulator as LegacySimulatorLifecycle | undefined
     let simulatorDisposed = true
     try {
-      if (simulator?.dispose) {
-        await simulator.dispose()
+      if (simulator instanceof Simulator) {
+        await runInternalLifecycleTeardown<[], void | Promise<void>>(simulator)
+      } else if (legacySimulator?.dispose) {
+        await legacySimulator.dispose()
       } else {
-        simulator?.purge()
+        await legacySimulator?.purge?.()
       }
     } catch (error) {
       simulatorDisposed = false
       failures.push(error)
     }
 
-    withProjectMutationAuthority(this, () => {
-      for (const document of [...this.documents].reverse()) {
-        try {
-          document.remove()
-        } catch (error) {
-          failures.push(error)
+    runInAction(() => {
+      withProjectTeardownAuthority(this, () => {
+        for (const document of [...this.documents].reverse()) {
           try {
-            document.purge()
-          } catch (purgeError) {
-            failures.push(purgeError)
+            removeDocumentDuringTeardown(document)
+          } catch (error) {
+            failures.push(error)
+            try {
+              purgeDocumentDuringTeardown(document)
+            } catch (purgeError) {
+              failures.push(purgeError)
+            }
+            this.internalUnlinkDocument(document)
+            retireDocumentDuringTeardown(document)
           }
-          this.internalUnlinkDocument(document)
         }
-      }
 
-      runInAction(() => {
         if (simulatorDisposed) {
           this._simulator = undefined
         }
@@ -264,7 +290,7 @@ export class Project {
         this.data = this.protectProjectDataValue(createEmptyProjectSchema())
         this._config = undefined
         this.isRendererReady = false
-        this.emitter.dispose()
+        runInternalLifecycleTeardown(this.emitter)
       })
     })
     if (failures.length) {
@@ -324,7 +350,7 @@ export class Project {
   }
 
   /** Internal guard that prevents ambient hooks from mutating another document. */
-  beginDocumentMutationBoundary(document: Document): DocumentMutationBoundary {
+  #beginDocumentMutationBoundary(document: Document): DocumentMutationBoundary {
     if (this.documentMutationBoundary) {
       throw new Error('A document mutation boundary is already active')
     }
@@ -354,11 +380,17 @@ export class Project {
   }
 
   assertDocumentMutationAllowed(document: Document): void {
+    assertLifecycleMutationAllowed(document, 'document.mutation')
     assertProjectMutationAuthority(this, 'document.mutation')
     const boundary = this.documentMutationBoundary
     if (boundary && (boundary.document !== document || !boundary.mutationsAllowed)) {
       throw new Error(`Document mutation is blocked while document "${boundary.document.id}" is isolated`)
     }
+  }
+
+  /** Internal liveness check for generation-owned history/listener state. */
+  assertDocumentGenerationActive(document: Document): void {
+    assertLifecycleMutationAllowed(document, 'document.generation')
   }
 
   /** Internal guard for project document identity and lifecycle changes. */
@@ -372,6 +404,7 @@ export class Project {
 
   /** Internal guard for operations that detach, purge, open, or close a document. */
   assertDocumentLifecycleMutationAllowed(document: Document): void {
+    assertLifecycleMutationAllowed(document, 'document.lifecycle')
     assertProjectMutationAuthority(this, 'document.lifecycle')
     const boundary = this.documentMutationBoundary
     if (boundary) {
@@ -492,36 +525,41 @@ export class Project {
 
   mountSimulator(simulator: Simulator) {
     this.assertProjectMutationAllowed()
+    assertLifecycleMutationAllowed(simulator, 'project.mountSimulator.target')
+    if (this._simulator && this._simulator !== simulator) {
+      const currentSimulator: unknown = this._simulator
+      if (currentSimulator instanceof Simulator) runInternalLifecycleTeardown(currentSimulator)
+      else (currentSimulator as LegacySimulatorLifecycle).dispose?.()
+    }
+    inheritLifecycleMutationGuard(this, simulator)
+    if (simulator instanceof Simulator) inheritEngineTeardownOwnership(this, simulator)
     this._simulator = simulator
     this.emitter.emit(PROJECT_EVENT.SIMULATOR_READY, simulator)
   }
 
   onSimulatorReady(listener: (simulator: Simulator) => void): () => void {
+    assertLifecycleMutationAllowed(this, 'project.onSimulatorReady')
     if (this._simulator) {
       listener(this._simulator)
     }
 
-    this.emitter.on(PROJECT_EVENT.SIMULATOR_READY, listener)
-    return () => {
-      this.emitter.off(PROJECT_EVENT.SIMULATOR_READY, listener)
-    }
+    return this.emitter.on(PROJECT_EVENT.SIMULATOR_READY, listener)
   }
 
   /**
    * use to wait for renderer ready and then do initial work
    */
   onRendererReady(listener: () => void): () => void {
+    assertLifecycleMutationAllowed(this, 'project.onRendererReady')
     if (this.isRendererReady) {
       listener()
     }
 
-    this.emitter.on(PROJECT_EVENT.RENDERER_READY, listener)
-    return () => {
-      this.emitter.off(PROJECT_EVENT.RENDERER_READY, listener)
-    }
+    return this.emitter.on(PROJECT_EVENT.RENDERER_READY, listener)
   }
 
   onDocumentAdd(listener: (document: Document) => void) {
+    assertLifecycleMutationAllowed(this, 'project.onDocumentAdd')
     const dispose = this.designer.onEvent(DOCUMENT_EVENT.ADD, listener)
 
     return () => {
@@ -530,6 +568,7 @@ export class Project {
   }
 
   onDocumentRemove(listener: (id: string) => void) {
+    assertLifecycleMutationAllowed(this, 'project.onDocumentRemove')
     const dispose = this.designer.onEvent(DOCUMENT_EVENT.REMOVE, listener)
 
     return () => {
@@ -538,6 +577,7 @@ export class Project {
   }
 
   onCurrentDocumentChange(listener: (document: Document) => void) {
+    assertLifecycleMutationAllowed(this, 'project.onCurrentDocumentChange')
     const dispose = this.designer.onEvent(DOCUMENT_EVENT.OPEN_CHANGE, listener)
 
     return () => {

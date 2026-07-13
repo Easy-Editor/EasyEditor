@@ -1,3 +1,5 @@
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import { createLogger } from './logger'
 
 export interface HotkeyCallbackConfig {
@@ -13,7 +15,15 @@ export type Disposable = () => void
 
 export type HotkeyCallback = (e: KeyboardEvent, combo?: string) => any | false
 
+export type HotkeyCallbackSnapshot = Readonly<
+  Omit<HotkeyCallbackConfig, 'modifiers'> & { modifiers: readonly string[] }
+>
+
 export interface HotkeyCallbacks {
+  readonly [key: string]: readonly HotkeyCallbackSnapshot[]
+}
+
+interface MutableHotkeyCallbacks {
   [key: string]: HotkeyCallbackConfig[]
 }
 
@@ -370,10 +380,23 @@ export interface HotkeyConfig {
 export class Hotkey {
   logger = createLogger('HotKey')
 
-  /**
-   * 当前快捷键配置
-   */
-  callBacks: HotkeyCallbacks = {}
+  #callBacks: MutableHotkeyCallbacks = {}
+
+  /** Detached diagnostics; mutating a retained view cannot reconfigure this Hotkey. */
+  get callBacks(): HotkeyCallbacks {
+    const snapshot: Record<string, readonly HotkeyCallbackSnapshot[]> = {}
+    for (const [key, callbacks] of Object.entries(this.#callBacks)) {
+      snapshot[key] = Object.freeze(
+        callbacks.map(callback =>
+          Object.freeze({
+            ...callback,
+            modifiers: Object.freeze([...callback.modifiers]),
+          }),
+        ),
+      )
+    }
+    return Object.freeze(snapshot)
+  }
 
   private directMap: HotkeyDirectMap = {}
 
@@ -397,76 +420,106 @@ export class Hotkey {
     }
   >()
 
-  constructor(readonly viewName: string = 'global') {}
+  constructor(readonly viewName: string = 'global') {
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
+  }
 
   activate(activate: boolean): void {
+    assertLifecycleMutationAllowed(this, 'hotkey.activate')
     this.isActivate = activate
   }
 
   mount(window: Window): Disposable {
+    assertLifecycleMutationAllowed(this, 'hotkey.mount')
     const { document } = window
+    const createRelease = (mountedDocument: { references: number; dispose: Disposable }): Disposable => {
+      let released = false
+      return () => {
+        if (!released) {
+          released = true
+          mountedDocument.references -= 1
+        }
+        if (mountedDocument.references === 0) {
+          mountedDocument.dispose()
+        }
+      }
+    }
     const mounted = this.mountedDocuments.get(document)
     if (mounted) {
       mounted.references += 1
-      let released = false
-      return () => {
-        if (released) {
-          return
-        }
-        released = true
-        mounted.references -= 1
-        if (mounted.references === 0) {
-          mounted.dispose()
-        }
-      }
+      return createRelease(mounted)
     }
 
     const handleKeyEvent = this.handleKeyEvent.bind(this)
-    document.addEventListener('keypress', handleKeyEvent, false)
-    document.addEventListener('keydown', handleKeyEvent, false)
-    document.addEventListener('keyup', handleKeyEvent, false)
-
-    let disposed = false
+    const eventTypes = ['keypress', 'keydown', 'keyup'] as const
+    const pendingRemovals = new Set<(typeof eventTypes)[number]>()
     const dispose = () => {
-      if (disposed) {
-        return
+      const failures: unknown[] = []
+      for (const eventType of [...pendingRemovals]) {
+        try {
+          document.removeEventListener(eventType, handleKeyEvent, false)
+          pendingRemovals.delete(eventType)
+        } catch (error) {
+          failures.push(error)
+        }
       }
-      disposed = true
-      document.removeEventListener('keypress', handleKeyEvent, false)
-      document.removeEventListener('keydown', handleKeyEvent, false)
-      document.removeEventListener('keyup', handleKeyEvent, false)
-      this.mountedDocuments.delete(document)
+
+      if (pendingRemovals.size === 0) {
+        this.mountedDocuments.delete(document)
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'Hotkey listener disposal failed')
+      }
     }
     const mountedDocument = { references: 1, dispose }
+    // Publish provisional ownership before acquisition. If a later listener
+    // fails to attach and rollback also fails, engine teardown can still retry
+    // every successfully acquired registration.
     this.mountedDocuments.set(document, mountedDocument)
-    let released = false
-    return () => {
-      if (released) {
-        return
+    try {
+      for (const eventType of eventTypes) {
+        document.addEventListener(eventType, handleKeyEvent, false)
+        pendingRemovals.add(eventType)
       }
-      released = true
-      mountedDocument.references -= 1
-      if (mountedDocument.references === 0) {
-        mountedDocument.dispose()
+    } catch (error) {
+      try {
+        dispose()
+      } catch (rollbackError) {
+        const rollbackErrors = rollbackError instanceof AggregateError ? rollbackError.errors : [rollbackError]
+        throw new AggregateError([error, ...rollbackErrors], 'Hotkey listener acquisition rollback failed')
       }
+      throw error
     }
+    return createRelease(mountedDocument)
   }
 
   dispose(): void {
+    assertPublicLifecycleTeardownAllowed(this, 'hotkey.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    const failures: unknown[] = []
     for (const mounted of [...this.mountedDocuments.values()]) {
-      mounted.dispose()
+      try {
+        mounted.dispose()
+      } catch (error) {
+        failures.push(error)
+      }
     }
-    this.mountedDocuments.clear()
     if (this.resetTimer) {
       clearTimeout(this.resetTimer)
       this.resetTimer = 0
     }
-    this.callBacks = {}
+    this.#callBacks = {}
     this.directMap = {}
     this.sequenceLevels = {}
     this.ignoreNextKeyup = false
     this.ignoreNextKeypress = false
     this.nextExpectedAction = false
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Hotkey disposal completed with errors')
+    }
   }
 
   /**
@@ -476,11 +529,13 @@ export class Hotkey {
    * @param action
    */
   bind(combos: string[] | string, callback: HotkeyCallback, action?: string): Hotkey {
+    assertLifecycleMutationAllowed(this, 'hotkey.bind')
     this.bindMultiple(Array.isArray(combos) ? combos : [combos], callback, action)
     return this
   }
 
   batchBind(hotkeys: HotkeyConfig[]): Hotkey {
+    assertLifecycleMutationAllowed(this, 'hotkey.batchBind')
     for (const hotkey of hotkeys) {
       this.bind(hotkey.combos, hotkey.callback, hotkey.action)
     }
@@ -494,12 +549,13 @@ export class Hotkey {
    * @param action
    */
   unbind(combos: string[] | string, callback: HotkeyCallback, action?: string) {
+    assertLifecycleMutationAllowed(this, 'hotkey.unbind')
     const combinations = Array.isArray(combos) ? combos : [combos]
 
     combinations.forEach(combination => {
       const info: KeyInfo = getKeyInfo(combination, action)
       const { key, modifiers } = info
-      const callbacks = this.callBacks[key]
+      const callbacks = this.#callBacks[key]
       if (!callbacks) {
         return
       }
@@ -550,7 +606,7 @@ export class Hotkey {
     const action: string = e.type
 
     // if there are no events related to this keycode
-    if (!this.callBacks[character]) {
+    if (!this.#callBacks[character]) {
       return []
     }
 
@@ -561,8 +617,8 @@ export class Hotkey {
 
     // loop through all callbacks for the key that was pressed
     // and see if any of them match
-    for (i = 0; i < this.callBacks[character].length; ++i) {
-      callback = this.callBacks[character][i]
+    for (i = 0; i < this.#callBacks[character].length; ++i) {
+      callback = this.#callBacks[character][i]
 
       // if a sequence name is not specified, but this is a sequence at
       // the wrong level then move onto the next match
@@ -587,7 +643,7 @@ export class Hotkey {
         const deleteCombo = !sequenceName && callback.combo === combination
         const deleteSequence = sequenceName && callback.seq === sequenceName && callback.level === level
         if (deleteCombo || deleteSequence) {
-          this.callBacks[character].splice(i, 1)
+          this.#callBacks[character].splice(i, 1)
         }
 
         matches.push(callback)
@@ -732,7 +788,7 @@ export class Hotkey {
 
     // make sure to initialize array if this is the first time
     // a callback is added for this key
-    this.callBacks[info.key] = this.callBacks[info.key] || []
+    this.#callBacks[info.key] = this.#callBacks[info.key] || []
 
     // remove an existing match if there is one
     this.getMatches(info.key, info.modifiers, { type: info.action }, sequenceName, combination, level)
@@ -743,7 +799,7 @@ export class Hotkey {
     //
     // this is important because the way these are processed expects
     // the sequence ones to come first
-    this.callBacks[info.key][sequenceName ? 'unshift' : 'push']({
+    this.#callBacks[info.key][sequenceName ? 'unshift' : 'push']({
       callback,
       modifiers: info.modifiers,
       action: info.action,

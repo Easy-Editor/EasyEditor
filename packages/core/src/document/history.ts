@@ -1,4 +1,10 @@
 import { reaction, untracked } from 'mobx'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { RootSchema } from '../types'
 import { type EventBus, createEventBus, createLogger } from '../utils'
 import type { Document } from './document'
@@ -52,6 +58,7 @@ export class History<T = RootSchema> {
   }
 
   setSerialization(serialization: Serialization<T, string>) {
+    this.assertGenerationActive()
     this.serialization = serialization
   }
 
@@ -63,6 +70,11 @@ export class History<T = RootSchema> {
     readonly document?: Document,
   ) {
     this.emitter = document?.designer.createEventBus('History') || createEventBus('History')
+    installLifecycleTeardownOperation(this, () => this.#destroyInternal())
+    if (document) {
+      inheritEngineTeardownOwnership(document.project, this)
+      inheritEngineTeardownOwnership(this, this.emitter)
+    }
     this.session = new Session(0, '', this.timeGap)
     this.records = [this.session]
     this.savePointSession = this.session
@@ -126,7 +138,7 @@ export class History<T = RootSchema> {
   }
 
   go(originalCursor: number) {
-    if (this.document) this.document.project.assertDocumentMutationAllowed(this.document)
+    this.assertMutationAllowed()
     this.session.end()
 
     let cursor = originalCursor
@@ -179,6 +191,7 @@ export class History<T = RootSchema> {
   }
 
   savePoint() {
+    this.assertGenerationActive()
     if (!this.session) {
       return
     }
@@ -191,6 +204,7 @@ export class History<T = RootSchema> {
    * Start an explicit history boundary. Nested boundaries join the outer one.
    */
   beginTransaction() {
+    this.assertGenerationActive()
     if (this.transactionDepth === 0) {
       this.transactionStartData = this.session.data
       this.transactionPendingData = this.session.data
@@ -202,6 +216,7 @@ export class History<T = RootSchema> {
    * Commit the outer transaction as exactly one, immediately closed session.
    */
   commitTransaction() {
+    this.assertGenerationActive()
     if (this.transactionDepth < 1) {
       throw new Error('No active history transaction')
     }
@@ -232,6 +247,7 @@ export class History<T = RootSchema> {
 
   /** Restore the exact pre-transaction snapshot without adding a history unit. */
   rollbackTransaction() {
+    this.assertGenerationActive()
     if (this.transactionDepth < 1) return
     const startData = this.transactionStartData
     this.clearTransactionState()
@@ -247,6 +263,7 @@ export class History<T = RootSchema> {
 
   /** Close an untouched transaction without rebuilding the document model. */
   cancelTransaction() {
+    this.assertGenerationActive()
     if (this.transactionDepth < 1) return
     this.clearTransactionState()
   }
@@ -258,11 +275,16 @@ export class History<T = RootSchema> {
   }
 
   destroy() {
+    assertPublicLifecycleTeardownAllowed(this, 'history.destroy')
+    this.#destroyInternal()
+  }
+
+  #destroyInternal(): void {
     this.records.forEach(record => record.end())
     this.clearTransactionState()
     this.records = []
     this.disposer()
-    this.emitter.dispose()
+    runInternalLifecycleTeardown(this.emitter)
   }
 
   /**
@@ -305,6 +327,7 @@ export class History<T = RootSchema> {
   }
 
   onStateChange(listener: () => void) {
+    this.assertGenerationActive()
     this.emitter.on(HISTORY_EVENT.STATE_CHANGE, listener)
     return () => {
       this.emitter.off(HISTORY_EVENT.STATE_CHANGE, listener)
@@ -312,10 +335,19 @@ export class History<T = RootSchema> {
   }
 
   onCursorChange(func: () => void) {
+    this.assertGenerationActive()
     this.emitter.on(HISTORY_EVENT.CURSOR_CHANGE, func)
     return () => {
       this.emitter.off(HISTORY_EVENT.CURSOR_CHANGE, func)
     }
+  }
+
+  private assertMutationAllowed(): void {
+    if (this.document) this.document.project.assertDocumentMutationAllowed(this.document)
+  }
+
+  private assertGenerationActive(): void {
+    if (this.document) this.document.project.assertDocumentGenerationActive(this.document)
   }
 }
 

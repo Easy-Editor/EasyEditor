@@ -1,5 +1,6 @@
 import { action, computed, observable, runInAction } from 'mobx'
 import { DESIGNER_EVENT, type SettingTopEntry } from '../../designer'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import { type NodeSchema, type NpmInfo, TRANSFORM_STAGE } from '../../types'
 import { type EventBus, isObject, isRemoteComponent, uniqueId } from '../../utils'
 import type { Document } from '../document'
@@ -107,6 +108,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   _settingEntry: SettingTopEntry | undefined
 
   get settingEntry() {
+    this.document.project.assertDocumentGenerationActive(this.document)
     if (this._settingEntry) return this._settingEntry
     this._settingEntry = this.document.designer.createSettingEntry([this])
     return this._settingEntry
@@ -260,7 +262,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     if (children == null) {
       if (initialChildren) {
         if (typeof initialChildren === 'function') {
-          return initialChildren(this) || []
+          return withoutProjectMutationAuthority(this.document.project, () => initialChildren(this) || [])
         }
         return initialChildren
       }
@@ -285,7 +287,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   didDropIn(dragNode: Node) {
     const { callbacks } = this.componentMeta.advanced
     if (callbacks?.onNodeAdd) {
-      callbacks?.onNodeAdd.call(this, dragNode, this)
+      withoutProjectMutationAuthority(this.document.project, () => callbacks.onNodeAdd?.call(this, dragNode, this))
     }
     if (this._parent) {
       this._parent.didDropIn(dragNode)
@@ -298,7 +300,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   didDropOut(dragNode: Node) {
     const { callbacks } = this.componentMeta.advanced
     if (callbacks?.onNodeRemove) {
-      callbacks?.onNodeRemove.call(this, dragNode, this)
+      withoutProjectMutationAuthority(this.document.project, () => callbacks.onNodeRemove?.call(this, dragNode, this))
     }
     if (this._parent) {
       this._parent.didDropOut(dragNode)
@@ -310,7 +312,10 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    */
   canSelect() {
     const onSelectHook = this.componentMeta?.advanced?.callbacks?.onSelectHook
-    const canSelect = typeof onSelectHook === 'function' ? onSelectHook(this) : true
+    const canSelect =
+      typeof onSelectHook === 'function'
+        ? withoutProjectMutationAuthority(this.document.project, () => onSelectHook(this))
+        : true
     return canSelect
   }
 
@@ -319,7 +324,10 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    */
   canClick(e: MouseEvent) {
     const onClickHook = this.componentMeta?.advanced?.callbacks?.onClickHook
-    const canClick = typeof onClickHook === 'function' ? onClickHook(e, this) : true
+    const canClick =
+      typeof onClickHook === 'function'
+        ? withoutProjectMutationAuthority(this.document.project, () => onClickHook(e, this))
+        : true
     return canClick
   }
 
@@ -772,6 +780,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onVisibleChange(listener: (flag: boolean) => void) {
+    this.document.project.assertDocumentGenerationActive(this.document)
     this.emitter.on(NODE_EVENT.VISIBLE_CHANGE, listener)
 
     return () => {
@@ -780,6 +789,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onLockChange(listener: (flag: boolean) => void) {
+    this.document.project.assertDocumentGenerationActive(this.document)
     this.emitter.on(NODE_EVENT.LOCK_CHANGE, listener)
 
     return () => {
@@ -788,6 +798,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onChildrenChange(listener: (info?: { type: string; node: Node }) => void) {
+    this.document.project.assertDocumentGenerationActive(this.document)
     return this.children?.onChange(listener)
   }
 
@@ -796,6 +807,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onPropChange(listener: (info: any) => void) {
+    this.document.project.assertDocumentGenerationActive(this.document)
     this.emitter.on(NODE_EVENT.PROP_CHANGE, listener)
     return () => {
       this.emitter.off(NODE_EVENT.PROP_CHANGE, listener)

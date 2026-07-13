@@ -61,6 +61,12 @@ created -> initializing -> ready -> disposing -> disposed
 - Failed initialization rolls owned resources back in reverse order.
 - Failed disposal enters `failed`; another `destroy()` retries unfinished cleanup.
 - Destroying one instance cannot clear another instance's Project, events, hotkeys, materials, or remote resources.
+- `lifecycleState` is a read-only decision source. `disposing`, `disposed`, and `failed` reject new writes and listener acquisition; callers cannot reopen the boundary by assigning the state.
+- A generation begins on entry to `initializing` and ends on entry to `disposing` or an initialization rollback. Only those generation boundaries invalidate prior asynchronous mutation tickets, so plugin registration, initialization, or extension work that resumes after destroy/restart cannot commit into the new generation.
+- Reusable root services such as Config, Editor, and Designer reactivate only through explicit `init()`. Retained `Document`, `History`, material Registry/Meta, and PluginContext references from an old generation remain permanently tombstoned. PluginContext exposes generation-bound capability views rather than reusable raw service references.
+- Same-generation plugin `init()`, `destroy()`, and `extend()` callers join the in-flight Promise. Same-name register, override, and delete operations use an exclusive reservation; a replacement initializes before it atomically replaces the registered runtime.
+- Teardown authority is not exposed as a public boolean; engine-owned services can only be cleaned up by `EngineInstance.destroy()`. Host write authority is suspended before event, material-listener, and component-hook callbacks execute, so callbacks cannot borrow it. Observer-facing state uses detached snapshots instead of backing maps or mutable Error references.
+- Under the restricted policy, public transaction APIs reject executable validators; Agent validation uses a package-private unforgeable capability. Material transactions restore complete Entry/ComponentMeta state and tombstone replaced metadata only after commit. `MaterialRegistry.getSnapshot()` exposes frozen deterministic verification data without a rollback token.
 
 The root `@easy-editor/core` entry retains `defaultEngine`, `init`, `project`, and other legacy facade exports for compatibility. New code should not use it as the instance entry.
 
@@ -144,7 +150,7 @@ Legacy UMD scripts may mutate global objects or prototypes. Removing a `<script>
 
 | Invariant | Test family |
 | --- | --- |
-| Instance isolation and lifecycle | `engine-isolation`, `engine-lifecycle` |
+| Instance isolation and lifecycle | `engine-instance`, `engine-lifecycle`, `engine-child-boundaries`, `engine-generation-boundary`, `engine-lifecycle-adversarial` |
 | Schema migration and failure atomicity | `schema-validation` |
 | Transactions and structural commands | `transaction`, `structural-commands` |
 | Agent grants, staleness, and transport | `agent-*` |

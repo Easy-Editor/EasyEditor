@@ -1,6 +1,13 @@
 import { action, observable, runInAction } from 'mobx'
 import type { Designer } from '.'
 import type { Node } from '../document'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { Simulator } from '../simulator'
 import { isSimulator } from '../simulator'
 import type { ComponentInstance, NodeSchema } from '../types'
@@ -110,11 +117,11 @@ export const getSourceSensor = (dragObject: DragObject): Simulator | null => {
 }
 
 export class Dragon {
-  emitter: EventBus
+  private emitter: EventBus
 
   private sensors: Sensor[] = []
 
-  private disposeDragSession?: () => void
+  private disposeDragSession?: (clearLocation?: boolean) => void
 
   /** current active sensor */
   @observable.ref private accessor _activeSensor: Sensor | undefined
@@ -131,6 +138,11 @@ export class Dragon {
 
   constructor(readonly designer: Designer) {
     this.emitter = designer.createEventBus('Dragon')
+    installLifecycleTeardownOperation(
+      this,
+      action(() => this.#disposeInternal()),
+    )
+    inheritEngineTeardownOwnership(this, this.emitter)
   }
 
   /**
@@ -144,6 +156,7 @@ export class Dragon {
     boost: (e: MouseEvent | DragEvent) => DragObject | null,
     eventType: 'mouse' | 'drag' = 'drag',
   ) {
+    assertLifecycleMutationAllowed(this.designer, 'dragon.from')
     const handleEvent = (e: MouseEvent | DragEvent) => {
       // ESC or RightClick
       if (e.which === 3 || e.button === 2) {
@@ -183,6 +196,7 @@ export class Dragon {
    */
   @action
   boost(dragObject: DragObject, boostEvent: MouseEvent | DragEvent, shell?: HTMLElement) {
+    assertLifecycleMutationAllowed(this.designer, 'dragon.boost')
     this.disposeDragSession?.()
 
     const { designer } = this
@@ -290,7 +304,7 @@ export class Dragon {
     }
 
     let sessionDisposed = false
-    const disposeSession = () => {
+    const disposeSession = (clearLocation = true) => {
       if (sessionDisposed) return
       sessionDisposed = true
       lastSensor?.deactiveSensor()
@@ -299,7 +313,7 @@ export class Dragon {
         this._activeSensor = undefined
         this._dragging = false
       })
-      designer.clearLocation()
+      if (clearLocation) designer.clearLocation()
       removeEventListeners()
       if (this.disposeDragSession === disposeSession) {
         this.disposeDragSession = undefined
@@ -489,6 +503,7 @@ export class Dragon {
    */
   @action
   addSensor(sensor: Sensor) {
+    assertLifecycleMutationAllowed(this.designer, 'dragon.addSensor')
     this.sensors.push(sensor)
   }
 
@@ -497,6 +512,7 @@ export class Dragon {
    */
   @action
   removeSensor(sensor: Sensor) {
+    assertLifecycleMutationAllowed(this.designer, 'dragon.removeSensor')
     const i = this.sensors.indexOf(sensor)
     if (i > -1) {
       this.sensors.splice(i, 1)
@@ -514,37 +530,33 @@ export class Dragon {
       },
     ) => void,
   ) {
-    this.emitter.on(DRAGON_EVENT.DRAGSTART, func)
-
-    return () => {
-      this.emitter.off(DRAGON_EVENT.DRAGSTART, func)
-    }
+    assertLifecycleMutationAllowed(this.designer, 'dragon.onDragstart')
+    return this.emitter.on(DRAGON_EVENT.DRAGSTART, func)
   }
 
   onDrag(func: (e: LocateEvent) => void) {
-    this.emitter.on(DRAGON_EVENT.DRAG, func)
-
-    return () => {
-      this.emitter.off(DRAGON_EVENT.DRAG, func)
-    }
+    assertLifecycleMutationAllowed(this.designer, 'dragon.onDrag')
+    return this.emitter.on(DRAGON_EVENT.DRAG, func)
   }
 
   onDragend(func: (e: { dragObject: DragObject; copy?: boolean; esc?: boolean }) => void) {
-    this.emitter.on(DRAGON_EVENT.DRAGEND, func)
-
-    return () => {
-      this.emitter.off(DRAGON_EVENT.DRAGEND, func)
-    }
+    assertLifecycleMutationAllowed(this.designer, 'dragon.onDragend')
+    return this.emitter.on(DRAGON_EVENT.DRAGEND, func)
   }
 
   dispose(): void {
-    this.disposeDragSession?.()
+    assertPublicLifecycleTeardownAllowed(this, 'dragon.dispose')
+    this.#disposeInternal()
+  }
+
+  #disposeInternal(): void {
+    this.disposeDragSession?.(false)
     this.disposeDragSession = undefined
     this._activeSensor?.deactiveSensor()
     this._activeSensor = undefined
     this._dragging = false
     this.sensors = []
-    this.emitter.dispose()
+    runInternalLifecycleTeardown(this.emitter)
   }
 }
 

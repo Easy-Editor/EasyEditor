@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { reaction } from 'mobx'
 import { createProjectSchema } from './fixtures/project-schema.mjs'
 import { captureFailure, loadCore } from './helpers/kernel.mjs'
 
 function captureState(engine) {
   const document = engine.project.currentDocument
-  const materialState = engine.materials.captureTransactionState()
+  const materialState = engine.materials.registry.getSnapshot()
   return {
     document,
     historyData: document.history.hotData,
     historyState: document.history.getState(),
-    materialEntries: [...materialState.entries.entries()].sort(([a], [b]) => a.localeCompare(b)),
-    materialPendingEntries: [...materialState.pendingEntries.entries()].sort(([a], [b]) => a.localeCompare(b)),
+    materialEntries: materialState.entries,
+    materialPendingEntries: materialState.pendingEntries,
     materialVersion: engine.materials.version,
     mutationVersion: document.mutationVersion,
     project: structuredClone(engine.project.export()),
@@ -205,4 +206,144 @@ test('restricted host composition, typed transactions, Agent capability, and eng
   assert.equal(engine.project.documents.length, 0)
   await engine.destroy()
   assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('agentRestricted event callbacks cannot borrow ambient host mutation authority', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+  let callbackError
+  const unsubscribe = engine.project.onDocumentAdd(document => {
+    try {
+      document.root.setPropValue('borrowedAuthority', 'persisted')
+    } catch (error) {
+      callbackError = error
+    }
+  })
+  t.after(unsubscribe)
+
+  engine.loadProject(createProjectSchema({ id: 'authority-callback' }), true)
+
+  assertRawMutationDenied(callbackError)
+  assert.equal(engine.project.currentDocument.root.getPropValue('borrowedAuthority'), undefined)
+})
+
+test('agentRestricted MobX reactions cannot borrow ambient host mutation authority', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+  let callbackError
+  const disposeReaction = reaction(
+    () => engine.project.documents.length,
+    () => {
+      try {
+        engine.project.currentDocument?.root?.setPropValue('borrowedMobxAuthority', 'persisted')
+      } catch (error) {
+        callbackError = error
+      }
+    },
+  )
+  t.after(disposeReaction)
+
+  engine.loadProject(createProjectSchema({ id: 'authority-mobx-callback' }), true)
+
+  assertRawMutationDenied(callbackError)
+  assert.equal(engine.project.currentDocument.root.getPropValue('borrowedMobxAuthority'), undefined)
+})
+
+test('agentRestricted MobX reactions cannot mutate project collections during teardown', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+  engine.loadProject(createProjectSchema({ id: 'authority-teardown-callback' }), true)
+  const oldDocument = engine.project.currentDocument
+  let callbackError
+  let callbackRuns = 0
+  const disposeReaction = reaction(
+    () => engine.project.documents,
+    documents => {
+      callbackRuns += 1
+      try {
+        documents.push(oldDocument)
+      } catch (error) {
+        callbackError = error
+      }
+    },
+  )
+  t.after(disposeReaction)
+
+  await engine.destroy()
+
+  assert.equal(callbackRuns, 1)
+  assert.match(callbackError?.message || '', /engine is disposing/i)
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(engine.project.documents.length, 0)
+
+  await engine.init()
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.equal(engine.project.documents.length, 0)
+})
+
+test('agentRestricted material observers and component hooks cannot borrow host transaction authority', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+  let hookError
+  let materialError
+  engine.materials.createComponentMeta({
+    componentName: 'Page',
+    configure: {
+      advanced: {
+        callbacks: {
+          onNodeAdd(_node, parent) {
+            try {
+              parent.setPropValue('borrowedHookAuthority', 'persisted')
+            } catch (error) {
+              hookError = error
+            }
+          },
+        },
+      },
+    },
+  })
+  const unsubscribe = engine.materials.registry.subscribe(event => {
+    if (event.type !== 'usage_changed') return
+    try {
+      engine.project.currentDocument?.root?.setPropValue('borrowedMaterialAuthority', 'persisted')
+    } catch (error) {
+      materialError = error
+    }
+  })
+  t.after(unsubscribe)
+
+  engine.loadProject(createProjectSchema({ id: 'authority-material-callback' }), true)
+  const document = engine.project.currentDocument
+  engine.transactions.run([
+    {
+      type: 'insertNode',
+      documentId: document.id,
+      parentId: document.root.id,
+      node: { componentName: 'Text', props: {}, children: [] },
+    },
+  ])
+
+  assertRawMutationDenied(materialError)
+  assertRawMutationDenied(hookError)
+  assert.equal(document.root.getPropValue('borrowedMaterialAuthority'), undefined)
+  assert.equal(document.root.getPropValue('borrowedHookAuthority'), undefined)
+})
+
+test('EventBus does not expose a raw EventEmitter handle that can revive a disposed engine', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+  await engine.destroy()
+
+  const rawEmitter = engine.eventBus.eventEmitter
+  assert.equal(rawEmitter, undefined)
 })

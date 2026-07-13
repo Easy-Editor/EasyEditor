@@ -13,6 +13,17 @@ import {
 } from '../designer/location'
 import type { Scroller } from '../designer/scroller'
 import { type Node, getClosestClickableNode, getClosestNode } from '../document'
+import {
+  assertLifecycleMutationAllowed,
+  inheritLifecycleMutationGuard,
+  sealLifecycleMutations,
+} from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { Project } from '../project'
 import type { ComponentInstance, DataSourceEngine, Snippet } from '../types'
 import type { Asset } from '../types/assets'
@@ -181,20 +192,33 @@ export class Simulator {
   }
 
   private get engineConfig(): Config {
-    return (
-      (this.editor as typeof this.editor & { engineConfig?: Config }).engineConfig ||
-      (this.fallbackConfig ||= new Config())
-    )
+    const engineConfig = (this.editor as typeof this.editor & { engineConfig?: Config }).engineConfig
+    if (engineConfig) return engineConfig
+    if (!this.fallbackConfig) {
+      this.fallbackConfig = new Config()
+      inheritLifecycleMutationGuard(this, this.fallbackConfig)
+      inheritEngineTeardownOwnership(this, this.fallbackConfig)
+    }
+    return this.fallbackConfig
   }
 
   private get engineClipboard(): Clipboard {
-    return this.editor.get<Clipboard>('clipboard') || (this.fallbackClipboard ||= new Clipboard())
+    const clipboard = this.editor.get<Clipboard>('clipboard')
+    if (clipboard) return clipboard
+    if (!this.fallbackClipboard) {
+      this.fallbackClipboard = new Clipboard()
+      inheritLifecycleMutationGuard(this, this.fallbackClipboard)
+      inheritEngineTeardownOwnership(this, this.fallbackClipboard)
+    }
+    return this.fallbackClipboard
   }
 
   constructor(project: Project, designer: Designer) {
+    installLifecycleTeardownOperation(this, () => this.#purgeInternal())
     this.designer = designer
     this.project = project
     this.emitter = designer.createEventBus('Simulator')
+    inheritEngineTeardownOwnership(this, this.emitter)
     this.viewport = new Viewport(designer)
     this.scroller = this.designer.createScroller(this.viewport)
     this.autoRender = !this.engineConfig.get('disableAutoRender', false)
@@ -210,11 +234,13 @@ export class Simulator {
 
   @action
   setProps(props: SimulatorProps) {
+    assertLifecycleMutationAllowed(this, 'simulator.setProps')
     this._props = props
   }
 
   @action
   set(key: string, value: any) {
+    assertLifecycleMutationAllowed(this, 'simulator.set')
     this._props = {
       ...this._props,
       [key]: value,
@@ -230,6 +256,7 @@ export class Simulator {
     effect: (reaction: IReactionPublic) => void,
     options?: IReactionOptions<unknown, boolean>,
   ) {
+    assertLifecycleMutationAllowed(this, 'simulator.connect')
     this._renderer = renderer
     return this.trackLifetime(autorun(effect, options))
   }
@@ -239,6 +266,7 @@ export class Simulator {
     effect: (value: unknown, prev: unknown, reaction: IReactionPublic) => void,
     opts?: IReactionOptions<unknown, boolean>,
   ): IReactionDisposer {
+    assertLifecycleMutationAllowed(this, 'simulator.reaction')
     return this.trackLifetime(reaction(expression, effect, opts))
   }
 
@@ -246,11 +274,17 @@ export class Simulator {
     effect: (reaction: IReactionPublic) => void,
     options?: IReactionOptions<unknown, boolean>,
   ): IReactionDisposer {
+    assertLifecycleMutationAllowed(this, 'simulator.autorun')
     return this.trackLifetime(autorun(effect, options))
   }
 
   @action
   purge() {
+    assertPublicLifecycleTeardownAllowed(this, 'simulator.purge')
+    this.#purgeInternal()
+  }
+
+  #purgeInternal() {
     const errors: unknown[] = []
     try {
       this.disposeFrame()
@@ -267,10 +301,9 @@ export class Simulator {
     for (const dispose of [...this.lifetimeDisposers].reverse()) {
       try {
         dispose()
+        this.lifetimeDisposers.delete(dispose)
       } catch (error) {
         errors.push(error)
-      } finally {
-        this.lifetimeDisposers.delete(dispose)
       }
     }
     try {
@@ -284,19 +317,19 @@ export class Simulator {
       errors.push(error)
     }
     try {
-      this.fallbackConfig?.dispose()
+      if (this.fallbackConfig) runInternalLifecycleTeardown(this.fallbackConfig)
       this.fallbackConfig = undefined
     } catch (error) {
       errors.push(error)
     }
     try {
-      this.fallbackClipboard?.dispose()
+      if (this.fallbackClipboard) runInternalLifecycleTeardown(this.fallbackClipboard)
       this.fallbackClipboard = undefined
     } catch (error) {
       errors.push(error)
     }
     try {
-      this.emitter.dispose()
+      runInternalLifecycleTeardown(this.emitter)
     } catch (error) {
       errors.push(error)
     }
@@ -311,10 +344,12 @@ export class Simulator {
     if (errors.length) {
       throw new AggregateError(errors, 'Simulator disposal completed with errors')
     }
+    sealLifecycleMutations(this, 'simulator generation is disposed')
   }
 
   dispose() {
-    this.purge()
+    assertPublicLifecycleTeardownAllowed(this, 'simulator.dispose')
+    this.#purgeInternal()
   }
 
   private disposeFrame(): void {
@@ -322,10 +357,9 @@ export class Simulator {
     for (const dispose of [...this.frameDisposers].reverse()) {
       try {
         dispose()
+        this.frameDisposers.delete(dispose)
       } catch (error) {
         errors.push(error)
-      } finally {
-        this.frameDisposers.delete(dispose)
       }
     }
     this.iframe = undefined
@@ -337,12 +371,18 @@ export class Simulator {
   }
 
   private trackLifetime<T extends Disposable>(disposer: T): T {
-    let disposed = false
+    let state: 'active' | 'disposing' | 'disposed' = 'active'
     const tracked = () => {
-      if (disposed) return
-      disposed = true
+      if (state !== 'active') return
+      state = 'disposing'
+      try {
+        disposer()
+      } catch (error) {
+        state = 'active'
+        throw error
+      }
+      state = 'disposed'
       this.lifetimeDisposers.delete(tracked)
-      disposer()
     }
     this.lifetimeDisposers.add(tracked)
     return tracked as T
@@ -352,11 +392,13 @@ export class Simulator {
    * force to rerender the viewport
    */
   rerender() {
+    assertLifecycleMutationAllowed(this, 'simulator.rerender')
     this.renderer?.rerender?.()
   }
 
   @action
   async mountContentFrame(iframe: HTMLIFrameElement | HTMLElement | null) {
+    assertLifecycleMutationAllowed(this, 'simulator.mountContentFrame')
     if (!iframe || this.iframe === iframe) {
       return
     }
@@ -389,10 +431,12 @@ export class Simulator {
   }
 
   postEvent(eventName: string, ...data: any[]) {
+    assertLifecycleMutationAllowed(this, 'simulator.postEvent')
     this.emitter.emit(eventName, ...data)
   }
 
   linkSnippet(ref: HTMLElement, snippet: Snippet) {
+    assertLifecycleMutationAllowed(this, 'simulator.linkSnippet')
     return this.designer.dragon.from(ref, () => ({
       type: DragObjectType.NodeData,
       data: snippet.schema,
@@ -404,10 +448,12 @@ export class Simulator {
   }
 
   setupEvents(): Disposable[] {
+    assertLifecycleMutationAllowed(this, 'simulator.setupEvents')
     return [this.setupDragAndClick(), this.setupDetecting()]
   }
 
   setupDragAndClick(): Disposable {
+    assertLifecycleMutationAllowed(this, 'simulator.setupDragAndClick')
     const { designer } = this
     const doc = this.contentDocument!
     const pendingMouseups = new Set<(event: MouseEvent) => void>()
@@ -515,6 +561,7 @@ export class Simulator {
   }
 
   setupDetecting(): Disposable {
+    assertLifecycleMutationAllowed(this, 'simulator.setupDetecting')
     const doc = this.contentDocument!
     const { detecting, dragon } = this.designer
     const hover = (e: MouseEvent) => {
@@ -555,6 +602,7 @@ export class Simulator {
 
   @action
   setInstance(docId: string, id: string, instances: ComponentInstance[] | null) {
+    assertLifecycleMutationAllowed(this, 'simulator.setInstance')
     if (!Object.prototype.hasOwnProperty.call(this.instancesMap, docId)) {
       this.instancesMap[docId] = new Map()
     }
@@ -697,6 +745,7 @@ export class Simulator {
   }
 
   scrollToNode(node: Node, detail?: any) {
+    assertLifecycleMutationAllowed(this, 'simulator.scrollToNode')
     if (this.sensing) {
       // active sensor
       return
@@ -726,6 +775,7 @@ export class Simulator {
    * fix event's prop, canvasX、canvasY and target
    */
   fixEvent(e: LocateEvent): LocateEvent {
+    assertLifecycleMutationAllowed(this, 'simulator.fixEvent')
     if (e.fixed) {
       return e
     }
@@ -761,11 +811,13 @@ export class Simulator {
   }
 
   deactiveSensor() {
+    assertLifecycleMutationAllowed(this, 'simulator.deactiveSensor')
     this.sensing = false
     this.scroller.cancel()
   }
 
   locate(e: LocateEvent): any {
+    assertLifecycleMutationAllowed(this, 'simulator.locate')
     const { dragObject } = e
 
     const nodes = dragObject?.nodes

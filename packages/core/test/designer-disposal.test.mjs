@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createProjectSchema } from './fixtures/project-schema.mjs'
 import { loadCore } from './helpers/kernel.mjs'
 
-const listenerCount = (eventBus, event) => eventBus.eventEmitter.listenerCount(event)
+const listenerCount = (eventBus, event) => eventBus.listenerCount(event)
 
 test('designer purge releases constructor subscriptions, owned event buses, state, and offset observers', async t => {
   const core = await loadCore()
@@ -13,6 +13,7 @@ test('designer purge releases constructor subscriptions, owned event buses, stat
   })
 
   engine.project.load(createProjectSchema(), true)
+  await engine.init()
   await Promise.resolve()
 
   const { designer } = engine
@@ -77,7 +78,7 @@ test('designer purge releases constructor subscriptions, owned event buses, stat
     },
   })
 
-  designer.purge()
+  await engine.destroy()
 
   assert.equal(listenerCount(designer.emitter), 0)
   assert.equal(listenerCount(designer.dragon.emitter), 0)
@@ -115,20 +116,23 @@ test('designer purge releases constructor subscriptions, owned event buses, stat
     'external listeners must not fire after disposal',
   )
 
-  designer.purge()
+  await engine.destroy()
   assert.equal(observerPurges, 1, 'purge must remain idempotent')
 
-  designer.mount()
+  await engine.init()
+  engine.loadProject(createProjectSchema({ id: 'designer-disposal-restart' }), true)
   await Promise.resolve()
+  const restartedDocument = designer.currentDocument
+  const restartedRoot = restartedDocument.rootNode
   assert.ok(listenerCount(designer.dragon.emitter, core.DRAGON_EVENT.DRAGSTART) > 0)
   assert.ok(listenerCount(designer.selection.emitter, core.SELECTION_EVENT.CHANGE) > 0)
   assert.ok(listenerCount(designer.activeTracker.emitter, 'change') > 0)
-  assert.ok(listenerCount(projectDocument.history.emitter, core.HISTORY_EVENT.STATE_CHANGE) > 0)
-  assert.deepEqual(designer.selection.selected, [root.id])
+  assert.ok(listenerCount(restartedDocument.history.emitter, core.HISTORY_EVENT.STATE_CHANGE) > 0)
+  assert.deepEqual(designer.selection.selected, [restartedRoot.id])
 
-  designer.purge()
+  await engine.destroy()
   assert.equal(listenerCount(designer.dragon.emitter), 0)
-  assert.equal(listenerCount(projectDocument.history.emitter, core.HISTORY_EVENT.STATE_CHANGE), 0)
+  assert.equal(listenerCount(restartedDocument.history.emitter, core.HISTORY_EVENT.STATE_CHANGE), 0)
 })
 
 test('editor destroy removes EventBus and EventEmitter listeners and remains reusable after engine restart', async t => {

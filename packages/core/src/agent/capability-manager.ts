@@ -5,7 +5,9 @@ import {
   TransactionRollbackIncompleteError,
   isEditorCommandType,
 } from '../commands'
+import { runValidatedTransactionOnDocument } from '../commands/transaction-boundary'
 import type { Document } from '../document'
+import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import type { Project } from '../project'
 import type { TrustPolicy } from '../trust'
 import { uniqueId } from '../utils/unique-id'
@@ -589,7 +591,11 @@ export class AgentCapabilityManager {
 
   private generation = 0
 
-  constructor(private readonly host: AgentCapabilityHost) {}
+  constructor(private readonly host: AgentCapabilityHost) {
+    installLifecycleTeardownOperation<[reason?: string], void>(this, (reason = 'engine.lifecycle') =>
+      this.#revokeAllInternal(reason),
+    )
+  }
 
   activate(): void {
     if (this.active && this.host.lifecycleState === 'ready') return
@@ -757,6 +763,11 @@ export class AgentCapabilityManager {
   }
 
   revokeAll(reason = 'engine.lifecycle'): void {
+    assertPublicLifecycleTeardownAllowed(this, 'agentCapabilities.revokeAll')
+    this.#revokeAllInternal(reason)
+  }
+
+  #revokeAllInternal(reason: string): void {
     const failures: unknown[] = []
     for (const session of [...this.portSessions]) {
       try {
@@ -1061,7 +1072,7 @@ export class AgentCapabilityManager {
           })
         }
       }
-      result = this.host.transactions.runOnDocument(plan.document, plan.commands, {
+      result = runValidatedTransactionOnDocument(this.host.transactions, plan.document, plan.commands, {
         invokeNodeCallbacks: false,
         postcondition: boundDocument => verifyExpectedDocument(boundDocument, '$.postcondition'),
         precondition: boundDocument => {

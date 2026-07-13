@@ -1,83 +1,22 @@
 import { action, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type DropLocation } from '../designer'
+import { sealLifecycleMutations } from '../lifecycle/mutation-barrier'
+import { createMutationGuardedMapView } from '../lifecycle/mutation-guarded-map'
+import { runInternalLifecycleTeardown } from '../lifecycle/teardown-boundary'
+import { releaseMaterialUsageDuringTeardown } from '../materials/teardown'
 import type { Project } from '../project'
 import type { Simulator } from '../simulator'
 import { type ComponentsMap, type NodeSchema, type RootSchema, TRANSFORM_STAGE } from '../types'
 import { type EventBus, uniqueId } from '../utils'
 import { History } from './history'
 import { NODE_EVENT, Node, type NodeModelOptions, insertChild, insertChildren } from './node/node'
+import { installDocumentTeardown } from './teardown'
 
 export enum DOCUMENT_EVENT {
   ADD = 'document:add',
   REMOVE = 'document:remove',
   OPEN_CHANGE = 'document:open.change',
   OPEN = 'document:open',
-}
-
-const createMutationGuardedMapView = <K, V>(backing: Map<K, V>, assertMutation: () => void): Map<K, V> => {
-  return new Proxy(backing, {
-    get(target, property, receiver) {
-      if (property === 'set') {
-        return (key: K, value: V) => {
-          assertMutation()
-          target.set(key, value)
-          return receiver as Map<K, V>
-        }
-      }
-      if (property === 'delete') {
-        return (key: K) => {
-          assertMutation()
-          return target.delete(key)
-        }
-      }
-      if (property === 'clear') {
-        return () => {
-          assertMutation()
-          target.clear()
-        }
-      }
-      if (property === 'forEach') {
-        return (callback: (value: V, key: K, map: Map<K, V>) => void, thisArg?: unknown) => {
-          target.forEach((value, key) => callback.call(thisArg, value, key, receiver as Map<K, V>))
-        }
-      }
-      if (property === 'size') return target.size
-      if (property === 'valueOf') return () => receiver
-      if (
-        property === 'get' ||
-        property === 'has' ||
-        property === 'entries' ||
-        property === 'keys' ||
-        property === 'values' ||
-        property === Symbol.iterator
-      ) {
-        const method = Reflect.get(target, property, target) as (...args: unknown[]) => unknown
-        return (...args: unknown[]) => Reflect.apply(method, target, args)
-      }
-
-      return Reflect.get(target, property, receiver)
-    },
-    defineProperty(target, property, attributes) {
-      assertMutation()
-      return Reflect.defineProperty(target, property, attributes)
-    },
-    deleteProperty(target, property) {
-      assertMutation()
-      return Reflect.deleteProperty(target, property)
-    },
-    preventExtensions(target) {
-      assertMutation()
-      return Reflect.preventExtensions(target)
-    },
-    set(target, property, value) {
-      assertMutation()
-      return Reflect.set(target, property, value, target)
-    },
-    setPrototypeOf(target, prototype) {
-      assertMutation()
-      return Reflect.setPrototypeOf(target, prototype)
-    },
-  })
 }
 
 export class Document {
@@ -109,16 +48,24 @@ export class Document {
   }
 
   /** document is open or not */
-  @observable.ref accessor _opened = false
+  @observable.ref private accessor openedState = false
+
+  get _opened(): boolean {
+    return this.openedState
+  }
 
   /** document is suspended or not */
-  @observable.ref accessor _suspended = false
+  @observable.ref private accessor suspendedState = false
+
+  get _suspended(): boolean {
+    return this.suspendedState
+  }
 
   /**
    * 是否为非激活状态
    */
   get suspended() {
-    return this._suspended || !this._opened
+    return this.suspendedState || !this.openedState
   }
 
   /**
@@ -183,7 +130,7 @@ export class Document {
   // }
 
   get opened() {
-    return this._opened
+    return this.openedState
   }
 
   isBlank() {
@@ -204,6 +151,7 @@ export class Document {
 
   @action
   set dropLocation(loc: DropLocation | null) {
+    this.project.assertDocumentGenerationActive(this)
     this._dropLocation = loc
     this.designer.postEvent(DESIGNER_EVENT.DOCUMENT_DROP_LOCATION_CHANGE, { document: this, location: loc })
   }
@@ -236,6 +184,11 @@ export class Document {
       },
       this,
     )
+    installDocumentTeardown(this, {
+      purge: () => this.#purgeInternal(true),
+      remove: () => this.#removeInternal(true),
+      retire: () => sealLifecycleMutations(this, 'document generation is disposed'),
+    })
   }
 
   @action
@@ -257,31 +210,68 @@ export class Document {
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE) {
+    this.project.assertDocumentGenerationActive(this)
     return this.rootNode!.export<RootSchema>(stage)
   }
 
   /** Pure raw snapshot for history, transactions, and capability boundaries. */
   exportRaw(): RootSchema {
+    this.project.assertDocumentGenerationActive(this)
     return this.rootNode!.exportRaw<RootSchema>()
   }
 
   @action
   remove() {
-    this.project.assertDocumentLifecycleMutationAllowed(this)
-    this.history.destroy()
-    this.designer.postEvent(DOCUMENT_EVENT.REMOVE, { id: this.id })
-    this.purge()
-    this.project.internalUnlinkDocument(this)
+    this.#removeInternal(false)
+  }
+
+  #removeInternal(teardown: boolean): void {
+    if (!teardown) this.project.assertDocumentLifecycleMutationAllowed(this)
+    const errors: unknown[] = []
+    try {
+      runInternalLifecycleTeardown(this.history)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.#purgeInternal(teardown)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.project.internalUnlinkDocument(this)
+    } catch (error) {
+      errors.push(error)
+    }
+    sealLifecycleMutations(this, 'document generation is disposed')
+    if (!teardown) {
+      try {
+        this.designer.postEvent(DOCUMENT_EVENT.REMOVE, { id: this.id })
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Document removal completed with errors')
   }
 
   @action
   purge() {
-    this.project.assertDocumentLifecycleMutationAllowed(this)
-    this.markSchemaMutation()
+    // A project-owned Document cannot be left without a root while retaining
+    // its identity. Keep the legacy entry point as a complete terminal remove.
+    this.#removeInternal(false)
+  }
+
+  #purgeInternal(teardown: boolean): void {
+    if (teardown) this.schemaMutationVersion += 1
+    else {
+      this.project.assertDocumentLifecycleMutationAllowed(this)
+      this.markSchemaMutation()
+    }
     // 追踪物料使用：批量减少所有节点的使用计数
     for (const node of this.nodes) {
       if (node.componentName) {
-        this.designer.materials.decrementUsage(node.materialUsageKey)
+        if (teardown) releaseMaterialUsageDuringTeardown(this.designer.materials, node.materialUsageKey)
+        else this.designer.materials.decrementUsage(node.materialUsageKey)
       }
     }
 
@@ -422,10 +412,10 @@ export class Document {
   @action
   private setSuspense(flag: boolean) {
     this.project.assertDocumentLifecycleMutationAllowed(this)
-    if (!this._opened && !flag) {
+    if (!this.openedState && !flag) {
       return
     }
-    this._suspended = flag
+    this.suspendedState = flag
     this.simulator?.setSuspense(flag)
     if (!flag) {
       this.project.checkExclusive(this)
@@ -445,13 +435,13 @@ export class Document {
   @action
   open() {
     this.project.assertDocumentLifecycleMutationAllowed(this)
-    const originState = this._opened
-    this._opened = true
+    const originState = this.openedState
+    this.openedState = true
     // only emit when document is suspense
     if (originState === false) {
       this.designer.postEvent(DOCUMENT_EVENT.OPEN, this)
     }
-    if (this._suspended) {
+    if (this.suspendedState) {
       this.setSuspense(false)
     } else {
       this.project.checkExclusive(this)
@@ -463,7 +453,7 @@ export class Document {
   close() {
     this.project.assertDocumentLifecycleMutationAllowed(this)
     this.setSuspense(true)
-    this._opened = false
+    this.openedState = false
   }
 
   /**
@@ -538,6 +528,7 @@ export class Document {
   }
 
   onReady(listener: () => void) {
+    this.project.assertDocumentGenerationActive(this)
     const dispose = this.designer.onEvent(DOCUMENT_EVENT.OPEN, listener)
 
     return () => {
@@ -546,6 +537,7 @@ export class Document {
   }
 
   onNodeAdd(listener: (node: Node) => void) {
+    this.project.assertDocumentGenerationActive(this)
     const dispose = this.designer.onEvent(NODE_EVENT.ADD, listener)
 
     return () => {
@@ -554,6 +546,7 @@ export class Document {
   }
 
   onNodeRemove(listener: (id: string) => void) {
+    this.project.assertDocumentGenerationActive(this)
     const dispose = this.designer.onEvent(NODE_EVENT.REMOVE, listener)
 
     return () => {

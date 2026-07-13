@@ -54,6 +54,24 @@ export interface MaterialEntry {
   extensions?: Map<string, unknown>
 }
 
+/** Detached, deterministic registry state for diagnostics and verification. */
+export interface MaterialRegistryEntrySnapshot {
+  readonly componentLoaded: boolean
+  readonly componentName: string
+  readonly extensionKeys: readonly string[]
+  readonly source: MaterialSource
+  readonly status: MaterialStatus
+  readonly usageCount: number
+  readonly version?: string
+}
+
+/** Public observation surface. It contains no mutable entries or rollback token. */
+export interface MaterialRegistrySnapshot {
+  readonly entries: readonly MaterialRegistryEntrySnapshot[]
+  readonly pendingEntries: readonly MaterialRegistryEntrySnapshot[]
+  readonly version: number
+}
+
 /** 注册选项 */
 export interface RegisterOptions {
   /** 物料来源 */
@@ -167,6 +185,9 @@ export interface IMaterialRegistry {
    * 获取所有物料条目
    */
   getAll(): Map<string, MaterialEntry>
+
+  /** Return a frozen, detached snapshot suitable for invariant checks. */
+  getSnapshot(): MaterialRegistrySnapshot
 
   /**
    * 获取按来源分组的物料

@@ -160,15 +160,13 @@ export class Viewport {
   setScrollTarget(target: Window): Disposable {
     this.clearScrollTarget()
     const scrollTarget = new ScrollTarget(target)
-    this._scrollX = scrollTarget.left
-    this._scrollY = scrollTarget.top
 
-    let scrollTimer: any
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined
     const onScroll = () => {
       this._scrollX = scrollTarget.left
       this._scrollY = scrollTarget.top
       this._scrolling = true
-      if (scrollTimer) {
+      if (scrollTimer !== undefined) {
         clearTimeout(scrollTimer)
       }
       scrollTimer = setTimeout(() => {
@@ -176,28 +174,69 @@ export class Viewport {
       }, 80)
     }
     const onResize = () => this.touch()
-    target.addEventListener('scroll', onScroll)
-    target.addEventListener('resize', onResize)
-    this._scrollTarget = scrollTarget
-
+    const listeners = {
+      resize: onResize,
+      scroll: onScroll,
+    }
+    const pendingListenerRemovals = new Set<keyof typeof listeners>()
     let disposed = false
     const dispose = () => {
       if (disposed) {
         return
       }
-      disposed = true
-      target.removeEventListener('scroll', onScroll)
-      target.removeEventListener('resize', onResize)
-      if (scrollTimer) {
-        clearTimeout(scrollTimer)
+
+      const failures: unknown[] = []
+      for (const eventType of [...pendingListenerRemovals]) {
+        try {
+          target.removeEventListener(eventType, listeners[eventType])
+          pendingListenerRemovals.delete(eventType)
+        } catch (error) {
+          failures.push(error)
+        }
       }
-      if (this.scrollDisposer === dispose) {
+      if (scrollTimer !== undefined) {
+        try {
+          clearTimeout(scrollTimer)
+          scrollTimer = undefined
+        } catch (error) {
+          failures.push(error)
+        }
+      }
+
+      if (pendingListenerRemovals.size === 0 && scrollTimer === undefined) {
+        disposed = true
+      }
+      if (disposed && this.scrollDisposer === dispose) {
         this.scrollDisposer = undefined
         this._scrollTarget = undefined
         this._scrolling = false
       }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'Viewport scroll target disposal failed')
+      }
     }
     this.scrollDisposer = dispose
+
+    try {
+      target.addEventListener('scroll', onScroll)
+      pendingListenerRemovals.add('scroll')
+      target.addEventListener('resize', onResize)
+      pendingListenerRemovals.add('resize')
+    } catch (acquisitionError) {
+      try {
+        dispose()
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [acquisitionError, rollbackError],
+          'Viewport scroll target setup failed and rollback was incomplete',
+        )
+      }
+      throw acquisitionError
+    }
+
+    this._scrollX = scrollTarget.left
+    this._scrollY = scrollTarget.top
+    this._scrollTarget = scrollTarget
     return dispose
   }
 

@@ -1,6 +1,12 @@
 import EventEmitter from 'events'
 import { action, observable } from 'mobx'
 import { Config } from '../config'
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import {
+  assertPublicLifecycleTeardownAllowed,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../lifecycle/teardown-boundary'
 import type { Plugins } from '../plugin/plugins'
 import {
   EDITOR_EVENT,
@@ -58,6 +64,7 @@ export class Editor extends EventEmitter implements IEditor {
 
   constructor(config?: EditorConfig, engineConfig?: Config, eventDelivery?: EventDeliveryScheduler) {
     super()
+    installLifecycleTeardownOperation(this, () => this.#destroyInternal())
     // set global emitter maxListeners
     this.setMaxListeners(200)
     this.eventBus = new EventBus(this, undefined, eventDelivery)
@@ -66,6 +73,41 @@ export class Editor extends EventEmitter implements IEditor {
     if (config) {
       this.init(config)
     }
+  }
+
+  override addListener(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    assertLifecycleMutationAllowed(this, 'editor.addListener')
+    return super.addListener(eventName, listener)
+  }
+
+  override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    assertLifecycleMutationAllowed(this, 'editor.on')
+    return super.on(eventName, listener)
+  }
+
+  override once(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    assertLifecycleMutationAllowed(this, 'editor.once')
+    return super.once(eventName, listener)
+  }
+
+  override prependListener(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    assertLifecycleMutationAllowed(this, 'editor.prependListener')
+    return super.prependListener(eventName, listener)
+  }
+
+  override prependOnceListener(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    assertLifecycleMutationAllowed(this, 'editor.prependOnceListener')
+    return super.prependOnceListener(eventName, listener)
+  }
+
+  override setMaxListeners(count: number): this {
+    assertLifecycleMutationAllowed(this, 'editor.setMaxListeners')
+    return super.setMaxListeners(count)
+  }
+
+  override removeAllListeners(eventName?: string | symbol): this {
+    assertPublicLifecycleTeardownAllowed(this, 'editor.removeAllListeners')
+    return this.#removeAllListenersInternal(eventName)
   }
 
   get<T = undefined, KeyOrType extends EditorValueKey = any>(
@@ -80,6 +122,7 @@ export class Editor extends EventEmitter implements IEditor {
 
   @action
   set(key: EditorValueKey, data: any): void | Promise<void> {
+    assertLifecycleMutationAllowed(this, 'editor.set')
     // store the data to engineConfig while invoking editor.set()
     if (!keyBlacklist.includes(key as string)) {
       this.engineConfig.set(key as any, data)
@@ -95,6 +138,7 @@ export class Editor extends EventEmitter implements IEditor {
   onceGot<T = undefined, KeyOrType extends EditorValueKey = any>(
     keyOrType: KeyOrType,
   ): Promise<EditorGetResult<T, KeyOrType>> {
+    assertLifecycleMutationAllowed(this, 'editor.onceGot')
     const x = this.context.get(keyOrType)
     if (x !== undefined) {
       return Promise.resolve(x)
@@ -112,13 +156,14 @@ export class Editor extends EventEmitter implements IEditor {
     keyOrType: KeyOrType,
     fn: (data: EditorGetResult<T, KeyOrType>) => void,
   ): () => void {
+    assertLifecycleMutationAllowed(this, 'editor.onGot')
     const x = this.context.get(keyOrType)
     if (x !== undefined) {
       fn(x)
     }
-    this.setWait(keyOrType, fn)
+    const registration = this.setWait(keyOrType, fn)
     return () => {
-      this.delWait(keyOrType, fn)
+      this.removeWait(keyOrType, registration)
     }
   }
 
@@ -129,18 +174,21 @@ export class Editor extends EventEmitter implements IEditor {
     keyOrType: KeyOrType,
     fn: (data: EditorGetResult<T, KeyOrType>) => void,
   ): () => void {
-    this.setWait(keyOrType, fn)
+    assertLifecycleMutationAllowed(this, 'editor.onChange')
+    const registration = this.setWait(keyOrType, fn)
     return () => {
-      this.delWait(keyOrType, fn)
+      this.removeWait(keyOrType, registration)
     }
   }
 
   register(data: any, key?: EditorValueKey): void {
+    assertLifecycleMutationAllowed(this, 'editor.register')
     this.context.set(key || data, data)
     this.notifyGot(key || data)
   }
 
   async init(config?: EditorConfig, components?: Editor['components']): Promise<any> {
+    assertLifecycleMutationAllowed(this, 'editor.init')
     this.config = config || {}
     this.components = components || {}
     const { hooks = [], lifeCycles } = this.config
@@ -162,7 +210,12 @@ export class Editor extends EventEmitter implements IEditor {
   }
 
   destroy(): void {
-    this.unregisterHooks()
+    assertPublicLifecycleTeardownAllowed(this, 'editor.destroy')
+    this.#destroyInternal()
+  }
+
+  #destroyInternal(): void {
+    this.#unregisterHooksInternal()
 
     if (this.config) {
       try {
@@ -184,11 +237,12 @@ export class Editor extends EventEmitter implements IEditor {
     this.hooks = []
     this.config = undefined
     this.components = undefined
-    this.eventBus.dispose()
-    this.removeAllListeners()
+    runInternalLifecycleTeardown(this.eventBus)
+    this.#removeAllListenersInternal()
   }
 
   async extend(pluginManager: Plugins) {
+    assertLifecycleMutationAllowed(this, 'editor.extend')
     this.eventBus.emit(EDITOR_EVENT.BEFORE_EXTEND)
 
     try {
@@ -203,6 +257,7 @@ export class Editor extends EventEmitter implements IEditor {
   }
 
   initHooks = (hooks: HookConfig[]) => {
+    assertLifecycleMutationAllowed(this, 'editor.initHooks')
     this.hooks = hooks.map(hook => ({
       ...hook,
       // 指定第一个参数为 editor
@@ -213,6 +268,7 @@ export class Editor extends EventEmitter implements IEditor {
   }
 
   registerHooks = (hooks: HookConfig[]) => {
+    assertLifecycleMutationAllowed(this, 'editor.registerHooks')
     this.initHooks(hooks).forEach(({ message, type, handler }) => {
       if (['on', 'once'].indexOf(type) !== -1) {
         this[type](message as any, handler)
@@ -220,10 +276,20 @@ export class Editor extends EventEmitter implements IEditor {
     })
   }
 
-  unregisterHooks = () => {
+  unregisterHooks = (): void => {
+    assertPublicLifecycleTeardownAllowed(this, 'editor.unregisterHooks')
+    this.#unregisterHooksInternal()
+  }
+
+  #unregisterHooksInternal(): void {
     this.hooks.forEach(({ message, handler }) => {
       this.removeListener(message, handler)
     })
+  }
+
+  #removeAllListenersInternal(eventName?: string | symbol): this {
+    if (eventName === undefined) return super.removeAllListeners()
+    return super.removeAllListeners(eventName)
   }
 
   /**
@@ -250,12 +316,23 @@ export class Editor extends EventEmitter implements IEditor {
   }
 
   private setWait(key: EditorValueKey, resolve: (data: any) => void, once?: boolean) {
+    assertLifecycleMutationAllowed(this, 'editor.wait')
+    const registration = { resolve, once }
     const waits = this.waits.get(key)
     if (waits) {
-      waits.push({ resolve, once })
+      waits.push(registration)
     } else {
-      this.waits.set(key, [{ resolve, once }])
+      this.waits.set(key, [registration])
     }
+    return registration
+  }
+
+  private removeWait(key: EditorValueKey, registration: { once?: boolean; resolve: (data: any) => void }): void {
+    const waits = this.waits.get(key)
+    if (!waits) return
+    const index = waits.indexOf(registration)
+    if (index !== -1) waits.splice(index, 1)
+    if (waits.length < 1) this.waits.delete(key)
   }
 
   private delWait(key: EditorValueKey, fn: any) {
@@ -275,43 +352,23 @@ export class Editor extends EventEmitter implements IEditor {
   }
 
   onBeforeInit(listener: (editor: Editor) => void) {
-    this.eventBus.on(EDITOR_EVENT.BEFORE_INIT, listener)
-
-    return () => {
-      this.eventBus.off(EDITOR_EVENT.BEFORE_INIT, listener)
-    }
+    return this.eventBus.on(EDITOR_EVENT.BEFORE_INIT, listener)
   }
 
   onAfterInit(listener: (editor: Editor) => void) {
-    this.eventBus.on(EDITOR_EVENT.AFTER_INIT, listener)
-
-    return () => {
-      this.eventBus.off(EDITOR_EVENT.AFTER_INIT, listener)
-    }
+    return this.eventBus.on(EDITOR_EVENT.AFTER_INIT, listener)
   }
 
   onDestroy(listener: (editor: Editor) => void) {
-    this.eventBus.on(EDITOR_EVENT.DESTROY, listener)
-
-    return () => {
-      this.eventBus.off(EDITOR_EVENT.DESTROY, listener)
-    }
+    return this.eventBus.on(EDITOR_EVENT.DESTROY, listener)
   }
 
   onBeforeExtend(listener: (editor: Editor) => void) {
-    this.eventBus.on(EDITOR_EVENT.BEFORE_EXTEND, listener)
-
-    return () => {
-      this.eventBus.off(EDITOR_EVENT.BEFORE_EXTEND, listener)
-    }
+    return this.eventBus.on(EDITOR_EVENT.BEFORE_EXTEND, listener)
   }
 
   onAfterExtend(listener: (editor: Editor) => void) {
-    this.eventBus.on(EDITOR_EVENT.AFTER_EXTEND, listener)
-
-    return () => {
-      this.eventBus.off(EDITOR_EVENT.AFTER_EXTEND, listener)
-    }
+    return this.eventBus.on(EDITOR_EVENT.AFTER_EXTEND, listener)
   }
 }
 

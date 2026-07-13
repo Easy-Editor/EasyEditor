@@ -29,6 +29,8 @@ const options: EngineInstanceOptions = {
 }
 const engine: EngineInstance = createEngine(options)
 const lifecycleState: EngineLifecycleState = engine.lifecycleState
+// @ts-expect-error lifecycle state is an engine-owned, read-only decision source
+engine.lifecycleState = 'ready'
 const directEngine = new EngineInstance(options)
 const currentVersion: '1.0.0' = CURRENT_PROJECT_SCHEMA_VERSION
 const prepared = validateProjectSchema(

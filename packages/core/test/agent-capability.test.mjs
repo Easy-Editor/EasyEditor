@@ -41,13 +41,13 @@ async function createHarness(t, options = {}) {
 
 function captureKernelState(engine) {
   const document = engine.project.currentDocument
-  const materials = engine.materials.captureTransactionState()
+  const materials = engine.materials.registry.getSnapshot()
   return {
     document,
     historyData: document.history.hotData,
     historyState: document.history.getState(),
-    materialEntries: [...materials.entries].sort(([a], [b]) => a.localeCompare(b)),
-    materialPendingEntries: [...materials.pendingEntries].sort(([a], [b]) => a.localeCompare(b)),
+    materialEntries: materials.entries,
+    materialPendingEntries: materials.pendingEntries,
     schema: structuredClone(document.export()),
     selection: [...engine.designer.selection.selected],
   }

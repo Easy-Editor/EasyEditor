@@ -1,4 +1,5 @@
 import EventEmitter from 'events'
+import { runInAction } from 'mobx'
 import { AgentCapabilityManager } from '../agent'
 import { CommandManager, TransactionManager } from '../commands'
 import { Config, type ConfigOptions } from '../config'
@@ -6,6 +7,8 @@ import { Clipboard } from '../designer/clipboard'
 import { Designer } from '../designer/designer'
 import type { Document } from '../document'
 import { DisposalLedger } from '../lifecycle'
+import { advanceLifecycleMutationEpoch, installLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import { claimEngineTeardownOwnership, runInternalLifecycleTeardown } from '../lifecycle/teardown-boundary'
 import { Materials } from '../materials'
 import {
   type PluginContext,
@@ -31,6 +34,14 @@ import { createLogger } from '../utils/logger'
 import { Editor } from './editor'
 
 export type EngineLifecycleState = 'created' | 'initializing' | 'ready' | 'disposing' | 'disposed' | 'failed'
+
+const engineLifecycleStates = new WeakMap<EngineInstance, EngineLifecycleState>()
+
+const getEngineLifecycleState = (engine: EngineInstance): EngineLifecycleState => {
+  const state = engineLifecycleStates.get(engine)
+  if (!state) throw new Error('Engine lifecycle state is not initialized')
+  return state
+}
 
 export interface RemoteAccessRequest {
   name: string
@@ -62,7 +73,9 @@ export interface EngineInstanceOptions {
 }
 
 export class EngineInstance {
-  lifecycleState: EngineLifecycleState = 'created'
+  get lifecycleState(): EngineLifecycleState {
+    return getEngineLifecycleState(this)
+  }
 
   readonly trustPolicy: TrustPolicy
 
@@ -120,67 +133,90 @@ export class EngineInstance {
 
   private restrictedPluginBoundaryRelease?: () => void
 
+  private readonly assertLifecycleMutationAllowed = (origin: string): void => {
+    const state = getEngineLifecycleState(this)
+    if (state === 'disposing' || state === 'disposed' || state === 'failed') {
+      throw new Error(`Cannot ${origin} while engine is ${state}`)
+    }
+  }
+
   constructor(options: EngineInstanceOptions = {}) {
+    engineLifecycleStates.set(this, 'created')
+    Object.defineProperty(this, 'lifecycleState', {
+      configurable: false,
+      enumerable: true,
+      get: () => getEngineLifecycleState(this),
+    })
     this.trustPolicy = resolveTrustPolicy(options.trustPolicy)
     this.ensureRestrictedPluginBoundary('engine.constructor')
-    this.config = options.services?.config || new Config()
-    this.eventBus = options.services?.eventBus || new EventBus(new EventEmitter())
-    this.eventBus.setDeliveryScheduler(this.eventTransactions.defer)
-    this.event = new Event(this.eventBus, { prefix: 'common' })
-    this.hotkey = new Hotkey()
-    this.clipboard = options.services?.clipboard || new Clipboard()
-    this.editor = new Editor(undefined, this.config, this.eventTransactions.defer)
-    this.editor.set('trustPolicy', this.trustPolicy)
+    try {
+      this.config = options.services?.config || new Config()
+      this.eventBus = options.services?.eventBus || new EventBus(new EventEmitter())
+      this.eventBus.setDeliveryScheduler(this.eventTransactions.defer)
+      this.event = new Event(this.eventBus, { prefix: 'common' })
+      this.hotkey = new Hotkey()
+      this.clipboard = options.services?.clipboard || new Clipboard()
+      this.editor = new Editor(undefined, this.config, this.eventTransactions.defer)
+      this.editor.set('trustPolicy', this.trustPolicy)
 
-    const schemaValidator = new SchemaValidator(this.trustPolicy, origin => this.assertTrustBoundaryIntegrity(origin))
-    this.designer = new Designer({ editor: this.editor, eventDelivery: this.eventTransactions.defer, schemaValidator })
-    this.project = this.designer.project
-    this.setters = new Setters()
-    this.materials = new Materials(this.editor)
+      const schemaValidator = new SchemaValidator(this.trustPolicy, origin => this.assertTrustBoundaryIntegrity(origin))
+      this.designer = new Designer({
+        editor: this.editor,
+        eventDelivery: this.eventTransactions.defer,
+        schemaValidator,
+      })
+      this.project = this.designer.project
+      this.setters = new Setters()
+      this.materials = new Materials(this.editor)
 
-    this.remoteAdapter = options.remoteAdapter
-    this.remoteAdapterActive = !!this.remoteAdapter
-    const registry = options.services?.registry || new ResourceRegistry()
-    const remoteLoadingState = options.services?.loadingState || new LoadingStateManager()
-    this.remote = {
-      loadingState: remoteLoadingState,
-      registry,
-      request: request => {
-        this.assertRemoteAccess(request)
-        return this.remoteAdapter?.request?.(request)
-      },
+      this.remoteAdapter = options.remoteAdapter
+      this.remoteAdapterActive = !!this.remoteAdapter
+      const registry = options.services?.registry || new ResourceRegistry()
+      const remoteLoadingState = options.services?.loadingState || new LoadingStateManager()
+      this.remote = {
+        loadingState: remoteLoadingState,
+        registry,
+        request: request => {
+          this.assertRemoteAccess(request)
+          return this.remoteAdapter?.request?.(request)
+        },
+      }
+
+      const pluginContextApiAssembler: PluginContextApiAssembler = {
+        assembleApis: (context: PluginContext, pluginName: string, meta: PluginMeta) => {
+          context.engine = this
+          context.hotkey = this.hotkey
+          context.clipboard = this.clipboard
+          context.project = this.project
+          context.setters = this.setters
+          context.materials = this.materials
+          const eventPrefix = meta?.eventPrefix || 'common'
+          context.event = new Event(this.eventBus, { prefix: eventPrefix })
+          context.config = this.config
+          context.plugins = this.plugins
+          context.trustPolicy = this.trustPolicy
+          context.logger = createLogger(`plugin:${pluginName}`)
+        },
+      }
+
+      this.innerPlugins = new Plugins(
+        pluginContextApiAssembler,
+        { eventDelivery: this.eventTransactions.defer },
+        origin => this.assertPluginExtensionsAllowed(origin),
+      )
+      this.plugins = this.innerPlugins.toProxy()
+
+      this.transactions = new TransactionManager(this, this.eventTransactions)
+      this.commands = new CommandManager(this.transactions)
+      this.agentCapabilities = new AgentCapabilityManager(this)
+      this.wireEditorContext()
+
+      this.hostWindow = options.hostWindow
+      this.claimLifecycleMutationOwnership()
+    } catch (error) {
+      this.releaseRestrictedPluginBoundary()
+      throw error
     }
-
-    const pluginContextApiAssembler: PluginContextApiAssembler = {
-      assembleApis: (context: PluginContext, pluginName: string, meta: PluginMeta) => {
-        context.engine = this
-        context.hotkey = this.hotkey
-        context.clipboard = this.clipboard
-        context.project = this.project
-        context.setters = this.setters
-        context.materials = this.materials
-        const eventPrefix = meta?.eventPrefix || 'common'
-        context.event = new Event(this.eventBus, { prefix: eventPrefix })
-        context.config = this.config
-        context.plugins = this.plugins
-        context.trustPolicy = this.trustPolicy
-        context.logger = createLogger(`plugin:${pluginName}`)
-      },
-    }
-
-    this.innerPlugins = new Plugins(
-      pluginContextApiAssembler,
-      { eventDelivery: this.eventTransactions.defer },
-      origin => this.assertPluginExtensionsAllowed(origin),
-    )
-    this.plugins = this.innerPlugins.toProxy()
-
-    this.transactions = new TransactionManager(this, this.eventTransactions)
-    this.commands = new CommandManager(this.transactions)
-    this.agentCapabilities = new AgentCapabilityManager(this)
-    this.wireEditorContext()
-
-    this.hostWindow = options.hostWindow
   }
 
   async init(options?: ConfigOptions): Promise<void> {
@@ -211,7 +247,7 @@ export class EngineInstance {
   }
 
   private async initialize(options?: ConfigOptions): Promise<void> {
-    this.lifecycleState = 'initializing'
+    this.#transitionLifecycle('initializing')
     this.initScope = new DisposalLedger()
     try {
       if (options) this.config.setEngineOptions(options)
@@ -242,13 +278,13 @@ export class EngineInstance {
 
       await this.plugins.extend()
       await this.plugins.init()
-      this.lifecycleState = 'ready'
+      this.#transitionLifecycle('ready')
       this.agentCapabilities.activate()
       this.logger.info('Engine initialization successfully')
     } catch (error) {
       const rollbackErrors: unknown[] = []
       try {
-        await this.plugins.destroy()
+        await runInternalLifecycleTeardown<['destroy'], Promise<void>>(this.innerPlugins, 'destroy')
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
       }
@@ -258,7 +294,7 @@ export class EngineInstance {
         rollbackErrors.push(rollbackError)
       }
       this.initScope = undefined
-      this.lifecycleState = rollbackErrors.length ? 'failed' : 'created'
+      this.#transitionLifecycle(rollbackErrors.length ? 'failed' : 'created')
       if (rollbackErrors.length) {
         throw new AggregateError([error, ...rollbackErrors], 'Engine initialization and rollback both failed')
       }
@@ -311,7 +347,7 @@ export class EngineInstance {
   }
 
   private async disposeEngine(): Promise<void> {
-    this.lifecycleState = 'disposing'
+    this.#transitionLifecycle('disposing')
     const failures: unknown[] = []
     const cleanup = async (operation: () => void | Promise<void>) => {
       try {
@@ -321,36 +357,36 @@ export class EngineInstance {
       }
     }
 
-    await cleanup(() => this.agentCapabilities.revokeAll('engine.lifecycle'))
+    await cleanup(() => runInternalLifecycleTeardown<[string]>(this.agentCapabilities, 'engine.lifecycle'))
     const initScope = this.initScope
     await cleanup(() => initScope?.dispose())
     this.initScope = undefined
-    await cleanup(() => this.plugins.destroy())
-    await cleanup(() => this.designer.purge())
-    await cleanup(() => withProjectMutationAuthority(this.project, () => this.project.dispose()))
+    await cleanup(() => runInternalLifecycleTeardown<['destroy'], Promise<void>>(this.innerPlugins, 'destroy'))
+    await cleanup(() => runInternalLifecycleTeardown(this.designer))
+    await cleanup(() => runInternalLifecycleTeardown<[], Promise<void>>(this.project))
     if (!initScope) {
       await cleanup(() => this.disposeRemoteAdapter())
     }
-    await cleanup(() => this.hotkey.dispose())
-    await cleanup(() => this.clipboard.dispose())
-    await cleanup(() => this.materials.dispose())
-    await cleanup(() => this.setters.dispose())
-    await cleanup(() => this.remote.loadingState.dispose())
-    await cleanup(() => this.remote.registry.dispose())
-    await cleanup(() => this.innerPlugins.clearContexts())
-    await cleanup(() => this.editor.destroy())
-    await cleanup(() => this.eventBus.dispose())
-    await cleanup(() => this.config.dispose({ preserve: ['VERSION'] }))
+    await cleanup(() => runInternalLifecycleTeardown(this.hotkey))
+    await cleanup(() => runInternalLifecycleTeardown(this.clipboard))
+    await cleanup(() => runInternalLifecycleTeardown(this.materials))
+    await cleanup(() => runInternalLifecycleTeardown(this.setters))
+    await cleanup(() => runInternalLifecycleTeardown(this.remote.loadingState))
+    await cleanup(() => runInternalLifecycleTeardown(this.remote.registry))
+    await cleanup(() => runInternalLifecycleTeardown<['clearContexts']>(this.innerPlugins, 'clearContexts'))
+    await cleanup(() => runInternalLifecycleTeardown(this.editor))
+    await cleanup(() => runInternalLifecycleTeardown(this.eventBus))
+    await cleanup(() => runInternalLifecycleTeardown(this.config, { preserve: ['VERSION'] }))
     // Plugins can run arbitrary teardown hooks; finish with a final capability
     // and audit-subscriber sweep so no late teardown registration survives.
-    await cleanup(() => this.agentCapabilities.revokeAll('engine.lifecycle.finalize'))
+    await cleanup(() => runInternalLifecycleTeardown<[string]>(this.agentCapabilities, 'engine.lifecycle.finalize'))
 
     if (failures.length > 0) {
-      this.lifecycleState = 'failed'
+      this.#transitionLifecycle('failed')
       throw new AggregateError(failures, 'Engine disposal completed with errors')
     }
     this.releaseRestrictedPluginBoundary()
-    this.lifecycleState = 'disposed'
+    this.#transitionLifecycle('disposed')
     this.logger.info('Engine destruction successfully')
   }
 
@@ -434,7 +470,19 @@ export class EngineInstance {
     if (this.lifecycleState === 'disposing' || this.lifecycleState === 'disposed' || this.lifecycleState === 'failed') {
       throw new Error(`Cannot mutate the project while engine is ${this.lifecycleState}`)
     }
-    return withProjectMutationAuthority(this.project, operation)
+    const eventScope = this.eventTransactions.begin()
+    let result: T
+    try {
+      // Keep host writes inside one outer MobX batch, but release the ambient
+      // authority before that batch flushes reactions. Synchronous observers
+      // therefore cannot inherit host mutation authority.
+      result = runInAction(() => withProjectMutationAuthority(this.project, operation))
+    } catch (error) {
+      this.eventTransactions.rollback(eventScope)
+      throw error
+    }
+    this.eventTransactions.commit(eventScope)
+    return result
   }
 
   private resolveOwnedDocument(documentOrId?: Document | string): Document {
@@ -465,6 +513,66 @@ export class EngineInstance {
     this.editor.set('transactions', this.transactions)
     this.editor.set('commands', this.commands)
     this.editor.set('agentCapabilities', this.agentCapabilities)
+  }
+
+  private claimLifecycleMutationOwnership(): void {
+    const ownedMutationRoots = [
+      this,
+      this.clipboard,
+      this.agentCapabilities,
+      this.config,
+      this.designer,
+      this.editor,
+      this.editor.eventBus,
+      this.eventBus,
+      this.hotkey,
+      this.innerPlugins,
+      this.plugins,
+      this.materials,
+      this.project,
+      this.remote.loadingState,
+      this.remote.registry,
+      this.setters,
+    ]
+    for (const root of ownedMutationRoots) {
+      installLifecycleMutationGuard(root, this.assertLifecycleMutationAllowed)
+    }
+
+    const ownedTeardownRoots = [
+      this.clipboard,
+      this.agentCapabilities,
+      this.config,
+      this.designer,
+      this.editor,
+      this.editor.eventBus,
+      this.eventBus,
+      this.hotkey,
+      this.innerPlugins,
+      this.materials,
+      this.project,
+      this.remote.loadingState,
+      this.remote.registry,
+      this.setters,
+    ]
+    for (const root of ownedTeardownRoots) {
+      claimEngineTeardownOwnership(root)
+    }
+  }
+
+  #transitionLifecycle(nextState: EngineLifecycleState): void {
+    const previousState = getEngineLifecycleState(this)
+    engineLifecycleStates.set(this, nextState)
+    // A generation starts when initialization begins and ends when disposal
+    // starts or initialization rolls back. Entering `ready` is still the same
+    // generation: plugin capabilities acquired during init must remain usable
+    // for the lifetime of that ready engine.
+    if (
+      nextState === 'initializing' ||
+      nextState === 'disposing' ||
+      (previousState === 'initializing' && nextState !== 'ready')
+    ) {
+      advanceLifecycleMutationEpoch(this)
+    }
   }
 }
 
