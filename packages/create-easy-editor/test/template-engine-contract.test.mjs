@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const repositoryRoot = join(packageRoot, '../..')
 const templateRoot = join(packageRoot, 'template/dashboard/react')
 const templateSourceRoot = join(templateRoot, 'src')
 
@@ -133,8 +134,20 @@ test('React dashboard Text material does not forward arbitrary schema props to t
 
 test('React dashboard template pins the compatible engine release set and package manager', () => {
   const manifest = JSON.parse(readTemplate('package.json'))
+  const exampleManifest = JSON.parse(readFileSync(join(repositoryRoot, 'examples/dashboard/package.json'), 'utf8'))
 
   assert.equal(manifest.packageManager, 'pnpm@10.25.0')
+  assert.deepEqual(
+    [manifest, exampleManifest].map(({ dependencies }) => ({
+      '@tailwindcss/vite': dependencies['@tailwindcss/vite'],
+      tailwindcss: dependencies.tailwindcss,
+    })),
+    [
+      { '@tailwindcss/vite': '4.1.18', tailwindcss: '4.1.18' },
+      { '@tailwindcss/vite': '4.1.18', tailwindcss: '4.1.18' },
+    ],
+    'the generated template and source example must stay on the last Node 18-compatible Tailwind release',
+  )
   assert.deepEqual(
     Object.fromEntries(
       [
