@@ -16,6 +16,11 @@ const visit = async directory => {
 }
 
 await visit(distDirectory)
+const agentWorkerFiles = files.filter(file => /agent\.worker-[^/]+\.js$/.test(file))
+if (agentWorkerFiles.length !== 1) {
+  throw new Error(`Expected one isolated Agent Worker bundle, found ${agentWorkerFiles.length}`)
+}
+
 for (const file of files) {
   const content = await readFile(file, 'utf8')
   for (const sentinel of forbidden) {

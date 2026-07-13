@@ -1,6 +1,5 @@
 /**
- * Material Loader
- * 物料加载器
+ * Instance-owned material loader.
  */
 
 import {
@@ -10,351 +9,319 @@ import {
   type MaterialInfo,
   RemoteLoadError,
   RemoteLoadErrorType,
-  loadingState,
-  resourceRegistry,
-} from '@easy-editor/core'
-import { scriptLoader } from './script-loader'
-import { versionResolver } from './version-resolver'
+} from '@easy-editor/core/instance'
+import { GlobalExportClaims } from '../global-export-claims.js'
+import { SingleFlight } from '../keyed-operation-coordinator.js'
+import type { DashboardRemoteServices } from '../runtime-services'
+import type { ScriptLoader } from './script-loader'
+import type { VersionResolver } from './version-resolver'
 
-/** 加载结果 */
 export interface LoadedMaterial {
   component: Component
   meta: ComponentMetadata
 }
 
-/**
- * 物料加载器
- * 负责从 CDN 加载物料组件和元数据
- */
 export class MaterialLoader {
-  /** 完整物料缓存 */
-  private cache = new Map<string, LoadedMaterial>()
+  private readonly cache = new Map<string, LoadedMaterial>()
+  private readonly claims: GlobalExportClaims
+  private readonly componentLoads = new SingleFlight()
+  private readonly loadingPromises = new Map<string, Promise<LoadedMaterial>>()
+  private readonly metaCache = new Map<string, ComponentMetadata>()
+  private readonly metaLoadingPromises = new Map<string, Promise<ComponentMetadata>>()
+  constructor(
+    private readonly services: DashboardRemoteServices,
+    private readonly scriptLoader: ScriptLoader,
+    private readonly versionResolver: VersionResolver,
+  ) {
+    this.claims = new GlobalExportClaims(services)
+  }
 
-  /** 元数据缓存 */
-  private metaCache = new Map<string, ComponentMetadata>()
-
-  /** 正在加载的 Promise（防止重复请求） */
-  private loadingPromises = new Map<string, Promise<LoadedMaterial>>()
-
-  /** 元数据加载 Promise */
-  private metaLoadingPromises = new Map<string, Promise<ComponentMetadata>>()
-
-  /**
-   * 加载完整物料（元数据 + 组件）
-   */
   async loadMaterial(info: MaterialInfo, options?: LoadOptions): Promise<LoadedMaterial> {
-    const { package: packageName, version = 'latest', globalName } = info
-    const cacheKey = `${packageName}@${version}`
+    this.services.scope.assertActive()
+    const { package: packageName, version = 'latest' } = info
+    const globalName = this.requireGlobalName(info.globalName, packageName)
+    const cacheKey = this.createCacheKey(packageName, version, globalName)
+    if (options?.useCache !== false && this.cache.has(cacheKey)) return this.cache.get(cacheKey)!
+    if (this.loadingPromises.has(cacheKey)) return this.loadingPromises.get(cacheKey)!
 
-    // 检查缓存
-    if (options?.useCache !== false && this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey)!
-    }
-
-    // 检查是否正在加载
-    if (this.loadingPromises.has(cacheKey)) {
-      return this.loadingPromises.get(cacheKey)!
-    }
-
-    // 更新加载状态
-    loadingState.startLoading(cacheKey, 'material', packageName)
-
-    // 创建加载 Promise
-    const loadPromise = this.doLoadMaterial(packageName, version, globalName!, cacheKey, options)
-    this.loadingPromises.set(cacheKey, loadPromise)
-
+    const promise = this.loadMaterialOperation(packageName, version, globalName, cacheKey, options)
+    this.loadingPromises.set(cacheKey, promise)
     try {
-      const result = await loadPromise
-      this.cache.set(cacheKey, result)
-
-      // 注册到资源注册表
-      resourceRegistry.register({
-        type: 'material',
-        name: packageName,
-        version,
-        globalName: globalName!,
-        data: result,
-        loadedAt: Date.now(),
-      })
-
-      // 更新加载状态
-      loadingState.markLoaded(cacheKey)
-
-      return result
-    } catch (error) {
-      loadingState.markError(cacheKey, error as Error)
-      throw error
+      return await promise
     } finally {
       this.loadingPromises.delete(cacheKey)
     }
   }
 
-  /**
-   * 仅加载元数据
-   */
   async loadMeta(info: MaterialInfo, options?: LoadOptions): Promise<ComponentMetadata> {
-    const { package: packageName, version = 'latest', globalName } = info
-    const cacheKey = `${packageName}@${version}`
+    this.services.scope.assertActive()
+    const { package: packageName, version = 'latest' } = info
+    const globalName = this.requireGlobalName(info.globalName, packageName)
+    const cacheKey = this.createCacheKey(packageName, version, globalName)
+    if (options?.useCache !== false && this.metaCache.has(cacheKey)) return this.metaCache.get(cacheKey)!
+    if (this.metaLoadingPromises.has(cacheKey)) return this.metaLoadingPromises.get(cacheKey)!
 
-    // 检查缓存
-    if (options?.useCache !== false && this.metaCache.has(cacheKey)) {
-      return this.metaCache.get(cacheKey)!
-    }
-
-    // 检查是否正在加载
-    if (this.metaLoadingPromises.has(cacheKey)) {
-      return this.metaLoadingPromises.get(cacheKey)!
-    }
-
-    // 更新加载状态
-    loadingState.startLoading(`${cacheKey}-meta`, 'material', packageName)
-
-    // 创建加载 Promise
-    const loadPromise = this.doLoadMeta(packageName, version, globalName!, cacheKey, options)
-    this.metaLoadingPromises.set(cacheKey, loadPromise)
-
+    const promise = this.loadMetaOperation(packageName, version, globalName, cacheKey, options)
+    this.metaLoadingPromises.set(cacheKey, promise)
     try {
-      const result = await loadPromise
-      this.metaCache.set(cacheKey, result)
-      loadingState.markLoaded(`${cacheKey}-meta`)
-      return result
-    } catch (error) {
-      loadingState.markError(`${cacheKey}-meta`, error as Error)
-      throw error
+      return await promise
     } finally {
       this.metaLoadingPromises.delete(cacheKey)
     }
   }
 
-  /**
-   * 添加组件代码（元数据已加载的情况下）
-   */
   async addComponent(info: MaterialInfo, options?: LoadOptions): Promise<Component> {
-    const { package: packageName, version = 'latest', globalName } = info
-
-    if (!globalName) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.METADATA_INVALID,
-        packageName,
-        'material',
-        'globalName is required for addComponent',
-      )
-    }
-
-    const cacheKey = `${packageName}@${version}`
-
-    // 检查是否已完整加载
-    if (this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey)!.component
-    }
-
-    // 解析版本号
-    const resolvedVersion = await versionResolver.resolve(packageName, version)
-
-    // 创建加载上下文
-    const context = scriptLoader.createContext(`${cacheKey}-component`)
-
-    // 加载 component.min.js
-    await scriptLoader.loadWithFallback(
-      packageName,
-      resolvedVersion,
-      'dist/component.min.js',
-      context,
-      'material',
-      options,
+    this.services.scope.assertActive()
+    const { package: packageName, version = 'latest' } = info
+    const globalName = this.requireGlobalName(info.globalName, packageName)
+    const cacheKey = this.createCacheKey(packageName, version, globalName)
+    const cached = this.cache.get(cacheKey)
+    if (cached) return cached.component
+    return this.componentLoads.run(cacheKey, () =>
+      this.addComponentOperation(packageName, version, globalName, cacheKey, options),
     )
-
-    // 从全局变量获取组件
-    const global = window as unknown as Record<string, unknown>
-    const componentExports = global[`${globalName}Component`] as Record<string, unknown> | undefined
-
-    if (!componentExports) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.GLOBAL_NOT_FOUND,
-        globalName,
-        'material',
-        `Component UMD export not found: window.${globalName}Component`,
-      )
-    }
-
-    const defaultExport = componentExports.default as Record<string, unknown> | undefined
-    const component = (componentExports.component || defaultExport?.component || defaultExport) as Component | undefined
-
-    if (!component) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.GLOBAL_NOT_FOUND,
-        globalName,
-        'material',
-        `Component not found in window.${globalName}Component`,
-      )
-    }
-
-    // 如果元数据已加载，合并到缓存
-    const meta = this.metaCache.get(cacheKey)
-    if (meta) {
-      const result: LoadedMaterial = { component, meta }
-      this.cache.set(cacheKey, result)
-      this.registerToGlobal(globalName, result)
-    }
-
-    console.log(`[MaterialLoader] Component added: ${cacheKey}`)
-    return component
   }
 
-  /**
-   * 预加载多个物料
-   */
-  async preload(materials: MaterialInfo[], options?: LoadOptions): Promise<LoadedMaterial[]> {
-    return Promise.all(materials.map(m => this.loadMaterial(m, options)))
+  private async addComponentOperation(
+    packageName: string,
+    version: string,
+    globalName: string,
+    cacheKey: string,
+    options?: LoadOptions,
+  ): Promise<Component> {
+    this.services.scope.assertActive()
+    const operation = this.services.scope.beginOperation(`load component ${cacheKey}`)
+    try {
+      const resolvedVersion = await this.versionResolver.resolve(packageName, version)
+      this.services.scope.assertCurrent(operation)
+      const exportName = `${globalName}Component`
+      this.claims.prepare(exportName, `${packageName}@${resolvedVersion}/dist/component.min.js`, {
+        name: exportName,
+        type: 'global-claim',
+        resourceType: 'material',
+      })
+      const context = this.scriptLoader.createContext(`${cacheKey}-component`)
+      await this.scriptLoader.loadWithFallback(
+        packageName,
+        resolvedVersion,
+        'dist/component.min.js',
+        context,
+        'material',
+        options,
+      )
+      this.services.scope.assertCurrent(operation)
+
+      const componentExports = this.claims.read<Record<string, unknown>>(exportName)
+      if (!componentExports) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.GLOBAL_NOT_FOUND,
+          exportName,
+          'material',
+          `Component UMD export not found: window.${exportName}`,
+        )
+      }
+      const defaultExport = componentExports.default as Record<string, unknown> | undefined
+      const component = (componentExports.component || defaultExport?.component || defaultExport) as
+        | Component
+        | undefined
+      if (!component) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.GLOBAL_NOT_FOUND,
+          exportName,
+          'material',
+          `Component not found in window.${exportName}`,
+        )
+      }
+
+      const meta = this.metaCache.get(cacheKey)
+      if (meta) this.cache.set(cacheKey, { component, meta })
+      return component
+    } finally {
+      this.services.scope.finishOperation(operation)
+    }
   }
 
-  /**
-   * 清除缓存
-   */
+  preload(materials: MaterialInfo[], options?: LoadOptions): Promise<LoadedMaterial[]> {
+    this.services.scope.assertActive()
+    return Promise.all(materials.map(material => this.loadMaterial(material, options)))
+  }
+
   clearCache(name?: string, version?: string): void {
     if (name && version) {
-      const key = `${name}@${version}`
-      this.cache.delete(key)
-      this.metaCache.delete(key)
-    } else {
-      this.cache.clear()
-      this.metaCache.clear()
+      const prefix = `${encodeURIComponent(name)}::${encodeURIComponent(version)}::`
+      for (const key of this.cache.keys()) {
+        if (key.startsWith(prefix)) this.cache.delete(key)
+      }
+      for (const key of this.metaCache.keys()) {
+        if (key.startsWith(prefix)) this.metaCache.delete(key)
+      }
+      return
     }
+    this.cache.clear()
+    this.metaCache.clear()
   }
 
-  /**
-   * 执行完整物料加载
-   */
-  private async doLoadMaterial(
-    name: string,
+  dispose(): void {
+    this.clearCache()
+    this.componentLoads.clear()
+    this.loadingPromises.clear()
+    this.metaLoadingPromises.clear()
+    this.claims.clearClaims()
+  }
+
+  private async loadMaterialOperation(
+    packageName: string,
     version: string,
     globalName: string,
     cacheKey: string,
     options?: LoadOptions,
   ): Promise<LoadedMaterial> {
-    // 解析版本号
-    loadingState.updateProgress(cacheKey, 10)
-    const resolvedVersion = await versionResolver.resolve(name, version)
+    const operation = this.services.scope.beginOperation(`load material ${cacheKey}`)
+    this.services.loadingState.startLoading(cacheKey, 'material', packageName)
+    try {
+      this.services.loadingState.updateProgress(cacheKey, 10)
+      const resolvedVersion = await this.versionResolver.resolve(packageName, version)
+      this.services.scope.assertCurrent(operation)
+      this.claims.prepare(globalName, `${packageName}@${resolvedVersion}/dist/index.min.js`, {
+        name: globalName,
+        type: 'global-claim',
+        resourceType: 'material',
+      })
 
-    // 创建加载上下文
-    const context = scriptLoader.createContext(cacheKey)
-
-    // 加载完整的 index.min.js
-    loadingState.updateProgress(cacheKey, 30)
-    await scriptLoader.loadWithFallback(name, resolvedVersion, 'dist/index.min.js', context, 'material', options)
-
-    // 从全局变量获取物料
-    loadingState.updateProgress(cacheKey, 80)
-    const global = window as unknown as Record<string, unknown>
-    const materialExports = global[globalName] as Record<string, unknown> | undefined
-
-    if (!materialExports) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.GLOBAL_NOT_FOUND,
-        globalName,
+      this.services.loadingState.updateProgress(cacheKey, 30)
+      const context = this.scriptLoader.createContext(cacheKey)
+      await this.scriptLoader.loadWithFallback(
+        packageName,
+        resolvedVersion,
+        'dist/index.min.js',
+        context,
         'material',
-        `UMD export not found: window.${globalName}`,
+        options,
       )
+      this.services.scope.assertCurrent(operation)
+      this.services.loadingState.updateProgress(cacheKey, 80)
+
+      const materialExports = this.claims.read<Record<string, unknown>>(globalName)
+      if (!materialExports) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.GLOBAL_NOT_FOUND,
+          globalName,
+          'material',
+          `UMD export not found: window.${globalName}`,
+        )
+      }
+      const defaultExport = materialExports.default as Record<string, unknown> | undefined
+      const meta = (materialExports.meta || defaultExport?.meta) as ComponentMetadata | undefined
+      const component = (materialExports.component || defaultExport?.component) as Component | undefined
+      if (!meta?.componentName) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.METADATA_INVALID,
+          globalName,
+          'material',
+          'Invalid metadata: missing componentName',
+        )
+      }
+      if (!component) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.GLOBAL_NOT_FOUND,
+          globalName,
+          'material',
+          `Component not found in window.${globalName}`,
+        )
+      }
+
+      const result = { component, meta }
+      this.services.scope.assertCurrent(operation)
+      this.cache.set(cacheKey, result)
+      this.metaCache.set(cacheKey, meta)
+      this.services.loadingState.updateProgress(cacheKey, 100)
+      this.services.loadingState.markLoaded(cacheKey)
+      return result
+    } catch (error) {
+      if (this.services.scope.isActive) this.services.loadingState.markError(cacheKey, this.toError(error))
+      throw error
+    } finally {
+      this.services.scope.finishOperation(operation)
     }
-
-    // 提取 meta 和 component
-    const defaultExport = materialExports.default as Record<string, unknown> | undefined
-    const meta = (materialExports.meta || defaultExport?.meta) as ComponentMetadata | undefined
-    const component = (materialExports.component || defaultExport?.component) as Component | undefined
-
-    if (!meta?.componentName) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.METADATA_INVALID,
-        globalName,
-        'material',
-        'Invalid metadata: missing componentName',
-      )
-    }
-
-    if (!component) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.GLOBAL_NOT_FOUND,
-        globalName,
-        'material',
-        `Component not found in window.${globalName}`,
-      )
-    }
-
-    const result: LoadedMaterial = { component, meta }
-    this.registerToGlobal(globalName, result)
-
-    loadingState.updateProgress(cacheKey, 100)
-    console.log(`[MaterialLoader] Loaded: ${cacheKey}`, result)
-    return result
   }
 
-  /**
-   * 执行元数据加载
-   */
-  private async doLoadMeta(
-    name: string,
+  private async loadMetaOperation(
+    packageName: string,
     version: string,
     globalName: string,
     cacheKey: string,
     options?: LoadOptions,
   ): Promise<ComponentMetadata> {
-    // 解析版本号
-    const resolvedVersion = await versionResolver.resolve(name, version)
-
-    // 创建加载上下文
-    const context = scriptLoader.createContext(`${cacheKey}-meta`)
-
-    // 加载 meta.min.js
-    await scriptLoader.loadWithFallback(name, resolvedVersion, 'dist/meta.min.js', context, 'material', options)
-
-    // 从全局变量获取元数据
-    const global = window as unknown as Record<string, unknown>
-    const metaExports = global[`${globalName}Meta`] as Record<string, unknown> | undefined
-
-    if (!metaExports) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.GLOBAL_NOT_FOUND,
-        globalName,
+    const stateKey = `${cacheKey}-meta`
+    const operation = this.services.scope.beginOperation(`load material metadata ${cacheKey}`)
+    this.services.loadingState.startLoading(stateKey, 'material', packageName)
+    try {
+      const resolvedVersion = await this.versionResolver.resolve(packageName, version)
+      this.services.scope.assertCurrent(operation)
+      const exportName = `${globalName}Meta`
+      this.claims.prepare(exportName, `${packageName}@${resolvedVersion}/dist/meta.min.js`, {
+        name: exportName,
+        type: 'global-claim',
+        resourceType: 'material',
+      })
+      const context = this.scriptLoader.createContext(stateKey)
+      await this.scriptLoader.loadWithFallback(
+        packageName,
+        resolvedVersion,
+        'dist/meta.min.js',
+        context,
         'material',
-        `UMD meta export not found: window.${globalName}Meta`,
+        options,
       )
+      this.services.scope.assertCurrent(operation)
+
+      const metaExports = this.claims.read<Record<string, unknown>>(exportName)
+      if (!metaExports) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.GLOBAL_NOT_FOUND,
+          exportName,
+          'material',
+          `UMD meta export not found: window.${exportName}`,
+        )
+      }
+      const defaultExport = metaExports.default as Record<string, unknown> | undefined
+      const meta = (metaExports.meta || defaultExport?.meta || defaultExport) as ComponentMetadata | undefined
+      if (!meta?.componentName) {
+        throw RemoteLoadError.create(
+          RemoteLoadErrorType.METADATA_INVALID,
+          exportName,
+          'material',
+          'Invalid metadata: missing componentName',
+        )
+      }
+
+      this.services.scope.assertCurrent(operation)
+      this.metaCache.set(cacheKey, meta)
+      this.services.loadingState.markLoaded(stateKey)
+      return meta
+    } catch (error) {
+      if (this.services.scope.isActive) this.services.loadingState.markError(stateKey, this.toError(error))
+      throw error
+    } finally {
+      this.services.scope.finishOperation(operation)
     }
-
-    const defaultExport = metaExports.default as Record<string, unknown> | undefined
-    const meta = (metaExports.meta || defaultExport?.meta || defaultExport) as ComponentMetadata | undefined
-
-    if (!meta?.componentName) {
-      throw RemoteLoadError.create(
-        RemoteLoadErrorType.METADATA_INVALID,
-        globalName,
-        'material',
-        'Invalid metadata: missing componentName',
-      )
-    }
-
-    this.registerToGlobal(globalName, { meta })
-
-    console.log(`[MaterialLoader] Meta loaded: ${cacheKey}`, meta)
-    return meta
   }
 
-  /**
-   * 注册到全局变量
-   */
-  private registerToGlobal(globalName: string, data: Partial<LoadedMaterial>): void {
-    const global = window as unknown as Record<string, unknown>
-    const easyEditor = (global.$EasyEditor || {}) as Record<string, unknown>
-    const materials = (easyEditor.materials || {}) as Record<string, unknown>
+  private requireGlobalName(globalName: string | undefined, packageName: string): string {
+    if (globalName) return globalName
+    throw RemoteLoadError.create(
+      RemoteLoadErrorType.METADATA_INVALID,
+      packageName,
+      'material',
+      'globalName is required',
+    )
+  }
 
-    materials[globalName] = {
-      ...(materials[globalName] as Record<string, unknown>),
-      ...data,
-    }
+  private createCacheKey(packageName: string, version: string, globalName: string): string {
+    return [packageName, version, globalName].map(encodeURIComponent).join('::')
+  }
 
-    easyEditor.materials = materials
-    global.$EasyEditor = easyEditor
+  private toError(error: unknown): Error {
+    return error instanceof Error ? error : new Error(String(error))
   }
 }
-
-/** 导出单例 */
-export const materialLoader = new MaterialLoader()

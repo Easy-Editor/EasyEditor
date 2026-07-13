@@ -9,7 +9,8 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { TRANSFORM_STAGE, insertChildren, project } from '@easy-editor/core'
+import { engine } from '@/editor/runtime'
+import { TRANSFORM_STAGE, insertChildren } from '@easy-editor/core/instance'
 import {
   ArrowDown,
   ArrowUp,
@@ -27,7 +28,9 @@ import {
   Ungroup,
 } from 'lucide-react'
 import { observer } from 'mobx-react'
-import { Fragment, type PropsWithChildren } from 'react'
+import { type ComponentType, Fragment, type PropsWithChildren } from 'react'
+
+const project = engine.project
 
 enum SelectionType {
   NONE = 'none',
@@ -38,7 +41,7 @@ enum SelectionType {
 interface MenuItem {
   key: string
   label: string
-  icon?: React.ComponentType
+  icon?: ComponentType<{ className?: string }>
   children?: MenuItem[]
   separator?: boolean
   shortcut?: string

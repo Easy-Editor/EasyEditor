@@ -1,8 +1,10 @@
 import { Sidebar, SidebarContent, SidebarHeader } from '@/components/ui/sidebar'
+import { engine } from '@/editor/runtime'
 import { customFieldItem } from '@/editor/setters'
-import { project, setters } from '@easy-editor/core'
 import { SettingRenderer } from '@easy-editor/react-renderer'
 import { observer } from 'mobx-react'
+
+const project = engine.project
 
 export const SettingSidebar = observer(({ ...props }: React.ComponentProps<typeof Sidebar>) => {
   return (

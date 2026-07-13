@@ -1,9 +1,12 @@
 import BannerImg from '@/assets/banner.png'
 import { Button } from '@/components/ui/button'
+import { engine } from '@/editor/runtime'
 import { savePageInfoToLocalStorage, savePageSchemaToLocalStorage, saveProjectSchemaToLocalStorage } from '@/lib/schema'
 import { cn } from '@/lib/utils'
-import { TRANSFORM_STAGE, project } from '@easy-editor/core'
+import { TRANSFORM_STAGE } from '@easy-editor/core/instance'
 import { toast } from 'sonner'
+
+const project = engine.project
 
 export const AppHeader = ({ className }: { className?: string }) => {
   const save = (kind: 'project' | 'page' = 'page') => {

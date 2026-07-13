@@ -12,7 +12,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Cloud, Component, ListTree, Pin, PinOff, X } from 'lucide-react'
+import { Component, ListTree, Pin, PinOff, X } from 'lucide-react'
 import * as React from 'react'
 import { useEffect } from 'react'
 import { ComponentSidebar } from './Components'

@@ -3,13 +3,16 @@
  * 处理远程物料的拖拽和点击添加到画布
  */
 
-import { materialManager } from '@/editor/remote'
-import { cn } from '@/lib/utils'
-import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
-import { observer } from 'mobx-react'
-import React, { useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
+import { materialManager } from '@/editor/remote'
+import { engine } from '@/editor/runtime'
+import { cn } from '@/lib/utils'
+import type { ComponentMeta, Snippet as ISnippet } from '@easy-editor/core'
+import { observer } from 'mobx-react'
+import { type DragEvent as ReactDragEvent, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+
+const project = engine.project
 
 interface RemoteSnippetProps {
   snippet: ISnippet
@@ -24,6 +27,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
   const [isLoading, setIsLoading] = useState(false)
 
   const metadata = componentMeta.getMetadata()
+  const npm = metadata.npm
   const isRemoteMaterial = metadata.devMode === 'proCode'
 
   // 使用 MobX 响应式数据来检测组件是否已加载
@@ -37,7 +41,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
   // 处理拖拽完成：在画布上监听 drop 事件
   useEffect(() => {
-    if (!isRemoteMaterial || !metadata.npm?.globalName) {
+    if (!isRemoteMaterial || !npm?.globalName) {
       return
     }
 
@@ -47,10 +51,12 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
     const canvasElement = simulator.contentDocument?.body
     if (!canvasElement) return
 
+    const handleCanvasDragOver = (event: DragEvent) => event.preventDefault()
+
     const handleCanvasDrop = async (e: DragEvent) => {
       // 检查是否是当前远程物料的拖拽
       const dragData = e.dataTransfer?.getData('text/plain')
-      if (dragData !== `remote-material:${metadata.npm.globalName}`) return
+      if (dragData !== `remote-material:${npm.globalName}`) return
 
       // 检查组件代码是否已加载（使用响应式数据）
       const hasComponent = !!materialManager.remoteComponentsMap[metadata.componentName]
@@ -66,13 +72,13 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
 
       setIsLoading(true)
       const toastId = toast.loading('正在加载组件代码...', {
-        description: `${metadata.title || metadata.componentName} - ${metadata.npm.package}@${metadata.npm.version}`,
+        description: `${metadata.title || metadata.componentName} - ${npm.package}@${npm.version}`,
         position: 'top-center',
       })
 
       try {
         // 加载组件代码
-        await materialManager.addComponent(metadata.npm!.package)
+        await materialManager.addComponent(npm.package)
 
         toast.dismiss(toastId)
 
@@ -104,10 +110,10 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
           componentName: snippet.schema.componentName || metadata.componentName,
           // 添加 npm 信息到 schema
           npm: {
-            package: metadata.npm.package,
-            version: metadata.npm.version || 'latest',
-            globalName: metadata.npm.globalName,
-            componentName: metadata.npm.componentName || metadata.componentName,
+            package: npm.package,
+            version: npm.version || 'latest',
+            globalName: npm.globalName,
+            componentName: npm.componentName || metadata.componentName,
           },
           // 覆盖位置信息（使用 drop 坐标）
           $dashboard: {
@@ -126,7 +132,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
         const rootNode = currentDocument.root
         if (rootNode) {
           const newNode = currentDocument.insertNode(rootNode, nodeSchema, 0, true)
-          console.log(`[RemoteSnippet] ✅ Remote material node added:`, newNode?.id)
+          console.log('[RemoteSnippet] ✅ Remote material node added:', newNode?.id)
 
           // 选中新添加的节点
           if (newNode) {
@@ -153,26 +159,26 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
     }
 
     canvasElement.addEventListener('drop', handleCanvasDrop)
-    canvasElement.addEventListener('dragover', e => e.preventDefault()) // 允许 drop
+    canvasElement.addEventListener('dragover', handleCanvasDragOver)
 
     return () => {
       canvasElement.removeEventListener('drop', handleCanvasDrop)
-      canvasElement.removeEventListener('dragover', e => e.preventDefault())
+      canvasElement.removeEventListener('dragover', handleCanvasDragOver)
     }
-  }, [snippet, componentMeta, isRemoteMaterial, metadata])
+  }, [snippet, isRemoteMaterial, metadata, npm])
 
   // 处理拖拽开始：设置拖拽数据
-  const handleDragStart = (e: React.DragEvent) => {
-    if (isRemoteMaterial && metadata.npm?.globalName) {
+  const handleDragStart = (e: ReactDragEvent) => {
+    if (isRemoteMaterial && npm?.globalName) {
       // 设置拖拽标识，用于在 drop 时识别这是远程物料
-      e.dataTransfer.setData('text/plain', `remote-material:${metadata.npm.globalName}`)
+      e.dataTransfer.setData('text/plain', `remote-material:${npm.globalName}`)
       e.dataTransfer.effectAllowed = 'copy'
     }
   }
 
   // 处理点击添加到画布中心
   const handleClick = async () => {
-    if (!isRemoteMaterial || !metadata.npm?.globalName) {
+    if (!isRemoteMaterial || !npm?.globalName) {
       return // 本地物料，让 linkSnippet 处理
     }
 
@@ -182,13 +188,13 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
     if (needsComponentLoading) {
       setIsLoading(true)
       const toastId = toast.loading('正在加载组件代码...', {
-        description: `${metadata.title || metadata.componentName} - ${metadata.npm.package}@${metadata.npm.version}`,
+        description: `${metadata.title || metadata.componentName} - ${npm.package}@${npm.version}`,
         position: 'top-center',
       })
 
       try {
         // 加载组件代码
-        await materialManager.addComponent(metadata.npm!.package)
+        await materialManager.addComponent(npm.package)
 
         toast.dismiss(toastId)
 
@@ -227,10 +233,10 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
           componentName: snippet.schema.componentName || metadata.componentName,
           // 添加 npm 信息到 schema
           npm: {
-            package: metadata.npm.package,
-            version: metadata.npm.version || 'latest',
-            globalName: metadata.npm.globalName,
-            componentName: metadata.npm.componentName || metadata.componentName,
+            package: npm.package,
+            version: npm.version || 'latest',
+            globalName: npm.globalName,
+            componentName: npm.componentName || metadata.componentName,
           },
           // 覆盖位置信息（使用画布中心）
           $dashboard: {
@@ -249,7 +255,7 @@ export const RemoteSnippet = observer(({ snippet, componentMeta }: RemoteSnippet
         const rootNode = currentDocument.root
         if (rootNode) {
           const newNode = currentDocument.insertNode(rootNode, nodeSchema, 0, true)
-          console.log(`[RemoteSnippet] ✅ Remote material node added (click):`, newNode?.id)
+          console.log('[RemoteSnippet] ✅ Remote material node added (click):', newNode?.id)
 
           // 选中新添加的节点
           if (newNode) {

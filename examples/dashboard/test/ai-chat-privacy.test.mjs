@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { filterMessageContent, parseAiCommands } from '../src/components/ai-chat/commands.mjs'
 import {
   MAX_CHAT_MESSAGES,
   createCanvasProjection,
@@ -120,5 +121,40 @@ test('command aliases resolve only through the private map for that request', ()
   assert.throws(
     () => resolveCommandAliases([{ type: 'removeNode', nodeId: 'raw-child-id' }], aliases),
     /must reference a node alias from this request/,
+  )
+})
+
+test('worker command parser accepts one strict envelope and rejects ambient authority fields', () => {
+  assert.deepEqual(parseAiCommands('说明\n```json\n{"commands":[{"type":"removeNode","nodeId":"n_request_2"}]}\n```'), [
+    { type: 'removeNode', nodeId: 'n_request_2' },
+  ])
+
+  assert.throws(
+    () => parseAiCommands('{"commands":[{"type":"removeNode","nodeId":"n_request_2","documentId":"secret"}]}'),
+    /不允许指定 documentId/,
+  )
+  assert.throws(() => parseAiCommands('{"commands":[{"type":"prototypeMutation"}]}'), /未知操作/)
+  assert.throws(() => parseAiCommands('{"commands":[],"systemPrompt":"attacker"}'), /只允许包含 commands/)
+  assert.throws(
+    () =>
+      parseAiCommands(
+        '{"commands":[{"type":"removeNode","nodeId":"n_request_2"}]}\n{"commands":[{"type":"removeNode","nodeId":"n_request_3"}]}',
+      ),
+    /只能包含一个 JSON 指令块/,
+  )
+})
+
+test('worker removes the complete command envelope before returning assistant text to the UI', () => {
+  assert.equal(
+    filterMessageContent('已完成。\n```json\n{"commands":[{"type":"removeNode","nodeId":"n_request_2"}]}\n```'),
+    '已完成。',
+  )
+  assert.equal(filterMessageContent('已完成 {"commands":[{"type":"removeNode","nodeId":"n_request_2"}]}'), '已完成')
+  assert.equal(
+    filterMessageContent(
+      '已更新 n_request_2。 {"commands":[{"type":"removeNode","nodeId":"n_request_2"}]} 冗余 {"commands":[{"type":"removeNode","nodeId":"n_request_3"}]}',
+      ['n_request_2', 'n_request_3'],
+    ),
+    '已更新 节点。  冗余',
   )
 })

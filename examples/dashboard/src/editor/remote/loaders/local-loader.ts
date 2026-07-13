@@ -1,25 +1,18 @@
 /**
- * Local Material Loader
- * 本地物料加载器 - 用于开发模式下的本地物料调试
- *
- * 支持：
- * - 连接 Vite 开发服务器
- * - 加载完整物料模块（component、meta、configure、snippets）
- * - 注册到 materials 系统
- * - Vite HMR 热更新
+ * Instance-owned local material development loader.
  */
 
-import { materials, MaterialSource } from '@easy-editor/core'
-import type { Component, ComponentMetadata } from '@easy-editor/core'
+import { type Component, type ComponentMetadata, MaterialSource } from '@easy-editor/core/instance'
 import { runInAction } from 'mobx'
+import { type KeyedOperation, LatestOperationRegistry, SingleFlight } from '../keyed-operation-coordinator.js'
+import { closeOwnedSocket } from '../owned-resource-cleanup.js'
+import type { RemoteOperation } from '../resource-scope.js'
+import type { DashboardRemoteServices } from '../runtime-services'
 
-/** 物料连接配置 */
 export interface LocalMaterialConfig {
-  /** 开发服务器地址 */
   devServerUrl: string
 }
 
-/** 物料服务器返回的信息 */
 export interface MaterialServerInfo {
   name: string
   title?: string
@@ -32,28 +25,21 @@ export interface MaterialServerInfo {
   hasConfigure: boolean
   hasSnippets: boolean
   hmrPort?: number
-  /** WebSocket 路径 */
   wsPath?: string
 }
 
-/** 加载的物料模块 */
 export interface LoadedMaterialModule {
-  /** 默认导出（通常是组件） */
   default?: Component
-  /** 组件 */
   component?: Component
-  /** 元数据 */
   meta?: ComponentMetadata
 }
 
-/** 物料连接信息 */
 interface MaterialConnection {
   url: string
   componentName: string
   module: LoadedMaterialModule
   ws?: WebSocket
   info: MaterialServerInfo
-  /** 重连状态 */
   reconnect: {
     retries: number
     timer?: ReturnType<typeof setTimeout>
@@ -61,10 +47,13 @@ interface MaterialConnection {
   }
 }
 
-/** 调试物料分组名称 */
-const DEBUG_GROUP = 'DEBUG'
+interface LocalUrlOperation {
+  keyed: KeyedOperation
+  scoped: RemoteOperation
+  abortScopedOperation: () => void
+}
 
-/** WebSocket 重连配置 */
+const DEBUG_GROUP = 'DEBUG'
 const WS_RECONNECT_CONFIG = {
   maxRetries: 5,
   initialDelay: 1000,
@@ -72,476 +61,510 @@ const WS_RECONNECT_CONFIG = {
   backoffFactor: 2,
 }
 
-/**
- * 简单的事件发射器
- */
+type EventHandler = (payload: unknown) => void
+
 class EventEmitter {
-  private events = new Map<string, Set<(...args: unknown[]) => void>>()
+  private readonly events = new Map<string, Set<EventHandler>>()
 
-  on(event: string, handler: (...args: unknown[]) => void): () => void {
-    if (!this.events.has(event)) {
-      this.events.set(event, new Set())
-    }
-    this.events.get(event)!.add(handler)
-    return () => this.off(event, handler)
+  on<T>(event: string, handler: (payload: T) => void): () => void {
+    const stored = handler as unknown as EventHandler
+    const handlers = this.events.get(event) || new Set<EventHandler>()
+    handlers.add(stored)
+    this.events.set(event, handlers)
+    return () => handlers.delete(stored)
   }
 
-  off(event: string, handler: (...args: unknown[]) => void): void {
-    this.events.get(event)?.delete(handler)
+  off<T>(event: string, handler: (payload: T) => void): void {
+    this.events.get(event)?.delete(handler as unknown as EventHandler)
   }
 
-  emit(event: string, ...args: unknown[]): void {
-    this.events.get(event)?.forEach(handler => {
+  protected emit(event: string, payload: unknown): void {
+    for (const handler of this.events.get(event) || []) {
       try {
-        handler(...args)
+        handler(payload)
       } catch (error) {
         console.error(`[LocalMaterialLoader] Event handler error (${event}):`, error)
       }
-    })
+    }
+  }
+
+  protected clearEvents(): void {
+    this.events.clear()
   }
 }
 
-/**
- * 本地物料加载器
- * 用于连接本地开发服务器并加载物料到编辑器
- */
-class LocalMaterialLoaderClass extends EventEmitter {
-  /** 活动连接 */
-  private connections = new Map<string, MaterialConnection>()
+export class LocalMaterialLoaderClass extends EventEmitter {
+  private readonly connectFlights = new SingleFlight()
+  private readonly connections = new Map<string, MaterialConnection>()
+  private readonly moduleVersion = new Map<string, number>()
+  private readonly operations = new LatestOperationRegistry()
+  private readonly pendingSocketClosures = new Set<WebSocket>()
+  private cleanupComplete = false
+  private disposed = false
 
-  /** 模块缓存版本（用于强制刷新） */
-  private moduleVersion = new Map<string, number>()
+  constructor(private readonly services: DashboardRemoteServices) {
+    super()
+  }
 
-  /**
-   * 连接本地物料开发服务器
-   */
   async connect(config: LocalMaterialConfig): Promise<LoadedMaterialModule> {
-    const { devServerUrl } = config
-    const normalizedUrl = this.normalizeUrl(devServerUrl)
+    this.assertUsable()
+    const normalizedUrl = this.normalizeUrl(config.devServerUrl)
+    const existing = this.connections.get(normalizedUrl)
+    if (existing) return existing.module
+    return this.connectFlights.run(normalizedUrl, () => this.connectOperation(normalizedUrl))
+  }
 
-    // 检查是否已连接
-    if (this.connections.has(normalizedUrl)) {
-      console.warn(`[LocalMaterialLoader] Already connected to ${normalizedUrl}`)
-      return this.connections.get(normalizedUrl)!.module
-    }
-
+  private async connectOperation(normalizedUrl: string): Promise<LoadedMaterialModule> {
+    this.assertUsable()
+    const operation = this.beginUrlOperation(normalizedUrl, `connect local material ${normalizedUrl}`)
+    let ws: WebSocket | undefined
+    let registeredComponentName: string | undefined
     try {
-      // 1. 健康检查
-      await this.checkHealth(normalizedUrl)
+      await this.checkHealth(normalizedUrl, operation.keyed.signal)
+      this.assertUrlOperationCurrent(operation)
       this.emit('status', { url: normalizedUrl, status: 'checking' })
 
-      // 2. 获取物料信息
-      const info = await this.fetchMaterialInfo(normalizedUrl)
+      const info = await this.fetchMaterialInfo(normalizedUrl, operation.keyed.signal)
+      this.assertUrlOperationCurrent(operation)
       this.emit('status', { url: normalizedUrl, status: 'loading', info })
 
-      // 3. 动态导入物料模块
       const module = await this.loadModule(normalizedUrl, info.entry)
+      this.assertUrlOperationCurrent(operation)
+      if (!module.meta) throw new Error('Material meta not found in module')
 
-      if (!module.meta) {
-        throw new Error('Material meta not found in module')
-      }
+      this.registerMaterial(normalizedUrl, module, operation, componentName => {
+        registeredComponentName = componentName
+      })
+      this.assertUrlOperationCurrent(operation)
+      ws = this.setupViteHMR(normalizedUrl, info, () => this.isUrlOperationCurrent(operation))
+      this.assertUrlOperationCurrent(operation)
 
-      // 4. 注册到 materials 系统
-      this.registerMaterial(normalizedUrl, module)
-
-      // 5. 建立 HMR 连接
-      const ws = this.setupViteHMR(normalizedUrl, info)
-
-      // 6. 缓存连接信息
       const connection: MaterialConnection = {
         url: normalizedUrl,
         componentName: module.meta.componentName,
         module,
         ws,
         info,
-        reconnect: {
-          retries: 0,
-          isReconnecting: false,
-        },
+        reconnect: { retries: 0, isReconnecting: false },
       }
+      this.assertUrlOperationCurrent(operation)
       this.connections.set(normalizedUrl, connection)
-
       this.emit('connected', {
         url: normalizedUrl,
         componentName: module.meta.componentName,
         meta: module.meta,
       })
-
-      console.log(`[LocalMaterialLoader] Connected to ${normalizedUrl}`, module.meta.componentName)
+      if (this.connections.get(normalizedUrl) !== connection) {
+        throw new Error(`Local material connection for ${normalizedUrl} was invalidated`)
+      }
       return module
     } catch (error) {
-      this.emit('error', { url: normalizedUrl, error })
+      const cleanupFailures: unknown[] = []
+      if (ws) {
+        try {
+          this.closeSocket(ws)
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError)
+        }
+      }
+      if (registeredComponentName) {
+        try {
+          this.removeOwnedMaterial(normalizedUrl, registeredComponentName)
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError)
+        }
+      }
+      if (this.isUrlOperationCurrent(operation)) this.emit('error', { url: normalizedUrl, error })
+      if (cleanupFailures.length) {
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          `Local material connection cleanup failed: ${normalizedUrl}`,
+        )
+      }
       throw error
+    } finally {
+      this.finishUrlOperation(operation)
     }
   }
 
-  /**
-   * 断开连接
-   */
   disconnect(devServerUrl: string): void {
     const normalizedUrl = this.normalizeUrl(devServerUrl)
+    this.operations.invalidate(normalizedUrl)
+    this.connectFlights.forget(normalizedUrl)
     const connection = this.connections.get(normalizedUrl)
+    if (!connection) return
 
-    if (!connection) {
-      console.warn(`[LocalMaterialLoader] Not connected to ${normalizedUrl}`)
-      return
-    }
-
-    // 清除重连定时器
-    if (connection.reconnect.timer) {
-      clearTimeout(connection.reconnect.timer)
-    }
-
-    // 关闭 WebSocket
-    if (connection.ws) {
-      connection.ws.close()
-    }
-
-    // 从 materials 系统移除
-    runInAction(() => {
-      try {
-        materials.removeComponentMeta(connection.componentName)
-      } catch (error) {
-        console.warn('[LocalMaterialLoader] Failed to remove material from registry:', error)
-      }
-    })
-
-    // 清理缓存
+    const failures: unknown[] = []
     this.connections.delete(normalizedUrl)
-    this.moduleVersion.delete(normalizedUrl)
-
-    this.emit('disconnected', {
-      url: normalizedUrl,
-      componentName: connection.componentName,
-    })
-
-    console.log(`[LocalMaterialLoader] Disconnected from ${normalizedUrl}`)
-  }
-
-  /**
-   * 断开所有连接
-   */
-  disconnectAll(): void {
-    const urls = Array.from(this.connections.keys())
-    for (const url of urls) {
-      this.disconnect(url)
+    if (connection.reconnect.timer) this.services.scope.clearTimer(connection.reconnect.timer)
+    if (connection.ws) {
+      try {
+        this.closeSocket(connection.ws)
+      } catch (error) {
+        failures.push(error)
+      }
     }
+    try {
+      runInAction(() => this.removeOwnedMaterial(normalizedUrl, connection.componentName))
+    } catch (error) {
+      failures.push(error)
+    }
+    this.emit('disconnected', { url: normalizedUrl, componentName: connection.componentName })
+    if (failures.length) throw new AggregateError(failures, `Failed to disconnect local material: ${normalizedUrl}`)
   }
 
-  /**
-   * 获取所有活动连接
-   */
+  disconnectAll(): void {
+    const failures: unknown[] = []
+    for (const url of [...this.connections.keys()]) {
+      try {
+        this.disconnect(url)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Failed to disconnect one or more local materials')
+  }
+
   getConnections(): Array<{ url: string; componentName: string }> {
-    return Array.from(this.connections.entries()).map(([url, conn]) => ({
-      url,
-      componentName: conn.componentName,
+    return Array.from(this.connections.values(), connection => ({
+      url: connection.url,
+      componentName: connection.componentName,
     }))
   }
 
-  /**
-   * 检查是否已连接
-   */
   isConnected(devServerUrl: string): boolean {
     return this.connections.has(this.normalizeUrl(devServerUrl))
   }
 
-  /**
-   * 手动刷新物料（当 HMR 不工作时使用）
-   */
   async refresh(devServerUrl: string): Promise<void> {
+    this.assertUsable()
     const normalizedUrl = this.normalizeUrl(devServerUrl)
     const connection = this.connections.get(normalizedUrl)
-
-    if (!connection) {
-      throw new Error(`Not connected to ${normalizedUrl}`)
-    }
-
-    await this.handleHMRUpdate(normalizedUrl, connection.info)
+    if (!connection) throw new Error(`Not connected to ${normalizedUrl}`)
+    await this.handleHMRUpdate(normalizedUrl, connection.info, true)
   }
 
-  /**
-   * 健康检查
-   */
-  private async checkHealth(url: string): Promise<void> {
+  dispose(): void {
+    if (this.cleanupComplete) return
+    const failures: unknown[] = []
+    if (!this.disposed) {
+      this.disposed = true
+      this.operations.invalidateAll()
+      this.connectFlights.clear()
+    }
     try {
-      const response = await fetch(`${url}/api/health`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
-
-      if (!response.ok) {
-        throw new Error(`Server responded with status ${response.status}`)
-      }
-
-      const data = await response.json()
-      if (data.status !== 'ok') {
-        throw new Error('Server health check failed')
-      }
+      this.disconnectAll()
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Cannot connect to dev server at ${url}: ${message}`)
+      failures.push(error)
     }
+    for (const socket of [...this.pendingSocketClosures]) {
+      try {
+        this.closeSocket(socket)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    this.moduleVersion.clear()
+    this.clearEvents()
+    if (failures.length) throw new AggregateError(failures, 'Local material loader disposal failed')
+    this.cleanupComplete = true
   }
 
-  /**
-   * 获取物料信息
-   */
-  private async fetchMaterialInfo(url: string): Promise<MaterialServerInfo> {
+  private async checkHealth(url: string, signal: AbortSignal): Promise<void> {
+    const endpoint = `${url}/api/health`
     try {
-      const response = await fetch(`${url}/api/material`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `Server responded with status ${response.status}`)
-      }
-
-      return await response.json()
+      const response = await this.services.scope.perform(
+        { name: url, type: 'fetch', url: endpoint, resourceType: 'material' },
+        () => this.services.environment.fetch(endpoint, { method: 'GET', signal }),
+      )
+      if (!response.ok) throw new Error(`Server responded with status ${response.status}`)
+      const data = (await response.json()) as { status?: unknown }
+      if (data.status !== 'ok') throw new Error('Server health check failed')
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Failed to fetch material info: ${message}`)
+      throw new Error(
+        `Cannot connect to dev server at ${url}: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
 
-  /**
-   * 动态加载物料模块（使用 Module Federation）
-   */
+  private async fetchMaterialInfo(url: string, signal: AbortSignal): Promise<MaterialServerInfo> {
+    const endpoint = `${url}/api/material`
+    try {
+      const response = await this.services.scope.perform(
+        { name: url, type: 'fetch', url: endpoint, resourceType: 'material' },
+        () => this.services.environment.fetch(endpoint, { method: 'GET', signal }),
+      )
+      if (!response.ok) throw new Error(`Server responded with status ${response.status}`)
+      const info = (await response.json()) as Partial<MaterialServerInfo>
+      if (!info.name || !info.version || !info.entry) throw new Error('Invalid material server response')
+      return info as MaterialServerInfo
+    } catch (error) {
+      throw new Error(`Failed to fetch material info: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   private async loadModule(baseUrl: string, entry: string): Promise<LoadedMaterialModule> {
-    // 增加版本号以强制刷新
     const version = (this.moduleVersion.get(baseUrl) || 0) + 1
     this.moduleVersion.set(baseUrl, version)
-
+    const moduleUrl = `${baseUrl}${entry}?t=${Date.now()}&v=${version}`
     try {
-      // 尝试使用 Module Federation 的方式加载
-      // @originjs/vite-plugin-federation 提供了 __federation_get 全局函数
-      if (typeof window !== 'undefined' && 'materials_audio' in window) {
-        // 如果已经配置了 federation remotes，尝试使用 __federation_get
-        const getModule = (
-          window as unknown as { __federation_get?: (remote: string, module: string) => Promise<unknown> }
-        ).__federation_get
-        if (getModule) {
-          console.log('[LocalMaterialLoader] Using Module Federation to load module')
-          const module = await getModule('materials_audio', './Audio')
-          return module as LoadedMaterialModule
-        }
-      }
-
-      // 回退到普通的动态 import
-      console.log('[LocalMaterialLoader] Falling back to dynamic import')
-      const moduleUrl = `${baseUrl}${entry}?t=${Date.now()}&v=${version}`
-      const module = await import(/* @vite-ignore */ moduleUrl)
-      return module
+      return (await this.services.scope.perform(
+        { name: baseUrl, type: 'module', url: moduleUrl, resourceType: 'material' },
+        () => this.services.environment.importModule(moduleUrl),
+      )) as LoadedMaterialModule
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Failed to load material module: ${message}`)
+      throw new Error(`Failed to load material module: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
-  /**
-   * 注册物料到 materials 系统
-   */
-  private registerMaterial(url: string, module: LoadedMaterialModule): void {
+  private registerMaterial(
+    url: string,
+    module: LoadedMaterialModule,
+    operation: LocalUrlOperation,
+    onRegistered?: (componentName: string) => void,
+  ): void {
     const meta = module.meta
-    if (!meta) {
-      throw new Error('Material meta is required')
-    }
-
-    // 获取组件
+    if (!meta) throw new Error('Material meta is required')
     const component = module.component || module.default
-
-    // 创建干净的元数据副本
     const registrationMeta: ComponentMetadata = {
       ...meta,
-      // 强制设置为调试分组
       group: DEBUG_GROUP,
-      // 深拷贝 configure，设置 view 为加载的组件
       configure: meta.configure
         ? {
             ...meta.configure,
-            advanced: {
-              ...meta.configure.advanced,
-              view: component,
-            },
+            advanced: { ...meta.configure.advanced, view: component },
           }
-        : {
-            advanced: {
-              view: component,
-            },
-          },
+        : { advanced: { view: component } },
     }
 
-    // 使用 runInAction 确保 MobX 响应式正确触发
-    runInAction(() => {
-      // 注册物料，标记为本地调试物料
-      materials.createComponentMeta(registrationMeta, {
-        source: MaterialSource.DEBUG,
-        component,
-      })
-
-      // 在 registry 的 extensions 中存储调试信息
-      const entry = materials.registry.get(meta.componentName)
-      if (entry) {
-        entry.extensions = entry.extensions || new Map()
-        entry.extensions.set('devServerUrl', url)
-        entry.extensions.set('isLocalDebug', true)
-      }
-
-      // 强制刷新 componentMetasMap
-      materials.refreshComponentMetasMap()
-    })
-
-    console.log(`[LocalMaterialLoader] Registered material: ${meta.componentName}`)
+    this.services.scope.perform(
+      { name: meta.componentName, type: 'registration', url, resourceType: 'material' },
+      () => {
+        this.assertUrlOperationCurrent(operation)
+        runInAction(() => {
+          this.assertMaterialNameAvailable(url, meta.componentName)
+          this.services.materials.createComponentMeta(registrationMeta, {
+            source: MaterialSource.DEBUG,
+            component,
+          })
+          onRegistered?.(meta.componentName)
+          const entry = this.services.materials.registry.get(meta.componentName)
+          if (entry) {
+            entry.extensions = entry.extensions || new Map()
+            entry.extensions.set('devServerUrl', url)
+            entry.extensions.set('isLocalDebug', true)
+          }
+          this.services.materials.refreshComponentMetasMap()
+        })
+      },
+    )
+    this.assertUrlOperationCurrent(operation)
   }
 
-  /**
-   * 设置 Vite HMR 监听
-   */
-  private setupViteHMR(url: string, info: MaterialServerInfo): WebSocket | undefined {
+  private setupViteHMR(url: string, info: MaterialServerInfo, isOwnerCurrent: () => boolean): WebSocket | undefined {
     try {
-      const wsPath = info.wsPath || '/ws'
-      const wsProtocol = url.startsWith('https') ? 'wss' : 'ws'
-      const wsUrl = `${url.replace(/^https?/, wsProtocol)}${wsPath}`
-
-      console.log(`[LocalMaterialLoader] Connecting to WebSocket: ${wsUrl}`)
-
-      const ws = new WebSocket(wsUrl)
+      const wsUrl = new URL(info.wsPath || '/ws', url)
+      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      const ws = this.services.scope.perform(
+        { name: info.name, type: 'websocket', url: wsUrl.href, resourceType: 'material' },
+        () => {
+          if (!isOwnerCurrent()) throw new Error(`WebSocket owner for ${url} was invalidated`)
+          const socket = new this.services.environment.WebSocket(wsUrl.href)
+          try {
+            this.services.scope.ownSocket(socket)
+          } catch (ownershipError) {
+            try {
+              socket.close()
+            } catch (cleanupError) {
+              throw new AggregateError(
+                [ownershipError, cleanupError],
+                `WebSocket ownership and cleanup both failed for ${url}`,
+              )
+            }
+            throw ownershipError
+          }
+          if (!isOwnerCurrent()) {
+            this.closeSocket(socket)
+            throw new Error(`WebSocket owner for ${url} was invalidated`)
+          }
+          return socket
+        },
+      )
+      if (!isOwnerCurrent()) {
+        this.closeSocket(ws)
+        return undefined
+      }
 
       ws.onopen = () => {
-        console.log(`[LocalMaterialLoader] HMR WebSocket connected to ${wsUrl}`)
-        this.emit('ws:connected', { url })
-
-        // 重置重连状态
         const connection = this.connections.get(url)
-        if (connection) {
-          connection.reconnect.retries = 0
-          connection.reconnect.isReconnecting = false
-        }
+        if (!this.services.scope.isActive || connection?.ws !== ws) return
+        connection.reconnect.retries = 0
+        connection.reconnect.isReconnecting = false
+        this.emit('ws:connected', { url })
       }
-
-      ws.onmessage = async event => {
+      ws.onmessage = event => {
+        if (!this.services.scope.isActive || this.connections.get(url)?.ws !== ws) return
         try {
-          const data = JSON.parse(event.data)
-          console.log('[LocalMaterialLoader] WebSocket message:', data.type)
-
-          if (data.type === 'connected') {
-            console.log('[LocalMaterialLoader] Server acknowledged connection')
-          } else if (data.type === 'update') {
-            console.log('[LocalMaterialLoader] HMR update detected, reloading module...')
-            await this.handleHMRUpdate(url, info)
-          }
+          const data = JSON.parse(String(event.data)) as { type?: unknown }
+          if (data.type === 'update') void this.handleHMRUpdate(url, info)
         } catch {
-          // 忽略非 JSON 消息
+          // Ignore non-JSON development-server messages.
         }
       }
-
       ws.onerror = error => {
-        console.warn('[LocalMaterialLoader] HMR WebSocket connection failed:', error)
-        this.emit('ws:error', { url, error })
+        if (this.services.scope.isActive && this.connections.get(url)?.ws === ws) {
+          this.emit('ws:error', { url, error })
+        }
       }
-
       ws.onclose = () => {
-        console.log('[LocalMaterialLoader] HMR WebSocket closed')
+        this.services.scope.releaseSocket(ws)
+        if (!this.services.scope.isActive || this.connections.get(url)?.ws !== ws) return
         this.emit('ws:closed', { url })
         this.scheduleReconnect(url, info)
       }
-
       return ws
     } catch (error) {
-      console.warn('[LocalMaterialLoader] Failed to setup HMR:', error)
+      if (this.services.scope.isActive && isOwnerCurrent()) {
+        console.warn('[LocalMaterialLoader] Failed to setup HMR:', error)
+      }
       return undefined
     }
   }
 
-  /**
-   * 计划 WebSocket 重连
-   */
   private scheduleReconnect(url: string, info: MaterialServerInfo): void {
     const connection = this.connections.get(url)
-    if (!connection) {
-      return
-    }
-
-    if (connection.reconnect.retries >= WS_RECONNECT_CONFIG.maxRetries) {
-      console.warn(
-        `[LocalMaterialLoader] Max reconnection attempts (${WS_RECONNECT_CONFIG.maxRetries}) reached for ${url}`,
-      )
-      this.emit('ws:reconnect:failed', { url, retries: connection.reconnect.retries })
-      return
-    }
-
-    // 计算重连延迟（指数退避）
+    if (!connection || connection.reconnect.retries >= WS_RECONNECT_CONFIG.maxRetries) return
     const delay = Math.min(
-      WS_RECONNECT_CONFIG.initialDelay * Math.pow(WS_RECONNECT_CONFIG.backoffFactor, connection.reconnect.retries),
+      WS_RECONNECT_CONFIG.initialDelay * WS_RECONNECT_CONFIG.backoffFactor ** connection.reconnect.retries,
       WS_RECONNECT_CONFIG.maxDelay,
     )
-
-    connection.reconnect.retries++
+    connection.reconnect.retries += 1
     connection.reconnect.isReconnecting = true
-
-    console.log(
-      `[LocalMaterialLoader] Scheduling reconnection attempt ${connection.reconnect.retries}/${WS_RECONNECT_CONFIG.maxRetries} in ${delay}ms`,
-    )
-
-    this.emit('ws:reconnecting', { url, attempt: connection.reconnect.retries, delay })
-
-    if (connection.reconnect.timer) {
-      clearTimeout(connection.reconnect.timer)
-    }
-
-    connection.reconnect.timer = setTimeout(() => {
-      if (!this.connections.has(url)) {
-        return
-      }
-
-      console.log(`[LocalMaterialLoader] Attempting reconnection ${connection.reconnect.retries}`)
-      const newWs = this.setupViteHMR(url, info)
-      if (newWs) {
-        connection.ws = newWs
-      }
+    if (connection.reconnect.timer) this.services.scope.clearTimer(connection.reconnect.timer)
+    connection.reconnect.timer = this.services.scope.setTimer(() => {
+      const current = this.connections.get(url)
+      if (current !== connection) return
+      const ws = this.setupViteHMR(
+        url,
+        info,
+        () => this.services.scope.isActive && this.connections.get(url) === connection,
+      )
+      if (ws && this.connections.get(url) === connection) current.ws = ws
     }, delay)
+    this.emit('ws:reconnecting', { url, attempt: connection.reconnect.retries, delay })
   }
 
-  /**
-   * 处理 HMR 更新
-   */
-  private async handleHMRUpdate(url: string, info: MaterialServerInfo): Promise<void> {
+  private async handleHMRUpdate(url: string, info: MaterialServerInfo, propagateError = false): Promise<void> {
+    if (this.disposed || !this.services.scope.isActive) {
+      if (propagateError) throw new Error('Local material loader is disposed')
+      return
+    }
+    const operation = this.beginUrlOperation(url, `refresh local material ${url}`)
+    let registeredComponentName: string | undefined
     try {
       const module = await this.loadModule(url, info.entry)
-
-      if (module.meta) {
-        this.registerMaterial(url, module)
-
-        const connection = this.connections.get(url)
-        if (connection) {
-          connection.module = module
+      this.assertUrlOperationCurrent(operation)
+      const meta = module.meta
+      if (!meta) throw new Error('Material meta not found in refreshed module')
+      const connection = this.connections.get(url)
+      if (!connection) throw new Error(`Local material connection for ${url} was invalidated`)
+      const previousComponentName = connection.componentName
+      this.registerMaterial(url, module, operation, componentName => {
+        registeredComponentName = componentName
+      })
+      this.assertUrlOperationCurrent(operation)
+      runInAction(() => {
+        if (previousComponentName !== meta.componentName) {
+          this.removeOwnedMaterial(url, previousComponentName)
         }
-
-        this.emit('hmr:update', {
-          url,
-          componentName: module.meta.componentName,
-          module,
-        })
-
-        console.log('[LocalMaterialLoader] HMR update completed')
-      }
+      })
+      connection.module = module
+      connection.componentName = meta.componentName
+      this.emit('hmr:update', { url, componentName: meta.componentName, module })
     } catch (error) {
-      console.error('[LocalMaterialLoader] HMR update failed:', error)
-      this.emit('hmr:error', { url, error })
+      const failures: unknown[] = [error]
+      const connection = this.connections.get(url)
+      if (registeredComponentName && connection?.componentName !== registeredComponentName) {
+        const componentName = registeredComponentName
+        try {
+          runInAction(() => this.removeOwnedMaterial(url, componentName))
+        } catch (cleanupError) {
+          failures.push(cleanupError)
+        }
+      }
+      const failure =
+        failures.length === 1 ? error : new AggregateError(failures, `Local material refresh cleanup failed: ${url}`)
+      if (this.isUrlOperationCurrent(operation)) this.emit('hmr:error', { url, error: failure })
+      if (propagateError) throw failure
+    } finally {
+      this.finishUrlOperation(operation)
     }
   }
 
-  /**
-   * 规范化 URL
-   */
+  private beginUrlOperation(url: string, label: string): LocalUrlOperation {
+    const scoped = this.services.scope.beginOperation(label)
+    const keyed = this.operations.begin(url)
+    const abortScopedOperation = () => scoped.abortController.abort()
+    keyed.signal.addEventListener('abort', abortScopedOperation, { once: true })
+    return { keyed, scoped, abortScopedOperation }
+  }
+
+  private isUrlOperationCurrent(operation: LocalUrlOperation): boolean {
+    return (
+      !this.disposed &&
+      this.services.scope.isActive &&
+      !operation.scoped.abortController.signal.aborted &&
+      this.operations.isCurrent(operation.keyed)
+    )
+  }
+
+  private assertUrlOperationCurrent(operation: LocalUrlOperation): void {
+    this.operations.assertCurrent(operation.keyed)
+    this.services.scope.assertCurrent(operation.scoped)
+    if (this.disposed) throw new Error('Local material loader is disposed')
+  }
+
+  private finishUrlOperation(operation: LocalUrlOperation): void {
+    operation.keyed.signal.removeEventListener('abort', operation.abortScopedOperation)
+    this.operations.finish(operation.keyed)
+    this.services.scope.finishOperation(operation.scoped)
+  }
+
+  private assertUsable(): void {
+    if (this.disposed) throw new Error('Local material loader is disposed')
+    this.services.scope.assertActive()
+  }
+
+  private closeSocket(ws: WebSocket): void {
+    ws.onopen = null
+    ws.onmessage = null
+    ws.onerror = null
+    ws.onclose = null
+    this.pendingSocketClosures.add(ws)
+    closeOwnedSocket(this.services.scope, ws)
+    this.pendingSocketClosures.delete(ws)
+  }
+
+  private assertMaterialNameAvailable(url: string, componentName: string): void {
+    const existing = this.services.materials.registry.get(componentName)
+    if (!existing) return
+    const ownerUrl = existing.extensions?.get('devServerUrl')
+    if (ownerUrl !== url) {
+      throw new Error(
+        `Local material component name "${componentName}" is already registered${
+          ownerUrl ? ` by ${String(ownerUrl)}` : ''
+        }`,
+      )
+    }
+  }
+
+  private removeOwnedMaterial(url: string, componentName: string): boolean {
+    const entry = this.services.materials.registry.get(componentName)
+    if (entry?.extensions?.get('devServerUrl') !== url) return false
+    return this.services.materials.removeComponentMeta(componentName)
+  }
+
   private normalizeUrl(url: string): string {
     return url.replace(/\/+$/, '')
   }
 }
-
-// 导出单例
-export const localLoader = new LocalMaterialLoaderClass()
-
-// 也导出类，便于测试
-export { LocalMaterialLoaderClass }

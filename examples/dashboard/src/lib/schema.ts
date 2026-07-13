@@ -1,5 +1,5 @@
 import { defaultRootSchema } from '@/editor/const'
-import type { ProjectSchema } from '@easy-editor/core'
+import { CURRENT_PROJECT_SCHEMA_VERSION, type ProjectSchema } from '@easy-editor/core/instance'
 
 const PROJECT_SCHEMA = 'projectSchema'
 const PAGE_INFO = 'pageInfo'
@@ -13,7 +13,7 @@ const generateProjectSchema = (pageSchema: any): ProjectSchema => {
   return {
     componentsTree: [pageSchema],
     // componentsMap: material.componentsMap as any,
-    version: '1.0.0',
+    version: CURRENT_PROJECT_SCHEMA_VERSION,
   }
 }
 

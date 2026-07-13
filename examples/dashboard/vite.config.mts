@@ -48,8 +48,8 @@ export default defineConfig(({ mode }) => ({
         materials_audio: 'materials_audio@http://localhost:5001/remoteEntry.js',
       },
       shared: {
-        react: { singleton: true, requiredVersion: '^19.0.0' },
-        'react-dom': { singleton: true, requiredVersion: '^19.0.0' },
+        react: { requiredVersion: '^19.0.0' },
+        'react-dom': { requiredVersion: '^19.0.0' },
       },
     }),
     tailwindcss(),

@@ -1,12 +1,15 @@
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Card, CardContent } from '@/components/ui/card'
 import type { MaterialGroup } from '@/editor/materials/type'
+import { engine } from '@/editor/runtime'
 import { cn } from '@/lib/utils'
-import { type ComponentMeta, type Snippet as ISnippet, project } from '@easy-editor/core'
+import type { ComponentMeta, Snippet as ISnippet } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import React from 'react'
-import { RemoteSnippet } from './RemoteSnippet'
 import { LocalMaterialDebugDialog } from './LocalMaterialDebugDialog'
+import { RemoteSnippet } from './RemoteSnippet'
+
+const project = engine.project
 
 /** 调试分组名称 */
 const DEBUG_GROUP = 'DEBUG'
@@ -55,7 +58,7 @@ const Snippet = ({ snippet }: SnippetProps) => {
  * 调试中物料 Snippet 组件
  * 带有特殊的视觉指示
  */
-const DebugSnippet = ({ snippet, componentMeta }: SnippetProps) => {
+const DebugSnippet = ({ snippet }: SnippetProps) => {
   const ref = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {

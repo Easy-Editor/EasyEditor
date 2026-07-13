@@ -2,14 +2,14 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
-import { createDashboardAgentContext } from '@/editor/agent'
+import { runDashboardAgentRequest } from '@/editor/agent'
 import { cn } from '@/lib/utils'
 import { Bot, ChevronDown, ChevronUp, Lightbulb, Send, User, X } from 'lucide-react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { MAX_AGENT_MESSAGE_BYTES } from './agent-request-boundary.mjs'
 import { type Suggestion, categorizedSuggestions, quickSuggestions } from './prompt'
 import { useCustomChat } from './use-custom-chat'
-import { executeAiCommands, filterMessageContent } from './utils'
 
 interface AiChatDialogProps {
   isOpen: boolean
@@ -18,8 +18,8 @@ interface AiChatDialogProps {
 }
 
 export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, className }) => {
-  const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useCustomChat({
-    createAgentContext: createDashboardAgentContext,
+  const { messages, input, handleInputChange, handleSubmit, cancelRequest, isLoading, error } = useCustomChat({
+    requestAgent: runDashboardAgentRequest,
     initialMessages: [
       {
         id: '1',
@@ -29,9 +29,6 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
         createdAt: new Date(),
       },
     ],
-    onFinish(message, context, nodeIdsByAlias) {
-      executeAiCommands(message.content, context, nodeIdsByAlias)
-    },
     onError(error) {
       console.error('❌ Custom chat error:', error)
     },
@@ -59,11 +56,12 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
       setIsVisible(true)
       setTimeout(() => setShouldShow(true), 10)
     } else {
+      cancelRequest()
       setShouldShow(false)
       const timer = setTimeout(() => setIsVisible(false), 300)
       return () => clearTimeout(timer)
     }
-  }, [isOpen])
+  }, [cancelRequest, isOpen])
 
   // 点击外部关闭下拉框
   useEffect(() => {
@@ -165,47 +163,43 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               </div>
             )}
 
-            {messages
-              .filter(message => message.role !== 'system')
-              .map(message => (
+            {messages.map(message => (
+              <div
+                key={message.id}
+                className={cn('flex gap-3', message.role === 'user' ? 'justify-end' : 'justify-start')}
+              >
+                {message.role === 'assistant' && (
+                  <Avatar className='h-8 w-8 flex-shrink-0'>
+                    <AvatarFallback className='bg-muted'>
+                      <Bot className='h-4 w-4' />
+                    </AvatarFallback>
+                  </Avatar>
+                )}
+
                 <div
-                  key={message.id}
-                  className={cn('flex gap-3', message.role === 'user' ? 'justify-end' : 'justify-start')}
+                  className={cn(
+                    'max-w-[280px] rounded-lg px-3 py-2 text-sm',
+                    message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
+                  )}
                 >
-                  {message.role === 'assistant' && (
-                    <Avatar className='h-8 w-8 flex-shrink-0'>
-                      <AvatarFallback className='bg-muted'>
-                        <Bot className='h-4 w-4' />
-                      </AvatarFallback>
-                    </Avatar>
-                  )}
-
-                  <div
-                    className={cn(
-                      'max-w-[280px] rounded-lg px-3 py-2 text-sm',
-                      message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
-                    )}
-                  >
-                    <p className='whitespace-pre-wrap'>
-                      {message.role === 'assistant' ? filterMessageContent(message.content) : message.content}
-                    </p>
-                    <span className='text-xs opacity-70 mt-1 block'>
-                      {message.createdAt?.toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-
-                  {message.role === 'user' && (
-                    <Avatar className='h-8 w-8 flex-shrink-0'>
-                      <AvatarFallback className='bg-secondary'>
-                        <User className='h-4 w-4' />
-                      </AvatarFallback>
-                    </Avatar>
-                  )}
+                  <p className='whitespace-pre-wrap'>{message.content}</p>
+                  <span className='text-xs opacity-70 mt-1 block'>
+                    {message.createdAt?.toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
                 </div>
-              ))}
+
+                {message.role === 'user' && (
+                  <Avatar className='h-8 w-8 flex-shrink-0'>
+                    <AvatarFallback className='bg-secondary'>
+                      <User className='h-4 w-4' />
+                    </AvatarFallback>
+                  </Avatar>
+                )}
+              </div>
+            ))}
 
             {isLoading && (
               <div className='flex gap-3 justify-start'>
@@ -338,6 +332,7 @@ export const AiChatDialog: React.FC<AiChatDialogProps> = ({ isOpen, onClose, cla
               placeholder='输入你的需求，或点击上方建议快速开始...'
               className='min-h-[44px] max-h-32 resize-none flex-1'
               disabled={isLoading}
+              maxLength={MAX_AGENT_MESSAGE_BYTES}
             />
             <Button
               onClick={handleSubmit}

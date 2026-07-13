@@ -1,59 +1,53 @@
-import type { DashboardAgentContext } from '@/editor/agent'
-import { useCallback, useState } from 'react'
-import { createCanvasProjection, createChatRequest } from './privacy.mjs'
+import type { DashboardAgentMessageInput, DashboardAgentRequestOptions, DashboardAgentResult } from '@/editor/agent'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AgentRequestSlot } from './agent-request-slot.mjs'
 
-interface Message {
+interface Message extends DashboardAgentMessageInput {
   id: string
-  content: string
-  role: 'user' | 'assistant' | 'system'
   createdAt: Date
 }
 
 interface CustomChatConfig {
   initialMessages: Message[]
-  createAgentContext: () => DashboardAgentContext
-  onFinish: (
-    message: Message,
-    context: DashboardAgentContext,
-    nodeIdsByAlias: ReadonlyMap<string, string>,
-  ) => Promise<void> | void
+  requestAgent: (
+    messages: readonly DashboardAgentMessageInput[],
+    options?: DashboardAgentRequestOptions,
+  ) => Promise<DashboardAgentResult>
+  onFinish?: (result: DashboardAgentResult, message: Message) => Promise<void> | void
   onError: (error: Error) => void
 }
 
-interface ChatCompletionResponse {
-  id?: string
-  message?: {
-    role?: 'assistant'
-    content?: string
-  }
-}
+const hasUnknownOutcome = (error: Error): boolean =>
+  Object.hasOwn(error, 'outcome') && (error as Error & { readonly outcome?: unknown }).outcome === 'unknown'
 
-interface GatewayErrorResponse {
-  error?: {
-    code?: string
-    message?: string
-  }
-}
-
-// 自定义聊天Hook作为备选方案
 export const useCustomChat = (config: CustomChatConfig) => {
   const [messages, setMessages] = useState<Message[]>(config.initialMessages)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  const requestSlotRef = useRef<AgentRequestSlot | undefined>(undefined)
+  if (!requestSlotRef.current) requestSlotRef.current = new AgentRequestSlot()
 
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value)
+  const cancelRequest = useCallback(() => {
+    requestSlotRef.current?.cancel()
+  }, [])
+
+  useEffect(() => cancelRequest, [cancelRequest])
+
+  const handleInputChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(event.target.value)
   }, [])
 
   const handleSubmit = useCallback(async () => {
-    if (!input.trim() || isLoading) return
+    const content = input.trim()
+    if (!content || isLoading) return
 
-    let agentContext: DashboardAgentContext | undefined
+    const controller = requestSlotRef.current?.begin()
+    if (!controller) return
 
     const userMessage: Message = {
-      id: Date.now().toString(),
-      content: input.trim(),
+      id: `${Date.now()}-user`,
+      content,
       role: 'user',
       createdAt: new Date(),
     }
@@ -61,59 +55,35 @@ export const useCustomChat = (config: CustomChatConfig) => {
     setInput('')
     setIsLoading(true)
     setError(null)
+    setMessages(previous => [...previous, userMessage])
 
     try {
-      // 在请求发出前固定文档身份和修订版本；响应回来后不再读取全局项目状态。
-      agentContext = config.createAgentContext()
-      const { snapshot } = agentContext
-      const projection = createCanvasProjection(snapshot.schema)
-
-      setMessages(prev => [...prev, userMessage])
-
-      const conversation = messages.filter(message => message.role !== 'system')
-      const request = createChatRequest([...conversation, userMessage], projection.canvas)
-
-      const response = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      })
-
-      if (!response.ok) {
-        const gatewayError = (await response.json().catch(() => undefined)) as GatewayErrorResponse | undefined
-        throw new Error(gatewayError?.error?.message || `AI request failed (${response.status})`)
-      }
-
-      const data = (await response.json()) as ChatCompletionResponse
-
+      const result = await config.requestAgent([...messages, userMessage], { signal: controller.signal })
       const assistantMessage: Message = {
-        id: data.id || Date.now().toString(),
-        content: data.message?.content || '抱歉，我无法理解您的请求。',
+        id: `${Date.now()}-assistant`,
+        content: result.message.content,
         role: 'assistant',
         createdAt: new Date(),
       }
 
-      setMessages(prev => [...prev, assistantMessage])
-
-      await config.onFinish(assistantMessage, agentContext, projection.nodeIdsByAlias)
-    } catch (err) {
-      console.error('❌ Chat error:', err)
-      const error = err instanceof Error ? err : new Error('Unknown error')
-      setError(error)
-      config.onError(error)
+      setMessages(previous => [...previous, assistantMessage])
+      await config.onFinish?.(result, assistantMessage)
+    } catch (caught) {
+      const requestError = caught instanceof Error ? caught : new Error('Unknown Agent error')
+      if (controller.signal.aborted && !hasUnknownOutcome(requestError)) return
+      setError(requestError)
+      config.onError(requestError)
     } finally {
-      agentContext?.capability.close()
-      setIsLoading(false)
+      if (requestSlotRef.current?.release(controller)) setIsLoading(false)
     }
-  }, [input, isLoading, messages, config])
+  }, [config, input, isLoading, messages])
 
   return {
     messages,
     input,
     handleInputChange,
     handleSubmit,
+    cancelRequest,
     isLoading,
     error,
   }

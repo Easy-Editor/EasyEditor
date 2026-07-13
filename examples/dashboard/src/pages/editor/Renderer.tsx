@@ -1,8 +1,10 @@
 import { materialManager } from '@/editor/remote'
-import { project } from '@easy-editor/core'
+import { engine } from '@/editor/runtime'
 import { SimulatorRenderer } from '@easy-editor/react-renderer-dashboard'
 import { observer } from 'mobx-react'
 import { RendererContextMenu } from './ContextMenu'
+
+const project = engine.project
 
 export const Renderer = observer(() => {
   const isEmpty = project.documents.length === 0

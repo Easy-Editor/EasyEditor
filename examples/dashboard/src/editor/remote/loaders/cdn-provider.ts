@@ -109,6 +109,3 @@ export class CdnProviderManager {
     this.sortByPriority()
   }
 }
-
-/** 导出单例 */
-export const cdnProviderManager = new CdnProviderManager()
