@@ -53,6 +53,7 @@ jobs:
         run: |
           pnpm --filter @easy-editor/plugin-dashboard lint
           pnpm --filter @easy-editor/plugin-dashboard test-types
+          pnpm --filter @easy-editor/plugin-dashboard test
           pnpm --filter @easy-editor/plugin-dashboard build
           pnpm --filter @easy-editor/plugin-dashboard types
 

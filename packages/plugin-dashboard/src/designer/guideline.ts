@@ -72,7 +72,22 @@ export interface AdsorptionLineInfo {
   distanceSegments?: DistanceSegment[]
 }
 
+const guidelineOwnerDisposers = new WeakMap<GuideLine, () => void>()
+
+/** @internal Registers cache eviction for a runtime-owned helper. */
+export const registerGuideLineOwner = (guideline: GuideLine, onDisposed: () => void) => {
+  guidelineOwnerDisposers.set(guideline, onDisposed)
+}
+
 export class GuideLine {
+  private viewportMountDisposer?: () => void
+
+  private disposeStarted = false
+
+  private disposeCompleted = false
+
+  private runtimeStateCleared = false
+
   /**
    * 是否启用辅助线
    */
@@ -129,38 +144,97 @@ export class GuideLine {
 
   constructor(readonly designer: Designer) {
     // 添加画布视口的辅助线
-    this.designer.onEvent(DESIGNER_EVENT.VIEWPORT_MOUNT, ({ viewport }: { viewport: Viewport }) => {
-      this.addGuideLine({
-        id: 'viewport-vertical-left',
-        type: 'vertical',
-        position: 0,
-      })
-      this.addGuideLine({
-        id: 'viewport-vertical-middle',
-        type: 'vertical',
-        position: viewport.width / 2,
-      })
-      this.addGuideLine({
-        id: 'viewport-vertical-right',
-        type: 'vertical',
-        position: viewport.width,
-      })
-      this.addGuideLine({
-        id: 'viewport-horizontal-top',
-        type: 'horizontal',
-        position: 0,
-      })
-      this.addGuideLine({
-        id: 'viewport-horizontal-middle',
-        type: 'horizontal',
-        position: viewport.height / 2,
-      })
-      this.addGuideLine({
-        id: 'viewport-horizontal-bottom',
-        type: 'horizontal',
-        position: viewport.height,
-      })
-    })
+    this.viewportMountDisposer = this.designer.onEvent(
+      DESIGNER_EVENT.VIEWPORT_MOUNT,
+      ({ viewport }: { viewport: Viewport }) => {
+        if (this.disposeStarted) return
+
+        this.addGuideLine({
+          id: 'viewport-vertical-left',
+          type: 'vertical',
+          position: 0,
+        })
+        this.addGuideLine({
+          id: 'viewport-vertical-middle',
+          type: 'vertical',
+          position: viewport.width / 2,
+        })
+        this.addGuideLine({
+          id: 'viewport-vertical-right',
+          type: 'vertical',
+          position: viewport.width,
+        })
+        this.addGuideLine({
+          id: 'viewport-horizontal-top',
+          type: 'horizontal',
+          position: 0,
+        })
+        this.addGuideLine({
+          id: 'viewport-horizontal-middle',
+          type: 'horizontal',
+          position: viewport.height / 2,
+        })
+        this.addGuideLine({
+          id: 'viewport-horizontal-bottom',
+          type: 'horizontal',
+          position: viewport.height,
+        })
+      },
+    )
+  }
+
+  /**
+   * Releases the viewport listener and observable runtime state. A failed
+   * listener removal is retained so the engine lifecycle can retry disposal.
+   */
+  dispose() {
+    if (this.disposeCompleted) return
+
+    this.disposeStarted = true
+    const errors: unknown[] = []
+
+    if (this.viewportMountDisposer) {
+      try {
+        this.viewportMountDisposer()
+        this.viewportMountDisposer = undefined
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    if (!this.runtimeStateCleared) {
+      try {
+        action(() => {
+          this.guideLines = []
+          this.nodeLineMap.verticalLinesMap.clear()
+          this.nodeLineMap.horizontalLinesMap.clear()
+          this.adsorptionLines.verticalLines.clear()
+          this.adsorptionLines.horizontalLines.clear()
+          this.adsorptionLinesWithDistance = []
+          this.userGuideLines = []
+          this.userGuideLineIdCounter = 0
+        })()
+        this.runtimeStateCleared = true
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Failed to dispose dashboard guideline')
+    }
+
+    const releaseOwner = guidelineOwnerDisposers.get(this)
+    if (releaseOwner) {
+      try {
+        releaseOwner()
+        guidelineOwnerDisposers.delete(this)
+      } catch (error) {
+        throw new AggregateError([error], 'Failed to release dashboard guideline ownership')
+      }
+    }
+
+    this.disposeCompleted = true
   }
 
   /**

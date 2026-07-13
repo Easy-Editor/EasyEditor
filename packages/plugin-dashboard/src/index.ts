@@ -13,8 +13,20 @@ import {
   getConvertedExtraKey,
 } from '@easy-editor/core/instance'
 import { AlignType, Alignment, DistributeType } from './designer/alignment'
-import { type AdsorptionLineInfo, type DistanceSegment, GuideLine, type UserGuideLineItem } from './designer/guideline'
-import { type MarqueeEvent, type MarqueeRect, MarqueeSelection } from './designer/marquee-selection'
+import {
+  type AdsorptionLineInfo,
+  type DistanceSegment,
+  GuideLine,
+  type UserGuideLineItem,
+  registerGuideLineOwner,
+} from './designer/guideline'
+import {
+  type MarqueeEvent,
+  type MarqueeRect,
+  MarqueeSelection,
+  disposeMarqueeSelectionRuntime,
+  registerMarqueeSelectionOwner,
+} from './designer/marquee-selection'
 import { updateNodeRect, updateNodeRectByDOM } from './utils'
 
 export * from './type'
@@ -63,6 +75,54 @@ interface DashboardPluginOptions {
 const dashboardGuidelines = new WeakMap<Designer, GuideLine>()
 const dashboardAlignments = new WeakMap<Designer, Alignment>()
 const dashboardMarqueeSelections = new WeakMap<Designer, MarqueeSelection>()
+const dashboardRuntimeLifecycle = Symbol('@easy-editor/plugin-dashboard/runtime-lifecycle')
+const dashboardRuntimeActivationToken = Object.freeze({})
+
+interface DashboardRuntimeLease {
+  state: 'active' | 'disposing' | 'disposed'
+}
+
+const dashboardRuntimeLeases = new WeakMap<Designer, DashboardRuntimeLease>()
+
+const assertDashboardRuntimeActive = (designer: Designer, helper: string) => {
+  if (dashboardRuntimeLeases.get(designer)?.state !== 'active') {
+    throw new Error(`Cannot access dashboard ${helper}; DashboardPlugin runtime is not active for this Designer`)
+  }
+}
+
+const clearDashboardRuntime = (designer: Designer, restoreDetecting = true) => {
+  const errors: unknown[] = []
+  const guideline = dashboardGuidelines.get(designer)
+  const marqueeSelection = dashboardMarqueeSelections.get(designer)
+
+  if (guideline) {
+    try {
+      guideline.dispose()
+      dashboardGuidelines.delete(designer)
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+
+  if (marqueeSelection) {
+    try {
+      disposeMarqueeSelectionRuntime(marqueeSelection, restoreDetecting)
+      dashboardMarqueeSelections.delete(designer)
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+
+  dashboardAlignments.delete(designer)
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Failed to clear dashboard runtime')
+  }
+}
+
+interface DashboardRuntimeDesigner extends Designer {
+  [dashboardRuntimeLifecycle](activationToken: object): () => void
+}
 
 const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
   const { group } = options || {}
@@ -80,9 +140,22 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       const { materials, project } = ctx
       const { designer } = project
 
-      dashboardGuidelines.delete(designer)
-      dashboardAlignments.delete(designer)
-      dashboardMarqueeSelections.delete(designer)
+      const disposeDashboardRuntime = (designer as DashboardRuntimeDesigner)[dashboardRuntimeLifecycle](
+        dashboardRuntimeActivationToken,
+      )
+      try {
+        ctx.onDispose(disposeDashboardRuntime)
+      } catch (registrationError) {
+        try {
+          disposeDashboardRuntime()
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [registrationError, cleanupError],
+            'Failed to register and roll back dashboard runtime ownership',
+          )
+        }
+        throw registrationError
+      }
 
       // add group componentMeta
       materials.createComponentMeta(groupMeta)
@@ -90,7 +163,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       /* ---------------------------- NodeData to Node ---------------------------- */
       const startOffsetNodeData = { x: 0, y: 0 }
 
-      designer.dragon.onDragstart(e => {
+      const disposeNodeDataDragStart = designer.dragon.onDragstart(e => {
         if (!e.shell) return
         const { simulator } = project
         if (!simulator) return
@@ -104,8 +177,9 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
           startOffsetNodeData.y = (e.globalY! - shellRect?.top!) / viewport.scale
         }
       })
+      ctx.onDispose(disposeNodeDataDragStart)
 
-      designer.onEvent(DESIGNER_EVENT.INSERT_NODE_BEFORE, (e: DropLocation) => {
+      const disposeInsertNodeBefore = designer.onEvent(DESIGNER_EVENT.INSERT_NODE_BEFORE, (e: DropLocation) => {
         const { event } = e
         const { dragObject } = event
 
@@ -125,13 +199,14 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
           }
         }
       })
+      ctx.onDispose(disposeInsertNodeBefore)
 
       /* ----------------------------------- DND ---------------------------------- */
       let startNodes: { [key: string]: DOMRect } = {}
       let startOffsetNodes: { [key: string]: { x: number; y: number } } = {}
       let lastOffsetNodes: { [key: string]: { x: number; y: number } } = {}
 
-      designer.dragon.onDragstart(e => {
+      const disposeNodeDragStart = designer.dragon.onDragstart(e => {
         const { dragObject } = e
 
         if (dragObject && dragObject.type === DragObjectType.Node) {
@@ -157,8 +232,9 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
           }
         }
       })
+      ctx.onDispose(disposeNodeDragStart)
 
-      designer.dragon.onDrag(e => {
+      const disposeNodeDrag = designer.dragon.onDrag(e => {
         const { dragObject } = e
         if (dragObject && dragObject.type === DragObjectType.Node) {
           // 根据拖拽包围盒的 Rect 计算吸附位置
@@ -210,8 +286,9 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
           }
         }
       })
+      ctx.onDispose(disposeNodeDrag)
 
-      designer.dragon.onDragend(e => {
+      const disposeNodeDragEnd = designer.dragon.onDragend(e => {
         const { simulator } = project
         if (!simulator) return
         const { dragObject, esc } = e
@@ -237,23 +314,65 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         startOffsetNodes = {}
         lastOffsetNodes = {}
       })
+      ctx.onDispose(disposeNodeDragEnd)
     },
     extend({ extendClass, extend }) {
       const { Node } = extendClass
 
       /* -------------------------------- Designer -------------------------------- */
       extend('Designer', {
+        [dashboardRuntimeLifecycle]: {
+          value(this: Designer, activationToken: object) {
+            if (activationToken !== dashboardRuntimeActivationToken) {
+              throw new Error('DashboardPlugin runtime activation requires its private lease token')
+            }
+            const engine = this.editor.get<{ plugins?: { has(pluginName: string): boolean } }>('engine')
+            if (!engine?.plugins?.has('DashboardPlugin')) {
+              throw new Error('DashboardPlugin runtime activation requires a registered DashboardPlugin')
+            }
+
+            const previousLease = dashboardRuntimeLeases.get(this)
+            if (previousLease) {
+              previousLease.state = 'disposing'
+              clearDashboardRuntime(this)
+              previousLease.state = 'disposed'
+              dashboardRuntimeLeases.delete(this)
+            } else {
+              clearDashboardRuntime(this)
+            }
+
+            const lease: DashboardRuntimeLease = { state: 'active' }
+            dashboardRuntimeLeases.set(this, lease)
+            return () => {
+              if (dashboardRuntimeLeases.get(this) !== lease || lease.state === 'disposed') return
+              lease.state = 'disposing'
+              // Prototype extensions are legacy-trusted only. Read the engine
+              // state through the raw Designer solely to choose teardown
+              // behavior; never return or retain the engine reference.
+              const lifecycleState = this.editor.get<{ lifecycleState?: string }>('engine')?.lifecycleState
+              const restoreDetecting = !['disposing', 'disposed', 'failed'].includes(lifecycleState || '')
+              clearDashboardRuntime(this, restoreDetecting)
+              lease.state = 'disposed'
+              dashboardRuntimeLeases.delete(this)
+            }
+          },
+        },
         guideline: {
           get() {
+            assertDashboardRuntimeActive(this, 'guideline')
             const existing = dashboardGuidelines.get(this)
             if (existing) return existing
             const guideline = new GuideLine(this)
+            registerGuideLineOwner(guideline, () => {
+              if (dashboardGuidelines.get(this) === guideline) dashboardGuidelines.delete(this)
+            })
             dashboardGuidelines.set(this, guideline)
             return guideline
           },
         },
         alignment: {
           get() {
+            assertDashboardRuntimeActive(this, 'alignment')
             const existing = dashboardAlignments.get(this)
             if (existing) return existing
             const alignment = new Alignment(this)
@@ -263,9 +382,15 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
         },
         marqueeSelection: {
           get() {
+            assertDashboardRuntimeActive(this, 'marquee selection')
             const existing = dashboardMarqueeSelections.get(this)
             if (existing) return existing
             const marqueeSelection = new MarqueeSelection(this)
+            registerMarqueeSelectionOwner(marqueeSelection, () => {
+              if (dashboardMarqueeSelections.get(this) === marqueeSelection) {
+                dashboardMarqueeSelections.delete(this)
+              }
+            })
             dashboardMarqueeSelections.set(this, marqueeSelection)
             return marqueeSelection
           },
