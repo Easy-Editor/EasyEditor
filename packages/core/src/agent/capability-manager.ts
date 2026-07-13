@@ -711,18 +711,23 @@ export class AgentCapabilityManager {
         capability,
         denyPeerExecution: planId => this.denyPeerExecution(capability.descriptor.capabilityId, planId),
         executeHostApproved: planId => this.execute(capability.descriptor.capabilityId, planId, 'host'),
-        onClose: closed => this.portSessions.delete(closed),
+        onClose: closed => {
+          if (closed.state === 'closed') this.portSessions.delete(closed)
+        },
         options: { executionAuthority, signal: options.signal },
         port,
         subscribeEvents: listener => this.subscribeDomainEvents(listener),
       })
+      if (session.state !== 'closed') this.portSessions.add(session)
       if (session.state !== 'open') {
-        throw new AgentCapabilityError({
-          code: 'agent.transport.closed',
-          message: 'The Agent MessagePort session closed during initialization',
-        })
+        throw (
+          session.initializationError ??
+          new AgentCapabilityError({
+            code: 'agent.transport.closed',
+            message: 'The Agent MessagePort session closed during initialization',
+          })
+        )
       }
-      this.portSessions.add(session)
       return session
     } catch (error) {
       capability.close()
@@ -774,9 +779,10 @@ export class AgentCapabilityManager {
         session.terminate(reason)
       } catch (error) {
         failures.push(error)
+      } finally {
+        if (session.state === 'closed') this.portSessions.delete(session)
       }
     }
-    this.portSessions.clear()
     for (const capabilityId of [...this.capabilities.keys()]) {
       try {
         this.revoke(capabilityId, reason)

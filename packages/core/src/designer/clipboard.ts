@@ -27,7 +27,7 @@ function getDataFromPasteEvent(event: ClipboardEvent) {
 export class Clipboard {
   private copyPasters: HTMLTextAreaElement[] = []
 
-  private injectedDocuments = new Map<Document, Disposer>()
+  private injectedDocuments = new Map<Document, { dispose: Disposer; ready: boolean }>()
 
   private listenerDisposals = new DisposalLedger()
 
@@ -82,9 +82,10 @@ export class Clipboard {
 
   injectCopyPaster(document: Document): Disposer {
     assertLifecycleMutationAllowed(this, 'clipboard.injectCopyPaster')
-    const existingDispose = this.injectedDocuments.get(document)
-    if (existingDispose) {
-      return existingDispose
+    const existing = this.injectedDocuments.get(document)
+    if (existing) {
+      if (!existing.ready) throw new Error('Clipboard injection cleanup is still pending for this document')
+      return existing.dispose
     }
 
     const listenerDisposals = this.#getListenerDisposals()
@@ -98,35 +99,19 @@ export class Clipboard {
     }
 
     let removeReadyListener: Disposer | undefined
-    if (document.body) {
-      append()
-    } else {
-      const onReady = () => {
-        try {
-          append()
-        } finally {
-          void Promise.resolve(removeReadyListener?.()).catch(() => undefined)
-        }
-      }
-      let listenerRegistered = false
-      removeReadyListener = listenerDisposals.add(() => {
-        if (!listenerRegistered) return
-        document.removeEventListener('DOMContentLoaded', onReady)
-        listenerRegistered = false
-      }, 'clipboard.DOMContentLoaded')
-      try {
-        listenerRegistered = true
-        document.addEventListener('DOMContentLoaded', onReady)
-      } catch (error) {
-        void Promise.resolve(removeReadyListener()).catch(() => undefined)
-        throw error
-      }
+    let disposeCopyPaster: Disposer | undefined
+    let dispose!: Disposer
+    const registration: { dispose: Disposer; ready: boolean } = {
+      dispose: () => undefined,
+      ready: false,
     }
-
-    const disposeCopyPaster = this.initCopyPaster(copyPaster)
-
-    const dispose = listenerDisposals.add(async () => {
+    dispose = listenerDisposals.add(async () => {
       const failures: unknown[] = []
+      try {
+        copyPaster.remove()
+      } catch (error) {
+        failures.push(error)
+      }
       for (const release of [removeReadyListener, disposeCopyPaster]) {
         if (!release) continue
         try {
@@ -135,18 +120,61 @@ export class Clipboard {
           failures.push(error)
         }
       }
-      try {
-        copyPaster.remove()
-      } catch (error) {
-        failures.push(error)
-      }
       if (failures.length > 0) {
         throw new AggregateError(failures, 'Clipboard injection disposal failed')
       }
-      if (this.injectedDocuments.get(document) === dispose) this.injectedDocuments.delete(document)
+      if (this.injectedDocuments.get(document) === registration) this.injectedDocuments.delete(document)
     }, 'clipboard.injection')
-    this.injectedDocuments.set(document, dispose)
-    return dispose
+    registration.dispose = dispose
+    // Publish provisional ownership before DOM or listener acquisition. A
+    // partially initialized injection is therefore still reachable by the
+    // engine disposal retry path.
+    this.injectedDocuments.set(document, registration)
+
+    try {
+      if (document.body) {
+        append()
+      } else {
+        const onReady = () => {
+          try {
+            append()
+          } finally {
+            void Promise.resolve(removeReadyListener?.()).catch(() => undefined)
+          }
+        }
+        let listenerRegistered = false
+        removeReadyListener = listenerDisposals.add(() => {
+          if (!listenerRegistered) return
+          document.removeEventListener('DOMContentLoaded', onReady)
+          listenerRegistered = false
+        }, 'clipboard.DOMContentLoaded')
+        try {
+          listenerRegistered = true
+          document.addEventListener('DOMContentLoaded', onReady)
+        } catch (error) {
+          void Promise.resolve(removeReadyListener()).catch(() => undefined)
+          throw error
+        }
+      }
+
+      disposeCopyPaster = this.initCopyPaster(copyPaster)
+      registration.ready = true
+      return dispose
+    } catch (error) {
+      const rollbackErrors: unknown[] = []
+      try {
+        copyPaster.remove()
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+      // Mark the provisional ledger entry complete when cleanup succeeds, or
+      // retain it automatically when any cleanup step still fails.
+      void Promise.resolve(dispose()).catch(() => undefined)
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError([error, ...rollbackErrors], 'Clipboard injection acquisition rollback failed')
+      }
+      throw error
+    }
   }
 
   async setData(data: any): Promise<void> {

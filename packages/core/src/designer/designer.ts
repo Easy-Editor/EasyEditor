@@ -105,6 +105,8 @@ export class Designer {
 
   private oobxList: OffsetObserver[] = []
 
+  private scrollers = new Set<Scroller>()
+
   private mounted = false
 
   private disposers: Array<() => void> = []
@@ -333,7 +335,11 @@ export class Designer {
 
   createScroller(scrollable: Scrollable) {
     assertLifecycleMutationAllowed(this, 'designer.createScroller')
-    return new Scroller(scrollable)
+    const scroller = new Scroller(scrollable)
+    inheritLifecycleMutationGuard(this, scroller)
+    inheritEngineTeardownOwnership(this, scroller)
+    this.scrollers.add(scroller)
+    return scroller
   }
 
   createOffsetObserver(nodeInstance: NodeSelector): OffsetObserver | null {
@@ -492,6 +498,15 @@ export class Designer {
     }
     this._dropLocation = undefined
     this.propsReducers.clear()
+
+    for (const scroller of [...this.scrollers].reverse()) {
+      try {
+        runInternalLifecycleTeardown(scroller)
+        this.scrollers.delete(scroller)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
 
     const retainedObservers: OffsetObserver[] = []
     for (const observer of this.oobxList) {

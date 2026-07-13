@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createFakeWindow } from './helpers/fake-browser.mjs'
-import { loadCore } from './helpers/kernel.mjs'
+import { captureFailure, loadCore } from './helpers/kernel.mjs'
 
-const captureFailure = operation => {
+const captureSyncFailure = operation => {
   try {
     operation()
   } catch (error) {
@@ -91,7 +91,7 @@ test('Viewport setup rolls back acquired listeners and retains incomplete rollba
     return removeIncompleteListener(type, listener, options)
   }
 
-  const incompleteRollback = captureFailure(() => viewport.setScrollTarget(incompleteTarget))
+  const incompleteRollback = captureSyncFailure(() => viewport.setScrollTarget(incompleteTarget))
   assert.equal(incompleteRollback.name, 'AggregateError')
   assert.match(incompleteRollback.message, /rollback was incomplete/)
   assert.equal(incompleteRollback.errors.length, 2)
@@ -119,4 +119,121 @@ test('Viewport setup rolls back acquired listeners and retains incomplete rollba
   assert.equal(rolledBackTarget.addCount, rolledBackTarget.removeCount)
   viewport.clearScrollTarget()
   assert.equal(rolledBackTarget.removeCount, 1, 'completed rollback must not be repeated')
+})
+
+test('Simulator frame acquisition rolls back partial event setup and permits a same-frame retry', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  let failMousemoveAcquisition = true
+  t.after(async () => {
+    failMousemoveAcquisition = false
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+  await engine.init()
+
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  engine.project.mountSimulator(simulator)
+  const frameWindow = createFakeWindow()
+  const frame = frameWindow.document.createElement('div')
+  const { document } = frameWindow
+  const addEventListener = document.addEventListener.bind(document)
+  document.addEventListener = (type, listener, options) => {
+    if (type === 'mousemove' && failMousemoveAcquisition) {
+      throw new Error('mousemove listener acquisition failed')
+    }
+    return addEventListener(type, listener, options)
+  }
+
+  await assert.rejects(simulator.mountContentFrame(frame), /mousemove listener acquisition failed/)
+  assert.equal(simulator.iframe, undefined)
+  assert.equal(simulator.contentDocument, undefined)
+  assert.equal(simulator.contentWindow, undefined)
+  assert.deepEqual(
+    Object.fromEntries(
+      ['mousedown', 'mouseover', 'mouseleave', 'mousemove'].map(type => [type, document.listenerCount(type)]),
+    ),
+    { mousedown: 0, mouseleave: 0, mousemove: 0, mouseover: 0 },
+  )
+  assert.deepEqual(Object.fromEntries(['scroll', 'resize'].map(type => [type, frameWindow.listenerCount(type)])), {
+    resize: 0,
+    scroll: 0,
+  })
+  assert.equal(document.addCount, document.removeCount)
+  assert.equal(frameWindow.addCount, frameWindow.removeCount)
+
+  failMousemoveAcquisition = false
+  await simulator.mountContentFrame(frame)
+  assert.strictEqual(simulator.iframe, frame)
+  assert.strictEqual(simulator.contentDocument, document)
+  assert.strictEqual(simulator.contentWindow, frameWindow)
+  assert.deepEqual(
+    Object.fromEntries(
+      ['mousedown', 'mouseover', 'mouseleave', 'mousemove'].map(type => [type, document.listenerCount(type)]),
+    ),
+    { mousedown: 1, mouseleave: 1, mousemove: 1, mouseover: 1 },
+  )
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(document.listenerCount(), 0)
+  assert.equal(frameWindow.listenerCount(), 0)
+  assert.equal(document.addCount, document.removeCount)
+  assert.equal(frameWindow.addCount, frameWindow.removeCount)
+})
+
+test('Simulator retains failed frame-acquisition cleanup for engine destroy retry', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  let failMousemoveAcquisition = true
+  let failMouseleaveRollback = true
+  t.after(async () => {
+    failMousemoveAcquisition = false
+    failMouseleaveRollback = false
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+  await engine.init()
+
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  engine.project.mountSimulator(simulator)
+  const frameWindow = createFakeWindow()
+  const frame = frameWindow.document.createElement('div')
+  const { document } = frameWindow
+  const addEventListener = document.addEventListener.bind(document)
+  const removeEventListener = document.removeEventListener.bind(document)
+  document.addEventListener = (type, listener, options) => {
+    if (type === 'mousemove' && failMousemoveAcquisition) {
+      throw new Error('mousemove listener acquisition failed')
+    }
+    return addEventListener(type, listener, options)
+  }
+  document.removeEventListener = (type, listener, options) => {
+    if (type === 'mouseleave' && failMouseleaveRollback) {
+      throw new Error('mouseleave listener rollback failed')
+    }
+    return removeEventListener(type, listener, options)
+  }
+
+  const error = await captureFailure(() => simulator.mountContentFrame(frame))
+  assert.equal(error.name, 'AggregateError')
+  assert.match(error.message, /rollback was incomplete/)
+  assert.ok(error.errors.some(cause => /mousemove listener acquisition failed/.test(cause?.message)))
+  assert.ok(error.errors.some(cause => /detecting listener disposal failed/.test(cause?.message)))
+  assert.equal(simulator.iframe, undefined)
+  assert.equal(simulator.contentDocument, undefined)
+  assert.equal(simulator.contentWindow, undefined)
+  assert.deepEqual(
+    Object.fromEntries(
+      ['mousedown', 'mouseover', 'mouseleave', 'mousemove'].map(type => [type, document.listenerCount(type)]),
+    ),
+    { mousedown: 0, mouseleave: 1, mousemove: 0, mouseover: 0 },
+  )
+
+  failMousemoveAcquisition = false
+  failMouseleaveRollback = false
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(document.listenerCount(), 0)
+  assert.equal(frameWindow.listenerCount(), 0)
+  assert.equal(document.addCount, document.removeCount)
+  assert.equal(frameWindow.addCount, frameWindow.removeCount)
 })

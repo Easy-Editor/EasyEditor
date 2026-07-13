@@ -1,3 +1,6 @@
+import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { sealLifecycleMutations } from '../lifecycle/mutation-barrier'
+import { installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import { isElementNode } from '../utils'
 
 export interface Scrollable {
@@ -52,13 +55,20 @@ const SCROLL_ACCURACY = 30
 
 export class Scroller {
   private pid: number | undefined
+
+  private animationEpoch = 0
+
+  private lifecycleState: 'active' | 'disposing' | 'disposed' = 'active'
+
   scrollable: Scrollable
 
   constructor(scrollable: Scrollable) {
     this.scrollable = scrollable
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
   }
 
   get scrollTarget(): ScrollTarget | null {
+    this.#assertActive('scroller.scrollTarget')
     let target = this.scrollable.scrollTarget
     if (!target) {
       return null
@@ -71,6 +81,7 @@ export class Scroller {
   }
 
   scrollTo(options: { left?: number; top?: number }) {
+    this.#assertActive('scroller.scrollTo')
     this.cancel()
 
     const { scrollTarget } = this
@@ -92,9 +103,10 @@ export class Scroller {
 
     const duration = 200
     const start = +new Date()
+    const animationEpoch = this.animationEpoch
 
     const animate = () => {
-      if (pid !== this.pid) {
+      if (this.lifecycleState !== 'active' || animationEpoch !== this.animationEpoch || pid !== this.pid) {
         return
       }
 
@@ -124,6 +136,7 @@ export class Scroller {
   }
 
   scrolling(point: { globalX: number; globalY: number }) {
+    this.#assertActive('scroller.scrolling')
     this.cancel()
 
     const { bounds, scale = 1 } = this.scrollable
@@ -141,6 +154,7 @@ export class Scroller {
     let sy = scrollTarget.top
     let ax = 0
     let ay = 0
+    const animationEpoch = this.animationEpoch
     if (y < bounds.top + SCROLL_ACCURACY) {
       ay = -Math.min(Math.max(bounds.top + SCROLL_ACCURACY - y, 10), 50) / scale
     } else if (y > bounds.bottom - SCROLL_ACCURACY) {
@@ -157,6 +171,9 @@ export class Scroller {
     }
 
     const animate = () => {
+      if (this.lifecycleState !== 'active' || animationEpoch !== this.animationEpoch) {
+        return
+      }
       let scroll = false
       if ((ay > 0 && sy < maxScrollHeight) || (ay < 0 && sy > 0)) {
         sy += ay
@@ -180,9 +197,30 @@ export class Scroller {
   }
 
   cancel() {
-    if (this.pid) {
-      cancelAnimationFrame(this.pid)
+    this.#assertActive('scroller.cancel')
+    this.#cancelInternal()
+  }
+
+  #assertActive(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+    if (this.lifecycleState !== 'active') {
+      throw new Error(`Cannot ${origin}; scroller generation is ${this.lifecycleState}`)
     }
-    this.pid = undefined
+  }
+
+  #cancelInternal(): void {
+    this.animationEpoch += 1
+    const pid = this.pid
+    if (pid === undefined) return
+    cancelAnimationFrame(pid)
+    if (this.pid === pid) this.pid = undefined
+  }
+
+  #disposeInternal(): void {
+    if (this.lifecycleState === 'disposed') return
+    this.lifecycleState = 'disposing'
+    this.#cancelInternal()
+    this.lifecycleState = 'disposed'
+    sealLifecycleMutations(this, 'scroller generation is disposed')
   }
 }

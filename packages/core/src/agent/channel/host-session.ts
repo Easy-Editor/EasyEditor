@@ -11,7 +11,7 @@ import type {
   AgentPortSessionDescriptor,
   AgentPortSessionOptions,
 } from '../types'
-import { listenToAgentMessagePort } from './message-port'
+import { createAgentMessagePortListenerLease } from './message-port'
 import {
   AGENT_PORT_PROTOCOL,
   type AgentPortEventMessage,
@@ -54,9 +54,25 @@ export class AgentPortHostSession implements AgentPortSession {
 
   private terminalPlanId?: string
 
-  private unsubscribeEvents: () => void = () => {}
+  private unsubscribeEvents?: () => void
 
-  private removePortListeners: () => void = () => {}
+  private removePortListeners?: () => void
+
+  private abortListenerRegistered = false
+
+  private capabilityClosed = false
+
+  private portClosed = false
+
+  private terminationReason?: string
+
+  private notifyOnTermination = false
+
+  private closeNotificationAttempted = false
+
+  private terminationInProgress = false
+
+  private initializationFailure?: unknown
 
   private readonly handleAbort = () => this.terminate('agent.transport.aborted')
 
@@ -70,21 +86,34 @@ export class AgentPortHostSession implements AgentPortSession {
     }) as AgentPortSessionDescriptor
 
     const { port, options } = dependencies
-    const removePortListeners = listenToAgentMessagePort(
+    const portListenerLease = createAgentMessagePortListenerLease(
       port,
       value => this.receive(value),
       () => this.terminate('agent.transport.messageerror'),
       () => this.terminate('agent.transport.peerClosed', false),
     )
-    if (this.currentState === 'closed') {
-      removePortListeners()
+    // Retain the lease before acquiring any registration. If a listener API
+    // partially succeeds and rollback fails, engine teardown can retry it.
+    this.removePortListeners = portListenerLease.dispose
+    try {
+      portListenerLease.listen()
+    } catch (error) {
+      this.failInitialization(error, 'agent.transport.listenerFailed')
       return
     }
-    this.removePortListeners = removePortListeners
-    options.signal.addEventListener('abort', this.handleAbort, { once: true })
-    this.unsubscribeEvents = dependencies.subscribeEvents(event => {
-      if (event.capabilityId === this.descriptor.capability.capabilityId) this.enqueueEvent(event)
-    })
+    if (this.currentState === 'closed') return
+    try {
+      // Mark the listener provisionally before acquisition so a signal
+      // implementation that registers and then throws is still cleaned up.
+      this.abortListenerRegistered = true
+      options.signal.addEventListener('abort', this.handleAbort, { once: true })
+      this.unsubscribeEvents = dependencies.subscribeEvents(event => {
+        if (event.capabilityId === this.descriptor.capability.capabilityId) this.enqueueEvent(event)
+      })
+    } catch (error) {
+      this.failInitialization(error, 'agent.transport.listenerFailed')
+      return
+    }
     if (options.signal.aborted) {
       this.terminate('agent.transport.aborted', false)
       return
@@ -103,6 +132,10 @@ export class AgentPortHostSession implements AgentPortSession {
 
   get state(): AgentPortSession['state'] {
     return this.currentState
+  }
+
+  get initializationError(): unknown {
+    return this.initializationFailure
   }
 
   approveAndExecute(planId: string) {
@@ -157,36 +190,95 @@ export class AgentPortHostSession implements AgentPortSession {
   }
 
   terminate(reason: string, notify = true): void {
-    if (this.currentState === 'closed' || this.currentState === 'closing') return
-    this.currentState = 'closing'
-    const { capability, onClose, options, port } = this.dependencies
-    this.unsubscribeEvents()
-    this.unsubscribeEvents = () => {}
-    options.signal.removeEventListener('abort', this.handleAbort)
-    this.removePortListeners()
-    this.removePortListeners = () => {}
-    this.queuedEvents.length = 0
-    this.queuedEventBytes = 0
-    this.unacknowledgedEvents.clear()
-    this.preparedPlanPreview = undefined
-    this.terminalPlanId = undefined
+    if (this.currentState === 'closed' || this.terminationInProgress) return
+    this.terminationInProgress = true
     try {
-      capability.close()
-    } catch {
-      // Closing the transport remains best-effort and fail-closed.
-    }
-    if (notify) {
-      try {
-        port.postMessage({ kind: 'closed', reason, sessionId: this.sessionId, version: AGENT_PORT_PROTOCOL })
-      } catch {
-        // The peer may already be gone.
+      if (this.currentState === 'open') {
+        this.currentState = 'closing'
+        this.terminationReason = reason
+        this.notifyOnTermination = notify
       }
-    }
-    try {
-      port.close()
-    } finally {
+      const { capability, onClose, options, port } = this.dependencies
+      const failures: unknown[] = []
+      const cleanup = (operation: () => void, completed: () => void) => {
+        try {
+          operation()
+          completed()
+        } catch (error) {
+          failures.push(error)
+        }
+      }
+
+      if (this.unsubscribeEvents) {
+        cleanup(this.unsubscribeEvents, () => {
+          this.unsubscribeEvents = undefined
+        })
+      }
+      if (this.abortListenerRegistered) {
+        cleanup(
+          () => options.signal.removeEventListener('abort', this.handleAbort),
+          () => {
+            this.abortListenerRegistered = false
+          },
+        )
+      }
+      if (this.removePortListeners) {
+        cleanup(this.removePortListeners, () => {
+          this.removePortListeners = undefined
+        })
+      }
+      this.queuedEvents.length = 0
+      this.queuedEventBytes = 0
+      this.unacknowledgedEvents.clear()
+      this.preparedPlanPreview = undefined
+      this.terminalPlanId = undefined
+      if (!this.capabilityClosed) {
+        cleanup(
+          () => capability.close(),
+          () => {
+            this.capabilityClosed = true
+          },
+        )
+      }
+      if (this.notifyOnTermination && !this.closeNotificationAttempted) {
+        this.closeNotificationAttempted = true
+        try {
+          port.postMessage({
+            kind: 'closed',
+            reason: this.terminationReason ?? reason,
+            sessionId: this.sessionId,
+            version: AGENT_PORT_PROTOCOL,
+          })
+        } catch {
+          // The peer may already be gone.
+        }
+      }
+      if (!this.portClosed) {
+        cleanup(
+          () => port.close(),
+          () => {
+            this.portClosed = true
+          },
+        )
+      }
+      if (failures.length) throw new AggregateError(failures, 'Agent MessagePort session termination failed')
       this.currentState = 'closed'
       onClose(this)
+    } finally {
+      this.terminationInProgress = false
+    }
+  }
+
+  private failInitialization(error: unknown, reason: string): void {
+    try {
+      this.terminate(reason, false)
+      this.initializationFailure = error
+    } catch (cleanupError) {
+      const cleanupFailures = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError]
+      this.initializationFailure = new AggregateError(
+        [error, ...cleanupFailures],
+        'Agent MessagePort session initialization rollback failed',
+      )
     }
   }
 

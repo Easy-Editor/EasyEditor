@@ -1,7 +1,7 @@
 import EventEmitter from 'events'
 import { runInAction } from 'mobx'
 import { AgentCapabilityManager } from '../agent'
-import { CommandManager, TransactionManager } from '../commands'
+import { CommandManager, TransactionCommittedError, TransactionManager } from '../commands'
 import { Config, type ConfigOptions } from '../config'
 import { Clipboard } from '../designer/clipboard'
 import { Designer } from '../designer/designer'
@@ -70,6 +70,14 @@ export interface EngineInstanceOptions {
   trustPolicy?: TrustPolicyPreset | TrustPolicy
   /** Internal compatibility injection used by the legacy default facade. */
   services?: Partial<EngineServices>
+}
+
+const appendFlattenedErrors = (target: unknown[], error: unknown): void => {
+  if (error instanceof AggregateError) {
+    for (const cause of error.errors) appendFlattenedErrors(target, cause)
+    return
+  }
+  target.push(error)
 }
 
 export class EngineInstance {
@@ -293,6 +301,15 @@ export class EngineInstance {
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
       }
+      // A multi-listener mount can fail before its returned disposer reaches
+      // initScope. The Hotkey owns provisional registrations itself, so always
+      // include its root cleanup in initialization rollback. Any incomplete
+      // cleanup leaves the engine failed and forces destroy() before retry.
+      try {
+        runInternalLifecycleTeardown(this.hotkey)
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
       this.initScope = undefined
       this.#transitionLifecycle(rollbackErrors.length ? 'failed' : 'created')
       if (rollbackErrors.length) {
@@ -471,17 +488,33 @@ export class EngineInstance {
       throw new Error(`Cannot mutate the project while engine is ${this.lifecycleState}`)
     }
     const eventScope = this.eventTransactions.begin()
-    let result: T
+    const postCommitErrors: unknown[] = []
+    let operationCompleted = false
+    let result!: T
     try {
       // Keep host writes inside one outer MobX batch, but release the ambient
       // authority before that batch flushes reactions. Synchronous observers
       // therefore cannot inherit host mutation authority.
-      result = runInAction(() => withProjectMutationAuthority(this.project, operation))
+      runInAction(() => {
+        result = withProjectMutationAuthority(this.project, operation)
+        operationCompleted = true
+      })
     } catch (error) {
-      this.eventTransactions.rollback(eventScope)
-      throw error
+      if (!operationCompleted) {
+        this.eventTransactions.rollback(eventScope)
+        throw error
+      }
+      // The host operation returned before MobX flushed reactions, so the
+      // model mutation is already committed and must never be reported as a
+      // retry-safe failure.
+      appendFlattenedErrors(postCommitErrors, error)
     }
-    this.eventTransactions.commit(eventScope)
+    try {
+      this.eventTransactions.commit(eventScope)
+    } catch (error) {
+      appendFlattenedErrors(postCommitErrors, error)
+    }
+    if (postCommitErrors.length) throw new TransactionCommittedError(postCommitErrors, result)
     return result
   }
 

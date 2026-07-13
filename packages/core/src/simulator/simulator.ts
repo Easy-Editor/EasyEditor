@@ -312,7 +312,7 @@ export class Simulator {
       errors.push(error)
     }
     try {
-      this.scroller.cancel()
+      runInternalLifecycleTeardown(this.scroller)
     } catch (error) {
       errors.push(error)
     }
@@ -370,6 +370,49 @@ export class Simulator {
     }
   }
 
+  private trackFrame<T extends Disposable>(disposer: T): T {
+    let state: 'active' | 'disposing' | 'disposed' = 'active'
+    const tracked = () => {
+      if (state !== 'active') return
+      state = 'disposing'
+      try {
+        disposer()
+      } catch (error) {
+        state = 'active'
+        throw error
+      }
+      state = 'disposed'
+      this.frameDisposers.delete(tracked)
+    }
+    this.frameDisposers.add(tracked)
+    return tracked as T
+  }
+
+  private rollbackFrameAcquisition(checkpoint: ReadonlySet<Disposable>): unknown[] {
+    const errors: unknown[] = []
+    const acquired = [...this.frameDisposers].filter(dispose => !checkpoint.has(dispose))
+    for (const dispose of acquired.reverse()) {
+      try {
+        dispose()
+        this.frameDisposers.delete(dispose)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    return errors
+  }
+
+  private failFrameAcquisition(checkpoint: ReadonlySet<Disposable>, acquisitionError: unknown): never {
+    const rollbackErrors = this.rollbackFrameAcquisition(checkpoint)
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [acquisitionError, ...rollbackErrors],
+        'Simulator frame setup failed and rollback was incomplete',
+      )
+    }
+    throw acquisitionError
+  }
+
   private trackLifetime<T extends Disposable>(disposer: T): T {
     let state: 'active' | 'disposing' | 'disposed' = 'active'
     const tracked = () => {
@@ -403,31 +446,45 @@ export class Simulator {
       return
     }
     this.disposeFrame()
-    this.iframe = iframe
-
+    let contentWindow: Window
+    let contentDocument: Document
     if (typeof HTMLIFrameElement !== 'undefined' && iframe instanceof HTMLIFrameElement) {
-      this._contentWindow = iframe.contentWindow!
-      this._contentDocument = this._contentWindow.document
+      contentWindow = iframe.contentWindow!
+      contentDocument = contentWindow.document
     } else {
-      this._contentDocument = iframe.ownerDocument
-      this._contentWindow = iframe.ownerDocument.defaultView!
+      contentDocument = iframe.ownerDocument
+      contentWindow = contentDocument.defaultView!
     }
 
-    // ready & render
-    this._renderer?.run()
+    const checkpoint = new Set(this.frameDisposers)
+    try {
+      // Register ownership immediately after each successful acquisition. The
+      // event helpers register their provisional disposers before their first
+      // listener is attached, so an exception cannot strand an unowned
+      // listener between two setup calls.
+      this.trackFrame(this.viewport.setScrollTarget(contentWindow))
+      this.setupFrameEvents(contentDocument)
 
-    // init events, overlays
-    this.frameDisposers.add(this.viewport.setScrollTarget(this._contentWindow))
-    for (const dispose of this.setupEvents()) {
-      this.frameDisposers.add(dispose)
-    }
+      // bind hotkey & clipboard
+      const hotkey = this.editor.get<Hotkey>('hotkey')
+      if (hotkey) {
+        this.trackFrame(hotkey.mount(contentWindow))
+      }
+      this.trackFrame(this.engineClipboard.injectCopyPaster(contentDocument))
 
-    // bind hotkey & clipboard
-    const hotkey = this.editor.get<Hotkey>('hotkey')
-    if (hotkey) {
-      this.frameDisposers.add(hotkey.mount(this._contentWindow))
+      // Publish the frame only after every frame-owned resource is acquired.
+      // Renderer startup requires the public frame reference, but its own run
+      // contract rolls back renderer resources before throwing.
+      this.iframe = iframe
+      this._contentDocument = contentDocument
+      this._contentWindow = contentWindow
+      this._renderer?.run()
+    } catch (error) {
+      this.iframe = undefined
+      this._contentDocument = undefined
+      this._contentWindow = undefined
+      this.failFrameAcquisition(checkpoint, error)
     }
-    this.frameDisposers.add(this.engineClipboard.injectCopyPaster(this._contentDocument!))
   }
 
   postEvent(eventName: string, ...data: any[]) {
@@ -449,14 +506,32 @@ export class Simulator {
 
   setupEvents(): Disposable[] {
     assertLifecycleMutationAllowed(this, 'simulator.setupEvents')
-    return [this.setupDragAndClick(), this.setupDetecting()]
+    const checkpoint = new Set(this.frameDisposers)
+    try {
+      return this.setupFrameEvents(this.contentDocument!)
+    } catch (error) {
+      this.failFrameAcquisition(checkpoint, error)
+    }
   }
 
   setupDragAndClick(): Disposable {
     assertLifecycleMutationAllowed(this, 'simulator.setupDragAndClick')
+    const checkpoint = new Set(this.frameDisposers)
+    try {
+      return this.setupFrameDragAndClick(this.contentDocument!)
+    } catch (error) {
+      this.failFrameAcquisition(checkpoint, error)
+    }
+  }
+
+  private setupFrameEvents(contentDocument: Document): Disposable[] {
+    return [this.setupFrameDragAndClick(contentDocument), this.setupFrameDetecting(contentDocument)]
+  }
+
+  private setupFrameDragAndClick(doc: Document): Disposable {
     const { designer } = this
-    const doc = this.contentDocument!
     const pendingMouseups = new Set<(event: MouseEvent) => void>()
+    let mousedownPending = true
 
     const onMouseDown = (downEvent: MouseEvent) => {
       const documentModel = this.project.currentDocument
@@ -546,23 +621,60 @@ export class Simulator {
         }
       }
 
-      doc.addEventListener('mouseup', checkSelect, true)
       pendingMouseups.add(checkSelect)
+      try {
+        doc.addEventListener('mouseup', checkSelect, true)
+      } catch (error) {
+        try {
+          doc.removeEventListener('mouseup', checkSelect, true)
+          pendingMouseups.delete(checkSelect)
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Simulator mouseup listener setup failed and rollback was incomplete',
+          )
+        }
+        throw error
+      }
     }
 
-    doc.addEventListener('mousedown', onMouseDown, true)
-    return () => {
-      doc.removeEventListener('mousedown', onMouseDown, true)
-      for (const checkSelect of pendingMouseups) {
-        doc.removeEventListener('mouseup', checkSelect, true)
+    const dispose = this.trackFrame(() => {
+      const errors: unknown[] = []
+      if (mousedownPending) {
+        try {
+          doc.removeEventListener('mousedown', onMouseDown, true)
+          mousedownPending = false
+        } catch (error) {
+          errors.push(error)
+        }
       }
-      pendingMouseups.clear()
-    }
+      for (const checkSelect of [...pendingMouseups]) {
+        try {
+          doc.removeEventListener('mouseup', checkSelect, true)
+          pendingMouseups.delete(checkSelect)
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Simulator drag and click listener disposal failed')
+      }
+    })
+    doc.addEventListener('mousedown', onMouseDown, true)
+    return dispose
   }
 
   setupDetecting(): Disposable {
     assertLifecycleMutationAllowed(this, 'simulator.setupDetecting')
-    const doc = this.contentDocument!
+    const checkpoint = new Set(this.frameDisposers)
+    try {
+      return this.setupFrameDetecting(this.contentDocument!)
+    } catch (error) {
+      this.failFrameAcquisition(checkpoint, error)
+    }
+  }
+
+  private setupFrameDetecting(doc: Document): Disposable {
     const { detecting, dragon } = this.designer
     const hover = (e: MouseEvent) => {
       if (!detecting.enable || this.designMode !== 'design') {
@@ -588,16 +700,37 @@ export class Simulator {
       }
     }
 
-    doc.addEventListener('mouseover', hover, true)
-    doc.addEventListener('mouseleave', leave, false)
-
-    // TODO: refactor this line, contains click, mousedown, mousemove
-    doc.addEventListener('mousemove', stopDraggingPropagation, true)
-    return () => {
-      doc.removeEventListener('mouseover', hover, true)
-      doc.removeEventListener('mouseleave', leave, false)
-      doc.removeEventListener('mousemove', stopDraggingPropagation, true)
+    const listeners = [
+      ['mouseover', hover, true],
+      ['mouseleave', leave, false],
+      // TODO: refactor this line, contains click, mousedown, mousemove
+      ['mousemove', stopDraggingPropagation, true],
+    ] as const
+    const pendingRemovals = new Set<(typeof listeners)[number]>()
+    const dispose = this.trackFrame(() => {
+      const errors: unknown[] = []
+      for (const listener of [...pendingRemovals].reverse()) {
+        const [type, callback, options] = listener
+        try {
+          doc.removeEventListener(type, callback, options)
+          pendingRemovals.delete(listener)
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Simulator detecting listener disposal failed')
+      }
+    })
+    for (const listener of listeners) {
+      const [type, callback, options] = listener
+      // Mark the removal as pending before acquisition. This remains safe when
+      // addEventListener throws before installing anything, and also covers a
+      // host implementation that installs a listener and then throws.
+      pendingRemovals.add(listener)
+      doc.addEventListener(type, callback, options)
     }
+    return dispose
   }
 
   @action

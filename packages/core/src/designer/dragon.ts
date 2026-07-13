@@ -254,7 +254,7 @@ export class Dragon {
       // ESC cancel drag
       if (!isBoostFromDragAPI) {
         handleEvents(doc => {
-          doc.addEventListener('keydown', checkEsc, false)
+          addEventListener(doc, 'keydown', checkEsc as EventListener, false)
         })
       }
 
@@ -288,33 +288,70 @@ export class Dragon {
       didDrop = true
     }
 
+    const listenerRegistrations = new Set<{
+      document: globalThis.Document
+      listener: EventListener
+      options: boolean
+      type: string
+    }>()
+    const addEventListener = (doc: globalThis.Document, type: string, listener: EventListener, options: boolean) => {
+      const registration = { document: doc, listener, options, type }
+      // Track provisional ownership before acquisition so even a throwing
+      // EventTarget implementation cannot create an unowned registration.
+      listenerRegistrations.add(registration)
+      doc.addEventListener(type, listener, options)
+    }
     const removeEventListeners = () => {
-      handleEvents(doc => {
-        if (isBoostFromDragAPI) {
-          doc.removeEventListener('dragover', move, true)
-          doc.removeEventListener('dragend', over, true)
-          doc.removeEventListener('drop', drop, true)
-        } else {
-          doc.removeEventListener('mousemove', move, true)
-          doc.removeEventListener('mouseup', over, true)
+      const failures: unknown[] = []
+      for (const registration of [...listenerRegistrations]) {
+        try {
+          registration.document.removeEventListener(registration.type, registration.listener, registration.options)
+          listenerRegistrations.delete(registration)
+        } catch (error) {
+          failures.push(error)
         }
-        doc.removeEventListener('mousedown', over, true)
-        doc.removeEventListener('keydown', checkEsc, false)
-      })
+      }
+      if (failures.length > 0) throw new AggregateError(failures, 'Dragon listener disposal failed')
     }
 
-    let sessionDisposed = false
+    let sessionState: 'active' | 'disposing' | 'disposed' = 'active'
+    const isSessionDisposed = () => sessionState === 'disposed'
     const disposeSession = (clearLocation = true) => {
-      if (sessionDisposed) return
-      sessionDisposed = true
-      lastSensor?.deactiveSensor()
-      lastSensor = undefined
-      runInAction(() => {
-        this._activeSensor = undefined
-        this._dragging = false
-      })
-      if (clearLocation) designer.clearLocation()
-      removeEventListeners()
+      if (sessionState !== 'active') return
+      sessionState = 'disposing'
+      const failures: unknown[] = []
+      try {
+        lastSensor?.deactiveSensor()
+        lastSensor = undefined
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
+        runInAction(() => {
+          this._activeSensor = undefined
+          this._dragging = false
+        })
+      } catch (error) {
+        failures.push(error)
+      }
+      if (clearLocation) {
+        try {
+          designer.clearLocation()
+        } catch (error) {
+          failures.push(error)
+        }
+      }
+      try {
+        removeEventListeners()
+      } catch (error) {
+        if (error instanceof AggregateError) failures.push(...error.errors)
+        else failures.push(error)
+      }
+      if (failures.length > 0) {
+        sessionState = 'active'
+        throw new AggregateError(failures, 'Dragon session disposal failed')
+      }
+      sessionState = 'disposed'
       if (this.disposeDragSession === disposeSession) {
         this.disposeDragSession = undefined
       }
@@ -322,7 +359,7 @@ export class Dragon {
 
     // drag end
     const over = (e?: any) => {
-      if (sessionDisposed) return
+      if (sessionState !== 'active') return
       if (e && isDragEvent(e)) {
         e.preventDefault()
       }
@@ -349,10 +386,13 @@ export class Dragon {
       }
       designer.clearLocation()
 
-      sessionDisposed = true
-      removeEventListeners()
-      if (this.disposeDragSession === disposeSession) {
-        this.disposeDragSession = undefined
+      try {
+        disposeSession(false)
+      } catch (cleanupError) {
+        if (exception) {
+          throw new AggregateError([exception, cleanupError], 'Dragon drag-end observers and cleanup failed')
+        }
+        throw cleanupError
       }
 
       if (exception) {
@@ -456,21 +496,30 @@ export class Dragon {
       dragstart()
     }
 
-    if (sessionDisposed) return
+    try {
+      if (isSessionDisposed()) return
 
-    handleEvents(doc => {
-      if (isBoostFromDragAPI) {
-        doc.addEventListener('dragover', move, true)
-        // dragexit
-        didDrop = false
-        doc.addEventListener('drop', drop, true)
-        doc.addEventListener('dragend', over, true)
-      } else {
-        doc.addEventListener('mousemove', move, true)
-        doc.addEventListener('mouseup', over, true)
+      handleEvents(doc => {
+        if (isBoostFromDragAPI) {
+          addEventListener(doc, 'dragover', move as EventListener, true)
+          // dragexit
+          didDrop = false
+          addEventListener(doc, 'drop', drop as EventListener, true)
+          addEventListener(doc, 'dragend', over as EventListener, true)
+        } else {
+          addEventListener(doc, 'mousemove', move as EventListener, true)
+          addEventListener(doc, 'mouseup', over as EventListener, true)
+        }
+        addEventListener(doc, 'mousedown', over as EventListener, true)
+      })
+    } catch (error) {
+      try {
+        disposeSession(false)
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], 'Dragon listener acquisition rollback failed')
       }
-      doc.addEventListener('mousedown', over, true)
-    })
+      throw error
+    }
   }
 
   /**

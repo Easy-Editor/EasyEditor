@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createProjectSchema } from './fixtures/project-schema.mjs'
-import { loadCore } from './helpers/kernel.mjs'
+import { captureFailure, loadCore } from './helpers/kernel.mjs'
 
 const listenerCount = (eventBus, event) => eventBus.listenerCount(event)
 
@@ -197,4 +197,102 @@ test('editor destroy removes EventBus and EventEmitter listeners and remains reu
 
   assert.equal(restartedInitCalls, 1)
   assert.equal(restartedBusCalls, 1)
+})
+
+test('Dragon listener cleanup remains retryable across engine destroy attempts', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  let failMousemoveRemoval = true
+  t.after(async () => {
+    failMousemoveRemoval = false
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+  await engine.init()
+
+  const { document } = globalThis
+  const baseline = document.listenerCount()
+  const removalAttempts = { mousedown: 0, mousemove: 0, mouseup: 0 }
+  const removeEventListener = document.removeEventListener.bind(document)
+  document.removeEventListener = (type, listener, options) => {
+    if (type in removalAttempts) removalAttempts[type] += 1
+    if (type === 'mousemove' && failMousemoveRemoval) throw new Error('mousemove listener removal failed')
+    return removeEventListener(type, listener, options)
+  }
+
+  engine.designer.dragon.boost(
+    { type: core.DragObjectType.NodeData, data: { componentName: 'Box' } },
+    {
+      type: 'mousedown',
+      button: 0,
+      which: 1,
+      clientX: 1,
+      clientY: 1,
+      target: document.body,
+      view: globalThis.window,
+    },
+  )
+  assert.equal(document.listenerCount(), baseline + 3)
+
+  await assert.rejects(engine.destroy(), /Engine disposal completed with errors/)
+  assert.equal(engine.lifecycleState, 'failed')
+  assert.equal(document.listenerCount('mousemove'), 1)
+  assert.equal(document.listenerCount('mouseup'), 0)
+  assert.equal(document.listenerCount('mousedown'), 0)
+  assert.deepEqual(removalAttempts, { mousedown: 1, mousemove: 1, mouseup: 1 })
+
+  failMousemoveRemoval = false
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(document.listenerCount(), baseline)
+  assert.deepEqual(removalAttempts, { mousedown: 1, mousemove: 2, mouseup: 1 })
+})
+
+test('Dragon boost rolls back every provisionally acquired listener', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+
+  const { document } = globalThis
+  const baseline = document.listenerCount()
+  const addEventListener = document.addEventListener.bind(document)
+  let failMouseupAcquisition = true
+  document.addEventListener = (type, listener, options) => {
+    if (type === 'mouseup' && failMouseupAcquisition) throw new Error('mouseup listener acquisition failed')
+    return addEventListener(type, listener, options)
+  }
+
+  const error = await captureFailure(() =>
+    engine.designer.dragon.boost(
+      { type: core.DragObjectType.NodeData, data: { componentName: 'Box' } },
+      {
+        type: 'mousedown',
+        button: 0,
+        which: 1,
+        clientX: 1,
+        clientY: 1,
+        target: document.body,
+        view: globalThis.window,
+      },
+    ),
+  )
+  assert.match(error.message, /mouseup listener acquisition failed/)
+  assert.equal(document.listenerCount(), baseline)
+
+  failMouseupAcquisition = false
+  engine.designer.dragon.boost(
+    { type: core.DragObjectType.NodeData, data: { componentName: 'Box' } },
+    {
+      type: 'mousedown',
+      button: 0,
+      which: 1,
+      clientX: 1,
+      clientY: 1,
+      target: document.body,
+      view: globalThis.window,
+    },
+  )
+  assert.equal(document.listenerCount(), baseline + 3)
+  await engine.destroy()
+  assert.equal(document.listenerCount(), baseline)
 })

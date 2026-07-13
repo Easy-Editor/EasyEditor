@@ -392,6 +392,76 @@ test('engine destroy owns simulator reactions and renderer disposal', async () =
   assert.equal(rendererDisposals, 1)
 })
 
+test('engine destroy owns Scroller animation frames and seals the disposed generation', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  const originalNode = globalThis.Node
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame
+  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame
+  let nextFrame = 0
+  let failCancellation = true
+  const pendingFrames = new Set()
+  const cancellationAttempts = []
+
+  globalThis.Node = { ELEMENT_NODE: 1 }
+  globalThis.requestAnimationFrame = () => {
+    const handle = nextFrame
+    nextFrame += 1
+    pendingFrames.add(handle)
+    return handle
+  }
+  globalThis.cancelAnimationFrame = handle => {
+    cancellationAttempts.push(handle)
+    if (failCancellation) {
+      failCancellation = false
+      throw new Error('transient frame cancellation failure')
+    }
+    pendingFrames.delete(handle)
+  }
+  t.after(async () => {
+    await engine.destroy().catch(() => undefined)
+    if (originalNode === undefined) globalThis.Node = undefined
+    else globalThis.Node = originalNode
+    if (originalRequestAnimationFrame === undefined) globalThis.requestAnimationFrame = undefined
+    else globalThis.requestAnimationFrame = originalRequestAnimationFrame
+    if (originalCancelAnimationFrame === undefined) globalThis.cancelAnimationFrame = undefined
+    else globalThis.cancelAnimationFrame = originalCancelAnimationFrame
+  })
+
+  await engine.init()
+  const scrollTarget = {
+    left: 0,
+    nodeType: 0,
+    scrollHeight: 1000,
+    scrollTo() {},
+    scrollWidth: 1000,
+    top: 0,
+  }
+  const oldScroller = engine.designer.createScroller({ scrollTarget })
+  oldScroller.scrollTo({ top: 100 })
+  assert.deepEqual([...pendingFrames], [0], 'RAF handle 0 must still be treated as an owned resource')
+
+  const firstFailure = await captureFailure(() => engine.destroy())
+  assert.equal(firstFailure.name, 'AggregateError')
+  assert.equal(engine.lifecycleState, 'failed')
+  assert.deepEqual(cancellationAttempts, [0])
+  assert.deepEqual([...pendingFrames], [0])
+  assert.throws(() => oldScroller.scrollTo({ top: 200 }), /engine is failed/)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.deepEqual(cancellationAttempts, [0, 0])
+  assert.equal(pendingFrames.size, 0)
+  assert.throws(() => oldScroller.cancel(), /scroller generation is disposed/)
+
+  await engine.init()
+  const nextScroller = engine.designer.createScroller({ scrollTarget })
+  nextScroller.scrollTo({ top: 100 })
+  assert.deepEqual([...pendingFrames], [1])
+  nextScroller.cancel()
+  assert.equal(pendingFrames.size, 0)
+})
+
 test('engine destroy retries only failed Simulator lifetime cleanup', async () => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })

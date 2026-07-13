@@ -151,6 +151,51 @@ test('Hotkey retains partially acquired listeners when mount rollback fails', as
   assert.equal(document.addCount, document.removeCount)
 })
 
+test('engine init cannot report ready with an incomplete Hotkey mount', async t => {
+  const core = await loadCore()
+  const hostWindow = createFakeWindow()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow })
+  let failKeydownAcquisition = true
+  let failKeypressRollback = true
+  t.after(async () => {
+    failKeydownAcquisition = false
+    failKeypressRollback = false
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+
+  const { document } = hostWindow
+  const addEventListener = document.addEventListener.bind(document)
+  const removeEventListener = document.removeEventListener.bind(document)
+  document.addEventListener = (type, listener, options) => {
+    if (type === 'keydown' && failKeydownAcquisition) throw new Error('init keydown acquisition failed')
+    return addEventListener(type, listener, options)
+  }
+  document.removeEventListener = (type, listener, options) => {
+    if (type === 'keypress' && failKeypressRollback) throw new Error('init keypress rollback failed')
+    return removeEventListener(type, listener, options)
+  }
+
+  await assert.rejects(engine.init(), /Engine initialization and rollback both failed/)
+  assert.equal(engine.lifecycleState, 'failed')
+  assert.deepEqual(
+    Object.fromEntries(['keypress', 'keydown', 'keyup'].map(type => [type, document.listenerCount(type)])),
+    { keydown: 0, keypress: 1, keyup: 0 },
+  )
+
+  failKeydownAcquisition = false
+  failKeypressRollback = false
+  await engine.init()
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.deepEqual(
+    Object.fromEntries(['keypress', 'keydown', 'keyup'].map(type => [type, document.listenerCount(type)])),
+    { keydown: 1, keypress: 1, keyup: 1 },
+  )
+
+  await engine.destroy()
+  assert.equal(document.listenerCount(), 0)
+  assert.equal(document.addCount, document.removeCount)
+})
+
 test('Clipboard reuses one injection and centrally releases paste and readiness listeners', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ hostWindow: null })
@@ -207,6 +252,52 @@ test('Clipboard centrally owns direct copy-paster registrations across restart',
   await engine.destroy()
   assert.equal(secondCopyPaster.listenerCount('paste'), 0)
   assert.equal(secondCopyPaster.addCount, secondCopyPaster.removeCount)
+})
+
+test('Clipboard retains an appended copy-paster when acquisition rollback fails', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null })
+  let failPasteAcquisition = true
+  let failDomRollback = true
+  t.after(async () => {
+    failPasteAcquisition = false
+    failDomRollback = false
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+  await engine.init()
+
+  const hostWindow = createFakeWindow()
+  const { document } = hostWindow
+  const createElement = document.createElement.bind(document)
+  let copyPaster
+  document.createElement = (...args) => {
+    copyPaster = createElement(...args)
+    const addEventListener = copyPaster.addEventListener.bind(copyPaster)
+    const remove = copyPaster.remove.bind(copyPaster)
+    copyPaster.addEventListener = (type, listener, options) => {
+      if (type === 'paste' && failPasteAcquisition) throw new Error('paste listener acquisition failed')
+      return addEventListener(type, listener, options)
+    }
+    copyPaster.remove = () => {
+      if (failDomRollback) throw new Error('copy-paster DOM rollback failed')
+      return remove()
+    }
+    return copyPaster
+  }
+
+  const error = await captureFailure(() => engine.clipboard.injectCopyPaster(document))
+  assert.equal(error.name, 'AggregateError')
+  assert.ok(error.errors.some(cause => /paste listener acquisition failed/.test(cause?.message)))
+  assert.ok(error.errors.some(cause => /copy-paster DOM rollback failed/.test(cause?.message)))
+  assert.equal(document.body.children.length, 1)
+  assert.equal(copyPaster.listenerCount('paste'), 0)
+
+  failPasteAcquisition = false
+  failDomRollback = false
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(document.body.children.length, 0)
+  assert.equal(copyPaster.listenerCount(), 0)
 })
 
 test('Clipboard disposal retains failed listener cleanup for a later destroy retry', async t => {

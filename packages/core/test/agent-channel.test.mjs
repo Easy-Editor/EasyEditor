@@ -32,6 +32,83 @@ const waitUntil = async (predicate, message) => {
   throw new Error(message)
 }
 
+const createTrackedAbortSignal = (removalFailures = 0) => {
+  const listeners = new Set()
+  let pendingRemovalFailures = removalFailures
+  let removalAttempts = 0
+  return {
+    aborted: false,
+    addEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      listeners.add(listener)
+    },
+    listenerCount: () => listeners.size,
+    removeEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      removalAttempts += 1
+      if (pendingRemovalFailures > 0) {
+        pendingRemovalFailures -= 1
+        throw new Error('abort listener removal failed')
+      }
+      listeners.delete(listener)
+    },
+    removalAttempts: () => removalAttempts,
+  }
+}
+
+const createRetryableHostPort = (removalFailures = {}, acquisitionFailures = {}, closeFailures = 0) => {
+  const listeners = new Map()
+  const removalAttempts = new Map()
+  let closeCount = 0
+  let closed = false
+  let pendingCloseFailures = closeFailures
+  const pendingFailures = new Map(Object.entries(removalFailures))
+  const pendingAcquisitionFailures = new Map(Object.entries(acquisitionFailures))
+  return {
+    addEventListener(type, listener) {
+      const bucket = listeners.get(type) ?? new Set()
+      bucket.add(listener)
+      listeners.set(type, bucket)
+      const failures = pendingAcquisitionFailures.get(type) ?? 0
+      if (failures > 0) {
+        pendingAcquisitionFailures.set(type, failures - 1)
+        throw new Error(`${type} listener acquisition failed`)
+      }
+    },
+    close() {
+      closeCount += 1
+      if (pendingCloseFailures > 0) {
+        pendingCloseFailures -= 1
+        throw new Error('port close failed')
+      }
+      closed = true
+    },
+    get closeCount() {
+      return closeCount
+    },
+    get closed() {
+      return closed
+    },
+    listenerCount(type) {
+      return listeners.get(type)?.size ?? 0
+    },
+    postMessage() {},
+    removalAttempts(type) {
+      return removalAttempts.get(type) ?? 0
+    },
+    removeEventListener(type, listener) {
+      removalAttempts.set(type, (removalAttempts.get(type) ?? 0) + 1)
+      const failures = pendingFailures.get(type) ?? 0
+      if (failures > 0) {
+        pendingFailures.set(type, failures - 1)
+        throw new Error(`${type} listener removal failed`)
+      }
+      listeners.get(type)?.delete(listener)
+    },
+    start() {},
+  }
+}
+
 const createFakeDescriptor = () => ({
   protocol: 1,
   transport: 'message-port',
@@ -405,6 +482,76 @@ test('engine disposal closes MessagePort sessions and rejects later client opera
   assert.equal(session.state, 'closed')
   const error = await captureFailure(() => capability.snapshot(document.id))
   assert.equal(error.code, 'agent.transport.closed')
+})
+
+test('MessagePort session teardown retains failed listener cleanup for the next engine destroy', async t => {
+  const { document, engine } = await createReadyEngine(t)
+  const port = createRetryableHostPort({ message: 2 }, {}, 2)
+  const signal = createTrackedAbortSignal(2)
+  const session = engine.agentCapabilities.issuePort(grantFor(document), port, { signal })
+  t.after(async () => {
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+
+  assert.deepEqual(
+    Object.fromEntries(['message', 'messageerror', 'close'].map(type => [type, port.listenerCount(type)])),
+    { close: 1, message: 1, messageerror: 1 },
+  )
+  assert.equal(signal.listenerCount(), 1)
+
+  await assert.rejects(engine.destroy(), /Engine disposal completed with errors/)
+  assert.equal(engine.lifecycleState, 'failed')
+  assert.equal(session.state, 'closing')
+  assert.deepEqual(
+    Object.fromEntries(['message', 'messageerror', 'close'].map(type => [type, port.listenerCount(type)])),
+    { close: 0, message: 1, messageerror: 0 },
+  )
+  assert.equal(signal.listenerCount(), 1)
+  assert.equal(signal.removalAttempts(), 2)
+  assert.equal(port.closeCount, 2, 'port.close must be retried by both manager sweeps')
+  assert.equal(port.closed, false)
+  assert.equal(port.removalAttempts('message'), 2, 'both manager sweeps must retain and retry the failed listener')
+  assert.equal(port.removalAttempts('messageerror'), 1)
+  assert.equal(port.removalAttempts('close'), 1)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(session.state, 'closed')
+  assert.equal(port.listenerCount('message'), 0)
+  assert.equal(signal.listenerCount(), 0)
+  assert.equal(signal.removalAttempts(), 3)
+  assert.equal(port.removalAttempts('message'), 3)
+  assert.equal(port.removalAttempts('messageerror'), 1, 'successfully removed listeners must not be removed twice')
+  assert.equal(port.removalAttempts('close'), 1, 'successfully removed listeners must not be removed twice')
+  assert.equal(port.closeCount, 3)
+  assert.equal(port.closed, true)
+})
+
+test('partially acquired MessagePort listeners remain engine-owned when initialization rollback fails', async t => {
+  const { document, engine } = await createReadyEngine(t)
+  const port = createRetryableHostPort({ message: 2 }, { messageerror: 1 })
+  const signal = createTrackedAbortSignal()
+  t.after(async () => {
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+
+  assert.throws(
+    () => engine.agentCapabilities.issuePort(grantFor(document), port, { signal }),
+    /Agent MessagePort session initialization rollback failed/,
+  )
+  assert.equal(port.listenerCount('message'), 1, 'the incompletely rolled-back listener must remain tracked')
+  assert.equal(port.listenerCount('messageerror'), 0)
+  assert.equal(port.listenerCount('close'), 0)
+  assert.equal(signal.listenerCount(), 0)
+  assert.equal(port.closeCount, 1)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(port.listenerCount('message'), 0)
+  assert.equal(port.removalAttempts('message'), 3)
+  assert.equal(port.removalAttempts('messageerror'), 1)
+  assert.equal(port.removalAttempts('close'), 0, 'never-acquired registrations must not be removed')
+  assert.equal(port.closeCount, 1)
 })
 
 test('an abrupt peer close before ready rejects the client handshake instead of hanging', async () => {
