@@ -4,6 +4,8 @@ EasyEditor 生态统一构建工具，用于 Materials 和 Setters 的打包构�
 
 ## 安装
 
+要求 Node.js 20 或更高版本。
+
 ```bash
 pnpm add -D @easy-editor/easypack
 ```

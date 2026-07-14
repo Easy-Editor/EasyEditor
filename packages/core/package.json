@@ -7,6 +7,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./agent": "./src/agent.ts",
     "./agent-channel": "./src/agent-channel.ts",
     "./instance": "./src/instance.ts"
   },
@@ -27,6 +28,11 @@
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js",
         "require": "./dist/index.cjs"
+      },
+      "./agent": {
+        "types": "./dist/agent.d.ts",
+        "import": "./dist/agent.js",
+        "require": "./dist/agent.cjs"
       },
       "./agent-channel": {
         "types": "./dist/agent-channel.d.ts",
@@ -69,11 +75,12 @@
     "format": "biome format --write .",
     "lint": "biome check .",
     "build": "npm-run-all -nl build:*",
-    "build:clean": "rimraf dist/ engine/dist/",
-    "build:js": "rollup -c",
+    "build:clean": "rimraf dist/ engine/dist/ test/dist/",
+    "build:js": "rimraf dist/ && rollup -c",
+    "test:kernel-build": "rollup -c rollup.test.config.js",
     "types": "npm-run-all -nl types:*",
     "types:src": "tsc --project tsconfig.build.json",
-    "test": "pnpm build:js && node --test test/*.test.mjs",
+    "test": "pnpm build:js && pnpm test:kernel-build && node --test test/*.test.mjs",
     "test-types": "tsc --project tsconfig.test.json"
   },
   "peerDependencies": {

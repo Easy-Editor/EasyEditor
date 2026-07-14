@@ -36,8 +36,8 @@ test('the instance entry is isolated from the legacy facade and version banner',
     if ('defaultEngine' in instance) {
       throw new Error('the instance entry exposed the legacy default engine')
     }
-    if (typeof instance.EngineInstance !== 'function' || typeof instance.createEngine !== 'function') {
-      throw new Error('the instance entry is missing its construction API')
+    if ('EngineInstance' in instance || typeof instance.createEngine !== 'function') {
+      throw new Error('the instance entry must expose only the factory construction path')
     }
     for (const runtimeExport of [
       'CURRENT_PROJECT_SCHEMA_VERSION',
@@ -77,8 +77,8 @@ test('the instance entry is isolated from the legacy facade and version banner',
     if (editorConstructionSignals !== 0 || 'defaultEngine' in instance) {
       throw new Error('requiring @easy-editor/core/instance loaded the legacy default engine')
     }
-    if (typeof instance.EngineInstance !== 'function' || typeof instance.createEngine !== 'function') {
-      throw new Error('the CommonJS instance entry is missing its construction API')
+    if ('EngineInstance' in instance || typeof instance.createEngine !== 'function') {
+      throw new Error('the CommonJS instance entry must expose only the factory construction path')
     }
     for (const runtimeExport of [
       'CURRENT_PROJECT_SCHEMA_VERSION',

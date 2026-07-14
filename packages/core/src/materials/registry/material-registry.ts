@@ -5,6 +5,7 @@
 
 import { action, computed, observable, runInAction } from 'mobx'
 import type { Designer } from '../../designer'
+import { deferDesignerEvent } from '../../designer/event-bus'
 import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../../lifecycle/mutation-barrier'
 import {
   assertPublicLifecycleTeardownAllowed,
@@ -12,6 +13,7 @@ import {
   installLifecycleTeardownOperation,
   runInternalLifecycleTeardown,
 } from '../../lifecycle/teardown-boundary'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import type { Component, ComponentMetadata } from '../../types'
 import { ComponentMeta } from '../component-meta'
 import {
@@ -317,13 +319,13 @@ export class MaterialRegistry implements IMaterialRegistry {
     const deliver = () => {
       this.#listeners.forEach(listener => {
         try {
-          listener(fullEvent)
+          withoutProjectMutationAuthority(this.#designer.project, () => listener(fullEvent))
         } catch (error) {
           console.error('[MaterialRegistry] Event listener error:', error)
         }
       })
     }
-    if (!this.#designer.deferEvent(deliver)) deliver()
+    if (!deferDesignerEvent(this.#designer, deliver)) deliver()
   }
 
   #createEntry(

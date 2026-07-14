@@ -36,7 +36,7 @@ A basic Setter component needs to implement the `SetterProps` interface:
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 
 export interface CustomSetterProps extends SetterProps {
   // Custom properties
@@ -80,7 +80,7 @@ For composite properties containing multiple sub-properties, such as margins, po
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 
 interface MarginValue {
   top?: number;
@@ -175,7 +175,7 @@ Sometimes we need to integrate third-party libraries to provide more professiona
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 import { SketchPicker } from 'react-color'
 
 interface ColorSetterProps extends SetterProps<string> {
@@ -234,7 +234,7 @@ Setters can access the designer, document, and nodes to implement more complex f
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import type { JSFunction, SetterProps } from '@easy-editor/core'
+import type { JSFunction, SetterProps } from '@easy-editor/core/instance'
 import { Settings, Trash } from 'lucide-react'
 import { useState } from 'react'
 
@@ -401,23 +401,23 @@ export default EventSetter
 After creating the Setter component, you need to register it with EasyEditor:
 
 ```typescript
-import { createEditor } from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import CustomSetter from './path/to/CustomSetter'
 import MarginSetter from './path/to/MarginSetter'
 import ColorSetter from './path/to/ColorSetter'
 import EventSetter from './path/to/EventSetter'
 
-// Register when creating editor instance
-const editor = createEditor({
-  // ...other configurations
-  setters: {
-    // Register custom setters
-    CustomSetter,
-    MarginSetter,
-    ColorSetter,
-    EventSetter
-  }
+const engine = createEngine()
+
+// Register through the instance-owned setter registry before initialization
+engine.setters.registerSetter({
+  CustomSetter,
+  MarginSetter,
+  ColorSetter,
+  EventSetter
 })
+
+await engine.init({ designMode: 'design' })
 ```
 
 ## Using in Materials
@@ -425,7 +425,7 @@ const editor = createEditor({
 In the component's property configuration, you can specify the `setter` field to use custom Setters:
 
 ```typescript
-import type { Configure } from '@easy-editor/core'
+import type { Configure } from '@easy-editor/core/instance'
 
 const configure: Configure = {
   props: [
@@ -538,7 +538,7 @@ Setter components can access designer context through the `field` property, incl
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 
 const AdvancedSetter: React.FC<SetterProps> = (props) => {
   const { value, onChange, field } = props;

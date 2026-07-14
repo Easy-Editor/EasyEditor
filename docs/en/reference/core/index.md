@@ -1,6 +1,18 @@
 # Core API
 
-The stable EasyEditor v2 runtime boundary is a host-owned `EngineInstance`. One instance owns lifecycle, plugins, materials, setters, project replacement, command transactions, Agent capabilities, and remote resources.
+The stable EasyEditor v2 framework boundary is a host-owned `EngineInstance`. One instance owns lifecycle, plugins, materials, setters, project replacement, command transactions, and remote resources.
+
+## Public contract levels
+
+| Level | Entry or surface | Promise |
+| --- | --- | --- |
+| **Stable** | `@easy-editor/core/instance` | Factory-owned engine lifecycle, Schema validation, commands, transactions, and host registration APIs |
+| **Compatibility (Web adapter)** | Designer, Project, Document, Node, Event, and DOM-oriented Simulator types | Available for existing Web renderers and read integration; raw model mutation methods are not stable v2 write APIs |
+| **Deferred / Internal** | Agent experiments and concrete engine internals | Agent Runtime is outside this framework-convergence phase; concrete construction and mutable service injection are not public APIs |
+
+The root `@easy-editor/core` entry is a v1 migration facade, not part of the Stable instance contract.
+
+`@easy-editor/core/instance` has an explicit finite export list. Hosts obtain an `EngineInstance` only through `createEngine()`; the concrete engine class, mutable service injection, and lifecycle internals are not exported.
 
 ::: warning v2 write boundary
 `engine.project`, `engine.designer`, and the exported Document and Node types remain available for renderer integration and legacy compatibility. Raw model mutation methods are not the stable v2 application write boundary. New code should use `engine.loadProject()`, `engine.unloadProject()`, `engine.commands`, `engine.transactions`, `engine.undo()`, and `engine.redo()`.
@@ -47,7 +59,7 @@ export async function startEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`ConfigOptions.designMode` accepts only `'design' | 'live'`. A successful initialization leaves `lifecycleState` at `ready`. Concurrent `init()` calls join the same attempt. Calling `init()` on a ready instance first disposes the current generation and then initializes a new one.
+`ConfigOptions.designMode` accepts only `'design' | 'live'`. A successful initialization leaves `lifecycleState` at `ready`. External concurrent `init()` calls join the same attempt; if disposal is in progress, initialization waits for it to finish. Calling `init()` on a ready instance first disposes the current generation and then initializes a new one.
 
 ### `engine.destroy()`
 
@@ -61,7 +73,7 @@ export function destroyEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`destroy()` stops new writes and disposes Agent capabilities, plugins, listeners, the Designer, Project, hotkeys, materials, setters, the remote adapter/registry, and events. Concurrent calls join one disposal attempt. A cleanup failure sets the state to `failed`; call `destroy()` again to retry.
+`destroy()` stops new writes and disposes plugins, listeners, the Designer, Project, hotkeys, materials, setters, the remote adapter/registry, events, and internal resources. External concurrent calls join one disposal attempt. If initialization is in progress, disposal waits for it to settle before cleaning the established generation. A cleanup failure sets the state to `failed`; call `destroy()` again to retry.
 
 Do not retain a settled destroy Promise permanently, and do not dispose engine-owned child services such as materials, setters, or Project independently.
 
@@ -79,16 +91,21 @@ type EngineLifecycleState =
 
 This is a readonly state source. A host may reject requests while the engine is not ready, but cannot assign a lifecycle state.
 
+### Lifecycle callback rule
+
+Plugin `init`, `extend`, and `destroy` hooks and `RemoteAdapter.init()` / `dispose()` are engine-owned lifecycle callbacks. They **must not** call the same engine's `init()` or `destroy()`; direct synchronous re-entry throws `LifecycleReentrancyError`. A restricted PluginContext does not expose engine lifecycle methods.
+
+Without AsyncContext-like causal tracking or Realm/process isolation, same-realm JavaScript cannot reliably distinguish an external host call from one issued through a previously captured raw engine closure after a callback suspends. Plugins and adapters must therefore not issue lifecycle calls that way after an `await`. This is a host-extension protocol rule, not a sandbox guarantee.
+
 ## Instance modules
 
 | Module | Responsibility |
 | --- | --- |
-| `plugins` | Asynchronous plugin registration, ordering, initialization, and disposal |
+| `plugins` | Host-side async registration/deletion and frozen status reads; the engine owns ordering, initialization, and disposal |
 | `materials` | Component metadata registration and verifiable registry snapshots |
 | `setters` | Setter registration and a stable readonly Map facade |
 | `project` / `designer` | Renderer integration and legacy model reads, not the new stable raw-write boundary |
 | `commands` / `transactions` | Verifiable, rollback-safe, auditable model writes |
-| `agentCapabilities` | Least-privilege Agent capabilities, previews, execution, and audit records |
 | `remote` | Remote access gated by both trust policy and a host adapter |
 | `config` / `event` / `eventBus` / `hotkey` | Instance-owned configuration and interaction infrastructure |
 
@@ -129,6 +146,9 @@ export function registerMetadata(
 - `engine.materials.registry.getSnapshot()` returns detached, sorted, frozen deterministic data.
 - `engine.materials.registry.getAll()` returns readonly Entry views rather than the backing Map.
 - `engine.setters.getSettersMap()` returns a stable `ReadonlyMap` facade; `set`, `delete`, and `clear` are rejected.
+- `engine.plugins.get()` / `getAll()` return frozen status only; they do not expose `PluginRuntime`, Context, or lifecycle methods.
+- `engine.plugins.getExports(name)` returns a generation-bound readonly exports facade; retained callable exports are revoked after disposal.
+- Under the restricted policy, a plugin Context is built from finite root facades that omit engine lifecycle and known reverse-authority fields. Its `PluginRegistry` is readonly and cannot register or delete peers. This describes the Context surface, not isolation from arbitrary same-realm code.
 
 ## Validate and replace a project
 
@@ -212,35 +232,15 @@ These values support invariant checks and tests without granting registry mutati
 
 ### Policy
 
-`createEngine()` defaults to `agentRestricted`, which denies executable Schema, callback transactions, raw model writes, plugin prototype extensions, and remote access. `legacyTrusted` is compatibility for trusted hosts that depend on legacy plugins or UMD resources; it is not a sandbox.
+`createEngine()` defaults to `agentRestricted`. It is a capability, input-validation, and model-mutation policy: through the restricted framework surface it rejects executable Schema, callback transactions, direct raw-model writes, plugin prototype extensions, and remote access, and supplies finite plugin root facades. It is not a security sandbox for malicious plugins.
+
+Same-realm plugins and host-provided `RemoteAdapter` implementations are trusted extension code; they can still use their own captured closures, imports, and globals. `legacyTrusted` provides a broader compatibility surface for trusted hosts that depend on legacy plugins or UMD resources. Neither policy provides process, iframe, Realm, or SES isolation.
 
 The current `DashboardPlugin` extends prototypes in its shared realm, so a compatible Dashboard host must select `legacyTrusted` explicitly. Put a restricted engine in a different Worker, iframe, or Realm from such code.
 
-### Agent execution authority
+### Agent phase deferred
 
-A same-realm capability returned by `issue()` can execute. `issuePort()` defaults to `executionAuthority: 'peer'`, so the connected peer can also execute. Only explicit `'host'` authority retains execution in the host:
-
-```ts
-import type {
-  AgentCapabilityGrantInput,
-  AgentPortSession,
-  EngineInstance,
-} from '@easy-editor/core/instance'
-
-export function issueHostApprovedPort(
-  engine: EngineInstance,
-  port: MessagePort,
-  signal: AbortSignal,
-  grant: AgentCapabilityGrantInput,
-): AgentPortSession {
-  return engine.agentCapabilities.issuePort(grant, port, {
-    executionAuthority: 'host',
-    signal,
-  })
-}
-```
-
-The peer can still call `snapshot()` and `preview()`, but its `execute()` fails closed. The host must inspect Core's authoritative `session.getPreparedPlanPreview(planId)`, apply its own policy or user-confirmation step, and only then call `session.approveAndExecute(planId)`. That call proves only that the host entry point approved execution; it does not identify a human approver.
+Agent Runtime, transport, authorization, and approval protocols are outside this phase's Stable framework contract and receive no stability promise from `EngineInstance`. Existing experiments will be reviewed separately during the Agent phase after the framework contract is stable.
 
 ### Remote resources
 
@@ -250,6 +250,8 @@ Remote access must pass both:
 2. the host `RemoteAdapter` allowlist for resource name, type, URL, and version.
 
 `engine.remote.registry` exposes readonly resource envelopes. Each `data` value remains an opaque adapter-owned capability. Engine disposal clears the adapter, loading state, and registry together.
+
+A `RemoteAdapter` is a trusted host extension. Its `init()` and `dispose()` hooks must not call the same engine lifecycle, including through a raw engine closure after an `await`.
 
 ## Compatibility status of the raw model API
 
@@ -262,6 +264,6 @@ The `@easy-editor/core` root entry still exports the v1 `defaultEngine`, `init`,
 - they do not provide multi-instance isolation;
 - their modules must not be mixed with explicit-instance modules;
 - teardown must still be awaited; and
-- new applications and Agent hosts should create instances from `@easy-editor/core/instance`.
+- new applications should create instances from `@easy-editor/core/instance`; Agent contracts are deferred to a separate design phase.
 
 See [Migrate from v1 to v2](/en/guide/migration-v2) and [Engine ownership and trust boundaries](/en/design/overview).

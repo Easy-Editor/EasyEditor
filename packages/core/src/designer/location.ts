@@ -1,4 +1,5 @@
 import type { Document as IDocument, Node as INode } from '../document'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import { isDocumentNode } from '../utils'
 import type { DragObject } from './dragon'
 import type { Sensor } from './sensor'
@@ -105,6 +106,17 @@ export const getWindow = (elem: Element | Document): Window => {
   return (isDocumentNode(elem) ? elem : elem.ownerDocument!).defaultView!
 }
 
+const snapshotLocationDetail = (detail: LocationDetail): LocationDetail => {
+  if (isLocationChildrenDetail(detail)) {
+    return Object.freeze({
+      ...detail,
+      focus: detail.focus ? Object.freeze({ ...detail.focus }) : undefined,
+      near: detail.near ? Object.freeze({ ...detail.near }) : undefined,
+    })
+  }
+  return Object.freeze({ ...detail })
+}
+
 export class DropLocation {
   readonly target: INode
 
@@ -120,9 +132,10 @@ export class DropLocation {
 
   constructor({ target, detail, source, event }: LocationData) {
     this.target = target
-    this.detail = detail
+    this.detail = snapshotLocationDetail(detail)
     this.source = source
     this.event = event
+    lockReadonlyProperties(this, ['detail', 'event', 'source', 'target'])
   }
 
   clone(event: LocateEvent): DropLocation {

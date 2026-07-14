@@ -23,7 +23,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['18.20.8', '20']
+        include:
+          - node-version: '18.20.8'
+            engine-strict: false
+            verify-easypack: false
+          - node-version: '20'
+            engine-strict: true
+            verify-easypack: true
 
     steps:
       - name: Checkout
@@ -39,7 +45,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --config.engine-strict=true
+        run: pnpm install --frozen-lockfile --config.engine-strict=${{ matrix.engine-strict }}
 
       - name: Verify Core kernel
         run: |
@@ -90,6 +96,7 @@ jobs:
           pnpm --filter @easy-editor/react-renderer-dashboard types
 
       - name: Verify build tooling
+        if: matrix.verify-easypack
         run: |
           pnpm --filter @easy-editor/easypack lint
           pnpm --filter @easy-editor/easypack types

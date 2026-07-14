@@ -3,19 +3,31 @@ import { PolicyViolation, type TrustPolicy } from '../trust'
 import type { Project } from './project'
 
 interface ProjectMutationAuthorityState {
+  callbackDepth: number
   depth: number
   suspendedDepth: number
-  teardownDepth: number
   readonly trustPolicy: TrustPolicy
 }
 
 const authorities = new WeakMap<Project, ProjectMutationAuthorityState>()
 
+/** Package-private marker for model mutations whose identity changes are terminal. */
+export class ProjectMutationCommittedError<T = unknown> extends AggregateError {
+  readonly committed = true
+
+  constructor(
+    errors: readonly unknown[],
+    readonly result: T,
+  ) {
+    super(errors, 'The project mutation committed, but one or more completion callbacks failed')
+  }
+}
+
 export function installProjectMutationAuthority(project: Project, trustPolicy: TrustPolicy): void {
   if (authorities.has(project)) {
     throw new Error('Project mutation authority is already installed')
   }
-  authorities.set(project, { depth: 0, suspendedDepth: 0, teardownDepth: 0, trustPolicy })
+  authorities.set(project, { callbackDepth: 0, depth: 0, suspendedDepth: 0, trustPolicy })
 }
 
 export function assertProjectMutationAuthority(project: Project, origin: string): void {
@@ -23,7 +35,7 @@ export function assertProjectMutationAuthority(project: Project, origin: string)
   if (!authority) {
     throw new Error('Project mutation authority is not installed')
   }
-  if (authority.teardownDepth === 0) assertLifecycleMutationAllowed(project, origin)
+  assertLifecycleMutationAllowed(project, origin)
   if (authority.depth > 0 && authority.suspendedDepth === 0) return
   if (authority.trustPolicy.allowDirectModelMutation === true) return
 
@@ -52,22 +64,6 @@ export function withProjectMutationAuthority<T>(project: Project, operation: () 
   }
 }
 
-/** Internal cleanup authority that is valid only while an engine is disposing. */
-export function withProjectTeardownAuthority<T>(project: Project, operation: () => T): T {
-  const authority = authorities.get(project)
-  if (!authority) {
-    throw new Error('Project mutation authority is not installed')
-  }
-  authority.depth += 1
-  authority.teardownDepth += 1
-  try {
-    return operation()
-  } finally {
-    authority.teardownDepth -= 1
-    authority.depth -= 1
-  }
-}
-
 /**
  * User/material callbacks must never inherit the ambient host write scope.
  * This is synchronous by design: executable async callbacks are outside the
@@ -78,10 +74,17 @@ export function withoutProjectMutationAuthority<T>(project: Project, operation: 
   if (!authority) {
     throw new Error('Project mutation authority is not installed')
   }
+  authority.callbackDepth += 1
   authority.suspendedDepth += 1
   try {
     return operation()
   } finally {
     authority.suspendedDepth -= 1
+    authority.callbackDepth -= 1
   }
+}
+
+/** Package-private lifecycle gate for synchronous engine-owned callbacks. */
+export function isProjectCallbackInvocationActive(project: Project): boolean {
+  return (authorities.get(project)?.callbackDepth ?? 0) > 0
 }

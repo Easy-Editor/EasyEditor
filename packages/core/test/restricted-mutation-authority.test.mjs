@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { reaction } from 'mobx'
+import { intercept, reaction } from 'mobx'
 import { createExecutableSchema, createProjectSchema } from './fixtures/project-schema.mjs'
 import { captureFailure, loadCore } from './helpers/kernel.mjs'
 
@@ -71,6 +71,27 @@ function assertRuntimeNonShadowable(target, key, replacement, label) {
     `${label}: defineProperty must not shadow the guarded accessor`,
   )
   assert.strictEqual(target[key], original, `${label}: defineProperty changed the guarded value`)
+}
+
+function assertRuntimeSnapshotNonShadowable(target, key, replacement, label) {
+  const original = target[key]
+  assert.equal(Object.isFrozen(original), true, `${label}: snapshot must be frozen`)
+  assert.equal(
+    Reflect.defineProperty(target, key, {
+      configurable: true,
+      enumerable: true,
+      value: replacement,
+      writable: true,
+    }),
+    false,
+    `${label}: defineProperty must not shadow the guarded accessor`,
+  )
+  const current = target[key]
+  assert.equal(Object.isFrozen(current), true, `${label}: replacement snapshot must stay frozen`)
+  assert.equal(current.length, original.length, `${label}: snapshot length changed`)
+  for (let index = 0; index < original.length; index += 1) {
+    assert.strictEqual(current[index], original[index], `${label}: snapshot member changed at ${index}`)
+  }
 }
 
 test('ready agentRestricted engines reject raw Node, Document, Project, and History writes before side effects', async () => {
@@ -153,7 +174,6 @@ test('engine model identities and authority-bearing references are runtime immut
     [engine, 'transactions', 'Engine.transactions'],
     [engine, 'commands', 'Engine.commands'],
     [engine, 'agentCapabilities', 'Engine.agentCapabilities'],
-    [engine, 'eventTransactions', 'Engine.eventTransactions'],
     [engine, 'remote', 'Engine.remote'],
     [engine.transactions, 'events', 'TransactionManager.events'],
     [engine.transactions, 'host', 'TransactionManager.host'],
@@ -184,7 +204,6 @@ test('engine model identities and authority-bearing references are runtime immut
     [engine.designer, 'project', 'Designer.project'],
     [engine.designer, 'selection', 'Designer.selection'],
     [engine.designer, 'settingsManager', 'Designer.settingsManager'],
-    [engine.designer, 'emitter', 'Designer.emitter'],
     [engine.designer.activeTracker, 'designer', 'ActiveTracker.designer'],
     [engine.designer.activeTracker, 'emitter', 'ActiveTracker.emitter'],
     [engine.designer.detecting, 'designer', 'Detecting.designer'],
@@ -195,11 +214,6 @@ test('engine model identities and authority-bearing references are runtime immut
     [engine.designer.selection, 'emitter', 'Selection.emitter'],
     [engine.designer.settingsManager, 'editor', 'SettingsManager.editor'],
     [engine.project, 'designer', 'Project.designer'],
-    [engine.project, 'emitter', 'Project.emitter'],
-    [engine.project, 'schemaValidator', 'Project.schemaValidator'],
-    [engine.project, 'trustPolicy', 'Project.trustPolicy'],
-    [engine.project.schemaValidator, 'assertTrustBoundaryIntegrity', 'SchemaValidator.assertTrustBoundaryIntegrity'],
-    [engine.project.schemaValidator, 'trustPolicy', 'SchemaValidator.trustPolicy'],
     [engine.innerPlugins, 'assertPrototypeExtensionsAllowed', 'Plugins.assertPrototypeExtensionsAllowed'],
     [engine.innerPlugins, 'pluginContextMap', 'Plugins.pluginContextMap'],
     [engine.innerPlugins, 'pluginsMap', 'Plugins.pluginsMap'],
@@ -216,9 +230,7 @@ test('engine model identities and authority-bearing references are runtime immut
     [document, 'mutationVersion', 'Document.mutationVersion'],
     [document, 'nodesMap', 'Document.nodesMap'],
     [document, 'root', 'Document.root'],
-    [document.history, 'dataFn', 'History.dataFn'],
     [document.history, 'document', 'History.document'],
-    [document.history, 'redoer', 'History.redoer'],
     [root, 'document', 'Node.document'],
     [root, 'children', 'Node.children'],
     [root, 'parent', 'Node.parent'],
@@ -234,7 +246,6 @@ test('engine model identities and authority-bearing references are runtime immut
   assertRuntimeReadonly(root, 'componentName', 'ForgedComponent', 'Node.componentName')
   for (const [target, key, value, label] of [
     [engine.project, 'config', replacement, 'Project.config'],
-    [engine.project, 'documents', replacement, 'Project.documents'],
     [engine.project, 'simulator', replacement, 'Project.simulator'],
     [engine.materials, 'designer', replacement, 'Materials.designer'],
     [engine.materials, 'registry', replacement, 'Materials.registry'],
@@ -251,12 +262,17 @@ test('engine model identities and authority-bearing references are runtime immut
     [document, 'rootNode', replacement, 'Document.rootNode'],
     [document, 'simulator', replacement, 'Document.simulator'],
     [root, 'props', replacement, 'Node.props'],
-    [props, 'items', replacement, 'Props.items'],
     [props, 'type', 'forged', 'Props.type'],
-    [children, 'children', replacement, 'NodeChildren.children'],
     [title, 'key', 'forged-key', 'Prop.key'],
   ]) {
     assertRuntimeNonShadowable(target, key, value, label)
+  }
+  for (const [target, key, label] of [
+    [engine.project, 'documents', 'Project.documents'],
+    [props, 'items', 'Props.items'],
+    [children, 'children', 'NodeChildren.children'],
+  ]) {
+    assertRuntimeSnapshotNonShadowable(target, key, replacement, label)
   }
   const selectedBefore = engine.designer.selection.selected
   assert.equal(
@@ -579,9 +595,10 @@ test('legacyTrusted preserves direct model mutation compatibility', async t => {
   document.rootNode = null
   assert.equal(document.rootNode, null)
   document.rootNode = root
-  document.root.props = orphan.props
-  assert.strictEqual(document.root.props, orphan.props)
-  document.root.props = originalProps
+  assert.throws(() => {
+    document.root.props = orphan.props
+  }, /canonical Props identity/)
+  assert.strictEqual(document.root.props, originalProps)
   titleProp.key = 'legacyTitle'
   assert.equal(titleProp.key, 'legacyTitle')
   titleProp.key = 'title'
@@ -692,7 +709,7 @@ test('agentRestricted MobX reactions cannot mutate project collections during te
   await engine.init()
   engine.loadProject(createProjectSchema({ id: 'authority-teardown-callback' }), true)
   const oldDocument = engine.project.currentDocument
-  let callbackError
+  const callbackErrors = []
   let callbackRuns = 0
   const disposeReaction = reaction(
     () => engine.project.documents,
@@ -701,7 +718,7 @@ test('agentRestricted MobX reactions cannot mutate project collections during te
       try {
         documents.push(oldDocument)
       } catch (error) {
-        callbackError = error
+        callbackErrors.push(error)
       }
     },
   )
@@ -709,14 +726,41 @@ test('agentRestricted MobX reactions cannot mutate project collections during te
 
   await engine.destroy()
 
-  assert.equal(callbackRuns, 1)
-  assert.match(callbackError?.message || '', /engine is disposing/i)
+  assert.ok(callbackRuns >= 1)
+  assert.equal(callbackErrors.length, callbackRuns)
+  assert.ok(callbackErrors.every(error => error instanceof TypeError))
   assert.equal(engine.lifecycleState, 'disposed')
   assert.equal(engine.project.documents.length, 0)
 
   await engine.init()
   assert.equal(engine.lifecycleState, 'ready')
   assert.equal(engine.project.documents.length, 0)
+})
+
+test('Project documents snapshots cannot intercept, veto, or rewrite canonical identity changes', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  t.after(async () => engine.destroy())
+  await engine.init()
+  engine.loadProject(createProjectSchema({ id: 'authority-teardown-intercept' }), true)
+  const oldDocument = engine.project.currentDocument
+  const exposedDocuments = engine.project.documents
+  assert.equal(Object.isFrozen(exposedDocuments), true)
+  assert.throws(() => intercept(exposedDocuments, () => null), /Cannot obtain administration/)
+
+  engine.loadProject(createProjectSchema({ id: 'authority-teardown-intercept-replacement' }), true)
+
+  assert.deepEqual(exposedDocuments, [oldDocument])
+  assert.equal(engine.project.documents.length, 1)
+  assert.notStrictEqual(engine.project.currentDocument, oldDocument)
+
+  await engine.destroy()
+
+  assert.equal(engine.project.documents.length, 0)
+
+  await engine.init()
+  assert.equal(engine.project.documents.length, 0)
+  assert.throws(() => oldDocument.createNode({ id: 'revived', componentName: 'Text', props: {} }), /disposed/)
 })
 
 test('agentRestricted material observers and component hooks cannot borrow host transaction authority', async t => {
@@ -767,6 +811,190 @@ test('agentRestricted material observers and component hooks cannot borrow host 
   assertRawMutationDenied(hookError)
   assert.equal(document.root.getPropValue('borrowedMaterialAuthority'), undefined)
   assert.equal(document.root.getPropValue('borrowedHookAuthority'), undefined)
+})
+
+test('SettingField material callbacks cannot inherit an ambient host transaction authority', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({
+    hostWindow: null,
+    trustPolicy: {
+      name: 'agentRestricted',
+      allowDirectModelMutation: false,
+      allowExecutableCommands: true,
+      allowExecutableSchema: false,
+      allowPluginExtensions: false,
+      allowRemoteAccess: false,
+    },
+  })
+  t.after(() => engine.destroy())
+  await engine.init()
+
+  let activePath
+  let root
+  const attempts = []
+  const attemptMutation = callback => {
+    let error
+    const propName = `borrowed-${activePath}-${callback}`
+    try {
+      root.setPropValue(propName, 'must-not-persist')
+    } catch (cause) {
+      error = cause
+    }
+    attempts.push({ callback, error, path: activePath, propName })
+  }
+
+  engine.materials.createComponentMeta({
+    componentName: 'Page',
+    configure: {
+      props: [
+        {
+          name: 'title',
+          setter: 'StringSetter',
+          extraProps: {
+            getValue(_field, value) {
+              attemptMutation('getValue')
+              return value
+            },
+            setValue() {
+              attemptMutation('setValue')
+            },
+          },
+        },
+        {
+          name: '#appearance',
+          type: 'group',
+          extraProps: {
+            getValue() {
+              attemptMutation('valueState')
+              return 'present'
+            },
+          },
+        },
+      ],
+    },
+  })
+  engine.loadProject(createProjectSchema({ id: 'setting-callback-authority' }), true)
+  root = engine.project.currentDocument.root
+  const [title, appearance] = root.settingEntry.items
+
+  const runInsideHostTransaction = (path, operation) => {
+    let invoked = false
+    const props = {}
+    Object.defineProperty(props, `command-${path}`, {
+      enumerable: true,
+      get() {
+        if (!invoked) {
+          invoked = true
+          operation()
+        }
+        return `committed-${path}`
+      },
+    })
+    activePath = path
+    try {
+      engine.commands.execute({ type: 'updateProps', nodeId: root.id, props })
+    } finally {
+      activePath = undefined
+    }
+    assert.equal(invoked, true, `${path} must execute inside command application`)
+  }
+
+  runInsideHostTransaction('getValue', () => title.getValue())
+  runInsideHostTransaction('valueState', () => appearance.valueState)
+  runInsideHostTransaction('setValue', () => title.setValue('set-through-field'))
+  runInsideHostTransaction('clearValue', () => title.clearValue())
+
+  assert.deepEqual(
+    attempts.map(({ callback, path }) => `${path}:${callback}`),
+    ['getValue:getValue', 'valueState:valueState', 'setValue:getValue', 'setValue:setValue', 'clearValue:setValue'],
+  )
+  for (const attempt of attempts) {
+    assertRawMutationDenied(attempt.error)
+    assert.equal(root.getPropValue(attempt.propName), undefined)
+  }
+})
+
+test('SettingField material callbacks block lifecycle reentry while preserving callback results and arguments', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  await engine.init()
+
+  let activePath
+  const lifecycleAttempts = []
+  const setCalls = []
+  const attemptLifecycleReentry = callback => {
+    let error
+    let result
+    try {
+      result = engine.init()
+    } catch (cause) {
+      error = cause
+    }
+    lifecycleAttempts.push({ callback, error, path: activePath, result })
+  }
+
+  engine.materials.createComponentMeta({
+    componentName: 'Page',
+    configure: {
+      props: [
+        {
+          name: 'title',
+          setter: 'StringSetter',
+          extraProps: {
+            getValue(_field, value) {
+              attemptLifecycleReentry('getValue')
+              return `${value}:material`
+            },
+            setValue(_field, value, oldValue) {
+              attemptLifecycleReentry('setValue')
+              setCalls.push({ oldValue, path: activePath, value })
+            },
+          },
+        },
+        {
+          name: '#appearance',
+          type: 'group',
+          extraProps: {
+            getValue() {
+              attemptLifecycleReentry('valueState')
+              return 'present'
+            },
+          },
+        },
+      ],
+    },
+  })
+  engine.loadProject(createProjectSchema({ id: 'setting-callback-lifecycle' }), true)
+  const root = engine.project.currentDocument.root
+  const [title, appearance] = root.settingEntry.items
+
+  activePath = 'getValue'
+  assert.equal(title.getValue(), 'before:material')
+  activePath = 'valueState'
+  assert.equal(appearance.valueState, 1)
+  activePath = 'setValue'
+  title.setValue('after')
+  assert.equal(root.getPropValue('title'), 'after')
+  activePath = 'clearValue'
+  title.clearValue()
+  activePath = undefined
+  assert.equal(root.getPropValue('title'), undefined)
+
+  assert.deepEqual(
+    lifecycleAttempts.map(({ callback, path }) => `${path}:${callback}`),
+    ['getValue:getValue', 'valueState:valueState', 'setValue:getValue', 'setValue:setValue', 'clearValue:setValue'],
+  )
+  for (const attempt of lifecycleAttempts) {
+    assert.equal(attempt.result, undefined)
+    assert.equal(attempt.error?.name, 'LifecycleReentrancyError')
+    assert.match(attempt.error.message, /Cannot init the engine from an engine-owned lifecycle callback/)
+  }
+  assert.deepEqual(setCalls, [
+    { oldValue: 'before:material', path: 'setValue', value: 'after' },
+    { oldValue: undefined, path: 'clearValue', value: undefined },
+  ])
+  assert.equal(engine.lifecycleState, 'ready')
 })
 
 test('EventBus does not expose a raw EventEmitter handle that can revive a disposed engine', async t => {

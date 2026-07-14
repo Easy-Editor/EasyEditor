@@ -6,7 +6,23 @@ interface LifecycleTeardownBoundary {
 }
 
 const lifecycleTeardownBoundaries = new WeakMap<object, LifecycleTeardownBoundary>()
-const lifecycleTeardownChildren = new WeakMap<object, Set<object>>()
+// Ownership points from a child to its owner. A persistent Engine service must
+// never keep retired generation resources alive merely to remember teardown
+// authority. WeakMap keys make the child collectable while dynamic parent
+// resolution still supports owners claimed after their children are created.
+const lifecycleTeardownParents = new WeakMap<object, object>()
+
+const isEngineTeardownOwned = (target: object): boolean => {
+  const visited = new Set<object>()
+  let current: object | undefined = target
+  while (current) {
+    if (visited.has(current)) throw new Error('Lifecycle teardown ownership contains a cycle')
+    visited.add(current)
+    if (lifecycleTeardownBoundaries.get(current)?.engineOwned) return true
+    current = lifecycleTeardownParents.get(current)
+  }
+  return false
+}
 
 /** Register an internal cleanup operation without exposing it on the public instance. */
 export function installLifecycleTeardownOperation<TArgs extends unknown[], TResult>(
@@ -28,33 +44,42 @@ export function claimEngineTeardownOwnership(target: object): void {
   if (!boundary) throw new Error('Engine-owned service has no internal teardown operation')
   if (boundary.engineOwned) return
   boundary.engineOwned = true
-  for (const child of lifecycleTeardownChildren.get(target) || []) {
-    claimEngineTeardownOwnership(child)
-  }
 }
 
 /** Propagate engine ownership to lazily-created child services. */
 export function inheritEngineTeardownOwnership(owner: object, target: object): void {
-  let children = lifecycleTeardownChildren.get(owner)
-  if (!children) {
-    children = new Set()
-    lifecycleTeardownChildren.set(owner, children)
+  if (!lifecycleTeardownBoundaries.has(owner)) {
+    throw new Error('Lifecycle teardown owner has no internal teardown operation')
   }
-  children.add(target)
-  if (lifecycleTeardownBoundaries.get(owner)?.engineOwned) {
-    claimEngineTeardownOwnership(target)
+  if (!lifecycleTeardownBoundaries.has(target)) {
+    throw new Error('Engine-owned child has no internal teardown operation')
   }
+  const existingParent = lifecycleTeardownParents.get(target)
+  if (existingParent && existingParent !== owner) {
+    throw new Error('Lifecycle teardown parent is already assigned to another owner')
+  }
+  let ancestor: object | undefined = owner
+  while (ancestor) {
+    if (ancestor === target) throw new Error('Lifecycle teardown ownership cannot contain a cycle')
+    ancestor = lifecycleTeardownParents.get(ancestor)
+  }
+  lifecycleTeardownParents.set(target, owner)
+}
+
+/** Package-private diagnostic used by the kernel regression suite. */
+export function getLifecycleTeardownParent(target: object): object | undefined {
+  return lifecycleTeardownParents.get(target)
 }
 
 /** Standalone services retain their historical explicit cleanup contract. */
 export function assertPublicLifecycleTeardownAllowed(target: object, origin: string): void {
-  if (!lifecycleTeardownBoundaries.get(target)?.engineOwned) return
+  if (!isEngineTeardownOwned(target)) return
   throw new Error(`Cannot ${origin}; cleanup of an engine-owned service must be initiated by EngineInstance.destroy()`)
 }
 
 /** Engine-owned child lifecycles are coordinated by their owning manager. */
 export function assertPublicOwnedLifecycleOperationAllowed(target: object, origin: string): void {
-  if (!lifecycleTeardownBoundaries.get(target)?.engineOwned) return
+  if (!isEngineTeardownOwned(target)) return
   throw new Error(`Cannot ${origin}; lifecycle of an engine-owned child must be coordinated by its owning service`)
 }
 

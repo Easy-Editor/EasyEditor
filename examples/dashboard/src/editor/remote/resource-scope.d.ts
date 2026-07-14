@@ -1,4 +1,4 @@
-import type { RemoteAccessRequest } from '@easy-editor/core'
+import type { RemoteAccessRequest } from '@easy-editor/core/instance'
 
 export interface RemoteOperation {
   readonly abortController: AbortController

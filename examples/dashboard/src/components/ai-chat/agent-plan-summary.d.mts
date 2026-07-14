@@ -1,4 +1,4 @@
-import type { AgentCommandType, AgentPlanPreview } from '@easy-editor/core'
+import type { AgentCommandType, AgentPlanPreview } from '@easy-editor/core/agent'
 
 export interface DashboardAgentOperationSummary {
   readonly type: AgentCommandType

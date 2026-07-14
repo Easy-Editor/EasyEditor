@@ -10,6 +10,7 @@ import {
 } from '../lifecycle/teardown-boundary'
 import type { EventBus } from '../utils'
 import type { Designer } from './designer'
+import { createDesignerEventBus } from './event-bus'
 
 export enum DETECTING_EVENT {
   CHANGE = 'detecting:change',
@@ -44,7 +45,7 @@ export class Detecting {
   }
 
   constructor(readonly designer: Designer) {
-    this.emitter = designer.createEventBus('Detecting')
+    this.emitter = createDesignerEventBus(designer, 'Detecting')
     lockReadonlyProperties(this, ['designer', 'emitter'])
     lockPrototypeAccessors(this, ['current', 'enable'])
     installLifecycleTeardownOperation(

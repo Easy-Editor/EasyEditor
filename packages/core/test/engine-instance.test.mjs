@@ -48,7 +48,7 @@ test('createEngine owns isolated mutable services', async t => {
 
   await a.plugins.register({ name: 'same-name', init() {} })
   await b.plugins.register({ name: 'same-name', init() {} })
-  assert.notStrictEqual(a.plugins.get('same-name').ctx, b.plugins.get('same-name').ctx)
+  assert.notStrictEqual(a.innerPlugins.get('same-name').ctx, b.innerPlugins.get('same-name').ctx)
 })
 
 test('destroying engine A leaves engine B usable across every instance-owned mutable service', async t => {
@@ -148,7 +148,7 @@ test('destroying engine A leaves engine B usable across every instance-owned mut
   assert.ok(b.setters.getSetter('SharedSetter'))
   assert.equal(bWindow.document.body.children.length, 1)
   assert.equal(b.hotkey.callBacks.a?.length, 1)
-  assert.equal(b.plugins.get('shared-plugin').isInited(), true)
+  assert.equal(b.innerPlugins.get('shared-plugin').isInited(), true)
   assert.equal(b.remote.registry.has('material', 'shared-remote'), true)
   assert.equal(b.remote.loadingState.getState('shared-loading')?.name, 'shared-loading')
   assert.deepEqual(bRemoteCalls, ['shared-request'])

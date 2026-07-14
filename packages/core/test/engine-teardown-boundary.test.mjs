@@ -36,7 +36,7 @@ test('ready engine-owned services reject public teardown without mutating live s
   )
 
   const materialRegistry = engine.materials.registry
-  const pluginRuntime = engine.plugins.get('teardown-proof-plugin')
+  const pluginRuntime = engine.innerPlugins.get('teardown-proof-plugin')
   const pluginContext = pluginRuntime.ctx
   const clipboardBodyCount = globalThis.document.body.children.length
   const clipboardRelease = engine.clipboard.injectCopyPaster(globalThis.document)
@@ -125,8 +125,8 @@ test('ready engine-owned services reject public teardown without mutating live s
     settle(() => pluginRuntime.extend({ extend() {}, extendClass: {} })),
     settle(() => pluginRuntime.dispose()),
     settle(() => pluginContext.dispose()),
-    settle(() => engine.plugins.pluginsMap.clear()),
-    settle(() => engine.plugins.pluginContextMap.clear()),
+    settle(() => engine.innerPlugins.pluginsMap.clear()),
+    settle(() => engine.innerPlugins.pluginContextMap.clear()),
   ])
 
   assert.deepEqual(
@@ -157,9 +157,9 @@ test('ready engine-owned services reject public teardown without mutating live s
   assert.equal(engine.editor.eventBus.listenerCount('teardown-proof'), 1)
   assert.equal(engine.designer.dragon.emitter.listenerCount(core.DRAGON_EVENT.DRAGSTART), designerListenerCount)
   assert.equal(globalThis.document.body.children.length, clipboardBodyCount + 1)
-  assert.equal(engine.plugins.get('teardown-proof-plugin'), pluginRuntime)
+  assert.equal(engine.innerPlugins.get('teardown-proof-plugin'), pluginRuntime)
   assert.equal(pluginRuntime.isInited(), true)
-  assert.equal(engine.plugins.pluginContextMap.get('teardown-proof-plugin'), pluginContext)
+  assert.equal(engine.innerPlugins.pluginContextMap.get('teardown-proof-plugin'), pluginContext)
 })
 
 test('EngineInstance destroy uses the internal teardown boundary and services remain restartable', async t => {
@@ -251,4 +251,108 @@ test('a mounted Simulator is an engine-owned generation resource', async t => {
   await engine.init()
   assert.throws(() => engine.project.mountSimulator(simulator), /disposed/)
   assert.equal(engine.project.simulator, null)
+})
+
+test('retired Simulator and History event buses cannot reacquire zombie listeners', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  t.after(async () => engine.destroy())
+  engine.loadProject(createProjectSchema({ id: 'retired-event-bus-boundary' }), true)
+  await engine.init()
+
+  const retiredHistory = engine.project.currentDocument.history
+  let historyDeliveries = 0
+  retiredHistory.emitter.on('zombie', () => {
+    historyDeliveries += 1
+  })
+  engine.project.removeDocument(engine.project.currentDocument)
+
+  assert.equal(retiredHistory.emitter.listenerCount(), 0)
+  assert.throws(() => retiredHistory.emitter.on('zombie', () => undefined), /history event bus generation is disposed/)
+  assert.throws(() => retiredHistory.emitter.emit('zombie'), /history event bus generation is disposed/)
+  assert.equal(historyDeliveries, 0)
+
+  const retiredSimulator = new core.Simulator(engine.project, engine.designer)
+  const replacementSimulator = new core.Simulator(engine.project, engine.designer)
+  let simulatorDeliveries = 0
+  retiredSimulator.emitter.on('zombie', () => {
+    simulatorDeliveries += 1
+  })
+  engine.project.mountSimulator(retiredSimulator)
+  engine.project.mountSimulator(replacementSimulator)
+
+  assert.equal(retiredSimulator.emitter.listenerCount(), 0)
+  assert.throws(
+    () => retiredSimulator.emitter.on('zombie', () => undefined),
+    /simulator event bus generation is disposed/,
+  )
+  assert.throws(() => retiredSimulator.emitter.emit('zombie'), /simulator event bus generation is disposed/)
+  assert.equal(simulatorDeliveries, 0)
+
+  await engine.destroy()
+  assert.throws(() => retiredHistory.emitter.emit('zombie'), /history event bus generation is disposed/)
+  assert.throws(() => retiredSimulator.emitter.emit('zombie'), /simulator event bus generation is disposed/)
+  assert.equal(historyDeliveries, 0)
+  assert.equal(simulatorDeliveries, 0)
+})
+
+test('dynamic teardown ownership uses collectable child-to-owner links', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  t.after(async () => engine.destroy())
+  engine.loadProject(createProjectSchema({ id: 'teardown-parent-links' }), true)
+  await engine.init()
+
+  const document = engine.project.currentDocument
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  const componentMeta = engine.materials.createComponentMeta({ componentName: 'TeardownParentLinks' })
+  await engine.plugins.register(
+    {
+      name: 'teardown-parent-links',
+      init() {},
+    },
+    { autoInit: true },
+  )
+  const runtime = engine.innerPlugins.get('teardown-parent-links')
+  const context = runtime.ctx
+  engine.project.mountSimulator(simulator)
+
+  assert.strictEqual(core.getTestLifecycleTeardownParent(document.history), engine.project)
+  assert.strictEqual(core.getTestLifecycleTeardownParent(simulator), engine.project)
+  assert.strictEqual(core.getTestLifecycleTeardownParent(componentMeta), engine.materials.registry)
+  assert.strictEqual(core.getTestLifecycleTeardownParent(runtime), engine.innerPlugins)
+  assert.strictEqual(core.getTestLifecycleTeardownParent(context), runtime)
+
+  assert.throws(() => simulator.purge(), /engine-owned service/)
+  await engine.plugins.delete('teardown-parent-links')
+  await engine.materials.registry.unload('TeardownParentLinks', { force: true })
+
+  // Retired children retain only their weak-key parent metadata while the
+  // persistent owner has no reverse child collection that can keep them alive.
+  assert.strictEqual(core.getTestLifecycleTeardownParent(runtime), engine.innerPlugins)
+  assert.strictEqual(core.getTestLifecycleTeardownParent(componentMeta), engine.materials.registry)
+})
+
+test('Simulator construction and mounting reject mixed engine graphs before side effects', async t => {
+  const core = await loadCore()
+  const first = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  const second = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  t.after(async () => Promise.allSettled([first.destroy(), second.destroy()]))
+  await Promise.all([first.init(), second.init()])
+
+  assert.throws(() => new core.Simulator(first.project, second.designer), /same engine instance/)
+
+  const current = new core.Simulator(first.project, first.designer)
+  const foreign = new core.Simulator(second.project, second.designer)
+  first.project.mountSimulator(current)
+  current.set('mount-proof', 'active')
+
+  assert.throws(() => first.project.mountSimulator(foreign), /another project or designer/)
+  assert.strictEqual(first.project.simulator, current)
+  assert.equal(current.get('mount-proof'), 'active')
+  current.set('mount-proof', 'still-active')
+  assert.equal(current.get('mount-proof'), 'still-active')
+
+  second.project.mountSimulator(foreign)
+  assert.strictEqual(second.project.simulator, foreign)
 })

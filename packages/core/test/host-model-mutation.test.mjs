@@ -21,6 +21,20 @@ function assertCommittedObserverFailure(error, messages) {
   }
 }
 
+function assertCommittedCleanupFailure(error, message) {
+  assert.equal(error.name, 'TransactionCommittedError')
+  assert.equal(error.committed, true)
+  assert.equal(error.result, undefined)
+  assert.ok(
+    error.errors.some(cause => cause?.message === message),
+    `missing committed cleanup error: ${message}`,
+  )
+  assert.ok(
+    error.errors.every(cause => !(cause instanceof AggregateError)),
+    'cleanup errors must be flattened',
+  )
+}
+
 function installThrowingReaction(track, effectMessage, observerMessage) {
   return reaction(
     track,
@@ -140,4 +154,167 @@ test('undo and redo expose committed outcomes when reactions and deferred observ
   assert.equal(root.getPropValue('title'), 'after')
   assert.equal(document.history.isUndoable(), true)
   assert.equal(document.history.isRedoable(), false)
+})
+
+test('replacement load keeps the new project authoritative when retired-project cleanup fails', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  await engine.init()
+  engine.loadProject(createProjectSchema({ id: 'replacement-cleanup-before' }), true)
+
+  const retiredDocument = engine.project.currentDocument
+  const retiredRoot = retiredDocument.root
+  const cleanupMessage = 'replacement cleanup failed once'
+  let cleanupAttempts = 0
+  core.registerTestSettingTopEntryDisposer(retiredRoot.settingEntry, () => {
+    cleanupAttempts += 1
+    if (cleanupAttempts === 1) throw new Error(cleanupMessage)
+  })
+
+  const replacementSchema = createProjectSchema({
+    id: 'replacement-cleanup-after',
+    componentsTree: [
+      {
+        docId: 'replacement-cleanup-after-document',
+        id: 'replacement-cleanup-after-root',
+        componentName: 'Page',
+        props: { title: 'replacement committed' },
+        children: [],
+      },
+    ],
+  })
+  const error = await captureFailure(() => engine.loadProject(replacementSchema, true))
+
+  assertCommittedCleanupFailure(error, cleanupMessage)
+  assert.equal(cleanupAttempts, 1)
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.equal(engine.project.export().id, 'replacement-cleanup-after')
+  assert.equal(engine.project.documents.length, 1)
+  assert.equal(engine.project.currentDocument.id, 'replacement-cleanup-after-document')
+  assert.equal(engine.project.currentDocument.root.getPropValue('title'), 'replacement committed')
+  assert.equal(retiredDocument.root, null)
+  assert.equal(retiredRoot.isPurged, true)
+  assert.throws(() => retiredRoot.settingEntry, /node generation is disposed/)
+  assert.throws(() => retiredDocument.exportRaw(), /document generation is disposed/)
+
+  await engine.destroy()
+
+  assert.equal(cleanupAttempts, 2, 'destroy must retry the privately retained cleanup')
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('bare unload keeps the empty project authoritative when document cleanup fails', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  await engine.init()
+  engine.loadProject(createProjectSchema({ id: 'unload-cleanup-before' }), true)
+
+  const retiredDocument = engine.project.currentDocument
+  const retiredRoot = retiredDocument.root
+  const cleanupMessage = 'unload cleanup failed once'
+  let cleanupAttempts = 0
+  core.registerTestSettingTopEntryDisposer(retiredRoot.settingEntry, () => {
+    cleanupAttempts += 1
+    if (cleanupAttempts === 1) throw new Error(cleanupMessage)
+  })
+
+  const error = await captureFailure(() => engine.unloadProject())
+
+  assertCommittedCleanupFailure(error, cleanupMessage)
+  assert.equal(cleanupAttempts, 1)
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.equal(engine.project.documents.length, 0)
+  assert.equal(engine.project.currentDocument, undefined)
+  assert.equal(retiredDocument.root, null)
+  assert.equal(retiredRoot.isPurged, true)
+  assert.throws(() => retiredRoot.settingEntry, /node generation is disposed/)
+  assert.throws(() => retiredDocument.exportRaw(), /document generation is disposed/)
+
+  await engine.destroy()
+
+  assert.equal(cleanupAttempts, 2, 'destroy must retry the privately retained cleanup')
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('replacement construction failure preserves the old project and terminally cleans provisional identities', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  await engine.init()
+  engine.loadProject(createProjectSchema({ id: 'provisional-construction-before' }), true)
+
+  const originalProject = structuredClone(engine.project.export())
+  const originalDocuments = engine.project.documents
+  const originalDocument = engine.project.currentDocument
+  const originalRoot = originalDocument.root
+  const events = { add: 0, remove: 0, open: 0 }
+  const disposeAdd = engine.project.onDocumentAdd(() => {
+    events.add += 1
+  })
+  const disposeRemove = engine.project.onDocumentRemove(() => {
+    events.remove += 1
+  })
+  const disposeOpen = engine.project.onCurrentDocumentChange(() => {
+    events.open += 1
+  })
+  t.after(disposeAdd)
+  t.after(disposeRemove)
+  t.after(disposeOpen)
+
+  let rejectConstruction = true
+  const provisionalRoots = []
+  engine.materials.createComponentMeta({
+    componentName: 'ProvisionalFailurePage',
+    configure: {
+      advanced: {
+        initialChildren(node) {
+          provisionalRoots.push(node)
+          if (rejectConstruction) throw new Error('provisional material construction failed')
+          return []
+        },
+      },
+    },
+  })
+  const replacementSchema = {
+    id: 'provisional-construction-after',
+    version: '1.0.0',
+    componentsMap: [],
+    componentsTree: [
+      {
+        docId: 'provisional-construction-document',
+        id: 'provisional-construction-root',
+        componentName: 'ProvisionalFailurePage',
+        props: { title: 'replacement' },
+      },
+    ],
+  }
+
+  const error = await captureFailure(() => engine.loadProject(replacementSchema, true))
+  const failedRoot = provisionalRoots[0]
+  const failedDocument = failedRoot.document
+
+  assert.match(error.message, /provisional material construction failed/)
+  assert.notEqual(error.committed, true)
+  assert.deepEqual(engine.project.export(), originalProject)
+  assert.deepEqual(engine.project.documents, originalDocuments)
+  assert.strictEqual(engine.project.currentDocument, originalDocument)
+  assert.strictEqual(engine.project.currentDocument.root, originalRoot)
+  assert.deepEqual(events, { add: 0, remove: 0, open: 0 })
+  assert.equal(failedRoot.isPurged, true)
+  assert.equal(failedDocument.root, null)
+  assert.throws(() => failedRoot.settingEntry, /node generation is disposed/)
+  assert.throws(() => failedDocument.exportRaw(), /document construction failed/)
+  assert.equal(engine.lifecycleState, 'ready')
+
+  rejectConstruction = false
+  engine.loadProject(replacementSchema, true)
+
+  assert.equal(provisionalRoots.length, 2)
+  assert.notStrictEqual(provisionalRoots[1], failedRoot)
+  assert.equal(engine.project.export().id, 'provisional-construction-after')
+  assert.equal(engine.project.currentDocument.id, 'provisional-construction-document')
+  assert.equal(engine.project.currentDocument.root.componentName, 'ProvisionalFailurePage')
+  assert.equal(engine.lifecycleState, 'ready')
 })

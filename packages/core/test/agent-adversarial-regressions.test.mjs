@@ -145,7 +145,7 @@ test('inserted node IDs must be bounded strings throughout the complete subtree'
   assert.deepEqual(document.exportRaw(), before)
 })
 
-test('Agent execution uses an unforgeable transaction seam instead of the mutable public method', async t => {
+test('Agent execution uses an unforgeable transaction seam behind an immutable public manager', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
   t.after(() => engine.destroy())
@@ -197,35 +197,34 @@ test('Agent execution uses an unforgeable transaction seam instead of the mutabl
 
   const originalRunOnDocument = engine.transactions.runOnDocument
   let publicMethodCalls = 0
-  engine.transactions.runOnDocument = function runWithAmbientCallbacks(boundDocument, commands, options) {
+  const forgedRunOnDocument = function runWithAmbientCallbacks(boundDocument, commands, options) {
     publicMethodCalls += 1
     return originalRunOnDocument.call(this, boundDocument, commands, {
       ...options,
       invokeNodeCallbacks: true,
     })
   }
+  assert.equal(Object.isFrozen(engine.transactions), true)
+  assert.equal(Reflect.set(engine.transactions, 'runOnDocument', forgedRunOnDocument), false)
+  assert.strictEqual(engine.transactions.runOnDocument, originalRunOnDocument)
 
-  try {
-    const receipt = capability.execute(plan.planId)
-    assert.equal(receipt.status, 'committed')
-    assert.equal(publicMethodCalls, 0)
-    assert.equal(callbackCalls, 0)
-    assert.ok(document.getNode('agent-authorized-node'))
-    assert.equal(document.getNode('ambient-unauthorized-node'), null)
-    assert.equal(document.history.isUndoable(), true)
-    assert.equal(engine.materials.getUsageCount('Text'), 1)
-    assert.equal(engine.materials.getUsageCount('ForbiddenAmbientComponent'), 0)
-    assert.equal(nodeAddEvents, 0, 'Agent domain writes must not publish executable model callbacks')
+  const receipt = capability.execute(plan.planId)
+  assert.equal(receipt.status, 'committed')
+  assert.equal(publicMethodCalls, 0)
+  assert.equal(callbackCalls, 0)
+  assert.ok(document.getNode('agent-authorized-node'))
+  assert.equal(document.getNode('ambient-unauthorized-node'), null)
+  assert.equal(document.history.isUndoable(), true)
+  assert.equal(engine.materials.getUsageCount('Text'), 1)
+  assert.equal(engine.materials.getUsageCount('ForbiddenAmbientComponent'), 0)
+  assert.equal(nodeAddEvents, 0, 'Agent domain writes must not publish executable model callbacks')
 
-    const audit = latestAudit(engine, record => record.action === 'execute' && record.planId === plan.planId)
-    assert.equal(audit.decision, 'allowed')
-    assert.equal(audit.outcome, 'committed')
+  const audit = latestAudit(engine, record => record.action === 'execute' && record.planId === plan.planId)
+  assert.equal(audit.decision, 'allowed')
+  assert.equal(audit.outcome, 'committed')
 
-    const replayError = await captureFailure(() => capability.execute(plan.planId))
-    assertCapabilityError(replayError, /^agent\.plan\.terminal$/)
-  } finally {
-    engine.transactions.runOnDocument = originalRunOnDocument
-  }
+  const replayError = await captureFailure(() => capability.execute(plan.planId))
+  assertCapabilityError(replayError, /^agent\.plan\.terminal$/)
 })
 
 test('reserved structural, path-like, and private extra keys cannot be granted or written', async t => {
@@ -299,7 +298,7 @@ test('legacy executable descriptors remain inert readable snapshot data but are 
   }
 })
 
-test('direct observable children and props-item A-to-B-to-A mutations make older plans stale', async t => {
+test('frozen collection views reject writes while canonical A-to-B-to-A mutations make older plans stale', async t => {
   const schema = createProjectSchema()
   schema.componentsTree[0].props = { title: 'before', subtitle: 'stable' }
   schema.componentsTree[0].children.push(
@@ -311,10 +310,13 @@ test('direct observable children and props-item A-to-B-to-A mutations make older
   const originalSchema = structuredClone(document.export())
 
   const childrenPlan = prepareRootUpdate(capability, document, 'must-not-commit-after-children-aba')
+  const childrenView = document.root.children.children
+  assert.equal(Object.isFrozen(childrenView), true)
+  assert.throws(() => childrenView.reverse(), TypeError)
   engine.transactions.runSync(() => {
     runInAction(() => {
-      document.root.children.children.reverse()
-      document.root.children.children.reverse()
+      document.root.children.reverse()
+      document.root.children.reverse()
     })
   })
   assert.deepEqual(document.export(), originalSchema)
@@ -324,11 +326,13 @@ test('direct observable children and props-item A-to-B-to-A mutations make older
   assert.deepEqual(document.export(), originalSchema)
 
   const propsItemsPlan = prepareRootUpdate(capability, document, 'must-not-commit-after-props-items-aba')
+  const propsView = document.root.props.items
+  const { extras } = document.root.props.export()
+  assert.equal(Object.isFrozen(propsView), true)
+  assert.throws(() => propsView.reverse(), TypeError)
   engine.transactions.runSync(() => {
-    runInAction(() => {
-      document.root.props.items.reverse()
-      document.root.props.items.reverse()
-    })
+    document.root.props.import({ subtitle: 'stable', title: 'before' }, extras)
+    document.root.props.import({ title: 'before', subtitle: 'stable' }, extras)
   })
   assert.deepEqual(document.export(), originalSchema)
   const propsItemsError = await captureFailure(() => capability.execute(propsItemsPlan.planId))
@@ -338,7 +342,7 @@ test('direct observable children and props-item A-to-B-to-A mutations make older
   assert.equal(
     document.history.isUndoable(),
     false,
-    'net-zero direct observable writes must not create history entries',
+    'net-zero canonical collection writes must not create history entries',
   )
 })
 

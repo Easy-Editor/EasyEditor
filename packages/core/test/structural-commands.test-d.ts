@@ -1,10 +1,5 @@
-import {
-  type AgentCommandType,
-  type AgentEditorCommand,
-  EDITOR_COMMAND_TYPES,
-  type EditorCommand,
-  type EditorCommandType,
-} from '../src/index.js'
+import type { AgentCommandType, AgentEditorCommand } from '../src/agent.js'
+import { EDITOR_COMMAND_TYPES, type EditorCommand, type EditorCommandType } from '../src/instance.js'
 
 const structuralCommands: EditorCommand[] = [
   { type: 'replace', documentId: 'document', nodeId: 'target', node: { componentName: 'Text' } },

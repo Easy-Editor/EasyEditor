@@ -5,7 +5,7 @@ description: Engine ownership, transactions, lifecycle, and trust boundaries
 
 # Architecture Overview
 
-EasyEditor Core is not a bag of global singletons. It is a **host-created, host-owned, and host-disposed state machine**. Schema, edit commands, plugins, remote resources, and Agents receive authority only through explicit boundaries.
+EasyEditor Core is not a bag of global singletons. It is a **factory-created, host-owned, and host-disposed state machine**. The stable framework surface comes only from `@easy-editor/core/instance`; Schema, edit commands, plugins, and remote resources receive authority through explicit boundaries. Agent Runtime design is deferred to a later phase.
 
 ## 1. System boundaries
 
@@ -16,8 +16,6 @@ flowchart LR
   Engine --> Commands[Commands / Transactions]
   Engine --> Plugins[Plugins / Materials / Setters]
   Engine --> Remote[RemoteAdapter]
-  Worker[Agent Worker] -->|MessagePort capability| Agent[AgentCapabilityManager]
-  Agent --> Commands
   Renderer[Renderer adapter] -->|explicit evaluation policy| Project
 ```
 
@@ -26,7 +24,7 @@ The governing rules are:
 1. **Ownership precedes access**: mutable services belong to one `EngineInstance`, not ambient global state.
 2. **Validation precedes effects**: Schema, commands, plugin dependencies, and remote requests are checked before mutation.
 3. **A transaction has one outcome**: a batch commits as one undo unit or rolls back.
-4. **Capabilities are narrower than object references**: an untrusted Agent receives a revocable capability, never `Project`, `Document`, or `Node`.
+4. **Capabilities are narrower than implementation objects**: plugin Context and host facades expose only the finite authority required for their role.
 5. **Disposal is a protocol**: every resource has an owner, an awaitable cleanup result, and retry semantics.
 
 ## 2. Explicit instances and lifecycle
@@ -57,7 +55,7 @@ created -> initializing -> ready -> disposing -> disposed
                      \-> failed -----^        \-> failed
 ```
 
-- Concurrent `init()` or `destroy()` callers join the operation in progress.
+- External lifecycle calls join or serialize: callers of the same operation share its in-flight Promise; `destroy()` waits for initialization before disposing, while `init()` waits for disposal before starting the next generation.
 - Failed initialization rolls owned resources back in reverse order.
 - Failed disposal enters `failed`; another `destroy()` retries unfinished cleanup.
 - Destroying one instance cannot clear another instance's Project, events, hotkeys, materials, or remote resources.
@@ -65,8 +63,9 @@ created -> initializing -> ready -> disposing -> disposed
 - A generation begins on entry to `initializing` and ends on entry to `disposing` or an initialization rollback. Only those generation boundaries invalidate prior asynchronous mutation tickets, so plugin registration, initialization, or extension work that resumes after destroy/restart cannot commit into the new generation.
 - Reusable root services such as Config, Editor, and Designer reactivate only through explicit `init()`. Retained `Document`, `History`, material Registry/Meta, and PluginContext references from an old generation remain permanently tombstoned. PluginContext exposes generation-bound capability views rather than reusable raw service references.
 - Same-generation plugin `init()`, `destroy()`, and `extend()` callers join the in-flight Promise. Same-name register, override, and delete operations use an exclusive reservation; a replacement initializes before it atomically replaces the registered runtime.
+- Plugin and `RemoteAdapter` lifecycle callbacks must not call the same engine's `init()` or `destroy()`. Direct synchronous re-entry throws `LifecycleReentrancyError`; a restricted PluginContext does not expose either lifecycle method.
 - Teardown authority is not exposed as a public boolean; engine-owned services can only be cleaned up by `EngineInstance.destroy()`. Host write authority is suspended before event, material-listener, and component-hook callbacks execute, so callbacks cannot borrow it. Observer-facing state uses detached snapshots instead of backing maps or mutable Error references.
-- Under the restricted policy, public transaction APIs reject executable validators; Agent validation uses a package-private unforgeable capability. Material transactions restore complete Entry/ComponentMeta state and tombstone replaced metadata only after commit. `MaterialRegistry.getSnapshot()` exposes frozen deterministic verification data without a rollback token.
+- Under the restricted policy, public transaction APIs reject executable validators. Material transactions restore complete Entry/ComponentMeta state and tombstone replaced metadata only after commit. `MaterialRegistry.getSnapshot()` exposes frozen deterministic verification data without a rollback token.
 
 The root `@easy-editor/core` entry retains `defaultEngine`, `init`, `project`, and other legacy facade exports for compatibility. New code should not use it as the instance entry.
 
@@ -78,9 +77,11 @@ The root `@easy-editor/core` entry retains `defaultEngine`, `init`, `project`, a
 | Executable Schema / commands | Denied | Allowed for trusted hosts |
 | Prototype-extending plugins | Denied with realm-integrity checks | Allowed |
 | Remote access | Denied by default | Allowed, still mediated by `RemoteAdapter` |
-| Intended use | New constrained hosts and Agent capability endpoints | Dashboards relying on legacy plugins or UMD |
+| Intended use | New constrained hosts | Dashboards relying on legacy plugins or UMD |
 
-Both policies run in the same JavaScript realm. **Neither provides process, iframe, or SES isolation.** Renderer expression evaluation is a separate policy: allowing evaluation does not place code in a security sandbox.
+`agentRestricted` is a capability, input-validation, and model-mutation policy. A restricted PluginContext is composed from finite root facades that omit engine lifecycle and known reverse-authority fields; its plugin registry is readonly, while the host reads frozen runtime snapshots and generation-bound exports. This narrows the supported API and accidental-authority surface; it is not intended to host malicious code.
+
+Plugins and `RemoteAdapter` implementations execute in the host JavaScript realm and are therefore **trusted extension code**. Neither policy provides process, iframe, Realm, or SES isolation; plugins can still use their own captured closures, imports, and globals. Renderer expression evaluation is a separate policy: allowing evaluation does not place code in a security sandbox.
 
 ## 4. Schema boundary
 
@@ -117,23 +118,9 @@ The canonical catalog contains:
 
 Transactions validate commands, document identity, and preconditions before writing. A commit creates one history unit. Failure restores Schema, node identity, selection, history, material counts, and deferred events. Observer failures are reported without pretending the commit did not happen.
 
-## 6. Agent capability boundary
+## 6. Agent phase deferred
 
-The Agent must not hold engine objects on the UI thread. The recommended flow is:
-
-```text
-UI -> request DTO -> Worker
-Worker -> snapshot capability -> privacy projection -> same-origin AI gateway
-Worker -> strict command parse -> preview -> safe proposal
-UI -> explicit confirmation -> trusted Host -> approveAndExecute
-Host -> safe result DTO -> UI
-```
-
-The host issues a minimal request-scoped grant covering document IDs, component names, command types, extra fields, and size limits. Component types, component props, and extra fields are independent authorities. Props and extras fail closed; only bounded strings, finite ranged numbers, or exact recursively validated objects may enter a command. The Dashboard currently grants only bounded `Text.text` and requires an inserted node to carry a range-checked `$dashboard.rect`.
-
-`preview` fixes the base revision, generated IDs, effects, and expected result. `execute(planId)` checks staleness before commit and exact output afterward. The Dashboard Worker session uses `executionAuthority: 'host'`: peer `execute` fails closed, while only the trusted host can call `approveAndExecute(planId)`. The host looks up its authoritative preview record by plan ID before deriving command counts, operation types, and affected-node counts, so the Worker cannot substitute forged effects for the confirmation summary. The UI never receives the plan ID, node IDs, or commands. Rejection, timeout, dialog close, and stale plans do not silently re-preview or retry. Receipts, audit records, and committed events from this entry carry `approvalSource: 'host'`; it proves that the trusted host invoked the approval entry, not the identity of a particular human approver.
-
-Before constructing a Worker, the Dashboard host inspects and copies only the newest 10 messages, capped at 2 KiB of UTF-8 per message and 12 KiB total. If an execution error reports a committed mutation or an incomplete rollback, the host returns `outcome: unknown`; callers must re-read the canvas and never automatically retry.
+This phase freezes a framework kernel that is instantiable, disposable, verifiable, transactional, and explicit about trust boundaries. Existing Agent experiments are outside the Stable `EngineInstance` contract and must not drive the framework object model. Agent Runtime, transport, authorization, and approval protocols will be designed separately after the framework contract is stable.
 
 ## 7. Remote resources and disposal
 
@@ -144,6 +131,8 @@ Network requests, scripts, styles, WebSockets, timers, and caches should be owne
 3. On `destroy()`, stop new work, cancel in-flight work, then clean up in reverse order.
 4. Late async completions after disposal must be discarded and cannot re-register resources.
 
+`RemoteAdapter.init()` and `dispose()` are engine-owned lifecycle callbacks and must not call the same engine's `init()` or `destroy()`. Direct synchronous re-entry is rejected. An adapter must also not capture a raw engine reference and issue a lifecycle call after an `await`.
+
 Legacy UMD scripts may mutate global objects or prototypes. Removing a `<script>` element cannot undo those process-level changes, so such code is trusted same-realm code under `legacyTrusted`, not sandboxed content. After a Dashboard instance is destroyed, a new instance in the same realm is not allowed to reclaim an already-loaded UMD global; HMR requires a full page reload. This is a compatibility limit of the legacy adapter, not a Core lifecycle guarantee.
 
 ## 8. Verification contract
@@ -153,16 +142,17 @@ Legacy UMD scripts may mutate global objects or prototypes. Removing a `<script>
 | Instance isolation and lifecycle | `engine-instance`, `engine-lifecycle`, `engine-child-boundaries`, `engine-generation-boundary`, `engine-lifecycle-adversarial` |
 | Schema migration and failure atomicity | `schema-validation` |
 | Transactions and structural commands | `transaction`, `structural-commands` |
-| Agent grants, staleness, and transport | `agent-*` |
 | Concurrent disposal and retry | `disposal-ledger`, `lifecycle-disposal` |
-| Dashboard remote and Worker boundaries | `dashboard-runtime-boundary`, `ai-chat-privacy` |
+| Finite public entry and capability boundaries | `framework-entry`, `engine-reference-boundaries`, `restricted-mutation-authority` |
+| Dashboard remote boundary | `dashboard-runtime-boundary` |
 
 Architectural claims hold only when lint, public type contracts, runtime tests, and builds pass together.
 
 ## 9. Current limitations
 
 - React rendering is implemented today; other frameworks remain extension targets.
-- `legacyTrusted` plugins and UMD modules are not reversibly sandboxed.
+- Same-realm plugins, `RemoteAdapter` implementations, and UMD modules are trusted extension code; neither `agentRestricted` nor `legacyTrusted` is a malicious-code sandbox.
 - Same-realm evaluation policy controls permission to execute, not isolation from malicious code.
-- Agent capabilities constrain the set of model actions. The Dashboard confirmation gate helps verify user intent, but it cannot remove prompt injection from projected canvas text or protect a host UI realm already controlled by XSS or malicious scripts.
+- Without AsyncContext-like causal tracking or an isolated Realm/process, same-realm JavaScript cannot reliably distinguish an external host lifecycle call from one issued through a raw engine closure after a lifecycle callback suspends. The latter is a plugin/adapter host-protocol violation, not an isolation guarantee the kernel can reliably enforce.
+- Agent Runtime object, transport, and authorization protocols are not stable commitments in this phase.
 - Hosts remain responsible for authentication, tenant authorization, rate limits, persistent audit, and real process or iframe isolation.

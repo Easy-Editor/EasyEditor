@@ -105,7 +105,7 @@ const init = async () => {
   // 4. Choose a application scenario
   let scenarios = argScenarios
   let hasInvalidArgScenarios = false
-  if (argScenarios && !SCENARIOS.findIndex(scenario => scenario.name === argScenarios)) {
+  if (argScenarios && !SCENARIOS.some(scenario => scenario.name === argScenarios)) {
     scenarios = undefined
     hasInvalidArgScenarios = true
   }
@@ -130,7 +130,7 @@ const init = async () => {
   // 5. Choose a framework and variant
   let framework = argTemplate
   let hasInvalidArgTemplate = false
-  if (argTemplate && !FRAMEWORKS.findIndex(framework => framework.name === argTemplate)) {
+  if (argTemplate && !FRAMEWORKS.some(framework => framework.name === argTemplate)) {
     framework = undefined
     hasInvalidArgTemplate = true
   }

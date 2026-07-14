@@ -31,7 +31,7 @@ my-setter/
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 
 export interface CustomSetterProps extends SetterProps {
   // 自定义属性
@@ -75,7 +75,7 @@ export default CustomSetter;
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 
 interface MarginValue {
   top?: number;
@@ -170,7 +170,7 @@ export default MarginSetter;
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 import { SketchPicker } from 'react-color'
 
 interface ColorSetterProps extends SetterProps<string> {
@@ -229,7 +229,7 @@ Setter 可以访问设计器、文档和节点，实现更复杂的功能，如�
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import type { JSFunction, SetterProps } from '@easy-editor/core'
+import type { JSFunction, SetterProps } from '@easy-editor/core/instance'
 import { Settings, Trash } from 'lucide-react'
 import { useState } from 'react'
 
@@ -396,23 +396,23 @@ export default EventSetter
 创建完 Setter 组件后，需要将其注册到 EasyEditor 中：
 
 ```typescript
-import { createEditor } from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import CustomSetter from './path/to/CustomSetter'
 import MarginSetter from './path/to/MarginSetter'
 import ColorSetter from './path/to/ColorSetter'
 import EventSetter from './path/to/EventSetter'
 
-// 在创建编辑器实例时注册
-const editor = createEditor({
-  // ...其他配置
-  setters: {
-    // 注册自定义设置器
-    CustomSetter,
-    MarginSetter,
-    ColorSetter,
-    EventSetter
-  }
+const engine = createEngine()
+
+// 在引擎初始化前，通过实例拥有的设置器注册表注册
+engine.setters.registerSetter({
+  CustomSetter,
+  MarginSetter,
+  ColorSetter,
+  EventSetter
 })
+
+await engine.init({ designMode: 'design' })
 ```
 
 ## 在物料中使用
@@ -420,7 +420,7 @@ const editor = createEditor({
 在组件的属性配置中，可以通过指定 `setter` 字段来使用自定义的 Setter：
 
 ```typescript
-import type { Configure } from '@easy-editor/core'
+import type { Configure } from '@easy-editor/core/instance'
 
 const configure: Configure = {
   props: [
@@ -533,7 +533,7 @@ Setter 组件可以通过 `field` 属性访问设计器上下文，包括当前�
 
 ```tsx
 import React from 'react'
-import type { SetterProps } from '@easy-editor/core'
+import type { SetterProps } from '@easy-editor/core/instance'
 
 const AdvancedSetter: React.FC<SetterProps> = (props) => {
   const { value, onChange, field } = props;

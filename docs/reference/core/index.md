@@ -1,6 +1,18 @@
 # Core API
 
-EasyEditor v2 的稳定运行时边界是宿主拥有的 `EngineInstance`。实例把生命周期、插件、物料、设置器、项目替换、命令事务、Agent capability 和远程资源收束到同一个所有权边界中。
+EasyEditor v2 的稳定框架边界是宿主拥有的 `EngineInstance`。实例把生命周期、插件、物料、设置器、项目替换、命令事务和远程资源收束到同一个所有权边界中。
+
+## 公共契约层级
+
+| 层级 | 入口或表面 | 承诺 |
+| --- | --- | --- |
+| **Stable** | `@easy-editor/core/instance` | 工厂创建的实例生命周期、Schema 校验、命令、事务和宿主注册 API |
+| **Compatibility（Web adapter）** | Designer、Project、Document、Node、Event 和面向 DOM 的 Simulator 类型 | 用于现有 Web 渲染器和读取集成；原始模型修改方法不是稳定的 v2 写入 API |
+| **Deferred / Internal** | Agent 实验和具体引擎实现 | Agent Runtime 不属于本轮框架收束；具体构造和可变服务注入不是公共 API |
+
+根入口 `@easy-editor/core` 是 v1 迁移 facade，不属于 Stable 实例契约。
+
+`@easy-editor/core/instance` 使用显式、有限的导出清单。宿主只能通过 `createEngine()` 取得 `EngineInstance`；具体引擎类、可变服务注入和生命周期内部能力不对外导出。
 
 ::: warning v2 写入边界
 `engine.project`、`engine.designer` 以及公开的 Document/Node 类型仍用于渲染集成和旧代码兼容，但原始模型修改方法不是稳定的 v2 业务写入边界。新代码应使用 `engine.loadProject()`、`engine.unloadProject()`、`engine.commands`、`engine.transactions`、`engine.undo()` 和 `engine.redo()`。
@@ -47,7 +59,7 @@ export async function startEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`ConfigOptions.designMode` 只接受 `'design' | 'live'`。初始化成功后 `lifecycleState` 为 `ready`。并发 `init()` 会等待同一轮初始化；对已经就绪的实例再次调用 `init()` 会先销毁当前运行代，再重新初始化。
+`ConfigOptions.designMode` 只接受 `'design' | 'live'`。初始化成功后 `lifecycleState` 为 `ready`。外部并发 `init()` 会等待同一轮初始化；若销毁正在进行，则初始化先等待销毁结束。对已经就绪的实例再次调用 `init()` 会先销毁当前运行代，再重新初始化。
 
 ### `engine.destroy()`
 
@@ -61,7 +73,7 @@ export function destroyEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`destroy()` 会阻止新写入，并清理实例拥有的 Agent capability、插件、监听器、Designer、Project、热键、物料、设置器、远程 adapter/registry 和事件。并发销毁会合并到同一轮操作；清理失败时状态进入 `failed`，再次调用会重试。
+`destroy()` 会阻止新写入，并清理实例拥有的插件、监听器、Designer、Project、热键、物料、设置器、远程 adapter/registry、事件及内部资源。外部并发销毁会合并到同一轮操作；若初始化正在进行，则销毁先等待初始化 settle，再清理已建立的运行代。清理失败时状态进入 `failed`，再次调用会重试。
 
 不要永久缓存已经 settle 的销毁 Promise，也不要单独销毁 `materials`、`setters`、`project` 等引擎拥有的子服务。
 
@@ -79,16 +91,21 @@ type EngineLifecycleState =
 
 这是只读状态源。宿主可以据此拒绝未就绪请求，但不能通过赋值改变生命周期。
 
+### 生命周期回调约束
+
+插件的 `init` / `extend` / `destroy` 与 `RemoteAdapter.init()` / `dispose()` 都是引擎拥有的生命周期回调。它们**不得**调用同一引擎的 `init()` 或 `destroy()`；直接同步重入会抛出 `LifecycleReentrancyError`。受限 PluginContext 不暴露引擎生命周期方法。
+
+同 Realm JavaScript 在没有 AsyncContext 类因果跟踪或 Realm/进程隔离时，无法可靠区分“外部宿主调用”和“回调在 `await` 后通过预先捕获的原始引擎闭包调用”。因此插件或 adapter 不得在异步挂起后这样调用生命周期；这是宿主扩展协议约束，不是安全沙箱能够兜底的场景。
+
 ## 实例模块
 
 | 模块 | 责任 |
 | --- | --- |
-| `plugins` | 异步注册、排序、初始化和销毁插件 |
+| `plugins` | 宿主异步注册/删除插件并读取冻结状态；排序、初始化和销毁由引擎拥有 |
 | `materials` | 注册组件元数据，并提供可验证 registry 快照 |
 | `setters` | 注册设置器，并提供稳定的只读 Map facade |
 | `project` / `designer` | 渲染器集成与旧模型读取；不是新的稳定直写边界 |
 | `commands` / `transactions` | 可验证、可回滚、可审计的模型写入 |
-| `agentCapabilities` | 最小权限 Agent capability、preview、执行与审计 |
 | `remote` | 经信任策略和宿主 adapter 双重授权的远程资源访问 |
 | `config` / `event` / `eventBus` / `hotkey` | 实例拥有的配置与交互基础设施 |
 
@@ -129,6 +146,9 @@ export function registerMetadata(
 - `engine.materials.registry.getSnapshot()` 返回排序、分离且冻结的确定性数据。
 - `engine.materials.registry.getAll()` 返回只读 Entry 视图，不暴露 backing Map。
 - `engine.setters.getSettersMap()` 返回稳定的 `ReadonlyMap` facade；`set`、`delete`、`clear` 会被拒绝。
+- `engine.plugins.get()` / `getAll()` 只返回冻结状态，不暴露 `PluginRuntime`、Context 或生命周期方法。
+- `engine.plugins.getExports(name)` 返回代际绑定的只读导出 facade；销毁后保留的可调用导出会失效。
+- 受限策略下，插件 Context 的根能力是有限 facade：不提供引擎生命周期，并省略已知的反向权限字段；其中 `PluginRegistry` 只读，不能通过该 registry 注册或删除其他插件。这里描述的是 Context 表面，而不是对任意同 Realm 代码的隔离承诺。
 
 ## 验证并替换项目
 
@@ -212,35 +232,15 @@ export function getEngineHealth(engine: EngineInstance) {
 
 ### 策略
 
-`createEngine()` 默认使用 `agentRestricted`，拒绝可执行 Schema、callback transaction、原始模型直写、插件原型扩展和远程访问。`legacyTrusted` 只为依赖旧插件或 UMD 的受信宿主提供兼容，不是沙箱。
+`createEngine()` 默认使用 `agentRestricted`。它是 capability、输入校验与模型修改策略：通过受限框架表面拒绝可执行 Schema、callback transaction、直接原始模型写入、插件原型扩展和远程访问，并向插件提供有限根 facade。它不是用来执行恶意插件的安全沙箱。
+
+同 Realm 插件与宿主提供的 `RemoteAdapter` 都是受信扩展代码；它们仍可使用自己捕获的闭包、导入和全局对象。`legacyTrusted` 只为依赖旧插件或 UMD 的受信宿主提供更宽的兼容表面；两种策略都不提供进程、iframe、Realm 或 SES 隔离。
 
 当前 `DashboardPlugin` 依赖同 Realm 原型扩展，因此 Dashboard 兼容宿主需要显式使用 `legacyTrusted`。受限引擎必须与这类代码隔离在不同 Worker、iframe 或 Realm 中。
 
-### Agent 执行权
+### Agent 阶段暂缓
 
-`issue()` 返回的同 Realm capability 可以执行；`issuePort()` 默认 `executionAuthority: 'peer'`，连接端也可以执行。只有显式选择 `'host'`，才能把执行权保留在宿主：
-
-```ts
-import type {
-  AgentCapabilityGrantInput,
-  AgentPortSession,
-  EngineInstance,
-} from '@easy-editor/core/instance'
-
-export function issueHostApprovedPort(
-  engine: EngineInstance,
-  port: MessagePort,
-  signal: AbortSignal,
-  grant: AgentCapabilityGrantInput,
-): AgentPortSession {
-  return engine.agentCapabilities.issuePort(grant, port, {
-    executionAuthority: 'host',
-    signal,
-  })
-}
-```
-
-连接端仍可 `snapshot()` 和 `preview()`，但 `execute()` 会被拒绝。宿主应读取 `session.getPreparedPlanPreview(planId)` 返回的 Core 权威 preview，完成自己的策略或用户确认后再调用 `session.approveAndExecute(planId)`。该调用只能证明宿主入口批准过，不能证明某个具体用户身份。
+Agent Runtime、传输、授权和审批协议不属于本阶段的 Stable 框架契约，也不从 `EngineInstance` 表面获得稳定承诺。现有实验入口会在框架契约稳定后的 Agent 阶段单独审视。
 
 ### 远程资源
 
@@ -250,6 +250,8 @@ export function issueHostApprovedPort(
 2. 宿主 `RemoteAdapter` 对资源名、类型、URL 和版本的 allowlist。
 
 `engine.remote.registry` 只暴露只读资源 envelope；其中 `data` 仍是 adapter 拥有的不透明 capability。实例销毁时 adapter、加载状态和 registry 会统一清理。
+
+`RemoteAdapter` 是宿主提供的受信扩展。其 `init()` / `dispose()` 不能调用同一引擎的生命周期，也不能捕获原始引擎后在 `await` 之后发起这类调用。
 
 ## 旧模型 API 的兼容地位
 
@@ -262,6 +264,6 @@ export function issueHostApprovedPort(
 - 不提供多实例隔离；
 - 不能与显式实例的模块交叉使用；
 - 使用后仍必须等待 `destroy()`；
-- 新应用和 Agent 宿主应从 `@easy-editor/core/instance` 创建实例。
+- 新应用应从 `@easy-editor/core/instance` 创建实例；Agent 相关契约留待后续阶段单独设计。
 
 完整步骤见[从 v1 迁移到 v2](/guide/migration-v2)和[引擎所有权与信任边界](/design/overview)。

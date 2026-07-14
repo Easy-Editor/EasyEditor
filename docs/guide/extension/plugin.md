@@ -1,572 +1,238 @@
 # 插件扩展
 
-插件是 EasyEditor 的功能扩展机制，通过插件可以扩展编辑器的功能，增强核心能力。本指南将帮助你了解如何开发和集成自定义插件。
-
-## 概述
-
-插件是 EasyEditor 的扩展单元，用于增强编辑器的功能。插件可以：
-
-- 添加新功能和物料组件
-- 扩展现有类的方法和属性
-- 监听和响应编辑器事件
-- 与其他插件协作和通信
-- 集成第三方库和服务
-
-EasyEditor 采用了"微内核+插件"的架构设计，大部分功能都是通过插件实现的，这使得编辑器非常灵活和可扩展。
+插件是 EasyEditor 的宿主扩展机制。稳定宿主从 `@easy-editor/core/instance` 创建引擎，通过有限 `PluginManager` 注册插件；插件定义不会获得 `PluginRuntime`、引擎生命周期编排或管理器内部 registry。
 
 ## 生命周期
 
-插件遵循以下生命周期：
+一个插件按以下顺序参与引擎生命周期：
 
-1. **注册阶段**：插件向编辑器注册，设置插件名称、依赖等基本信息
-2. **扩展阶段**：如果存在 `extend` 方法，调用它来扩展核心类
-3. **初始化阶段**：调用插件的 `init` 方法，设置事件监听，初始化资源
-4. **运行阶段**：插件正常工作，响应事件，提供功能
-5. **销毁阶段**：调用插件的 `destroy` 方法，清理资源，移除事件监听
-
-编辑器会确保按照正确的依赖顺序初始化插件，并在适当的时候销毁插件。
-
-## 目录结构
-
-一个完整的插件通常包含以下文件结构：
-
-```bash
-my-plugin/
-├── index.ts               # 插件入口
-└── types.ts               # 类型定义
-```
-
-最简单的插件可以只有一个入口文件。
-
-## 使用
-
-### 基础插件
-
-最基本的插件示例：
+1. **注册**：校验唯一名称、依赖和注册选项。
+2. **扩展**：若定义 `extend`，在初始化前应用兼容性原型扩展。
+3. **初始化**：调用 `init(ctx)`；返回 Promise 时引擎会等待。
+4. **运行**：插件通过当前运行代的 Context 能力工作。
+5. **销毁**：调用 `destroy(ctx)` 并等待结果，再执行 Context disposer。
 
 ```ts
-import type { PluginCreator } from '@easy-editor/core'
-
-// 插件工厂函数，可接收配置参数
-const MyPlugin: PluginCreator<Option> = (options = {}) => {
-  // 返回插件定义
-  return {
-    name: 'MyPlugin',              // 插件名称，必须唯一
-    deps: [],                      // 依赖的其他插件
-    init(ctx) {                    // 初始化方法
-      ctx.logger.info('MyPlugin initialized')
-
-      // 注册全局变量，可以被其他插件访问
-      ctx.set('myPluginData', {
-        version: '1.0.0',
-        ...options
-      })
-
-      // 注册事件监听
-      ctx.event.on('document.open', (doc) => {
-        ctx.logger.info('Document opened:', doc.id)
-      })
-    },
-    destroy(ctx) {                 // 销毁方法
-      ctx.logger.info('MyPlugin destroyed')
-
-      // 移除事件监听，避免内存泄漏
-      ctx.event.off('document.open')
-    }
-  }
+interface Plugin {
+  name: string
+  deps?: string[]
+  eventPrefix?: string
+  extensionFingerprint?: string
+  init(ctx: PluginContext): Promise<void> | void
+  extend?(ctx: PluginExtend): Promise<void> | void
+  destroy?(ctx: PluginContext): Promise<void> | void
+  exports?(): Record<string, unknown>
 }
+```
+
+插件生命周期回调不得调用同一引擎的 `init()` 或 `destroy()`；直接同步重入会抛出 `LifecycleReentrancyError`。受限 PluginContext 不暴露这两个方法。
+
+插件也不得捕获原始引擎引用并在生命周期回调 `await` 之后调用其生命周期。同 Realm JavaScript 在没有 AsyncContext 类因果跟踪或 Realm/进程隔离时无法可靠区分这种调用与外部宿主调用；这是扩展协议约束，不是沙箱保证。
+
+## 基础插件
+
+```ts
+import type { PluginCreator } from '@easy-editor/core/instance'
+
+interface Options {
+  debug?: boolean
+}
+
+const MyPlugin: PluginCreator<Options> = (options = {}) => ({
+  name: 'MyPlugin',
+  eventPrefix: 'my-plugin',
+
+  init(ctx) {
+    if (options.debug) ctx.logger.info('MyPlugin initialized')
+
+    const disposeEvent = ctx.event.on('common:document-open', documentId => {
+      ctx.logger.info('Document opened:', documentId)
+    })
+    ctx.onDispose(disposeEvent)
+
+    const handleDuplicate = (event: KeyboardEvent) => {
+      event.preventDefault()
+      ctx.event.emit('shortcut', { command: 'duplicate' })
+    }
+    ctx.hotkey.bind('ctrl+d', handleDuplicate)
+    ctx.onDispose(() => ctx.hotkey.unbind('ctrl+d', handleDuplicate))
+  },
+
+  async destroy(ctx) {
+    ctx.logger.info('MyPlugin destroyed')
+  },
+})
 
 export default MyPlugin
 ```
 
-### 事件处理插件
+优先用 `ctx.onDispose()` 登记监听器、快捷键、计时器和其他资源的清理函数。即使插件没有实现 `destroy`，Context disposer 仍由引擎统一拥有。
 
-处理编辑器事件的插件示例：
+## 注册插件
 
 ```ts
-import { type PluginCreator, DESIGNER_EVENT } from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
+import MyPlugin from './my-plugin'
 
-const EventHandlerPlugin: PluginCreator = () => {
-  return {
-    name: 'EventHandlerPlugin',
-    deps: [],
-    init(ctx) {
-      const { designer } = ctx
+const engine = createEngine({
+  trustPolicy: 'agentRestricted',
+  hostWindow: window,
+})
 
-      // 监听组件选择事件
-      designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, (nodeIds) => {
-        const node = designer.currentDocument?.getNode(nodeIds[0])
-        if (node) {
-          ctx.logger.info('Selected component:', node.componentName)
-        }
-      })
+await engine.plugins.register(MyPlugin({ debug: true }))
+await engine.init({ designMode: 'design' })
 
-      // 监听属性变更事件
-      designer.onEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, ({ node, prop, newvalue }) => {
-        ctx.logger.info(`Property ${prop} of ${node.id} changed to:`, newvalue)
-      })
-
-      // 监听拖拽事件
-      designer.onEvent(DESIGNER_EVENT.DRAG_END, (e) => {
-        ctx.logger.info('Component dropped:', e)
-      })
-    }
-  }
-}
-
-export default EventHandlerPlugin
+// 引擎已就绪后注册的普通插件需要显式 autoInit。
+await engine.plugins.register(AnotherPlugin(), { autoInit: true })
 ```
 
-### 功能扩展插件
+注册与删除都是异步操作，必须等待：
 
-扩展编辑器核心类的插件示例：
+- `register(plugin, { autoInit?, override? })`
+- `registerPlugins(plugins, options?)`
+- `delete(name)`
+
+`get()` / `getAll()` 只返回冻结的 `PluginRuntimeSnapshot`；`getExports()` 返回与当前运行代绑定的只读导出 facade。宿主和插件都拿不到原始 `PluginRuntime` 或其生命周期方法。
+
+## 插件通信
+
+### 事件
+
+`ctx.event.emit(name, payload)` 会按当前插件的 `eventPrefix` 补全事件名。监听跨插件事件时使用完整名称：
 
 ```ts
-import type { Plugin } from '@easy-editor/core'
+const Producer = (): Plugin => ({
+  name: 'Producer',
+  eventPrefix: 'producer',
+  init(ctx) {
+    ctx.event.emit('ready', { version: 1 })
+  },
+})
 
-const ExtendPlugin = (): Plugin => {
+const Consumer = (): Plugin => ({
+  name: 'Consumer',
+  init(ctx) {
+    ctx.onDispose(
+      ctx.event.on('producer:ready', payload => {
+        ctx.logger.info('Producer ready:', payload.version)
+      }),
+    )
+  },
+})
+```
+
+在受限策略下，回调参数也经过当前运行代的 capability membrane；不要把它们当作可跨代保存的原始内核对象。
+
+### 只读导出
+
+需要共享明确 API 时，使用插件导出，不要向 Context 动态挂载全局变量：
+
+```ts
+interface CounterApi {
+  read(): number
+}
+
+const Counter = (): Plugin => {
+  let value = 0
   return {
-    name: 'ExtendPlugin',
-    deps: [],
-    init(ctx) {
-      ctx.logger.info('ExtendPlugin initialized')
+    name: 'Counter',
+    init() {
+      value += 1
     },
-    // 扩展核心类
-    extend({ extendClass, extend }) {
-      const { Node, Document } = extendClass
-
-      // 扩展 Node 类
-      extend('Node', {
-        // 添加自定义方法
-        duplicate: {
-          value(this: Node) {
-            const parent = this.parent
-            if (!parent) return null
-
-            const index = parent.children.indexOf(this)
-            const schema = this.export()
-
-            // 创建副本
-            return parent.document.createNode({
-              ...schema,
-              id: undefined,  // 让系统生成新ID
-              props: {
-                ...schema.props,
-                label: `${schema.props?.label || 'Component'} Copy`
-              }
-            }, parent, { index: index + 1 })
-          }
-        },
-        // 添加自定义属性
-        isContainer: {
-          get(this: Node) {
-            // 检查节点是否为容器类型
-            return this.componentMeta?.configure?.component?.isContainer || false
-          }
-        }
-      })
-    }
+    exports: () => ({ read: () => value }),
   }
 }
 
-export default ExtendPlugin
+const Reader = (): Plugin => ({
+  name: 'Reader',
+  deps: ['Counter'],
+  init(ctx) {
+    const counter = ctx.plugins.getExports<CounterApi>('Counter')
+    ctx.logger.info('Counter:', counter?.read())
+  },
+})
 ```
 
-### 注册插件
+导出引用在所属运行代销毁后会失效；不要缓存到下一次 `init()`。
 
-在引擎初始化时注册插件：
+## PluginContext 边界
+
+Context 提供以下类别的能力：
+
+- `project`：项目读取与受策略约束的有限项目操作；
+- `materials` / `setters`：经审查的注册与读取 API；
+- `plugins`：只读 `PluginRegistry`；
+- `event`：经过前缀约束的共享引擎事件能力；`pluginEvent`：当前插件私有的事件总线；
+- `hotkey` / `clipboard`：交互能力；
+- `config` / `logger` / `trustPolicy`：配置、日志和策略信息；
+- `onDispose(disposer)`：把资源清理交回引擎所有。
+
+默认 `agentRestricted` Context 使用有限、null-prototype 的根 facade，并通过代际 membrane 包装返回值和回调参数。它省略引擎生命周期、内部 registry、共享引擎的原始 event bus、teardown 方法以及已知反向权限字段；`pluginEvent` 只属于当前插件。`plugins` 不能注册、覆盖或删除其他插件。
+
+这是一条 **API、输入和模型修改权限边界**，不是恶意代码沙箱。插件和宿主提供的 `RemoteAdapter` 都在同一个 JavaScript Realm 中执行，必须视为受信扩展代码；它们仍可使用自己的闭包、导入和全局对象。需要运行不可信代码时，使用 Worker、iframe、隔离 Realm 或独立进程。
+
+Context 和其派生 capability 与运行代绑定。实例销毁后，保留的 Context、回调值、物料 meta 或插件导出不会在下一代复活。
+
+旧插件如果必须访问 `Project.designer`、`Project.simulator` 等原始宿主服务，必须显式声明兼容边界，并且宿主必须选择 `legacyTrusted`：
 
 ```ts
 import {
-  init,
-  plugins,
-} from '@easy-editor/core'
-import MyPlugin from './plugins/my-plugin'
-import EventHandlerPlugin from './plugins/event-handler-plugin'
-import ExtendPlugin from './plugins/extend-plugin'
-import MyNewPlugin from './plugins/my-new-plugin'
+  assertLegacyTrustedPluginContext,
+  type PluginCreator,
+} from '@easy-editor/core/instance'
 
-// 注册插件
-await plugins.registerPlugins([
-  MyPlugin({ debug: true }),
-  EventHandlerPlugin(),
-  ExtendPlugin()
-])
-
-// 初始化引擎
-await init({
-  designMode: 'design',
-})
-
-// 初始化完成后，普通插件必须显式 autoInit 才会立即执行 init()
-await plugins.registerPlugins(
-  [MyNewPlugin()],
-  { autoInit: true },
-)
-```
-
-包含 `extend` 的原型扩展插件不能使用 `autoInit`。这类插件必须在引擎初始化前注册；如果引擎已经运行，请销毁并重启实例后再预注册。
-
-## 通信模式
-
-插件之间可以通过以下方式进行通信：
-
-### 事件通信
-
-通过编辑器的事件系统进行通信：
-
-```ts
-// 插件 A
-init(ctx) {
-  // 触发自定义事件
-  ctx.event.emit('pluginA.dataChanged', { someData: 'value' })
-}
-
-// 插件 B
-init(ctx) {
-  // 监听插件 A 的事件
-  ctx.event.on('pluginA.dataChanged', (data) => {
-    console.log('Received data from Plugin A:', data)
-  })
-}
-```
-
-### 共享上下文
-
-通过插件上下文共享数据和方法：
-
-```ts
-// 插件 A
-init(ctx) {
-  // 注册共享服务
-  ctx.set('dataService', {
-    getData: () => ({ value: 42 }),
-    setData: (data) => console.log('Data set:', data)
-  })
-}
-
-// 插件 B
-init(ctx) {
-  // 获取插件 A 注册的服务
-  const dataService = ctx.get('dataService')
-  if (dataService) {
-    const data = dataService.getData()
-    console.log('Got data:', data)
-    dataService.setData({ newValue: 100 })
-  }
-}
-```
-
-### 访问扩展方法
-
-通过扩展方法进行通信：
-
-```ts
-// 插件 A 扩展了 Node 类
-extend({ extend }) {
-  extend('Node', {
-    pluginAMethod: {
-      value(this: Node, param: string) {
-        return `Plugin A method: ${param}`
-      }
-    }
-  })
-}
-
-// 插件 B 使用插件 A 的扩展方法
-init(ctx) {
-  ctx.event.on('node.select', (nodeId) => {
-    const node = ctx.designer.currentDocument?.getNode(nodeId)
-    if (node && typeof node['pluginAMethod'] === 'function') {
-      const result = node['pluginAMethod']('test')
-      console.log(result)  // 输出: "Plugin A method: test"
-    }
-  })
-}
-```
-
-## 配置项
-
-### 核心属性
-
-#### `name` (必需)
-
-定义插件的唯一名称，用于识别插件和处理依赖关系。
-
-```ts
-{
-  name: 'MyPlugin'
-}
-```
-
-#### `deps` (可选)
-
-定义插件依赖的其他插件列表。EasyEditor 会确保依赖的插件在当前插件之前加载和初始化。
-
-```ts
-{
-  deps: ['CorePlugin', 'UIPlugin']  // 依赖 CorePlugin 和 UIPlugin
-}
-```
-
-#### `eventPrefix` (可选)
-
-定义插件的事件前缀，用于区分不同插件的事件。如果不设置，则使用 'common' 作为前缀。
-
-```ts
-{
-  eventPrefix: 'my-plugin'  // 事件名将变为 'my-plugin.eventName'
-}
-```
-
-### 核心方法
-
-#### `init` (必需)
-
-插件初始化方法，在编辑器启动时执行。可以是同步或异步函数。
-
-```ts
-{
+const LegacyPlugin: PluginCreator = () => ({
+  name: 'LegacyPlugin',
   init(ctx) {
-    // 初始化逻辑
-    ctx.logger.info('Plugin initialized')
-
-    // 订阅事件
-    ctx.event.on('document.open', (doc) => {
-      // 处理事件
-    })
-
-    // 异步初始化示例
-    // return new Promise((resolve) => {
-    //   setTimeout(() => {
-    //     // 异步操作完成
-    //     resolve()
-    //   }, 1000)
-    // })
-  }
-}
+    assertLegacyTrustedPluginContext(ctx)
+    ctx.project.designer.onEvent('legacy-event', () => {})
+  },
+})
 ```
 
-#### `destroy` (可选)
+断言在 `agentRestricted` 下会立即失败，不会把有限 Context 扩权。它只用于标记仍依赖直接宿主权限的迁移期插件；新插件应继续面向有限 capability 编写。
 
-插件销毁方法，在插件被移除时执行，用于清理资源。
+## 原型扩展兼容模式
 
-```ts
-{
-  destroy(ctx) {
-    // 清理资源
-    ctx.logger.info('Plugin destroyed')
+包含 `extend` 的插件会修改共享 Realm 中的类原型，只能：
 
-    // 取消事件订阅
-    ctx.event.off('document.open')
-
-    // 清除定时器
-    clearInterval(this.timer)
-
-    // 销毁DOM元素
-    if (this.element && this.element.parentNode) {
-      this.element.parentNode.removeChild(this.element)
-    }
-  }
-}
-```
-
-#### `extend` (可选)
-
-扩展编辑器核心类的方法，可以添加新的方法或属性，修改现有行为。
+1. 在引擎初始化前注册；
+2. 使用显式 `legacyTrusted`；
+3. 提供稳定 `extensionFingerprint` 以标识进程级扩展；
+4. 接受脚本移除和实例销毁无法撤销进程级原型副作用。
 
 ```ts
-{
-  extend({ extendClass, extend }) {
-    const { Node, Document } = extendClass
+import { createEngine, type Node, type Plugin } from '@easy-editor/core/instance'
 
-    // 扩展 Node 类
+const ExtendPlugin = (): Plugin => ({
+  name: 'ExtendPlugin',
+  extensionFingerprint: 'extend-plugin@1',
+  init() {},
+  extend({ extend }) {
     extend('Node', {
-      // 添加方法
-      customMethod: {
-        value(this: Node, param: string) {
-          return `Custom method with param: ${param}`
-        }
-      },
-
-      // 添加属性
-      customProperty: {
-        get(this: Node) {
-          return this.getExtraPropValue('customProp')
+      getPluginLabel: {
+        value(this: Node) {
+          return `${this.componentName}:${this.id}`
         },
-        set(this: Node, value) {
-          this.setExtraPropValue('customProp', value)
-        }
-      }
+      },
     })
-
-    // 扩展 Document 类
-    extend('Document', {
-      // 添加方法
-      customDocumentMethod: {
-        value(this: Document) {
-          return 'Custom document method'
-        }
-      }
-    })
-  }
-}
-```
-
-## 上下文 (Context)
-
-插件上下文 `ctx` 是一个包含编辑器核心功能的对象，提供了访问和操作编辑器各个部分的能力。主要包括：
-
-### 核心模块访问
-
-```ts
-// 获取编辑器实例
-const editor = ctx.editor
-// 获取设计器实例
-const designer = ctx.designer
-// 获取项目管理实例
-const project = ctx.project
-// 获取模拟器实例
-const simulator = ctx.simulator
-// 获取设置器管理实例
-const setterManager = ctx.setterManager
-// 获取组件元数据管理实例
-const componentMetaManager = ctx.componentMetaManager
-// 获取热键管理
-const hotkey = ctx.hotkey
-```
-
-### 日志系统
-
-```ts
-// 记录日志
-ctx.logger.debug('Debug message')
-ctx.logger.info('Info message')
-ctx.logger.warn('Warning message')
-ctx.logger.error('Error message')
-```
-
-### 事件系统
-
-插件上下文提供了两个事件系统：全局事件系统 `event` 和插件专用事件系统 `pluginEvent`。
-
-```ts
-// 全局事件系统
-// 订阅事件
-ctx.event.on('eventName', (data) => {
-  // 处理事件
+  },
 })
 
-// 取消事件订阅
-ctx.event.off('eventName')
-
-// 触发事件
-ctx.event.emit('eventName', eventData)
-
-// 插件专用事件系统
-// 使用插件名作为事件前缀
-ctx.pluginEvent.emit('dataChanged', { value: 100 })
-ctx.pluginEvent.on('dataChanged', (data) => {
-  console.log('Plugin event received:', data)
-})
+const engine = createEngine({ trustPolicy: 'legacyTrusted' })
+await engine.plugins.register(ExtendPlugin())
+await engine.init()
 ```
 
-### 数据共享
+原型扩展插件不能在引擎就绪后通过 `autoInit` 追加。`legacyTrusted` 也是受信兼容模式，不是沙箱；新插件应优先使用组合、事件、导出和显式宿主 API，而不是修改原型。
 
-```ts
-// 存储共享数据
-ctx.set('key', value)
-
-// 获取共享数据
-const value = ctx.get('key')
-
-// 删除共享数据
-ctx.delete('key')
-```
-
-## 核心类扩展
-
-`extend` 方法允许你扩展以下核心类：
-
-### 设计器相关类
-
-- **Designer**: 设计器主类
-- **Dragon**: 拖拽管理
-- **Detecting**: 检测管理
-- **Selection**: 选区管理
-- **DropLocation**: 放置位置
-- **OffsetObserver**: 偏移观察器
-
-### 模拟器相关类
-
-- **Simulator**: 模拟器主类
-- **Viewport**: 视口管理
-
-### 项目相关类
-
-- **Project**: 项目管理
-- **Document**: 文档管理
-- **History**: 历史记录
-- **Node**: 节点
-- **NodeChildren**: 节点子元素
-- **Props**: 属性集合
-- **Prop**: 单个属性
-
-### 组件相关类
-
-- **ComponentMetaManager**: 组件元数据管理器
-- **SetterManager**: 设置器管理器
-- **ComponentMeta**: 组件元数据
-
-
-## 类型扩展
-
-利用 `declare` 的类型扩展机制，扩展和自定义核心类型定义。以下是一个示例，展示如何扩展 NodeSchema 接口:
-
-```ts
-declare module '@easy-editor/core' {
-  interface NodeSchema {
-    /**
-     * 是否是根节点
-     */
-    isRoot?: boolean
-
-    /**
-     * 是否是分组
-     */
-    isGroup?: boolean
-
-    /**
-     * dashboard 额外信息
-     */
-    $dashboard?: {
-      /**
-       * 位置信息
-       */
-      rect?: DashboardRect
-    }
-  }
-}
-```
+可扩展类当前包括 Simulator、Viewport、Designer、Dragon、Detecting、Selection、DropLocation、OffsetObserver、Project、Document、History、Node、NodeChildren、Props、Prop、Materials、Setters 和 ComponentMeta。
 
 ## 注册选项
 
-在注册插件时，可以提供额外的选项：
+- `autoInit: true`：仅用于引擎已就绪后注册的普通插件。
+- `override: true`：候选插件先成功初始化，再原子替换同名 runtime；失败时保留旧插件。
 
-### `autoInit` (可选)
+同名注册、覆盖和删除由管理器 reservation 串行化。不要绕过 `engine.plugins` 操作内部 registry。
 
-是否自动初始化插件。如果设为 `true`，则在注册插件后立即初始化，而不等待插件管理器统一初始化所有插件。
-
-```ts
-// 注册并立即初始化插件
-await pluginManager.register(MyPlugin(), { autoInit: true })
-```
-
-### `override` (可选)
-
-是否允许覆盖同名插件。如果设为 `true`，则当注册的插件与已存在的插件同名时，会先销毁已存在的插件，然后注册新插件。
-
-```ts
-// 注册并覆盖同名插件
-await pluginManager.register(MyPlugin(), { override: true })
-```
+完整类型见 [Plugin API](/reference/plugin/)；框架所有权与信任模型见[架构综述](/design/overview)。

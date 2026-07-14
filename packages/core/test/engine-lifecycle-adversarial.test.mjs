@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { reaction } from 'mobx'
 import { loadCore } from './helpers/kernel.mjs'
 
 const createDeferred = () => {
@@ -17,6 +18,191 @@ const settle = async action => {
     return { error, status: 'rejected' }
   }
 }
+
+test('destroy rejects inside an active transaction without breaking rollback or a later destroy', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  await engine.init()
+  engine.project.load(
+    {
+      id: 'transaction-lifecycle-gate',
+      version: '1.0.0',
+      componentsMap: [],
+      componentsTree: [{ id: 'root', componentName: 'Page', props: { title: 'before' }, children: [] }],
+    },
+    true,
+  )
+  const root = engine.project.currentDocument.root
+  let nestedDestroyError
+
+  assert.throws(
+    () =>
+      engine.transactions.runSync(() => {
+        root.setPropValue('title', 'during')
+        try {
+          engine.destroy()
+        } catch (error) {
+          nestedDestroyError = error
+        }
+        throw new Error('force rollback')
+      }),
+    /force rollback/,
+  )
+  assert.equal(nestedDestroyError?.name, 'LifecycleReentrancyError')
+  assert.match(nestedDestroyError?.message ?? '', /transaction is active/)
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.equal(root.getPropValue('title'), 'before')
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('project-owned cleanup callbacks cannot reenter engine lifecycle during unload', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  await engine.init()
+  engine.loadProject(
+    {
+      id: 'cleanup-lifecycle-gate',
+      version: '1.0.0',
+      componentsMap: [],
+      componentsTree: [{ id: 'root', componentName: 'Page', props: {}, children: [] }],
+    },
+    true,
+  )
+
+  const lifecycleErrors = []
+  core.registerTestSettingTopEntryDisposer(engine.project.currentDocument.root.settingEntry, () => {
+    for (const request of [() => engine.destroy(), () => engine.init()]) {
+      try {
+        request()
+      } catch (error) {
+        lifecycleErrors.push(error)
+      }
+    }
+  })
+
+  engine.unloadProject()
+
+  assert.deepEqual(
+    lifecycleErrors.map(error => error?.name),
+    ['LifecycleReentrancyError', 'LifecycleReentrancyError'],
+  )
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.equal(engine.project.documents.length, 0)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('host project mutations keep lifecycle closed through MobX reaction flushes', async () => {
+  const core = await loadCore()
+  const projectSchema = (id, title = 'before') => ({
+    id,
+    version: '1.0.0',
+    componentsMap: [],
+    componentsTree: [{ docId: `${id}-doc`, id: `${id}-root`, componentName: 'Page', props: { title }, children: [] }],
+  })
+  const scenarios = [
+    {
+      name: 'loadProject',
+      observe: engine => engine.project.documents[0],
+      prepare: engine => engine.loadProject(projectSchema('load-before'), true),
+      mutate: engine => engine.loadProject(projectSchema('load-after'), true),
+      verify: engine => assert.equal(engine.project.currentDocument.id, 'load-after-doc'),
+    },
+    {
+      name: 'unloadProject',
+      observe: engine => engine.project.documents.length,
+      prepare: engine => engine.loadProject(projectSchema('unload-before'), true),
+      mutate: engine => engine.unloadProject(),
+      verify: engine => assert.equal(engine.project.documents.length, 0),
+    },
+    {
+      name: 'undo',
+      observe: engine => engine.project.currentDocument.root.getPropValue('title'),
+      prepare: engine => {
+        engine.loadProject(projectSchema('undo-before'), true)
+        engine.commands.execute({
+          type: 'updateProps',
+          nodeId: engine.project.currentDocument.root.id,
+          props: { title: 'after' },
+        })
+      },
+      mutate: engine => engine.undo(),
+      verify: engine => assert.equal(engine.project.currentDocument.root.getPropValue('title'), 'before'),
+    },
+    {
+      name: 'redo',
+      observe: engine => engine.project.currentDocument.root.getPropValue('title'),
+      prepare: engine => {
+        engine.loadProject(projectSchema('redo-before'), true)
+        engine.commands.execute({
+          type: 'updateProps',
+          nodeId: engine.project.currentDocument.root.id,
+          props: { title: 'after' },
+        })
+        engine.undo()
+      },
+      mutate: engine => engine.redo(),
+      verify: engine => assert.equal(engine.project.currentDocument.root.getPropValue('title'), 'after'),
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+    await engine.init()
+    scenario.prepare(engine)
+    let effects = 0
+    let lifecycleError
+    const nestedMutationErrors = []
+    let stateInside
+    const dispose = reaction(
+      () => scenario.observe(engine),
+      () => {
+        effects += 1
+        stateInside = engine.lifecycleState
+        try {
+          engine.destroy()
+        } catch (error) {
+          lifecycleError = error
+        }
+        for (const request of [
+          () => engine.unloadProject(),
+          () =>
+            engine.commands.execute({
+              type: 'updateProps',
+              nodeId: 'reaction-reentry',
+              props: { title: 'nested' },
+            }),
+        ]) {
+          try {
+            request()
+          } catch (error) {
+            nestedMutationErrors.push(error)
+          }
+        }
+      },
+    )
+
+    scenario.mutate(engine)
+    dispose()
+
+    assert.equal(effects, 1, `${scenario.name}: reaction must observe the committed mutation once`)
+    assert.equal(lifecycleError?.name, 'LifecycleReentrancyError', `${scenario.name}: lifecycle must reject promptly`)
+    assert.deepEqual(
+      nestedMutationErrors.map(error => error?.name),
+      ['LifecycleReentrancyError', 'LifecycleReentrancyError'],
+      `${scenario.name}: nested composition mutations must reject promptly`,
+    )
+    assert.equal(stateInside, 'ready', `${scenario.name}: callback must not start disposal`)
+    assert.equal(engine.lifecycleState, 'ready', `${scenario.name}: outer mutation must preserve the generation`)
+    scenario.verify(engine)
+
+    await engine.destroy()
+    assert.equal(engine.lifecycleState, 'disposed')
+  }
+})
 
 test('external lifecycleState assignment cannot reopen a disposed engine mutation barrier', async t => {
   const core = await loadCore()
@@ -76,7 +262,7 @@ test('runtime-private lifecycle state resists backing-field writes, method calls
   )
 })
 
-test('plugin writes to legacy lifecycle slot names cannot redirect engine initialization or teardown', async t => {
+test('plugin writes to legacy lifecycle slot names are denied without redirecting initialization or teardown', async t => {
   const core = await loadCore()
   let adapterDisposeCalls = 0
   const engine = core.createEngine({
@@ -106,25 +292,24 @@ test('plugin writes to legacy lifecycle slot names cannot redirect engine initia
   })
 
   await engine.init()
-  assert.deepEqual(writes, [true, true, true, true, true])
-  assert.strictEqual(engine.initScope, marker)
+  assert.deepEqual(writes, [false, false, false, false, false])
+  assert.equal(engine.initScope, undefined)
   await engine.destroy()
   assert.equal(adapterDisposeCalls, 1)
   assert.equal(engine.lifecycleState, 'disposed')
 })
 
-test('Plugins.toProxy returns one canonical lifecycle-guarded identity', async t => {
+test('Plugins.toProxy returns one canonical finite lifecycle-guarded identity', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => engine.destroy())
   const prefetchedProxy = engine.innerPlugins.toProxy()
   const repeatedProxy = engine.innerPlugins.toProxy()
-  const nestedProxy = prefetchedProxy.toProxy()
 
   await engine.init()
   await engine.destroy()
   const registration = await settle(() =>
-    nestedProxy.register({
+    prefetchedProxy.register({
       name: 'proxy-revival',
       init() {},
     }),
@@ -132,14 +317,14 @@ test('Plugins.toProxy returns one canonical lifecycle-guarded identity', async t
 
   assert.deepEqual(
     {
-      canonicalNested: nestedProxy === engine.plugins,
+      facadeHidesProxyFactory: prefetchedProxy.toProxy === undefined,
       canonicalPrefetched: prefetchedProxy === engine.plugins,
       canonicalRepeated: repeatedProxy === engine.plugins,
       registered: engine.plugins.has('proxy-revival'),
       registration: registration.status,
     },
     {
-      canonicalNested: true,
+      facadeHidesProxyFactory: true,
       canonicalPrefetched: true,
       canonicalRepeated: true,
       registered: false,
@@ -187,7 +372,7 @@ test('EventBus chaining retains the guarded facade instead of leaking its raw Ev
   )
 })
 
-test('an async autoInit registration cannot commit after destroy and restart crosses its generation', async t => {
+test('async autoInit registration blocks a cross-direction destroy until an explicit retry', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => engine.destroy())
@@ -211,11 +396,19 @@ test('an async autoInit registration cannot commit after destroy and restart cro
   )
   const registrationOutcome = settle(() => pendingRegistration)
   await oldInitStarted.promise
-  const destruction = engine.destroy()
+  const conflictingDestruction = await settle(() => engine.destroy())
+  assert.equal(conflictingDestruction.status, 'rejected')
+  assert.equal(conflictingDestruction.error?.name, 'LifecycleReentrancyError')
+  assert.equal(engine.lifecycleState, 'ready')
   releaseOldInit.resolve()
-  await destruction
-  await engine.init()
   const outcome = await registrationOutcome
+
+  assert.equal(outcome.status, 'fulfilled')
+  assert.equal(engine.plugins.has('stale-registration'), true)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  await engine.init()
 
   assert.deepEqual(
     {
@@ -224,14 +417,14 @@ test('an async autoInit registration cannot commit after destroy and restart cro
       registration: outcome.status,
     },
     {
-      initCalls: 1,
-      registered: false,
-      registration: 'rejected',
+      initCalls: 2,
+      registered: true,
+      registration: 'fulfilled',
     },
   )
 })
 
-test('an async plugin init cannot let its stale completion overwrite the restarted generation', async t => {
+test('async plugin init blocks a cross-direction destroy until an explicit retry', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => engine.destroy())
@@ -250,25 +443,33 @@ test('an async plugin init cannot let its stale completion overwrite the restart
     },
   })
 
-  const pendingInit = engine.plugins.init()
+  const pendingInit = engine.innerPlugins.init()
   const initOutcome = settle(() => pendingInit)
   await oldInitStarted.promise
-  const destruction = engine.destroy()
+  const conflictingDestruction = await settle(() => engine.destroy())
+  assert.equal(conflictingDestruction.status, 'rejected')
+  assert.equal(conflictingDestruction.error?.name, 'LifecycleReentrancyError')
+  assert.equal(engine.lifecycleState, 'ready')
   releaseOldInit.resolve()
-  await destruction
-  await engine.init()
   const outcome = await initOutcome
+
+  assert.equal(outcome.status, 'fulfilled')
+  assert.equal(engine.innerPlugins.get('stale-init')?.isInited(), true)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  await engine.init()
 
   assert.deepEqual(
     {
-      currentGenerationInited: engine.plugins.get('stale-init')?.isInited(),
+      currentGenerationInited: engine.innerPlugins.get('stale-init')?.isInited(),
       initCalls,
       oldGenerationInit: outcome.status,
     },
     {
       currentGenerationInited: true,
       initCalls: 2,
-      oldGenerationInit: 'rejected',
+      oldGenerationInit: 'fulfilled',
     },
   )
 })
@@ -396,7 +597,7 @@ test('a disposed plugin context revokes retained engine capabilities across rest
   )
 })
 
-test('a stale async plugin body cannot mutate the restarted generation before its ticket rejects', async t => {
+test('an async plugin body completes before an explicitly retried generation transition', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => engine.destroy())
@@ -414,17 +615,26 @@ test('a stale async plugin body cannot mutate the restarted generation before it
       }
     },
   })
-  const pendingInit = engine.plugins.init()
+  const pendingInit = engine.innerPlugins.init()
   const oldOutcome = settle(() => pendingInit)
   await oldInitStarted.promise
-  const destruction = engine.destroy()
+  const conflictingDestruction = await settle(() => engine.destroy())
+  assert.equal(conflictingDestruction.status, 'rejected')
+  assert.equal(conflictingDestruction.error?.name, 'LifecycleReentrancyError')
+  assert.equal(engine.lifecycleState, 'created')
   releaseOldInit.resolve()
-  await destruction
+  const completedInit = await oldOutcome
+
+  assert.equal(completedInit.status, 'fulfilled')
+  assert.equal(engine.config.get('stale-generation-write'), 'leaked')
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
   await engine.init()
 
   assert.deepEqual(
     {
-      currentInited: engine.plugins.get('stale-context-write')?.isInited(),
+      currentInited: engine.innerPlugins.get('stale-context-write')?.isInited(),
       initCalls,
       leaked: engine.config.get('stale-generation-write'),
       oldInit: (await oldOutcome).status,
@@ -433,12 +643,12 @@ test('a stale async plugin body cannot mutate the restarted generation before it
       currentInited: true,
       initCalls: 2,
       leaked: undefined,
-      oldInit: 'rejected',
+      oldInit: 'fulfilled',
     },
   )
 })
 
-test('an async plugin extension cannot commit after destroy and restart crosses its generation', async t => {
+test('async plugin extension blocks a cross-direction destroy until an explicit retry', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => engine.destroy())
@@ -457,16 +667,24 @@ test('an async plugin extension cannot commit after destroy and restart crosses 
     },
     init() {},
   })
-  const runtime = engine.plugins.get('stale-extension')
+  const runtime = engine.innerPlugins.get('stale-extension')
 
-  const pendingExtension = engine.plugins.extend()
+  const pendingExtension = engine.innerPlugins.extend()
   const extensionOutcome = settle(() => pendingExtension)
   await oldExtendStarted.promise
-  const destruction = engine.destroy()
+  const conflictingDestruction = await settle(() => engine.destroy())
+  assert.equal(conflictingDestruction.status, 'rejected')
+  assert.equal(conflictingDestruction.error?.name, 'LifecycleReentrancyError')
+  assert.equal(engine.lifecycleState, 'ready')
   releaseOldExtend.resolve()
-  await destruction
-  await engine.init()
   const outcome = await extensionOutcome
+
+  assert.equal(outcome.status, 'fulfilled')
+  assert.equal(runtime.isExtended(), true)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  await engine.init()
 
   assert.deepEqual(
     {
@@ -476,8 +694,8 @@ test('an async plugin extension cannot commit after destroy and restart crosses 
     },
     {
       currentGenerationExtended: true,
-      extendCalls: 2,
-      oldGenerationExtension: 'rejected',
+      extendCalls: 1,
+      oldGenerationExtension: 'fulfilled',
     },
   )
 })
@@ -641,8 +859,8 @@ test('same-name autoInit registration is linearized without array ghosts', async
 
   assert.deepEqual(
     {
-      arrayCount: engine.plugins.getAll().filter(plugin => plugin.name === 'linearized-registration').length,
-      mapSize: engine.plugins.pluginsMap.size,
+      arrayCount: engine.innerPlugins.getAll().filter(plugin => plugin.name === 'linearized-registration').length,
+      mapSize: engine.innerPlugins.pluginsMap.size,
       outcomes: outcomes.map(outcome => outcome.status).sort(),
       starts,
     },
@@ -671,7 +889,7 @@ test('a failed autoInit override leaves the previous plugin active and registere
     },
     { autoInit: true },
   )
-  const original = engine.plugins.get('atomic-override')
+  const original = engine.innerPlugins.get('atomic-override')
 
   const outcome = await settle(() =>
     engine.plugins.register(
@@ -690,7 +908,7 @@ test('a failed autoInit override leaves the previous plugin active and registere
       inited: original.isInited(),
       originalDestroyCalls,
       outcome: outcome.status,
-      retained: engine.plugins.get('atomic-override') === original,
+      retained: engine.innerPlugins.get('atomic-override') === original,
     },
     { inited: true, originalDestroyCalls: 0, outcome: 'rejected', retained: true },
   )
@@ -706,17 +924,18 @@ test('an autoInit replacement sees itself without publishing before atomic commi
   const candidate = {
     name: 'self-visible-override',
     marker: 'candidate',
+    exports: () => ({ marker: 'candidate' }),
     init(ctx) {
-      sawCandidate = ctx.plugins.get(candidate.name)?.config.marker === 'candidate'
+      sawCandidate = ctx.plugins.getExports(candidate.name)?.marker === 'candidate'
     },
   }
 
   await engine.plugins.register(candidate, { autoInit: true, override: true })
 
   assert.equal(sawCandidate, true)
-  assert.notEqual(engine.plugins.get('self-visible-override').config, candidate)
-  assert.equal(engine.plugins.get('self-visible-override').config.marker, 'candidate')
-  assert.equal(engine.plugins.getAll().filter(plugin => plugin.name === candidate.name).length, 1)
+  assert.notEqual(engine.innerPlugins.get('self-visible-override').config, candidate)
+  assert.equal(engine.innerPlugins.get('self-visible-override').config.marker, 'candidate')
+  assert.equal(engine.innerPlugins.getAll().filter(plugin => plugin.name === candidate.name).length, 1)
 })
 
 test('same-generation Plugins.extend callers join one extension preparation', async t => {
@@ -903,7 +1122,7 @@ test('a plugin registered while engine initialization is in flight is initialize
 
   assert.deepEqual(
     {
-      inited: engine.plugins.get('registered-during-initialization').isInited(),
+      inited: engine.innerPlugins.get('registered-during-initialization').isInited(),
       lateInitCalls,
       lifecycleState: engine.lifecycleState,
     },
@@ -944,7 +1163,7 @@ test('a newly registered PluginRuntime exposes explicit false lifecycle flags', 
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => engine.destroy())
   await engine.plugins.register({ name: 'explicit-runtime-flags', init() {} })
-  const runtime = engine.plugins.get('explicit-runtime-flags')
+  const runtime = engine.innerPlugins.get('explicit-runtime-flags')
 
   assert.deepEqual(
     { disabled: runtime.disabled, extended: runtime.isExtended(), inited: runtime.isInited() },
@@ -1018,9 +1237,9 @@ test('engine-owned plugin manager teardown stays behind EngineInstance while sta
 
   const publicAttempts = []
   for (const operation of [
-    () => engine.plugins.destroy(),
-    () => engine.plugins.clearContexts(),
-    () => engine.plugins.dispose(),
+    () => engine.innerPlugins.destroy(),
+    () => engine.innerPlugins.clearContexts(),
+    () => engine.innerPlugins.dispose(),
     () => engine.innerPlugins.destroy(),
     () => engine.innerPlugins.clearContexts(),
     () => engine.innerPlugins.dispose(),
@@ -1135,14 +1354,13 @@ test('retained plugin exports stay revoked after restart while a fresh generatio
     init() {},
   })
   await engine.init()
-  const runtime = engine.plugins.get('generation-bound-export')
-  const retained = runtime.toProxy().touch
+  const retained = engine.plugins.getExports('generation-bound-export').touch
   assert.equal(retained(), 1)
 
   await engine.destroy()
   await engine.init()
   const staleAttempt = await settle(() => retained())
-  const fresh = runtime.toProxy().touch
+  const fresh = engine.plugins.getExports('generation-bound-export').touch
 
   assert.equal(staleAttempt.status, 'rejected')
   assert.notStrictEqual(fresh, retained)

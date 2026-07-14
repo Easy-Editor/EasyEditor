@@ -3,6 +3,7 @@
  * Rollup 插件配置
  */
 
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import alias from '@rollup/plugin-alias'
 import babel from '@rollup/plugin-babel'
@@ -15,6 +16,10 @@ import cleanup from 'rollup-plugin-cleanup'
 import postcss from 'rollup-plugin-postcss'
 import type { ResolvedConfig } from '../config/types'
 import { DEFAULT_EXTENSIONS } from './constants'
+
+const require = createRequire(import.meta.url)
+const presetReact = require.resolve('@babel/preset-react')
+const presetTypescript = require.resolve('@babel/preset-typescript')
 
 export interface CreatePluginsOptions {
   config: ResolvedConfig
@@ -75,8 +80,8 @@ export function createPlugins(options: CreatePluginsOptions): RollupPlugin[] {
       babelrc: false,
       babelHelpers: 'bundled',
       presets: [
-        ['@babel/preset-react', { runtime: config.jsxRuntime }],
-        ['@babel/preset-typescript', { allowDeclareFields: true }],
+        [presetReact, { runtime: config.jsxRuntime }],
+        [presetTypescript, { allowDeclareFields: true }],
       ],
     }),
   )

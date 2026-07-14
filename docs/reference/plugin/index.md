@@ -9,9 +9,11 @@ interface Plugin {
   name: string;
   deps?: string[];
   eventPrefix?: string;
-  init(ctx: PluginContext): void | void;
-  extend?(ctx: PluginExtend): void;
-  destroy?(ctx: PluginContext): void | void;
+  extensionFingerprint?: string;
+  init(ctx: PluginContext): Promise<void> | void;
+  extend?(ctx: PluginExtend): Promise<void> | void;
+  destroy?(ctx: PluginContext): Promise<void> | void;
+  exports?(): Record<string, unknown>;
 }
 ```
 
@@ -49,7 +51,7 @@ const MyPlugin: PluginCreator<Options> = () => {
 ## eventPrefix
 
 - 类型: `string`
-- 默认值: 插件的 `name`
+- 默认值: `common`
 
 插件事件前缀，用于插件事件命名空间
 
@@ -65,29 +67,26 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## init
 
-- 类型: `init(ctx: PluginContext): void`
+- 类型: `init(ctx: PluginContext): Promise<void> | void`
 - 参数:
   - `ctx`: 插件上下文，提供访问编辑器核心模块的能力
 
-插件初始化方法，在编辑器加载插件时调用
+插件初始化方法，在编辑器加载插件时调用。返回 Promise 时，引擎会等待它 settle 后再完成初始化。
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
   return {
     name: 'MyPlugin',
     init(ctx) {
-      const { designer, logger, hotkey } = ctx;
+      const { logger, hotkey } = ctx;
 
       // 注册快捷键
-      hotkey.bind('ctrl+d', e => {
+      const handleDuplicate = (e: KeyboardEvent) => {
         e.preventDefault();
         logger.log('快捷键触发');
-      });
-
-      // 监听设计器事件
-      designer.on(DESIGNER_EVENT.SELECTION_CHANGE, selectedIds => {
-        logger.log('选择已变更:', selectedIds);
-      });
+      };
+      hotkey.bind('ctrl+d', handleDuplicate);
+      ctx.onDispose(() => hotkey.unbind('ctrl+d', handleDuplicate));
     }
   };
 };
@@ -95,11 +94,11 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## extend
 
-- 类型: `extend(ctx: PluginExtend): void`
+- 类型: `extend(ctx: PluginExtend): Promise<void> | void`
 - 参数:
   - `ctx`: 插件扩展上下文，提供扩展核心类的能力
 
-扩展核心类的方法，允许插件扩展编辑器核心模块的功能
+扩展核心类的方法，允许兼容插件扩展编辑器核心模块的功能。返回 Promise 时，引擎会等待扩展完成。原型扩展只适用于初始化前注册的 `legacyTrusted` 兼容插件；`agentRestricted` 会拒绝它。
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -129,30 +128,23 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## destroy
 
-- 类型: `destroy(ctx: PluginContext): void`
+- 类型: `destroy(ctx: PluginContext): Promise<void> | void`
 - 参数:
   - `ctx`: 插件上下文
 
-插件销毁方法，在编辑器卸载插件时调用，用于清理资源
+插件销毁方法，在编辑器卸载插件时调用，用于清理资源。返回 Promise 时，引擎会等待清理完成；失败会进入可重试的引擎清理流程。
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
-  const disposers = [];
-
   return {
     name: 'MyPlugin',
     init(ctx) {
-      const { designer } = ctx;
-
-      // 存储需要清理的监听器
-      disposers.push(
-        designer.on(DESIGNER_EVENT.SELECTION_CHANGE, () => {})
-      );
+      const dispose = ctx.event.on('common:selection-change', selectedIds => {
+        ctx.logger.log('选择已变更:', selectedIds);
+      });
+      ctx.onDispose(dispose);
     },
-    destroy(ctx) {
-      // 清理资源
-      disposers.forEach(dispose => dispose());
-
+    async destroy(ctx) {
       ctx.logger.log('插件已销毁');
     }
   };
@@ -161,22 +153,36 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## PluginContext
 
-插件上下文提供对编辑器核心模块的访问：
+插件上下文提供一组由引擎拥有、与当前运行代绑定的能力：
 
 ```ts
 interface PluginContext {
-  editor: Editor;
-  designer: Designer;
-  project: Project;
-  simulator: Simulator;
-  setterManager: SetterManager;
-  componentMetaManager: ComponentMetaManager;
-  event: EventBus;
+  project: PluginProjectCapability;
+  plugins: PluginRegistry;
+  setters: PluginSettersCapability;
+  materials: PluginMaterialsCapability;
+  event: PluginEventCapability;
   pluginEvent: EventBus;
-  hotkey: Hotkey;
-  logger: Logger;
+  hotkey: PluginHotkeyCapability;
+  clipboard?: PluginClipboardCapability;
+  config: PluginConfigCapability;
+  logger: PluginLoggerCapability;
+  trustPolicy?: TrustPolicy;
+  onDispose(disposer: Disposable): Disposable;
 }
 ```
+
+在默认 `agentRestricted` 策略下，这些根能力是有限 facade，而不是原始服务对象：
+
+- 不提供 `engine.init()` / `engine.destroy()`，也不暴露已知的反向权限字段；
+- `plugins` 只是只读 `PluginRegistry`，不能注册或删除其他插件；
+- `event` 是经过前缀约束的共享引擎事件能力，`pluginEvent` 是插件私有事件总线，不暴露共享引擎的原始 event bus；
+- Context 与回调参数绑定当前运行代，销毁后保留引用会失效；
+- facade 用来收窄受支持 API、输入和模型修改权限，不是恶意代码沙箱。
+
+插件与 `RemoteAdapter` 都运行在宿主 JavaScript Realm 中，因此必须被视为受信扩展代码。插件生命周期回调不得调用同一引擎的 `init()` / `destroy()`；直接同步重入会抛出 `LifecycleReentrancyError`。如果插件预先捕获原始引擎并在 `await` 后调用生命周期，没有 AsyncContext 类因果跟踪或 Realm/进程隔离的同 Realm 内核无法可靠识别来源；这种行为属于宿主扩展协议违规。
+
+仍需原始 `Project`、`Designer`、`Simulator` 等宿主服务的兼容插件，必须在 `init()` 中调用 `assertLegacyTrustedPluginContext(ctx)`，且宿主使用 `legacyTrusted`。该断言只会验证显式策略，不会在 `agentRestricted` 下扩权；新插件不应依赖此接口。
 
 ## PluginExtend
 
@@ -213,8 +219,8 @@ interface PluginExtendClass {
   NodeChildren: typeof NodeChildren;
   Props: typeof Props;
   Prop: typeof Prop;
-  ComponentMetaManager: typeof ComponentMetaManager;
-  SetterManager: typeof SetterManager;
+  Materials: typeof Materials;
+  Setters: typeof Setters;
   ComponentMeta: typeof ComponentMeta;
 }
 ```

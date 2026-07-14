@@ -1,6 +1,17 @@
 import { action, computed, isObservableArray, observable, set, untracked } from 'mobx'
 import { DESIGNER_EVENT } from '../../designer'
+import {
+  assertLifecycleMutationAllowed,
+  inheritLifecycleMutationGuard,
+  sealLifecycleMutations,
+} from '../../lifecycle/mutation-barrier'
 import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
+import {
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../../lifecycle/teardown-boundary'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { isObject, isPlainObject, uniqueId } from '../../utils'
 import type { Node } from '../node/node'
@@ -110,6 +121,11 @@ export class Prop {
 
   readonly id = uniqueId('prop')
 
+  #assertPropMutationAllowed(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
+  }
+
   @observable.ref accessor #key: PropKey
 
   get key(): PropKey {
@@ -118,7 +134,7 @@ export class Prop {
 
   @action
   set key(value: PropKey) {
-    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
+    this.#assertPropMutationAllowed('prop.key')
     if (this.#key === value) return
     this.owner.document.markSchemaMutation()
     this.#key = value
@@ -136,14 +152,12 @@ export class Prop {
     return this.props
   }
 
-  @observable.ref private accessor _value: PropValue | UNSET = UNSET
+  @observable.ref accessor #valueState: PropValue | UNSET = UNSET
 
   @computed
   get value(): unknown | UNSET {
     return this.export(TRANSFORM_STAGE.SERIALIZE)
   }
-
-  private _code: string | null = null
 
   /**
    * 获得表达式值
@@ -152,26 +166,26 @@ export class Prop {
     if (isJSExpression(this.value)) {
       return this.value.value
     }
-    return this._code != null ? this._code : JSON.stringify(this.value)
+    return this.#code != null ? this.#code : JSON.stringify(this.value)
   }
 
   /**
    * 设置表达式值
    */
   set code(code: string) {
-    if (isJSExpression(this._value)) {
+    if (isJSExpression(this.#valueState)) {
       this.setValue({
-        ...this._value,
+        ...this.#valueState,
         value: code,
       })
-      this._code = code
+      this.#code = code
       return
     }
 
     try {
       const v = JSON.parse(code)
       this.setValue(v)
-      this._code = code
+      this.#code = code
       return
     } catch (e) {
       // ignore
@@ -180,47 +194,47 @@ export class Prop {
     this.setValue({
       type: 'JSExpression',
       value: code,
-      mock: this._value,
+      mock: this.#valueState,
     })
-    this._code = code
+    this.#code = code
   }
 
-  @observable.ref private accessor _type: ValueTypes = 'unset'
+  #code: string | null = null
+
+  @observable.ref accessor #valueType: ValueTypes = 'unset'
 
   get type() {
-    return this._type
+    return this.#valueType
   }
 
   /** use for list or map type */
-  @observable.shallow private accessor _items: Prop[] | null = null
+  @observable.shallow accessor #itemsState: Prop[] | null = null
 
   /**
    * 作为一层缓存机制，主要是复用部分已存在的 Prop，保持响应式关系，比如：
-   * 当前 Prop#_value 值为 { a: 1 }，当调用 setValue({ a: 2 }) 时，所有原来的子 Prop 均被销毁，
+   * 当前 Prop 值为 { a: 1 }，当调用 setValue({ a: 2 }) 时，所有原来的子 Prop 均被销毁，
    * 导致假如外部有 mobx reaction（常见于 observer），此时响应式链路会被打断，
-   * 因为 reaction 监听的是原 Prop(a) 的 _value，而不是新 Prop(a) 的 _value。
+   * 因为 reaction 监听的是原 Prop(a) 的值，而不是新 Prop(a) 的值。
    */
-  @observable.shallow private accessor _maps: Map<PropKey, Prop> | null = null
+  @observable.shallow accessor #mapsState: Map<PropKey, Prop> | null = null
 
   /**
    * Construct the items and maps for the prop value
    */
-  @computed
-  private get items() {
-    if (this._items) {
-      return this._items
+  #getItems(): Prop[] | null {
+    if (this.#itemsState) {
+      return this.#itemsState
     }
 
     this.initItems()
-    return this._items
+    return this.#itemsState
   }
 
-  @computed
-  private get maps(): Map<PropKey, Prop> | null {
-    if (!this.items) {
+  #getMaps(): Map<PropKey, Prop> | null {
+    if (!this.#getItems()) {
       return null
     }
-    return this._maps
+    return this.#mapsState
   }
 
   /**
@@ -234,7 +248,7 @@ export class Prop {
    * item length
    */
   get size(): number {
-    return this.items?.length || 0
+    return this.#getItems()?.length || 0
   }
 
   constructor(
@@ -244,6 +258,9 @@ export class Prop {
   ) {
     this.owner = parent.owner
     this.props = parent.props
+    inheritLifecycleMutationGuard(parent as object, this)
+    installLifecycleTeardownOperation(this, () => this.#purgeInternal(true))
+    inheritEngineTeardownOwnership(parent as object, this)
     lockReadonlyProperties(this, ['id', 'owner', 'parent', 'props'])
     lockPrototypeAccessors(this, ['key'])
     this.key = key
@@ -261,18 +278,19 @@ export class Prop {
    */
   @action
   initItems() {
+    this.#assertPropMutationAllowed('prop.initItems')
     let items: Prop[] | null = null
 
-    if (this._type === 'list') {
+    if (this.#valueType === 'list') {
       const maps = new Map<string, Prop>()
-      const data = this._value as Array<PropValue>
+      const data = this.#valueState as Array<PropValue>
 
       for (let i = 0; i < data.length; i++) {
         const item = data[i]
         let prop: Prop
         items = items || []
-        if (this._maps?.has(i.toString())) {
-          prop = this._maps.get(i.toString())!
+        if (this.#mapsState?.has(i.toString())) {
+          prop = this.#mapsState.get(i.toString())!
           prop.setValue(item)
         } else {
           prop = new Prop(this, i.toString(), item)
@@ -281,16 +299,16 @@ export class Prop {
         maps.set(i.toString(), prop)
         items.push(prop)
       }
-      this._maps = maps
-    } else if (this._type === 'map') {
+      this.#mapsState = maps
+    } else if (this.#valueType === 'map') {
       const maps = new Map<string, Prop>()
-      const data = this._value as Record<string, PropValue>
+      const data = this.#valueState as Record<string, PropValue>
       const keys = Object.keys(data)
 
       for (const key of keys) {
         let prop: Prop
-        if (this._maps?.has(key)) {
-          prop = this._maps.get(key)!
+        if (this.#mapsState?.has(key)) {
+          prop = this.#mapsState.get(key)!
           prop.setValue(data[key])
         } else {
           prop = new Prop(this, key, data[key])
@@ -300,24 +318,24 @@ export class Prop {
         maps.set(key, prop)
       }
 
-      this._maps = maps
+      this.#mapsState = maps
     } else {
       items = null
-      this._maps = null
+      this.#mapsState = null
     }
 
-    this._items = items
+    this.#itemsState = items
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): PropValue {
-    const type = this._type
+    const type = this.#valueType
 
     if (stage === TRANSFORM_STAGE.RENDER && this.key === getConvertedExtraKey('condition')) {
       // 在设计器里，所有组件默认需要展示，除非开启了 enableCondition 配置
       if (this.owner.document.designer.editor.engineConfig.get('enableCondition') !== true) {
         return true
       }
-      return this._value as boolean
+      return this.#valueState as boolean
     }
 
     if (type === 'unset') {
@@ -325,17 +343,18 @@ export class Prop {
     }
 
     if (type === 'literal' || type === 'expression') {
-      return this._value as CompositeValue
+      return this.#valueState as CompositeValue
     }
 
     if (type === 'map') {
-      if (!this._items) {
-        return this._value as CompositeValue
+      if (!this.#itemsState) {
+        return this.#valueState as CompositeValue
       }
 
       let maps: CompositeObject | undefined = undefined
-      for (let i = 0; i < this.items!.length; i++) {
-        const prop = this.items![i]
+      const items = this.#getItems()!
+      for (let i = 0; i < items.length; i++) {
+        const prop = items[i]
         if (!prop.isUnset()) {
           const v = prop.export(stage)
           if (v !== null) {
@@ -348,11 +367,11 @@ export class Prop {
     }
 
     if (type === 'list') {
-      if (!this._items) {
-        return this._value as CompositeValue
+      if (!this.#itemsState) {
+        return this.#valueState as CompositeValue
       }
 
-      return this.items!.map(prop => {
+      return this.#getItems()!.map(prop => {
         return prop.export(stage)
       }) as CompositeArray
     }
@@ -361,62 +380,78 @@ export class Prop {
   /**
    * whether the prop has been destroyed
    */
-  @observable.ref private accessor purged = false
+  @observable.ref accessor #purged = false
 
   /**
    * clear internal data
    */
   @action
   purge() {
-    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
-    if (this.purged) {
-      return
+    if (this.#purged) return
+    this.#assertPropMutationAllowed('prop.purge')
+    this.parent.delete(this)
+  }
+
+  #purgeInternal(teardown: boolean): void {
+    if (this.#purged && !teardown) return
+    if (!this.#purged && !teardown) {
+      this.#assertPropMutationAllowed('prop.purge')
+      this.owner.document.markSchemaMutation()
     }
 
-    this.owner.document.markSchemaMutation()
-    this.purged = true
-    if (this._items) {
-      for (const item of this._items) {
-        item.purge()
+    const errors: unknown[] = []
+    this.#purged = true
+    if (this.#itemsState) {
+      const failedItems: Prop[] = []
+      for (const item of this.#itemsState) {
+        try {
+          runInternalLifecycleTeardown(item)
+        } catch (error) {
+          errors.push(error)
+          failedItems.push(item)
+        }
       }
+      this.#itemsState = failedItems.length > 0 ? failedItems : null
+    } else {
+      this.#itemsState = null
     }
 
-    this._items = null
-    this._maps = null
+    this.#mapsState = null
+    sealLifecycleMutations(this, 'prop generation is disposed')
+    if (errors.length) throw new AggregateError(errors, 'Prop disposal completed with errors')
   }
 
   @action
   remove() {
     this.purge()
-    this.parent.delete(this)
   }
 
   /**
    * dispose internal data, use for changing value,
    * this will not trigger reactive
    */
-  @action
-  private dispose() {
-    const items = untracked(() => this._items)
+  #dispose() {
+    const items = untracked(() => this.#itemsState)
     if (items) {
       for (const prop of items) {
-        prop.purge()
+        runInternalLifecycleTeardown(prop)
       }
     }
 
-    this._items = null
-    this._maps = null
+    this.#itemsState = null
+    this.#mapsState = null
   }
 
   @action
   unset() {
-    if (this._type === 'unset') return
+    this.#assertPropMutationAllowed('prop.unset')
+    if (this.#valueType === 'unset') return
     this.owner.document.markSchemaMutation()
-    this._type = 'unset'
+    this.#valueType = 'unset'
   }
 
   isUnset() {
-    return this._type === 'unset'
+    return this.#valueType === 'unset'
   }
 
   /**
@@ -446,41 +481,42 @@ export class Prop {
    */
   @action
   setValue(val: PropValue) {
-    if (val === this._value) return
+    this.#assertPropMutationAllowed('prop.setValue')
+    if (val === this.#valueState) return
 
     this.owner.document.markSchemaMutation()
-    const oldValue = this._value
-    this._value = val
+    const oldValue = this.#valueState
+    this.#valueState = val
     const t = typeof val
     if (val == null) {
-      this._type = 'literal'
+      this.#valueType = 'literal'
     } else if (t === 'string' || t === 'number' || t === 'boolean') {
-      this._type = 'literal'
+      this.#valueType = 'literal'
     } else if (Array.isArray(val)) {
-      this._type = 'list'
+      this.#valueType = 'list'
     } else if (isPlainObject(val)) {
       if (isJSExpression(val)) {
-        this._type = 'expression'
+        this.#valueType = 'expression'
       } else {
-        this._type = 'map'
+        this.#valueType = 'map'
       }
     } else {
-      this._type = 'expression'
-      this._value = {
+      this.#valueType = 'expression'
+      this.#valueState = {
         type: 'JSExpression',
         value: valueToSource(val),
       }
     }
 
-    this.dispose()
+    this.#dispose()
     this.initItems()
 
-    if (oldValue !== this._value) {
+    if (oldValue !== this.#valueState) {
       const propsInfo = {
         key: this.key,
         prop: this,
         oldValue,
-        newValue: this._value,
+        newValue: this.#valueState,
       }
 
       this.owner.emitPropChange(propsInfo)
@@ -494,19 +530,20 @@ export class Prop {
 
   getAsString() {
     if (this.type === 'literal') {
-      return this._value ? String(this._value) : ''
+      return this.#valueState ? String(this.#valueState) : ''
     }
     return ''
   }
 
   get(path: PropKey, createIfNone = true): Prop | null {
-    const type = this._type
+    if (createIfNone) this.#assertPropMutationAllowed('prop.get')
+    const type = this.#valueType
     if (type !== 'map' && type !== 'list' && type !== 'unset' && !createIfNone) {
       return null
     }
 
-    const maps = type === 'map' ? this.maps : null
-    const items = type === 'list' ? this.items : null
+    const maps = type === 'map' ? this.#getMaps() : null
+    const items = type === 'list' ? this.#getItems() : null
 
     const { entry, nest } = splitPath(path)
 
@@ -538,7 +575,19 @@ export class Prop {
 
   @action
   set(key: PropKey, value: PropValue | Prop, force = false) {
-    const type = this._type
+    this.#assertPropMutationAllowed('prop.set')
+    if (isProp(value)) {
+      if (value.parent !== this || value.props !== this.props || value.owner !== this.owner || value.key !== key) {
+        throw new Error('A Prop cannot adopt a foreign or mismatched child Prop identity')
+      }
+      const currentIndex = this.#itemsState?.indexOf(value) ?? -1
+      const currentForKey = this.#mapsState?.get(key)
+      if (currentIndex >= 0 && currentForKey !== value) {
+        throw new Error('A Prop child identity cannot be inserted more than once')
+      }
+      if (currentForKey === value) return value
+    }
+    const type = this.#valueType
     if (type !== 'map' && type !== 'list' && type !== 'unset' && !force) {
       return null
     }
@@ -554,7 +603,7 @@ export class Prop {
     }
 
     const prop = isProp(value) ? value : new Prop(this, key, value)
-    const items = this._items! || []
+    const items = this.#itemsState || []
 
     if (this.type === 'list') {
       if (!isValidArrayIndex(key)) {
@@ -565,9 +614,9 @@ export class Prop {
       } else {
         items[key] = prop
       }
-      this._items = items
+      this.#itemsState = items
     } else if (this.type === 'map') {
-      const maps = this._maps || new Map<string, Prop>()
+      const maps = this.#mapsState || new Map<string, Prop>()
       const orig = maps?.get(key)
 
       if (orig) {
@@ -575,17 +624,17 @@ export class Prop {
         const i = items.indexOf(orig)
         if (i > -1) {
           this.owner.document.markSchemaMutation()
-          items.splice(i, 1, prop)[0].purge()
+          runInternalLifecycleTeardown(items.splice(i, 1, prop)[0])
         }
         maps?.set(key, prop)
       } else {
         // push
         this.owner.document.markSchemaMutation()
         items.push(prop)
-        this._items = items
+        this.#itemsState = items
         maps?.set(key, prop)
       }
-      this._maps = maps
+      this.#mapsState = maps
     } else {
       return null
     }
@@ -595,22 +644,24 @@ export class Prop {
 
   @action
   delete(prop: Prop) {
-    if (this._items) {
-      const i = this._items.indexOf(prop)
+    this.#assertPropMutationAllowed('prop.delete')
+    if (this.#itemsState) {
+      const i = this.#itemsState.indexOf(prop)
       if (i > -1) {
         this.owner.document.markSchemaMutation()
-        this._items.splice(i, 1)
-        prop.purge()
+        this.#itemsState.splice(i, 1)
+        runInternalLifecycleTeardown(prop)
       }
-      if (this._maps && prop.key) {
-        this._maps.delete(String(prop.key))
+      if (this.#mapsState && prop.key) {
+        this.#mapsState.delete(String(prop.key))
       }
     }
   }
 
   @action
   add(key: PropKey, value?: PropValue | UNSET, force = false) {
-    const type = this._type
+    this.#assertPropMutationAllowed('prop.add')
+    const type = this.#valueType
     if (type !== 'list' && type !== 'unset' && !force) {
       return null
     }
@@ -619,9 +670,9 @@ export class Prop {
     }
 
     const prop = new Prop(this, key, value)
-    this._items = this._items || []
+    this.#itemsState = this.#itemsState || []
     this.owner.document.markSchemaMutation()
-    this._items.push(prop)
+    this.#itemsState.push(prop)
     return prop
   }
 
@@ -629,18 +680,20 @@ export class Prop {
    * check if the prop has the key, only for map and list type
    */
   has(key: PropKey) {
-    if (this._type !== 'map') {
+    if (this.#valueType !== 'map') {
       return false
     }
-    if (this._maps) {
-      return this._maps.has(key)
+    if (this.#mapsState) {
+      return this.#mapsState.has(key)
     }
-    return Object.prototype.hasOwnProperty.call(this._value, key)
+    return Object.prototype.hasOwnProperty.call(this.#valueState, key)
   }
 
   deleteKey(key: PropKey) {
-    if (this.maps) {
-      const prop = this.maps.get(key)
+    this.#assertPropMutationAllowed('prop.deleteKey')
+    const maps = this.#getMaps()
+    if (maps) {
+      const prop = maps.get(key)
       if (prop) {
         this.delete(prop)
       }
@@ -673,33 +726,37 @@ export class Prop {
 
   @action
   forEach(fn: (item: Prop, key: PropKey | number) => void): void {
-    const { items } = this
+    const items = this.#getItems()
     if (!items) {
       return
     }
 
-    const isMap = this._type === 'map'
+    const isMap = this.#valueType === 'map'
     items.forEach((item, index) => {
-      return isMap ? fn(item, item.key) : fn(item, index)
+      return withoutProjectMutationAuthority(this.owner.document.project, () =>
+        isMap ? fn(item, item.key) : fn(item, index),
+      )
     })
   }
 
   @action
   map<T>(fn: (item: Prop, key: PropKey | number) => T): T[] | null {
-    const { items } = this
+    const items = this.#getItems()
     if (!items) {
       return null
     }
 
-    const isMap = this._type === 'map'
+    const isMap = this.#valueType === 'map'
     return items.map((item, index) => {
-      return isMap ? fn(item, item.key) : fn(item, index)
+      return withoutProjectMutationAuthority(this.owner.document.project, () =>
+        isMap ? fn(item, item.key) : fn(item, index),
+      )
     })
   }
 
   [Symbol.iterator](): { next(): { value: Prop } } {
     let index = 0
-    const { items } = this
+    const items = this.#getItems()
     const length = items?.length || 0
     return {
       next() {

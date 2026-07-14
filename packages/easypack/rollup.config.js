@@ -10,9 +10,11 @@ const external = [
   'node:path',
   'node:url',
   'node:http',
+  'node:module',
   'fs',
   'path',
   'url',
+  'module',
   // Dependencies (will be installed by users)
   '@clack/prompts',
   '@rollup/plugin-alias',

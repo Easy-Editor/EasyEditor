@@ -184,6 +184,11 @@ test('engine init cannot report ready with an incomplete Hotkey mount', async t 
 
   failKeydownAcquisition = false
   failKeypressRollback = false
+  await assert.rejects(engine.init(), /failed generation must be destroyed before it can restart/)
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(document.listenerCount(), 0)
+
   await engine.init()
   assert.equal(engine.lifecycleState, 'ready')
   assert.deepEqual(

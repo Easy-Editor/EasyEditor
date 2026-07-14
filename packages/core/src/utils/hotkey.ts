@@ -353,6 +353,9 @@ function getKeyInfo(combination: string, action?: string): KeyInfo {
   }
 }
 
+const haveSameModifiers = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every(modifier => right.includes(modifier))
+
 /**
  * actually calls the callback function
  *
@@ -559,10 +562,9 @@ export class Hotkey {
       if (!callbacks) {
         return
       }
-      const idx = callbacks.findIndex(info => {
-        // @ts-ignore
-        return isEqual(info.modifiers, modifiers) && info.callback === callback
-      })
+      const idx = callbacks.findIndex(
+        info => haveSameModifiers(info.modifiers, modifiers) && info.callback === callback,
+      )
       if (idx !== -1) {
         callbacks.splice(idx, 1)
       }

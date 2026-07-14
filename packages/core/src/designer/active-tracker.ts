@@ -11,6 +11,7 @@ import {
 import type { ComponentInstance } from '../types'
 import type { EventBus } from '../utils'
 import type { Designer } from './designer'
+import { createDesignerEventBus } from './event-bus'
 import type { LocationDetail } from './location'
 
 export interface ActiveTarget {
@@ -25,7 +26,7 @@ export class ActiveTracker {
   private emitter: EventBus
 
   constructor(private readonly designer: Designer) {
-    this.emitter = designer.createEventBus('ActiveTracker')
+    this.emitter = createDesignerEventBus(designer, 'ActiveTracker')
     lockReadonlyProperties(this, ['designer', 'emitter'])
     installLifecycleTeardownOperation(
       this,

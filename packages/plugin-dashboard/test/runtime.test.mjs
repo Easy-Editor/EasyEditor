@@ -141,6 +141,7 @@ const initializeFakePlugin = (plugin, target, meta) => {
   plugin.init({
     materials: { createComponentMeta: value => createdMetadata.push(value) },
     project: { designer: target.capability },
+    trustPolicy: { name: 'legacyTrusted' },
     onDispose(disposer) {
       registeredDisposers.push(disposer)
       return disposer
@@ -250,6 +251,7 @@ test('dashboard runtime activation rolls back atomically when disposal registrat
     plugin.init({
       materials: { createComponentMeta: () => assert.fail('metadata must not be registered after ownership failure') },
       project: { designer: target.capability },
+      trustPolicy: { name: 'legacyTrusted' },
       onDispose(disposer) {
         retryRuntimeCleanup = disposer
         getGuideline()
@@ -875,6 +877,7 @@ test('process-level dashboard getters cannot be borrowed by an unregistered lega
       manuallyInvokedPlugin.init({
         materials: { createComponentMeta: () => assert.fail('manual activation must fail before mutation') },
         project: { designer: unregistered.designer },
+        trustPolicy: { name: 'legacyTrusted' },
         onDispose: () => assert.fail('manual activation must not obtain a runtime disposer'),
       }),
     /registered DashboardPlugin/,

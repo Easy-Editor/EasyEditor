@@ -1,5 +1,5 @@
 import { MessageChannel as NodeMessageChannel } from 'node:worker_threads'
-import type { AgentPortSession as AgentChannelPortSession } from '../src/agent-channel.js'
+import { type AgentPortSession as AgentChannelPortSession, connectAgentPort } from '../src/agent-channel.js'
 import {
   type AgentAuditRecord,
   type AgentCapability,
@@ -8,6 +8,10 @@ import {
   type AgentPlanPreview,
   type AgentPortExecutionAuthority,
   type AgentPortSession,
+  getAgentCapabilities,
+} from '../src/agent.js'
+import { defaultEngine } from '../src/index.js'
+import {
   CURRENT_PROJECT_SCHEMA_VERSION,
   type EditorCommand,
   type EngineInstance,
@@ -15,13 +19,12 @@ import {
   type SchemaPreparationResult,
   SchemaValidationError,
   SchemaValidator,
-  connectAgentPort,
   createEngine,
-  defaultEngine,
   resolveTrustPolicy,
-} from '../src/index.js'
+} from '../src/instance.js'
 
 const engine: EngineInstance = createEngine()
+const agentCapabilities = getAgentCapabilities(engine)
 engine.loadProject({ version: '0.0.1', componentsMap: [], componentsTree: [] }, true)
 engine.unloadProject()
 engine.undo()
@@ -54,7 +57,7 @@ void migrated
 const componentProps: AgentComponentPropPolicies = {
   Text: { text: { type: 'string', maxBytes: 4096 } },
 }
-const capability: AgentCapability = engine.agentCapabilities.issue({
+const capability: AgentCapability = agentCapabilities.issue({
   subjectId: 'agent:type-test',
   documentIds: ['document-id'],
   commandTypes: ['insertNode', 'updateProps'],
@@ -80,8 +83,8 @@ const plan: AgentPlanPreview = capability.preview({
   commands: [extrasOnlyCommand],
 })
 const receipt: AgentExecutionReceipt = capability.execute(plan.planId)
-const auditRecords: readonly AgentAuditRecord[] = engine.agentCapabilities.getAuditRecords()
-const unsubscribeAudit: () => void = engine.agentCapabilities.subscribeAudit(record => {
+const auditRecords: readonly AgentAuditRecord[] = agentCapabilities.getAuditRecords()
+const unsubscribeAudit: () => void = agentCapabilities.subscribeAudit(record => {
   const action: AgentAuditRecord['action'] = record.action
   void action
 })
@@ -99,7 +102,7 @@ capability.close()
 
 const browserChannel = new MessageChannel()
 const browserController = new AbortController()
-const browserSession = engine.agentCapabilities.issuePort(
+const browserSession = agentCapabilities.issuePort(
   {
     subjectId: 'agent:browser-port',
     documentIds: ['document-id'],
@@ -120,7 +123,7 @@ browserSession.close()
 
 const hostApprovedChannel = new MessageChannel()
 const hostApprovedController = new AbortController()
-const hostApprovedSession = engine.agentCapabilities.issuePort(
+const hostApprovedSession = agentCapabilities.issuePort(
   {
     subjectId: 'agent:host-approved-port',
     documentIds: ['document-id'],
@@ -139,7 +142,7 @@ if (hostApprovedReceipt.approvalSource) {
   void approvalSource
 }
 
-engine.agentCapabilities.issuePort(
+agentCapabilities.issuePort(
   {
     subjectId: 'agent:invalid-authority-port',
     documentIds: ['document-id'],
@@ -155,7 +158,7 @@ engine.agentCapabilities.issuePort(
 
 const nodeChannel = new NodeMessageChannel()
 const nodeController = new AbortController()
-engine.agentCapabilities.issuePort(
+agentCapabilities.issuePort(
   {
     subjectId: 'agent:node-port',
     documentIds: ['document-id'],

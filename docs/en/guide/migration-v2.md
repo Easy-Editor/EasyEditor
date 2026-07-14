@@ -43,7 +43,9 @@ Do not mix the root `project` facade with `engine.project` in one runtime path. 
 
 ## Own the lifecycle
 
-The lifecycle is `created -> initializing -> ready -> disposing -> disposed`, with `failed` representing incomplete initialization rollback or disposal. Concurrent `init()` and `destroy()` calls join the operation already in progress. A failed disposal can be retried with another `destroy()` call.
+The lifecycle is `created -> initializing -> ready -> disposing -> disposed`, with `failed` representing incomplete initialization rollback or disposal. External callers of the same operation join its in-flight Promise; `destroy()` waits for initialization to settle before disposing, while `init()` waits for disposal before starting the next generation. A failed disposal can be retried with another `destroy()` call.
+
+Plugin and `RemoteAdapter` lifecycle callbacks must not call the same engine's `init()` or `destroy()`. Direct synchronous re-entry throws `LifecycleReentrancyError`. Issuing the call after an `await` through a previously captured raw engine closure also violates the host-extension protocol; without AsyncContext-like tracking or Realm/process isolation, a same-realm kernel cannot reliably attribute that call.
 
 Only `engine.destroy()` may tear down engine-owned child services. Await it during application unmount, non-persisted `pagehide`, or HMR:
 
@@ -83,7 +85,7 @@ try {
 
 ## Select a trust policy
 
-`createEngine()` defaults to `agentRestricted`. It denies executable Schema, callback transactions, direct model mutation, plugin prototype extensions, and remote access. Use it for new constrained hosts and Agent capability endpoints.
+`createEngine()` defaults to `agentRestricted`. It rejects executable Schema, callback transactions, direct model mutation, plugin prototype extensions, and remote access through the restricted framework surface. Use it for new constrained hosts.
 
 Existing Dashboard integrations currently require explicit compatibility mode because `DashboardPlugin` extends prototypes in the shared realm:
 
@@ -94,7 +96,7 @@ const engine = createEngine({
 })
 ```
 
-`legacyTrusted` is not a sandbox. Legacy UMD and prototype extensions can leave process-wide effects that removing a script element cannot reverse. Run restricted engines in a different Worker, iframe, or Realm from that code.
+`agentRestricted` is a capability, input-validation, and model-mutation policy, not a malicious-code sandbox. Same-realm plugins and host `RemoteAdapter` implementations are trusted extension code and can still use their own closures, imports, and globals. `legacyTrusted` is the broader compatibility mode; legacy UMD and prototype extensions can leave process-wide effects that removing a script element cannot reverse. Isolate untrusted code in another Worker, iframe, Realm, or process.
 
 ## Use owned mutation boundaries
 
@@ -142,67 +144,11 @@ const health = Object.freeze({
 
 `lifecycleState` is readonly. The material snapshot is detached, sorted, and frozen. The setter map is a stable `ReadonlyMap`; `set`, `delete`, and `clear` are rejected. Write through the registration APIs instead.
 
-## Keep Agent and remote boundaries explicit
+## Tighten remote resources; defer Agent
 
-An Agent must not receive `Project`, `Document`, or `Node` references. Issue the smallest possible grant. Execution authority depends on how the capability is delivered:
+Agent Runtime, transport, authorization, and approval protocols are outside this framework migration. Complete the `@easy-editor/core/instance` ownership, lifecycle, transaction, and trust-boundary migration first; Agent contracts will be designed separately after the framework stabilizes.
 
-- `engine.agentCapabilities.issue(grant)` returns a same-realm capability whose holder can call `execute(planId)` directly.
-- `issuePort(grant, port, { signal })` defaults `executionAuthority` to `'peer'`, so the connected peer can also call `execute(planId)`.
-- Only `issuePort(..., { executionAuthority: 'host' })` denies peer execution and requires the trusted host to inspect Core's authoritative preview before calling `approveAndExecute(planId)`.
-
-Create a Worker channel that requires host approval explicitly:
-
-```ts
-import type {
-  AgentCapabilityGrantInput,
-  EngineInstance,
-} from '@easy-editor/core/instance'
-
-export function openHostApprovedAgentSession(
-  engine: EngineInstance,
-  worker: Worker,
-  grant: AgentCapabilityGrantInput,
-) {
-  const channel = new MessageChannel()
-  const controller = new AbortController()
-  const session = engine.agentCapabilities.issuePort(grant, channel.port1, {
-    executionAuthority: 'host',
-    signal: controller.signal,
-  })
-
-  worker.postMessage(
-    { type: 'easy-editor-agent-port', port: channel.port2 },
-    [channel.port2],
-  )
-
-  return {
-    inspect(planId: string) {
-      return session.getPreparedPlanPreview(planId)
-    },
-    approve(planId: string) {
-      return session.approveAndExecute(planId)
-    },
-    close() {
-      session.close()
-      controller.abort()
-    },
-  }
-}
-```
-
-The Worker receives only the structured-clone object capability:
-
-```ts
-import { connectAgentPort } from '@easy-editor/core/agent-channel'
-
-export async function connectAgentCapability(port: MessagePort) {
-  return connectAgentPort(port)
-}
-```
-
-In host-authority mode the Worker may call `snapshot()` and `preview()`, but `execute()` fails closed. The host must authorize the immutable preview returned by `session.getPreparedPlanPreview(planId)`, not effects echoed by the Agent. `approveAndExecute()` proves only that the trusted host entry point approved execution; it does not identify a human approver or eliminate prompt-injection risk. Combine capability policy with Worker isolation.
-
-Remote access requires both trust-policy permission and a host `RemoteAdapter` allowlist. The remote registry records readonly resource envelopes; its `data` field remains an opaque capability owned by the adapter. `engine.destroy()` disposes the adapter, loading state, and registry.
+Remote access requires both trust-policy permission and a host `RemoteAdapter` allowlist. The remote registry records readonly resource envelopes; its `data` field remains an opaque capability owned by the adapter. `engine.destroy()` disposes the adapter, loading state, and registry. A `RemoteAdapter` is a trusted host extension, and its `init()` / `dispose()` hooks must not call the same engine lifecycle.
 
 ## Root facade compatibility
 
@@ -212,6 +158,6 @@ The root entry still exports a process-wide `legacyTrusted` default instance for
 import { defaultEngine, destroy, init, project } from '@easy-editor/core'
 ```
 
-It does not provide instance isolation and should not be the default for new applications or Agent hosts. Do not mix its modules with an explicit instance, and always await `destroy()` when using it.
+It does not provide instance isolation and should not be the default for new applications. Do not mix its modules with an explicit instance, and always await `destroy()` when using it.
 
 See [Getting Started](/en/guide/getting-started), [Core API](/en/reference/core/), and [Engine ownership and trust boundaries](/en/design/overview).

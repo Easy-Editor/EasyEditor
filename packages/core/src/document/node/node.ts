@@ -1,6 +1,18 @@
 import { action, computed, observable, runInAction } from 'mobx'
 import { DESIGNER_EVENT, type SettingTopEntry } from '../../designer'
+import { createDesignerEventBus } from '../../designer/event-bus'
+import {
+  assertLifecycleMutationAllowed,
+  inheritLifecycleMutationGuard,
+  sealLifecycleMutations,
+} from '../../lifecycle/mutation-barrier'
 import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
+import {
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../../lifecycle/teardown-boundary'
+import { isDocumentMutationBoundaryActive } from '../../project/document-mutation-boundary'
 import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import { type NodeSchema, type NpmInfo, TRANSFORM_STAGE } from '../../types'
 import { type EventBus, isObject, isRemoteComponent, uniqueId } from '../../utils'
@@ -86,13 +98,23 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     return this.componentMeta.icon
   }
 
-  private purged = false
+  #purged = false
+
+  #assertNodeMutationAllowed(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+    this.document.project.assertDocumentMutationAllowed(this.document)
+  }
+
+  #assertNodeGenerationActive(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+    this.document.project.assertDocumentGenerationActive(this.document)
+  }
 
   /**
    * 是否已销毁
    */
   get isPurged() {
-    return this.purged
+    return this.#purged
   }
 
   #props: Props
@@ -102,17 +124,25 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   set props(value: Props) {
-    this.document.project.assertDocumentMutationAllowed(this.document)
+    this.#assertNodeMutationAllowed('node.props')
+    if (this.#props && isDocumentMutationBoundaryActive(this.document.project, this.document)) {
+      throw new Error('Raw Node.props mutation is blocked while a transaction is active')
+    }
+    if (!(value instanceof Props) || value.owner !== this) {
+      throw new Error('A Node can only own its canonical Props identity')
+    }
+    if (this.#props === value) return
+    this.document.markSchemaMutation()
     this.#props = value
   }
 
-  _settingEntry: SettingTopEntry | undefined
+  #settingEntry: SettingTopEntry | undefined
 
   get settingEntry() {
-    this.document.project.assertDocumentGenerationActive(this.document)
-    if (this._settingEntry) return this._settingEntry
-    this._settingEntry = this.document.designer.createSettingEntry([this])
-    return this._settingEntry
+    this.#assertNodeGenerationActive('node.settingEntry')
+    if (this.#settingEntry) return this.#settingEntry
+    this.#settingEntry = this.document.designer.createSettingEntry([this])
+    return this.#settingEntry
   }
 
   /**
@@ -120,9 +150,10 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    */
   @action
   refreshSettingEntry() {
-    if (this._settingEntry) {
-      this._settingEntry.purge()
-      this._settingEntry = undefined
+    this.#assertNodeMutationAllowed('node.refreshSettingEntry')
+    if (this.#settingEntry) {
+      this.#settingEntry.purge()
+      this.#settingEntry = undefined
     }
     // 重置当前 setting，用于升级版本后配置更新
     const { settingsManager } = this.document.designer
@@ -135,38 +166,63 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     Schema: Schema,
     options: NodeModelOptions = {},
   ) {
-    this.emitter = document.designer.createEventBus('Node')
+    inheritLifecycleMutationGuard(document, this)
+    installLifecycleTeardownOperation(this, (visited?: Set<Node>) => this.#purgeInternal(true, visited))
+    inheritEngineTeardownOwnership(document.project, this)
+    this.emitter = createDesignerEventBus(document.designer, 'Node')
+    inheritEngineTeardownOwnership(document.project, this.emitter)
     const { id, componentName, children, props, ...extras } = Schema
 
     this.id = id || uniqueId('node')
     this.componentName = componentName
     lockReadonlyProperties(this, ['componentName', 'document', 'emitter', 'id'])
     lockPrototypeAccessors(this, ['children', 'parent', 'props'])
-    this.props = new Props(this, props, extras)
-    if (options.invokeMaterialHooks !== false) {
-      this.props.merge(this.upgradeProps(this.initProps(props || {})), this.upgradeProps(extras))
-    }
-    this.initBuiltinProps()
-    const initialChildren =
-      options.invokeMaterialHooks === false ? this.explicitChildren(children) : this.initialChildren(children)
-    this._children = new NodeChildren(this, initialChildren, options)
-    lockReadonlyProperties(this, ['_children'])
+    try {
+      this.props = new Props(this, props, extras)
+      if (options.invokeMaterialHooks !== false) {
+        this.props.merge(this.upgradeProps(this.initProps(props || {})), this.upgradeProps(extras))
+      }
+      this.initBuiltinProps()
+      const initialChildren =
+        options.invokeMaterialHooks === false ? this.explicitChildren(children) : this.initialChildren(children)
+      this._children = new NodeChildren(this, initialChildren, options)
+      this._children.internalInitParent()
+      lockReadonlyProperties(this, ['_children'])
 
-    this.onVisibleChange(visible => {
-      this.document.designer.postEvent(DESIGNER_EVENT.NODE_VISIBLE_CHANGE, this, visible)
-    })
-    this.onLockChange(locked => {
-      this.document.designer.postEvent(DESIGNER_EVENT.NODE_LOCK_CHANGE, this, locked)
-    })
-    this.onChildrenChange(info => {
-      this.document.designer.postEvent(DESIGNER_EVENT.NODE_CHILDREN_CHANGE, {
-        type: info?.type,
-        node: this,
+      this.onVisibleChange(visible => {
+        this.document.designer.postEvent(DESIGNER_EVENT.NODE_VISIBLE_CHANGE, this, visible)
       })
-    })
+      this.onLockChange(locked => {
+        this.document.designer.postEvent(DESIGNER_EVENT.NODE_LOCK_CHANGE, this, locked)
+      })
+      this.onChildrenChange(info => {
+        this.document.designer.postEvent(DESIGNER_EVENT.NODE_CHILDREN_CHANGE, {
+          type: info?.type,
+          node: this,
+        })
+      })
+    } catch (error) {
+      this.#abortConstruction(error)
+    }
+  }
+
+  #abortConstruction(error: unknown): never {
+    const cleanupErrors: unknown[] = []
+    sealLifecycleMutations(this, 'node construction failed')
+    sealLifecycleMutations(this.emitter, 'node construction failed')
+    try {
+      this.#purgeInternal(true)
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError)
+    }
+    if (cleanupErrors.length) {
+      throw new AggregateError([error, ...cleanupErrors], 'Node construction failed and cleanup reported errors')
+    }
+    throw error
   }
 
   import(data: Schema, checkId = false, options: NodeModelOptions = {}) {
+    this.#assertNodeMutationAllowed('node.import')
     const { componentName, id, children, props, ...extras } = data
 
     this.props.import(props, extras)
@@ -216,14 +272,66 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   purge() {
-    this.document.project.assertDocumentMutationAllowed(this.document)
-    if (this.purged) {
+    if (this.#purged) return
+    this.#assertNodeMutationAllowed('node.purge')
+    if (this.isRoot) {
+      this.document.purge()
       return
     }
-    this.document.markSchemaMutation()
-    this.purged = true
-    this._children?.purge()
-    this.props.purge()
+    if (this.parent) {
+      this.document.removeNode(this)
+      return
+    }
+
+    const errors: unknown[] = []
+    if (this.document.getNode(this.id) === this) {
+      try {
+        this.document.unlinkNode(this)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    try {
+      this.#purgeInternal(false)
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length) throw new AggregateError(errors, 'Node disposal completed with errors')
+  }
+
+  #purgeInternal(teardown: boolean, visited = new Set<Node>()): void {
+    if (visited.has(this)) return
+    visited.add(this)
+    if (this.#purged && !teardown) return
+    if (!this.#purged && !teardown) {
+      this.#assertNodeMutationAllowed('node.purge')
+      this.document.markSchemaMutation()
+    }
+    const errors: unknown[] = []
+    const cleanup = (operation: () => void): void => {
+      try {
+        operation()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (this._children)
+      cleanup(() => runInternalLifecycleTeardown<[Set<Node>]>(this._children as NodeChildren, visited))
+    if (this.#props) cleanup(() => runInternalLifecycleTeardown(this.#props))
+    if (this.#settingEntry) {
+      const settingEntry = this.#settingEntry
+      try {
+        settingEntry.purge()
+        if (this.#settingEntry === settingEntry) this.#settingEntry = undefined
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    this.#purged = true
+    sealLifecycleMutations(this, 'node generation is disposed')
+    sealLifecycleMutations(this.emitter, 'node event bus generation is disposed')
+    cleanup(() => runInternalLifecycleTeardown(this.emitter))
+    if (errors.length) throw new AggregateError(errors, 'Node disposal completed with errors')
   }
 
   toData() {
@@ -336,10 +444,12 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   select() {
+    this.#assertNodeGenerationActive('node.select')
     this.document.designer.selection.select(this.id)
   }
 
   hover(flag = true) {
+    this.#assertNodeGenerationActive('node.hover')
     if (flag) {
       this.document.designer.detecting.capture(this)
     } else {
@@ -456,6 +566,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   getProp(path: string, createIfNone = true) {
+    if (createIfNone) this.#assertNodeMutationAllowed('node.getProp')
     return this.props.query(path, createIfNone) || null
   }
 
@@ -498,8 +609,11 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   setProps(props?: PropsMap | Props | null) {
     if (props instanceof Props) {
       if (this.props === props) return
-      this.document.markSchemaMutation()
-      this.props.purge()
+      if (props.owner !== this) throw new Error('A Node cannot adopt foreign Props identity')
+      if (isDocumentMutationBoundaryActive(this.document.project, this.document)) {
+        throw new Error('Raw Node.props mutation is blocked while a transaction is active')
+      }
+      runInternalLifecycleTeardown(this.props)
       this.props = props
       return
     }
@@ -507,22 +621,41 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   internalSetParent(parent: Node | null, useMutator = false) {
-    this.document.project.assertDocumentMutationAllowed(this.document)
+    this.#assertNodeMutationAllowed('node.internalSetParent')
+    if (parent) {
+      if (parent.document !== this.document) {
+        throw new Error('A Node parent must belong to the same Document')
+      }
+      if (this.document.getNode(this.id) !== this) {
+        throw new Error('An unregistered Node cannot be attached to a parent')
+      }
+      if (!parent.children?.has(this)) {
+        throw new Error('A Node parent change must be coordinated by the parent NodeChildren collection')
+      }
+      const visited = new Set<Node>()
+      let ancestor: Node | null = parent
+      while (ancestor) {
+        if (ancestor === this) throw new Error('A Node parent change cannot introduce a cycle')
+        if (visited.has(ancestor)) throw new Error('The target parent ancestry already contains a cycle')
+        visited.add(ancestor)
+        ancestor = ancestor.parent
+      }
+    }
     if (this.#parent === parent) {
       return
     }
     this.document.markSchemaMutation()
 
-    if (this.#parent) {
-      this.#parent.children?.unlinkChild(this)
+    const formerParent = this.#parent
+    if (formerParent) {
+      formerParent.children?.unlinkChild(this)
     }
     if (useMutator) {
-      this.#parent?.didDropOut(this)
+      formerParent?.didDropOut(this)
     }
 
+    this.#parent = parent
     if (parent) {
-      this.#parent = parent
-
       if (useMutator) {
         parent.didDropIn(this)
       }
@@ -530,6 +663,11 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   internalUnlinkParent() {
+    this.#assertNodeMutationAllowed('node.internalUnlinkParent')
+    if (this.#parent?.children?.has(this)) {
+      throw new Error('A Node parent must be unlinked from NodeChildren before clearing its parent identity')
+    }
+    if (!this.#parent) return
     this.document.markSchemaMutation()
     this.#parent = null
   }
@@ -538,18 +676,34 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    * unlink this node from its parent and document
    */
   unlink() {
-    this.document.project.assertDocumentMutationAllowed(this.document)
-    if (this.parent) {
-      this.parent.children!.unlinkChild(this)
+    this.#assertNodeMutationAllowed('node.unlink')
+    const errors: unknown[] = []
+    const parent = this.parent
+    if (parent) {
+      try {
+        parent.children!.unlinkChild(this)
+      } catch (error) {
+        errors.push(error)
+      }
     }
-    this.internalUnlinkParent()
-    this.document.unlinkNode(this)
+    try {
+      this.internalUnlinkParent()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      this.document.unlinkNode(this)
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length) throw new AggregateError(errors, 'Node unlink completed with errors')
   }
 
   /**
    * migrate this node to a new parent
    */
   migrate(newParent: Node) {
+    this.#assertNodeMutationAllowed('node.migrate')
     this.document.migrateNode(this, newParent)
   }
 
@@ -600,14 +754,28 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   @action
   remove(purge = true, useMutator = true) {
-    this.document.project.assertDocumentMutationAllowed(this.document)
-    if (this.parent) {
+    this.#assertNodeMutationAllowed('node.remove')
+    if (!this.parent) {
+      this.document.removeNode(this)
+      return
+    }
+
+    const errors: unknown[] = []
+    try {
       this.document.designer.postEvent(DESIGNER_EVENT.NODE_REMOVE, {
         node: this,
         index: this.index,
       })
-      this.parent.children?.internalDelete(this, purge, useMutator)
+    } catch (error) {
+      errors.push(error)
     }
+    try {
+      this.parent.children?.internalDelete(this, purge, useMutator)
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) throw new AggregateError(errors, 'Node removal completed with errors')
   }
 
   removeChild(node: Node) {
@@ -784,7 +952,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onVisibleChange(listener: (flag: boolean) => void) {
-    this.document.project.assertDocumentGenerationActive(this.document)
+    this.#assertNodeGenerationActive('node.onVisibleChange')
     this.emitter.on(NODE_EVENT.VISIBLE_CHANGE, listener)
 
     return () => {
@@ -793,7 +961,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onLockChange(listener: (flag: boolean) => void) {
-    this.document.project.assertDocumentGenerationActive(this.document)
+    this.#assertNodeGenerationActive('node.onLockChange')
     this.emitter.on(NODE_EVENT.LOCK_CHANGE, listener)
 
     return () => {
@@ -802,16 +970,17 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
   }
 
   onChildrenChange(listener: (info?: { type: string; node: Node }) => void) {
-    this.document.project.assertDocumentGenerationActive(this.document)
+    this.#assertNodeGenerationActive('node.onChildrenChange')
     return this.children?.onChange(listener)
   }
 
   emitPropChange(prop: any) {
+    this.#assertNodeGenerationActive('node.emitPropChange')
     this.emitter.emit(NODE_EVENT.PROP_CHANGE, prop)
   }
 
   onPropChange(listener: (info: any) => void) {
-    this.document.project.assertDocumentGenerationActive(this.document)
+    this.#assertNodeGenerationActive('node.onPropChange')
     this.emitter.on(NODE_EVENT.PROP_CHANGE, listener)
     return () => {
       this.emitter.off(NODE_EVENT.PROP_CHANGE, listener)
@@ -994,7 +1163,11 @@ export const getClosestClickableNode = (currentNode: Node | undefined | null, ev
  */
 export const ensureNode = (node: any, document: Document): Node => {
   let nodeInstance = node
-  if (!isNode(node)) {
+  if (isNode(node)) {
+    if (node.document !== document || document.getNode(node.id) !== node) {
+      throw new Error('Cannot use a foreign or unregistered Node identity')
+    }
+  } else {
     if (node.getComponentName) {
       nodeInstance = document.createNode({
         componentName: node.getComponentName(),

@@ -9,9 +9,11 @@ interface Plugin {
   name: string;
   deps?: string[];
   eventPrefix?: string;
-  init(ctx: PluginContext): void | void;
-  extend?(ctx: PluginExtend): void;
-  destroy?(ctx: PluginContext): void | void;
+  extensionFingerprint?: string;
+  init(ctx: PluginContext): Promise<void> | void;
+  extend?(ctx: PluginExtend): Promise<void> | void;
+  destroy?(ctx: PluginContext): Promise<void> | void;
+  exports?(): Record<string, unknown>;
 }
 ```
 
@@ -49,7 +51,7 @@ const MyPlugin: PluginCreator<Options> = () => {
 ## eventPrefix
 
 - Type: `string`
-- Default: Plugin's `name`
+- Default: `common`
 
 Plugin event prefix for plugin event namespace
 
@@ -65,29 +67,26 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## init
 
-- Type: `init(ctx: PluginContext): void`
+- Type: `init(ctx: PluginContext): Promise<void> | void`
 - Parameters:
   - `ctx`: Plugin context that provides access to editor core modules
 
-Plugin initialization method, called when the editor loads the plugin
+Plugin initialization method, called when the editor loads the plugin. When it returns a Promise, the engine waits for it to settle before initialization completes.
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
   return {
     name: 'MyPlugin',
     init(ctx) {
-      const { designer, logger, hotkey } = ctx;
+      const { logger, hotkey } = ctx;
 
       // Register hotkey
-      hotkey.bind('ctrl+d', e => {
+      const handleDuplicate = (e: KeyboardEvent) => {
         e.preventDefault();
         logger.log('Hotkey triggered');
-      });
-
-      // Listen to designer events
-      designer.on(DESIGNER_EVENT.SELECTION_CHANGE, selectedIds => {
-        logger.log('Selection changed:', selectedIds);
-      });
+      };
+      hotkey.bind('ctrl+d', handleDuplicate);
+      ctx.onDispose(() => hotkey.unbind('ctrl+d', handleDuplicate));
     }
   };
 };
@@ -95,11 +94,11 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## extend
 
-- Type: `extend(ctx: PluginExtend): void`
+- Type: `extend(ctx: PluginExtend): Promise<void> | void`
 - Parameters:
   - `ctx`: Plugin extension context that provides the ability to extend core classes
 
-Method to extend core classes, allowing plugins to extend functionality of editor core modules
+Method to extend core classes for compatibility plugins. When it returns a Promise, the engine waits for extension to complete. Prototype extension is available only to `legacyTrusted` plugins registered before initialization; `agentRestricted` rejects it.
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
@@ -129,30 +128,23 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## destroy
 
-- Type: `destroy(ctx: PluginContext): void`
+- Type: `destroy(ctx: PluginContext): Promise<void> | void`
 - Parameters:
   - `ctx`: Plugin context
 
-Plugin destruction method, called when the editor unloads the plugin, used for cleaning up resources
+Plugin destruction method, called when the editor unloads the plugin. When it returns a Promise, the engine waits for cleanup; failure remains part of the retryable engine-disposal flow.
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {
-  const disposers = [];
-
   return {
     name: 'MyPlugin',
     init(ctx) {
-      const { designer } = ctx;
-
-      // Store listeners that need cleanup
-      disposers.push(
-        designer.on(DESIGNER_EVENT.SELECTION_CHANGE, () => {})
-      );
+      const dispose = ctx.event.on('common:selection-change', selectedIds => {
+        ctx.logger.log('Selection changed:', selectedIds);
+      });
+      ctx.onDispose(dispose);
     },
-    destroy(ctx) {
-      // Clean up resources
-      disposers.forEach(dispose => dispose());
-
+    async destroy(ctx) {
       ctx.logger.log('Plugin destroyed');
     }
   };
@@ -161,22 +153,36 @@ const MyPlugin: PluginCreator<Options> = () => {
 
 ## PluginContext
 
-Plugin context provides access to editor core modules:
+Plugin context provides engine-owned capabilities bound to the current runtime generation:
 
 ```ts
 interface PluginContext {
-  editor: Editor;
-  designer: Designer;
-  project: Project;
-  simulator: Simulator;
-  setterManager: SetterManager;
-  componentMetaManager: ComponentMetaManager;
-  event: EventBus;
+  project: PluginProjectCapability;
+  plugins: PluginRegistry;
+  setters: PluginSettersCapability;
+  materials: PluginMaterialsCapability;
+  event: PluginEventCapability;
   pluginEvent: EventBus;
-  hotkey: Hotkey;
-  logger: Logger;
+  hotkey: PluginHotkeyCapability;
+  clipboard?: PluginClipboardCapability;
+  config: PluginConfigCapability;
+  logger: PluginLoggerCapability;
+  trustPolicy?: TrustPolicy;
+  onDispose(disposer: Disposable): Disposable;
 }
 ```
+
+Under the default `agentRestricted` policy these roots are finite facades, not raw service objects:
+
+- they omit `engine.init()` / `engine.destroy()` and known reverse-authority fields;
+- `plugins` is a readonly `PluginRegistry` and cannot register or delete peers;
+- `event` is the prefix-scoped shared-engine event capability, while `pluginEvent` is a plugin-private event bus and does not expose the shared engine's raw event bus;
+- Context and callback values are generation-bound, so retained references are revoked after disposal; and
+- the facades narrow the supported API, inputs, and model-mutation authority; they are not a malicious-code sandbox.
+
+Plugins and `RemoteAdapter` implementations execute in the host JavaScript realm and must be treated as trusted extension code. Plugin lifecycle hooks must not call the same engine's `init()` or `destroy()`; direct synchronous re-entry throws `LifecycleReentrancyError`. If a plugin captures a raw engine and issues such a call after an `await`, a same-realm kernel cannot reliably attribute that call without AsyncContext-like causal tracking or Realm/process isolation. That behavior violates the host-extension protocol.
+
+A compatibility plugin that still needs raw host services such as `Project`, `Designer`, or `Simulator` must call `assertLegacyTrustedPluginContext(ctx)` in `init()`, and its host must select `legacyTrusted`. The assertion only verifies the explicit policy; it cannot widen an `agentRestricted` Context. New plugins should not depend on this interface.
 
 ## PluginExtend
 
@@ -213,8 +219,8 @@ interface PluginExtendClass {
   NodeChildren: typeof NodeChildren;
   Props: typeof Props;
   Prop: typeof Prop;
-  ComponentMetaManager: typeof ComponentMetaManager;
-  SetterManager: typeof SetterManager;
+  Materials: typeof Materials;
+  Setters: typeof Setters;
   ComponentMeta: typeof ComponentMeta;
 }
 ```

@@ -4,6 +4,7 @@ import { Config } from '../config'
 import { Clipboard } from '../designer/clipboard'
 import { DESIGNER_EVENT, type Designer } from '../designer/designer'
 import { DragObjectType, type NodeInstance, isDragAnyObject, isShaken } from '../designer/dragon'
+import { createDesignerEventBus } from '../designer/event-bus'
 import {
   type LocateEvent,
   type LocationChildrenDetail,
@@ -215,12 +216,21 @@ export class Simulator {
   }
 
   constructor(project: Project, designer: Designer) {
+    if (project.designer !== designer) {
+      throw new Error('Simulator project and designer must belong to the same engine instance')
+    }
     installLifecycleTeardownOperation(this, () => this.#purgeInternal())
     this.designer = designer
     this.project = project
-    this.emitter = designer.createEventBus('Simulator')
+    // A simulator is engine-associated from construction, not only after the
+    // renderer mounts it into Project. This closes the pre-mount authority
+    // window for callback membranes and lifecycle mutation checks.
+    inheritLifecycleMutationGuard(project, this)
+    this.emitter = createDesignerEventBus(designer, 'Simulator')
     inheritEngineTeardownOwnership(this, this.emitter)
     this.viewport = new Viewport(designer)
+    inheritLifecycleMutationGuard(this, this.viewport)
+    inheritEngineTeardownOwnership(this, this.viewport)
     this.scroller = this.designer.createScroller(this.viewport)
     lockReadonlyProperties(this, ['designer', 'emitter', 'isSimulator', 'project', 'scroller', 'viewport'])
     lockPrototypeAccessors(this, ['currentDocument', 'editor'])
@@ -310,7 +320,7 @@ export class Simulator {
       }
     }
     try {
-      this.viewport.dispose()
+      runInternalLifecycleTeardown(this.viewport)
     } catch (error) {
       errors.push(error)
     }
@@ -332,6 +342,7 @@ export class Simulator {
       errors.push(error)
     }
     try {
+      sealLifecycleMutations(this.emitter, 'simulator event bus generation is disposed')
       runInternalLifecycleTeardown(this.emitter)
     } catch (error) {
       errors.push(error)
@@ -344,10 +355,10 @@ export class Simulator {
       this.instancesMap[docId].clear()
     }
     this.instancesMap = {}
+    sealLifecycleMutations(this, 'simulator generation is disposed')
     if (errors.length) {
       throw new AggregateError(errors, 'Simulator disposal completed with errors')
     }
-    sealLifecycleMutations(this, 'simulator generation is disposed')
   }
 
   dispose() {

@@ -3,9 +3,10 @@ import {
   assertLifecycleMutationTicket,
   captureLifecycleMutationTicket,
 } from '../lifecycle/mutation-barrier'
+import type { Disposable } from '../utils/hotkey'
 import type { PluginContext } from './plugin-context'
 
-const capabilityKeys = [
+export const pluginContextCapabilityKeys = [
   'engine',
   'clipboard',
   'trustPolicy',
@@ -22,6 +23,122 @@ const capabilityKeys = [
 
 const capabilityProxyTargets = new WeakMap<object, object>()
 
+// Package-private proof that an engine-owned object has already been reduced
+// to a finite plugin capability. A WeakSet keeps the proof unforgeable by
+// same-realm plugin code and avoids reopening every object with the same
+// lifecycle owner.
+const reviewedPluginContextCapabilities = new WeakSet<object>()
+
+export function markReviewedPluginContextCapability(target: object): void {
+  reviewedPluginContextCapabilities.add(target)
+}
+
+export function isReviewedPluginContextCapability(target: object): boolean {
+  return reviewedPluginContextCapabilities.has(target)
+}
+
+const blockedCapabilityProperties = new Set<PropertyKey>([
+  '__defineGetter__',
+  '__defineSetter__',
+  '__proto__',
+  'constructor',
+  'prototype',
+])
+
+const callbackArgumentIndexesByMethod = new Map<PropertyKey, readonly number[]>([
+  ['addListener', [1]],
+  ['bind', [1]],
+  ['every', [0]],
+  ['filter', [0]],
+  ['find', [0]],
+  ['findIndex', [0]],
+  ['findLast', [0]],
+  ['findLastIndex', [0]],
+  ['flatMap', [0]],
+  ['forEach', [0]],
+  ['getComponentMeta', [1]],
+  ['map', [0]],
+  ['off', [1]],
+  ['on', [1]],
+  ['onGot', [1]],
+  ['onMetadataChange', [0]],
+  ['prependListener', [1]],
+  ['reduce', [0]],
+  ['reduceRight', [0]],
+  ['removeListener', [1]],
+  ['some', [0]],
+  ['sort', [0]],
+  ['toSorted', [0]],
+  ['unbind', [1]],
+  ['waitPasteData', [1]],
+])
+
+const callbackThisPreservingMethods = new Set<PropertyKey>([
+  'every',
+  'filter',
+  'find',
+  'findIndex',
+  'findLast',
+  'findLastIndex',
+  'flatMap',
+  'forEach',
+  'map',
+  'some',
+])
+
+interface LifecycleCapabilityBinderOptions {
+  readonly isBlockedProperty?: (target: object, property: PropertyKey) => boolean
+  readonly blockedPropertiesByTarget?: WeakMap<object, ReadonlySet<PropertyKey>>
+}
+
+interface PluginContextOperations {
+  dispose(): void
+  onDispose(disposer: Disposable): Disposable
+}
+
+const pluginContextOperations = new WeakMap<PluginContext, PluginContextOperations>()
+
+const pluginContextBlockedTargetProperties = new WeakMap<PluginContext, WeakMap<object, ReadonlySet<PropertyKey>>>()
+
+const pluginContextBlockedPropertyResolvers = new WeakMap<
+  PluginContext,
+  (target: object, property: PropertyKey) => boolean
+>()
+
+export function installPluginContextOperations(context: PluginContext, operations: PluginContextOperations): void {
+  if (pluginContextOperations.has(context)) throw new Error('Plugin context operations are already installed')
+  pluginContextOperations.set(context, operations)
+}
+
+export function blockPluginContextTargetProperties(
+  context: PluginContext,
+  target: object,
+  properties: ReadonlySet<PropertyKey>,
+): void {
+  let blockedTargets = pluginContextBlockedTargetProperties.get(context)
+  if (!blockedTargets) {
+    blockedTargets = new WeakMap()
+    pluginContextBlockedTargetProperties.set(context, blockedTargets)
+  }
+  blockedTargets.set(target, properties)
+}
+
+export function installPluginContextBlockedPropertyResolver(
+  context: PluginContext,
+  resolver: (target: object, property: PropertyKey) => boolean,
+): void {
+  if (pluginContextBlockedPropertyResolvers.has(context)) {
+    throw new Error('Plugin context blocked-property resolver is already installed')
+  }
+  pluginContextBlockedPropertyResolvers.set(context, resolver)
+}
+
+const getPluginContextOperations = (context: PluginContext): PluginContextOperations => {
+  const operations = pluginContextOperations.get(context)
+  if (!operations) throw new Error('Plugin context operations are not installed')
+  return operations
+}
+
 /** Internal teardown may unwrap a revocable disposer without lending it back to plugin code. */
 export function unwrapPluginContextCapability<T>(value: T): T {
   if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return value
@@ -32,9 +149,9 @@ const isPromiseLike = (value: object): value is PromiseLike<unknown> => {
   return typeof (value as { then?: unknown }).then === 'function'
 }
 
-const createCapabilityFacadeTarget = (target: object, callable: boolean): object => {
+const createCapabilityFacadeTarget = (target: object, callable: boolean, preserveArrayIdentity: boolean): object => {
   if (callable) return function CapabilityFacade() {}.bind(undefined)
-  if (Array.isArray(target)) {
+  if (Array.isArray(target) && preserveArrayIdentity) {
     const facade: unknown[] = []
     // Preserve Array.isArray() without copying any capability-bearing values
     // onto the Proxy target. Array length stays writable on the facade so the
@@ -46,13 +163,32 @@ const createCapabilityFacadeTarget = (target: object, callable: boolean): object
 }
 
 /** Create a deep, generation-bound membrane for one engine-owned capability. */
-export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: string) {
+export function createLifecycleCapabilityBinder(
+  owner: object,
+  bindingOrigin: string,
+  options: LifecycleCapabilityBinderOptions = {},
+) {
   const ticket = captureLifecycleMutationTicket(owner, `${bindingOrigin}.bind`)
   const proxies = new WeakMap<object, object>()
   const methods = new WeakMap<object, Map<PropertyKey, (...args: unknown[]) => unknown>>()
+  const callbackWrappersWithHiddenThis = new WeakMap<(...args: unknown[]) => unknown, (...args: unknown[]) => unknown>()
+  const callbackWrappersWithWrappedThis = new WeakMap<
+    (...args: unknown[]) => unknown,
+    (...args: unknown[]) => unknown
+  >()
 
   const assertActive = (origin: string): void => {
     assertLifecycleMutationTicket(owner, ticket, origin)
+  }
+
+  const isBlockedCapabilityProperty = (target: object, property: PropertyKey): boolean =>
+    blockedCapabilityProperties.has(property) ||
+    options.isBlockedProperty?.(target, property) === true ||
+    options.blockedPropertiesByTarget?.get(target)?.has(property) === true
+
+  const unwrap = <T>(value: T): T => {
+    if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return value
+    return (capabilityProxyTargets.get(value as object) as T | undefined) || value
   }
 
   const wrapResult = <T>(result: T, origin: string): T => {
@@ -90,7 +226,8 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
     // expose their raw value, which punches through the generation membrane.
     // Arrays retain their observable Array identity; callables retain their
     // callable/constructable shape without copying authority-bearing values.
-    const proxyTarget = createCapabilityFacadeTarget(target, callable)
+    const preserveArrayIdentity = Array.isArray(target) && !isBlockedCapabilityProperty(target, 'length')
+    const proxyTarget = createCapabilityFacadeTarget(target, callable, preserveArrayIdentity)
     const proxy: object = new Proxy(proxyTarget, {
       apply(_innerTarget, thisArg, args) {
         assertActive(`${origin}.apply`)
@@ -104,17 +241,17 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
           origin,
         )
       },
-      defineProperty(_innerTarget, property, descriptor) {
+      defineProperty(_innerTarget, _property, _descriptor) {
         assertActive(`${origin}.defineProperty`)
-        if (descriptor.configurable !== true) return false
-        return Reflect.defineProperty(target, property, descriptor)
+        return false
       },
-      deleteProperty(_innerTarget, property) {
+      deleteProperty(_innerTarget, _property) {
         assertActive(`${origin}.deleteProperty`)
-        return Reflect.deleteProperty(target, property)
+        return false
       },
       get(_innerTarget, property) {
         assertActive(`${origin}.get`)
+        if (isBlockedCapabilityProperty(target, property)) return undefined
         const child = Reflect.get(target, property, target)
         if (typeof child !== 'function') return wrap(child, `${origin}.${String(property)}`)
 
@@ -128,13 +265,42 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
 
         const guardedMethod = (...args: unknown[]) => {
           assertActive(`${origin}.${String(property)}`)
-          return wrapResult(Reflect.apply(child, target, args), `${origin}.${String(property)}`)
+          const callbackIndexes = callbackArgumentIndexesByMethod.get(property)
+          const hostArgs = args.map((argument, index) => {
+            if (!callbackIndexes?.includes(index) || typeof argument !== 'function') return unwrap(argument)
+            const callback = argument as (...args: unknown[]) => unknown
+            const preserveCallbackThis = callbackThisPreservingMethods.has(property)
+            const callbackWrappers = preserveCallbackThis
+              ? callbackWrappersWithWrappedThis
+              : callbackWrappersWithHiddenThis
+            const existingCallback = callbackWrappers.get(callback)
+            if (existingCallback) return existingCallback
+            const guardedCallback = function (this: unknown, ...callbackArgs: unknown[]) {
+              assertActive(`${origin}.${String(property)}.callback`)
+              // Registration callbacks do not receive the host object's
+              // implicit receiver. In particular, EventEmitter invokes
+              // listeners with its private emitter as `this`. Native forEach
+              // is the one supported exception because it has an explicit
+              // caller-provided thisArg contract.
+              const callbackThis = preserveCallbackThis
+                ? wrap(this, `${origin}.${String(property)}.callback.this`)
+                : undefined
+              const wrappedArgs = callbackArgs.map((value, callbackIndex) =>
+                wrap(value, `${origin}.${String(property)}.callback.${callbackIndex}`),
+              )
+              return Reflect.apply(callback, callbackThis, wrappedArgs)
+            }
+            callbackWrappers.set(callback, guardedCallback)
+            return guardedCallback
+          })
+          return wrapResult(Reflect.apply(child, target, hostArgs), `${origin}.${String(property)}`)
         }
         targetMethods.set(property, guardedMethod)
         return guardedMethod
       },
       getOwnPropertyDescriptor(_innerTarget, property) {
         assertActive(`${origin}.getOwnPropertyDescriptor`)
+        if (isBlockedCapabilityProperty(target, property)) return undefined
         const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
         if (!descriptor) return descriptor
         const facadeDescriptor = Reflect.getOwnPropertyDescriptor(proxyTarget, property)
@@ -160,27 +326,28 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
       },
       getPrototypeOf() {
         assertActive(`${origin}.getPrototypeOf`)
-        return Reflect.getPrototypeOf(target)
+        return null
       },
       has(_innerTarget, property) {
         assertActive(`${origin}.has`)
+        if (isBlockedCapabilityProperty(target, property)) return false
         return Reflect.has(target, property)
       },
       ownKeys() {
         assertActive(`${origin}.ownKeys`)
-        return Reflect.ownKeys(target)
+        return Reflect.ownKeys(target).filter(property => !isBlockedCapabilityProperty(target, property))
       },
       preventExtensions() {
         assertActive(`${origin}.preventExtensions`)
         return false
       },
-      set(_innerTarget, property, child) {
+      set(_innerTarget, _property, _child) {
         assertActive(`${origin}.set`)
-        return Reflect.set(target, property, child, target)
+        return false
       },
-      setPrototypeOf(_innerTarget, prototype) {
+      setPrototypeOf(_innerTarget, _prototype) {
         assertActive(`${origin}.setPrototypeOf`)
-        return Reflect.setPrototypeOf(target, prototype)
+        return false
       },
     })
     proxies.set(target, proxy)
@@ -196,8 +363,30 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
  * plugin. Retained views remain revoked even after the same Engine restarts.
  */
 export function bindPluginContextCapabilities(context: PluginContext): void {
-  const bind = createLifecycleCapabilityBinder(context, 'pluginContext.capabilities')
-  for (const key of capabilityKeys) {
+  const blockedPropertiesByTarget =
+    pluginContextBlockedTargetProperties.get(context) || new WeakMap<object, ReadonlySet<PropertyKey>>()
+  const reviewedCapabilityRoots = new WeakSet<object>()
+  for (const key of pluginContextCapabilityKeys) {
+    const capability = context[key]
+    if ((typeof capability === 'object' || typeof capability === 'function') && capability !== null) {
+      reviewedCapabilityRoots.add(capability as object)
+    }
+  }
+  if ((typeof context.engine === 'object' || typeof context.engine === 'function') && context.engine !== null) {
+    blockedPropertiesByTarget.set(context.engine as object, new Set(['destroy', 'init']))
+  }
+  const blockedPropertyResolver = pluginContextBlockedPropertyResolvers.get(context)
+  const bind = createLifecycleCapabilityBinder(context, 'pluginContext.capabilities', {
+    blockedPropertiesByTarget,
+    isBlockedProperty: (target, property) => {
+      // The context roots were already reduced to explicit finite facades.
+      // Ownership filtering applies to values crossing those facades, not to
+      // the reviewed facade methods themselves.
+      if (reviewedCapabilityRoots.has(target) || isReviewedPluginContextCapability(target)) return false
+      return blockedPropertyResolver?.(target, property) === true
+    },
+  })
+  for (const key of pluginContextCapabilityKeys) {
     const capability = context[key]
     Object.defineProperty(context, key, {
       configurable: false,
@@ -207,11 +396,17 @@ export function bindPluginContextCapabilities(context: PluginContext): void {
     })
   }
 
-  for (const method of ['dispose', 'onDispose'] as const) {
-    Object.defineProperty(context, method, {
+  const operations = getPluginContextOperations(context)
+  Object.defineProperties(context, {
+    dispose: {
       configurable: false,
-      value: context[method].bind(context),
+      value: () => operations.dispose(),
       writable: false,
-    })
-  }
+    },
+    onDispose: {
+      configurable: false,
+      value: (disposer: Disposable) => operations.onDispose(disposer),
+      writable: false,
+    },
+  })
 }

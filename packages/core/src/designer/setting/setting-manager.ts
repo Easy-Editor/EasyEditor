@@ -15,6 +15,8 @@ export class SettingsManager {
 
   @observable.ref private accessor _settings: SettingTopEntry | undefined
 
+  #ownsSettings = false
+
   @computed
   get length(): number | undefined {
     return this._settings?.nodes.length
@@ -73,6 +75,8 @@ export class SettingsManager {
     if (sessionId === this._sessionId) {
       return
     }
+    if (this.#ownsSettings) this._settings?.purge()
+    this.#ownsSettings = false
     this._sessionId = sessionId
 
     // 当没有选中节点时，自动使用根节点
@@ -95,6 +99,7 @@ export class SettingsManager {
       this._settings = nodes[0].settingEntry
     } else {
       this._settings = this.#designer.createSettingEntry(nodes)
+      this.#ownsSettings = true
     }
   }
 
@@ -109,6 +114,8 @@ export class SettingsManager {
     this.#disposeSelectionListener = undefined
     this.#disposeEditorListener?.()
     this.#disposeEditorListener = undefined
+    if (this.#ownsSettings) this._settings?.purge()
+    this.#ownsSettings = false
     this._sessionId = ''
     this._settings = undefined
     this.#designer = undefined

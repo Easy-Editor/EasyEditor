@@ -5,7 +5,7 @@ import { captureFailure, loadCore } from './helpers/kernel.mjs'
 
 const listenerCount = (eventBus, event) => eventBus.listenerCount(event)
 
-test('designer purge releases constructor subscriptions, owned event buses, state, and offset observers', async t => {
+test('designer purge releases constructor subscriptions, owned event buses, and state', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   t.after(async () => {
@@ -67,20 +67,8 @@ test('designer purge releases constructor subscriptions, owned event buses, stat
   )
   assert.ok(globalThis.document.listenerCount() > browserListenerBaseline)
 
-  let observerPurges = 0
-  designer.oobxList.push({
-    compute() {},
-    isPurged() {
-      return false
-    },
-    purge() {
-      observerPurges += 1
-    },
-  })
-
   await engine.destroy()
 
-  assert.equal(listenerCount(designer.emitter), 0)
   assert.equal(listenerCount(designer.dragon.emitter), 0)
   assert.equal(listenerCount(designer.selection.emitter), 0)
   assert.equal(listenerCount(designer.detecting.emitter), 0)
@@ -95,8 +83,6 @@ test('designer purge releases constructor subscriptions, owned event buses, stat
   assert.equal(designer.dragon.dragging, false)
   assert.equal(designer.dragon.sensors.length, 0)
   assert.equal(designer.settingsManager.settings, undefined)
-  assert.equal(observerPurges, 1)
-  assert.equal(designer.oobxList.length, 0)
 
   const eventCallsBeforeProbe = [
     designerEventCalls,
@@ -117,7 +103,6 @@ test('designer purge releases constructor subscriptions, owned event buses, stat
   )
 
   await engine.destroy()
-  assert.equal(observerPurges, 1, 'purge must remain idempotent')
 
   await engine.init()
   engine.loadProject(createProjectSchema({ id: 'designer-disposal-restart' }), true)

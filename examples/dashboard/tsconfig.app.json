@@ -26,6 +26,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@easy-editor/core": ["../../packages/core/dist/index.d.ts"],
+      "@easy-editor/core/agent": ["../../packages/core/dist/agent.d.ts"],
       "@easy-editor/core/agent-channel": ["../../packages/core/dist/agent-channel.d.ts"],
       "@easy-editor/core/instance": ["../../packages/core/dist/instance.d.ts"],
       "@easy-editor/plugin-dashboard": ["../../packages/plugin-dashboard/dist/index.d.ts"],

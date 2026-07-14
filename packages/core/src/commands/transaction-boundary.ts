@@ -3,6 +3,7 @@ import type { BoundTransactionOptions, TransactionManager } from './transaction-
 import type { EditorCommand, TransactionResult } from './types'
 
 interface TransactionBoundaryOperations {
+  isActive(): boolean
   runValidatedOnDocument(
     document: Document,
     commands: readonly EditorCommand[],
@@ -11,6 +12,9 @@ interface TransactionBoundaryOperations {
 }
 
 const transactionBoundaryOperations = new WeakMap<TransactionManager, TransactionBoundaryOperations>()
+
+/** Package-private construction authority for engine-owned transaction roots. */
+export const transactionManagerConstructionAuthority: unique symbol = Symbol('TransactionManagerConstructionAuthority')
 
 export function installTransactionBoundaryOperations(
   manager: TransactionManager,
@@ -30,4 +34,11 @@ export function runValidatedTransactionOnDocument(
   const operations = transactionBoundaryOperations.get(manager)
   if (!operations) throw new Error('Transaction boundary operations are not installed')
   return operations.runValidatedOnDocument(document, commands, options)
+}
+
+/** Package-private lifecycle gate; transactions never expose their mutable context. */
+export function isTransactionBoundaryActive(manager: TransactionManager): boolean {
+  const operations = transactionBoundaryOperations.get(manager)
+  if (!operations) throw new Error('Transaction boundary operations are not installed')
+  return operations.isActive()
 }

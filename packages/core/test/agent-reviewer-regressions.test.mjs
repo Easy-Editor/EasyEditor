@@ -168,16 +168,22 @@ test('an incomplete rollback is terminal and audited explicitly instead of being
   const before = structuredClone(document.export())
   const target = document.getNode('child-1')
   const originalRemove = target.remove
-  const originalRollback = document.history.rollbackTransaction
+  const originalExportRaw = document.exportRaw
   let removeAttempts = 0
+  let transactionExportCalls = 0
   target.remove = function failFirstRemove(...args) {
     removeAttempts += 1
     if (removeAttempts === 1) throw new Error('forced apply failure')
     return originalRemove.apply(this, args)
   }
-  document.history.rollbackTransaction = function rollbackThenReportFailure() {
-    originalRollback.call(this)
-    throw new Error('forced rollback verification failure')
+  document.exportRaw = function failRollbackVerification(...args) {
+    const result = originalExportRaw.apply(this, args)
+    transactionExportCalls += 1
+    // Agent execution reads the schema once for its own preflight, then the
+    // transaction captures a rollback baseline and re-checks the precondition.
+    // The fourth read is the transaction manager's rollback verification.
+    if (transactionExportCalls === 4) throw new Error('forced rollback verification failure')
+    return result
   }
 
   try {
@@ -201,7 +207,7 @@ test('an incomplete rollback is terminal and audited explicitly instead of being
     assert.equal(removeAttempts, attemptsAfterRollback, 'an incompletely rolled-back plan must never be retried')
   } finally {
     target.remove = originalRemove
-    document.history.rollbackTransaction = originalRollback
+    document.exportRaw = originalExportRaw
   }
 })
 

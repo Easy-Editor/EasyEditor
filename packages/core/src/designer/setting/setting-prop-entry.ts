@@ -1,13 +1,22 @@
 import { computed, observable, runInAction } from 'mobx'
 import type { Node } from '../../document/node/node'
 import { type PropKey, isJSExpression } from '../../document/prop/prop'
+import {
+  assertLifecycleMutationAllowed,
+  inheritLifecycleMutationGuard,
+  sealLifecycleMutations,
+} from '../../lifecycle/mutation-barrier'
+import { lockReadonlyProperties } from '../../lifecycle/readonly-properties'
+import { inheritEngineTeardownOwnership, runInternalLifecycleTeardown } from '../../lifecycle/teardown-boundary'
 import type { ComponentMeta } from '../../materials/component-meta'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import type { Setters } from '../../setters'
 import type { Editor } from '../../types/editor'
 import type { FieldExtraProps } from '../../types/meta'
 import { type EventBus, createEventBus } from '../../utils/event-bus'
 import { uniqueId } from '../../utils/unique-id'
 import { DESIGNER_EVENT, type Designer } from '../designer'
+import { createDesignerEventBus } from '../event-bus'
 import type { SettingEntry } from './setting-entry'
 import type { SetValueOptions, SettingField } from './setting-field'
 import type { SettingTopEntry } from './setting-top-entry'
@@ -39,10 +48,25 @@ export class SettingPropEntry implements SettingEntry {
 
   readonly emitter: EventBus
 
-  @observable.ref private accessor _name: PropKey | undefined
+  #entryPurged = false
+
+  protected assertEntryMutationAllowed(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+  }
+
+  protected purgeEntry(): void {
+    if (!this.#entryPurged) {
+      this.#entryPurged = true
+      sealLifecycleMutations(this, 'setting field generation is disposed')
+      sealLifecycleMutations(this.emitter, 'setting field event bus generation is disposed')
+    }
+    runInternalLifecycleTeardown(this.emitter)
+  }
+
+  @observable.ref accessor #name: PropKey | undefined
 
   get name() {
-    return this._name
+    return this.#name
   }
 
   @computed
@@ -61,6 +85,7 @@ export class SettingPropEntry implements SettingEntry {
     name: PropKey | undefined,
     type?: 'field' | 'group',
   ) {
+    inheritLifecycleMutationGuard(parent, this)
     if (type == null) {
       const c = typeof name === 'string' ? name.slice(0, 1) : ''
       if (c === '#') {
@@ -72,7 +97,7 @@ export class SettingPropEntry implements SettingEntry {
       this.type = type
     }
     // initial self properties
-    this._name = name
+    this.#name = name
     this.isGroup = this.type === 'group'
 
     // copy parent static properties
@@ -84,8 +109,27 @@ export class SettingPropEntry implements SettingEntry {
     this.isMultiple = parent.isMultiple
     this.isSingle = parent.isSingle
     this.designer = parent.designer
-    this.emitter = this.designer?.createEventBus('SettingPropEntry') || createEventBus('SettingPropEntry')
+    this.emitter = this.designer
+      ? createDesignerEventBus(this.designer, 'SettingPropEntry')
+      : createEventBus('SettingPropEntry')
+    if (this.designer) inheritEngineTeardownOwnership(this.designer, this.emitter)
     this.top = parent.top
+    lockReadonlyProperties(this, [
+      'componentMeta',
+      'designer',
+      'editor',
+      'emitter',
+      'id',
+      'isGroup',
+      'isMultiple',
+      'isSameComponent',
+      'isSingle',
+      'nodes',
+      'parent',
+      'setters',
+      'top',
+      'type',
+    ])
   }
 
   getId() {
@@ -93,6 +137,7 @@ export class SettingPropEntry implements SettingEntry {
   }
 
   setKey(key: PropKey) {
+    this.assertEntryMutationAllowed('settingField.setKey')
     if (this.type !== 'field') {
       return
     }
@@ -101,14 +146,15 @@ export class SettingPropEntry implements SettingEntry {
     while (l-- > 0) {
       this.nodes[l].getProp(propName, true)!.key = key
     }
-    this._name = key
+    this.#name = key
   }
 
   getKey() {
-    return this._name
+    return this.#name
   }
 
   remove() {
+    this.assertEntryMutationAllowed('settingField.remove')
     if (this.type !== 'field') {
       return
     }
@@ -133,7 +179,13 @@ export class SettingPropEntry implements SettingEntry {
     return runInAction(() => {
       if (this.type !== 'field') {
         const { getValue } = this.extraProps
-        return getValue ? (getValue(this as unknown as SettingField, undefined) === undefined ? 0 : 1) : 0
+        return getValue
+          ? withoutProjectMutationAuthority(this.getNode().document.project, () =>
+              getValue(this as unknown as SettingField, undefined),
+            ) === undefined
+            ? 0
+            : 1
+          : 0
       }
       if (this.nodes.length === 1) {
         return 2
@@ -169,7 +221,11 @@ export class SettingPropEntry implements SettingEntry {
     }
     const { getValue } = this.extraProps
     try {
-      return getValue ? getValue(this as unknown as SettingField, val) : val
+      return getValue
+        ? withoutProjectMutationAuthority(this.getNode().document.project, () =>
+            getValue(this as unknown as SettingField, val),
+          )
+        : val
     } catch (e) {
       console.warn(e)
       return val
@@ -180,6 +236,7 @@ export class SettingPropEntry implements SettingEntry {
    * 设置当前属性值
    */
   setValue(val: any, isHotValue?: boolean, extraOptions?: SetValueOptions) {
+    this.assertEntryMutationAllowed('settingField.setValue')
     const oldValue = this.getValue()
     if (this.type === 'field') {
       this.name?.toString() && this.parent.setPropValue(this.name, val)
@@ -188,7 +245,9 @@ export class SettingPropEntry implements SettingEntry {
     const { setValue } = this.extraProps
     if (setValue && !extraOptions?.disableMutator) {
       try {
-        setValue(this as unknown as SettingField, val, oldValue)
+        withoutProjectMutationAuthority(this.getNode().document.project, () =>
+          setValue(this as unknown as SettingField, val, oldValue),
+        )
       } catch (e) {
         /* istanbul ignore next */
         console.warn(e)
@@ -201,13 +260,16 @@ export class SettingPropEntry implements SettingEntry {
    * 清除已设置的值
    */
   clearValue() {
+    this.assertEntryMutationAllowed('settingField.clearValue')
     if (this.type === 'field') {
       this.name?.toString() && this.parent.clearPropValue(this.name)
     }
     const { setValue } = this.extraProps
     if (setValue) {
       try {
-        setValue(this as unknown as SettingField, undefined)
+        withoutProjectMutationAuthority(this.getNode().document.project, () =>
+          setValue(this as unknown as SettingField, undefined),
+        )
       } catch (e) {
         console.warn(e)
       }
@@ -256,6 +318,7 @@ export class SettingPropEntry implements SettingEntry {
    * 设置顶层附属属性值
    */
   setExtraPropValue(propName: string, value: any) {
+    this.assertEntryMutationAllowed('settingField.setExtraPropValue')
     this.top.setExtraPropValue(propName, value)
   }
 
@@ -278,6 +341,7 @@ export class SettingPropEntry implements SettingEntry {
   }
 
   onValueChange(func: () => any) {
+    this.assertEntryMutationAllowed('settingField.onValueChange')
     this.emitter.on('valuechange', func)
 
     return () => {
@@ -286,6 +350,7 @@ export class SettingPropEntry implements SettingEntry {
   }
 
   notifyValueChange(oldValue: any, newValue: any) {
+    this.assertEntryMutationAllowed('settingField.notifyValueChange')
     this.designer?.postEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, {
       node: this.getNode(),
       prop: this,

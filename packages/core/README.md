@@ -1,6 +1,14 @@
 # @easy-editor/core
 
-The stateful kernel for EasyEditor: isolated engine instances, versioned Schema loading, transactional edit commands, lifecycle ownership, and Agent capability boundaries.
+The stateful framework kernel for EasyEditor: isolated engine instances, versioned Schema loading, transactional edit commands, lifecycle ownership, and explicit trust boundaries.
+
+## Public contract levels
+
+| Level | Surface | Promise |
+| --- | --- | --- |
+| **Stable** | `@easy-editor/core/instance` | Factory-owned engine lifecycle, Schema validation, commands, transactions, and host registration APIs |
+| **Compatibility (Web adapter)** | Designer, Project, Document, Node, Event, and DOM-oriented Simulator types | Available for existing Web renderers and read integration; raw model mutation methods are not stable v2 write APIs |
+| **Deferred / Internal** | Agent experiments and concrete engine internals | Agent Runtime is outside this framework phase; concrete construction and mutable service injection are not public APIs |
 
 ## Recommended entry: explicit instance
 
@@ -19,7 +27,9 @@ engine.loadProject(schema, true)
 await engine.destroy()
 ```
 
-`@easy-editor/core/instance` does not create the legacy default engine. Each instance owns its Project, Designer, plugins, materials, setters, event bus, hotkeys, command manager, Agent capabilities, and remote resource state.
+`@easy-editor/core/instance` does not create the legacy default engine. Each instance owns its Project, Designer, plugins, materials, setters, event bus, hotkeys, command manager, and remote resource state.
+
+The entry has an explicit finite export list. Hosts obtain instances only from `createEngine()`; the concrete engine class, mutable service injection, and lifecycle internals are not exported.
 
 ## Compatibility entry
 
@@ -27,13 +37,16 @@ The root `@easy-editor/core` entry still exports `defaultEngine`, `init`, `destr
 
 ## Kernel contracts
 
-- **Lifecycle**: `init()` and `destroy()` are awaitable and concurrency-safe; failed disposal can be retried. Runtime-private lifecycle state is exposed through a non-configurable read-only accessor, terminal instances reject new mutations/listeners, and asynchronous plugin work is generation-checked before commit. Engine-owned services can only be torn down through `EngineInstance.destroy()`.
+- **Lifecycle**: external calls are awaitable and serialized. Callers of the same operation join its in-flight Promise; `init()` waits for disposal and `destroy()` waits for initialization before proceeding. Failed disposal can be retried. Plugin and `RemoteAdapter` lifecycle callbacks must not call the same engine's `init()` or `destroy()`; direct synchronous re-entry throws `LifecycleReentrancyError`. Runtime-private lifecycle state is exposed through a non-configurable read-only accessor, terminal instances reject new mutations/listeners, and asynchronous plugin work is generation-checked before commit. Engine-owned services can only be torn down through `EngineInstance.destroy()`.
 - **Generation ownership**: a generation begins when initialization starts and ends when disposal starts or initialization rolls back. Reusable root services reactivate only through `init()`; retained `Document`, `History`, Simulator, material registry/meta, and plugin-context references from a disposed generation stay permanently revoked. Plugin contexts receive generation-bound capability views rather than reusable raw engine services.
 - **Schema**: the current version is `1.0.0`; legacy `0.0.1` input migrates explicitly and invalid input fails before the current project unloads.
-- **Transactions**: command batches commit as one undo/redo unit or roll back model, history, selection, complete material entry/meta state, and deferred events. Restricted public transactions reject executable validators; Agent validation uses a package-private capability instead of a mutable public method.
+- **Transactions**: command batches commit as one undo/redo unit or roll back model, history, selection, complete material entry/meta state, and deferred events. Restricted public transactions reject executable validators.
 - **Commands**: `insertNode`, `updateProps`, `removeNode`, `moveNode`, `replace`, `insertBefore`, `insertAfter`, `wrap`, and `unwrap` share one runtime/type catalog.
-- **Agent boundary**: grants independently restrict documents, component types, prop values, extra-field values, commands, and budgets. Prop/extra policies fail closed and recursively accept only bounded strings, finite ranged numbers, or exact objects; Worker transport exposes structured-clone DTOs rather than engine objects. Port sessions may opt into `executionAuthority: 'host'`, which lets the peer preview while the trusted host reads the authoritative record through `getPreparedPlanPreview(planId)` and reserves commit for `approveAndExecute(planId)`. Receipts, audit records, and committed events from that entry carry `approvalSource: 'host'`; this proves the trusted host invoked the approval entry, not the identity of a human approver.
-- **Trust boundary**: `agentRestricted` fails closed for raw mutation, executable input, plugin prototype extensions, and remote access. Host mutation authority is suspended before event, material, and component callbacks execute. `legacyTrusted` preserves compatibility but is not a security sandbox.
+- **Trust boundary**: `agentRestricted` is a capability, input-validation, and model-mutation policy. Its finite plugin Context facades omit engine lifecycle methods and known reverse-authority fields; its peer registry is readonly, while the host plugin manager returns frozen runtime snapshots and generation-bound exports instead of raw `PluginRuntime` objects. It also rejects executable input, prototype extensions, and remote access through the restricted framework surface. It does **not** make same-realm code safe to distrust: plugins and `RemoteAdapter` implementations remain trusted host extensions. `legacyTrusted` preserves broader compatibility; neither policy is a malicious-code sandbox.
 - **Outbound state**: mutable registries and raw event emitters are not lent to observers; loading-state notifications use detached maps, frozen state records, and cloned frozen errors. `MaterialRegistry.getSnapshot()` exposes deterministic frozen diagnostics without a rollback token or mutable entry.
 
-See the [architecture overview](../../docs/en/design/overview.md) for the ownership and trust model.
+Same-realm JavaScript cannot reliably distinguish a lifecycle call made by an external host from one made through a raw engine closure retained across an `await` without an AsyncContext-like mechanism or realm/process isolation. Capturing the engine in a plugin or adapter lifecycle callback and calling its lifecycle after suspension is therefore a host-protocol violation, not an isolation guarantee.
+
+Agent Runtime design is intentionally deferred until this framework contract is stable. Existing Agent experiments are outside the stable `@easy-editor/core/instance` surface and may change during the later Agent phase.
+
+See the [architecture overview](https://github.com/Easy-Editor/EasyEditor/blob/main/docs/en/design/overview.md) for the ownership and trust model.

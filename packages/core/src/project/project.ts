@@ -1,10 +1,11 @@
-import { action, computed, intercept, observable, observe, runInAction } from 'mobx'
+import { action, computed, observable, runInAction } from 'mobx'
 import type { Designer } from '../designer'
+import { createDesignerEventBus } from '../designer/event-bus'
 import { DOCUMENT_EVENT, Document, isDocument } from '../document'
 import {
-  purgeDocumentDuringTeardown,
+  getPendingDocumentTeardowns,
+  installProjectDocumentTeardown,
   removeDocumentDuringTeardown,
-  retireDocumentDuringTeardown,
 } from '../document/teardown'
 import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
 import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
@@ -22,10 +23,10 @@ import { type ComponentsMap, type ProjectSchema, type RootSchema, TRANSFORM_STAG
 import { type EventBus, createLogger, isLowCodeComponentType, isProCodeComponentType } from '../utils'
 import { type DocumentMutationBoundary, installDocumentMutationBoundary } from './document-mutation-boundary'
 import {
+  ProjectMutationCommittedError,
   assertProjectMutationAuthority,
   installProjectMutationAuthority,
   withProjectMutationAuthority,
-  withProjectTeardownAuthority,
 } from './mutation-authority'
 
 const logger = createLogger('Project')
@@ -84,27 +85,36 @@ interface ActiveDocumentMutationBoundary {
   mutationsAllowed: boolean
 }
 
+interface PreparedDocumentLoad {
+  readonly documents: Document[]
+  readonly documentToOpen?: Document
+}
+
 interface LegacySimulatorLifecycle {
   dispose?: () => void | Promise<void>
   purge?: () => void | Promise<void>
 }
 
 export class Project {
-  private emitter: EventBus
+  readonly #emitter: EventBus
 
-  private data: ProjectSchema = createEmptyProjectSchema()
+  #data: ProjectSchema = createEmptyProjectSchema()
 
-  @observable.shallow accessor documents: Document[] = []
+  @observable.shallow accessor #documents: Document[] = []
+
+  get documents(): readonly Document[] {
+    const snapshot = this.#documents.slice()
+    inheritLifecycleMutationGuard(this, snapshot)
+    return Object.freeze(snapshot)
+  }
 
   #documentsMap = new Map<string, Document>()
 
   #documentMutationBoundary?: ActiveDocumentMutationBoundary
 
-  #documentsMutationDisposer: () => void = () => {}
-
   @computed
   get currentDocument() {
-    return this.documents.find(document => document.active)
+    return this.#documents.find(document => document.active)
   }
 
   @observable.ref accessor #config: Record<string, any> | undefined
@@ -121,12 +131,12 @@ export class Project {
 
   #simulator?: Simulator
 
-  private readonly schemaValidator: SchemaValidator
+  readonly #schemaValidator: SchemaValidator
 
-  private readonly trustPolicy: TrustPolicy
+  readonly #trustPolicy: TrustPolicy
 
   allowsDirectModelMutation(): boolean {
-    return this.trustPolicy.allowDirectModelMutation === true
+    return this.#trustPolicy.allowDirectModelMutation === true
   }
 
   get simulator() {
@@ -141,31 +151,14 @@ export class Project {
     lockPrototypeAccessors(this, ['config', 'currentDocument', 'documents', 'simulator'])
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
     inheritEngineTeardownOwnership(this.designer, this)
-    this.emitter = designer.createEventBus('Project')
-    lockReadonlyProperties(this, ['emitter'])
-    inheritEngineTeardownOwnership(this, this.emitter)
-    this.trustPolicy = this.designer.editor.get<TrustPolicy>('trustPolicy') || resolveTrustPolicy('legacyTrusted')
-    installProjectMutationAuthority(this, this.trustPolicy)
+    this.#emitter = createDesignerEventBus(designer, 'Project')
+    inheritEngineTeardownOwnership(this, this.#emitter)
+    this.#trustPolicy = this.designer.editor.get<TrustPolicy>('trustPolicy') || resolveTrustPolicy('legacyTrusted')
+    installProjectMutationAuthority(this, this.#trustPolicy)
+    installProjectDocumentTeardown(this, document => this.#unlinkDocumentDuringTeardown(document))
     installDocumentMutationBoundary(this, document => this.#beginDocumentMutationBoundary(document))
-    this.schemaValidator = this.designer.get('schemaValidator') || new SchemaValidator(this.trustPolicy)
-    lockReadonlyProperties(this, ['schemaValidator', 'trustPolicy'])
-    this.trackDocumentCollectionMutations()
-    intercept(this, 'documents', change => {
-      this.assertProjectMutationAllowed()
-      return change
-    })
-    observe(this, 'documents', () => {
-      this.trackDocumentCollectionMutations()
-    })
+    this.#schemaValidator = this.designer.get('schemaValidator') || new SchemaValidator(this.#trustPolicy)
     withProjectMutationAuthority(this, () => this.load(schema))
-  }
-
-  private trackDocumentCollectionMutations(): void {
-    this.#documentsMutationDisposer()
-    this.#documentsMutationDisposer = intercept(this.documents, change => {
-      this.assertProjectMutationAllowed()
-      return change
-    })
   }
 
   import(schema: ProjectSchema) {
@@ -174,14 +167,14 @@ export class Project {
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE): ProjectSchema {
     return {
-      ...this.data,
+      ...this.#data,
       componentsMap: this.getComponentsMap(),
-      componentsTree: this.documents.filter(doc => !doc.isBlank()).map(doc => doc.export(stage) || {}),
+      componentsTree: this.#documents.filter(doc => !doc.isBlank()).map(doc => doc.export(stage) || {}),
     }
   }
 
   private getComponentsMap() {
-    return this.documents.reduce<ComponentsMap>((componentsMap: ComponentsMap, curDoc: Document): ComponentsMap => {
+    return this.#documents.reduce<ComponentsMap>((componentsMap: ComponentsMap, curDoc: Document): ComponentsMap => {
       const curComponentsMap = curDoc.getComponentsMap()
       if (Array.isArray(curComponentsMap)) {
         curComponentsMap.forEach(item => {
@@ -218,15 +211,35 @@ export class Project {
     // Validation, migration, and normalization must complete before the
     // current project is unloaded. A rejected schema therefore has no
     // observable side effects.
-    const preparedSchema = schema === undefined ? createEmptyProjectSchema() : this.schemaValidator.prepare(schema)
+    const preparedSchema = schema === undefined ? createEmptyProjectSchema() : this.#schemaValidator.prepare(schema)
+    const protectedData = this.protectProjectDataValue(preparedSchema)
+    // Construct the replacement graph before retiring the current generation.
+    // Failed material hooks therefore leave the existing project intact, and
+    // every provisional identity is terminally cleaned before the error exits.
+    const preparedDocuments = this.#prepareDocumentLoad(protectedData, autoOpen)
 
-    this.unload()
+    const cleanupErrors: unknown[] = []
+    try {
+      this.unload()
+    } catch (error) {
+      if (!(error instanceof ProjectMutationCommittedError)) {
+        const preparationCleanupErrors = this.#disposePreparedDocuments(preparedDocuments.documents)
+        if (preparationCleanupErrors.length) {
+          throw new AggregateError(
+            [error, ...preparationCleanupErrors],
+            'Project replacement was rejected and provisional cleanup reported errors',
+          )
+        }
+        throw error
+      }
+      cleanupErrors.push(...error.errors)
+    }
 
     // Loading is replacement, not a merge. Reusing the previous data object
     // would leak stale config, metadata, or extension fields into the new
     // project.
-    this.data = this.protectProjectDataValue(preparedSchema)
-    this.#config = this.data.config
+    this.#data = protectedData
+    this.#config = this.#data.config
 
     // perf: 在 open 的时候才创建 document
     // if (schema?.documents) {
@@ -235,27 +248,80 @@ export class Project {
     //   }
     // }
 
-    if (autoOpen) {
-      if (autoOpen === true) {
-        // auto open first document or open a blank page
-        const documentInstances = this.data.componentsTree.map(data => this.createDocument(data))
-        documentInstances[0]?.open()
-      } else {
-        // auto open should be string of fileName
-        this.open(autoOpen)
+    for (const document of preparedDocuments.documents) {
+      try {
+        this.#publishDocument(document)
+      } catch (error) {
+        cleanupErrors.push(error)
       }
     }
+    if (preparedDocuments.documentToOpen) {
+      try {
+        preparedDocuments.documentToOpen.open()
+      } catch (error) {
+        cleanupErrors.push(error)
+      }
+    }
+    if (cleanupErrors.length) throw new ProjectMutationCommittedError(cleanupErrors, undefined)
+  }
+
+  #prepareDocumentLoad(schema: ProjectSchema, autoOpen?: boolean | string): PreparedDocumentLoad {
+    let schemas: RootSchema[] = []
+    if (autoOpen === true) {
+      schemas = schema.componentsTree
+    } else if (typeof autoOpen === 'string') {
+      const matched = schema.componentsTree.find(data => data.fileName === autoOpen)
+      if (matched) schemas = [matched]
+    }
+
+    const documents: Document[] = []
+    try {
+      for (const documentSchema of schemas) documents.push(new Document(this, documentSchema))
+      const ids = new Set<string>()
+      for (const document of documents) {
+        if (ids.has(document.id)) throw new Error(`Project schema contains duplicate document id "${document.id}"`)
+        ids.add(document.id)
+      }
+      return { documentToOpen: documents[0], documents }
+    } catch (error) {
+      const cleanupErrors = this.#disposePreparedDocuments(documents)
+      if (cleanupErrors.length) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          'Project preparation failed and provisional cleanup reported errors',
+        )
+      }
+      throw error
+    }
+  }
+
+  #disposePreparedDocuments(documents: Document[]): unknown[] {
+    const cleanupErrors: unknown[] = []
+    for (const document of [...documents].reverse()) {
+      try {
+        removeDocumentDuringTeardown(document)
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError)
+      }
+    }
+    return cleanupErrors
   }
 
   @action
   unload() {
     this.assertProjectMutationAllowed()
-    if (this.documents.length < 1) {
+    if (this.#documents.length < 1) {
       return
     }
-    for (let i = this.documents.length - 1; i >= 0; i--) {
-      this.documents[i].remove()
+    const cleanupErrors: unknown[] = []
+    for (const document of [...this.#documents].reverse()) {
+      try {
+        document.remove()
+      } catch (error) {
+        cleanupErrors.push(error)
+      }
     }
+    if (cleanupErrors.length) throw new ProjectMutationCommittedError(cleanupErrors, undefined)
   }
 
   async dispose() {
@@ -282,34 +348,31 @@ export class Project {
       failures.push(error)
     }
 
-    runInAction(() => {
-      withProjectTeardownAuthority(this, () => {
-        for (const document of [...this.documents].reverse()) {
-          try {
-            removeDocumentDuringTeardown(document)
-          } catch (error) {
-            failures.push(error)
-            try {
-              purgeDocumentDuringTeardown(document)
-            } catch (purgeError) {
-              failures.push(purgeError)
-            }
-            this.internalUnlinkDocument(document)
-            retireDocumentDuringTeardown(document)
-          }
-        }
+    const documents = new Set([...getPendingDocumentTeardowns(this), ...this.#documents])
+    for (const document of [...documents].reverse()) {
+      try {
+        removeDocumentDuringTeardown(document)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
 
-        if (simulatorDisposed) {
-          this.#simulator = undefined
-        }
-        this.documents = []
-        this.#documentsMap.clear()
-        this.data = this.protectProjectDataValue(createEmptyProjectSchema())
-        this.#config = undefined
-        this.isRendererReady = false
-        runInternalLifecycleTeardown(this.emitter)
-      })
+    runInAction(() => {
+      if (simulatorDisposed) {
+        this.#simulator = undefined
+      }
+      this.#documents = []
+      this.#documentsMap.clear()
+      this.#data = this.protectProjectDataValue(createEmptyProjectSchema())
+      this.#config = undefined
+      this.isRendererReady = false
     })
+    try {
+      // Listener removal must not inherit Project teardown authority.
+      runInternalLifecycleTeardown(this.#emitter)
+    } catch (error) {
+      failures.push(error)
+    }
     if (failures.length) {
       throw new AggregateError(failures, 'Project disposal completed with errors')
     }
@@ -318,13 +381,22 @@ export class Project {
   @action
   createDocument(schema?: RootSchema) {
     this.assertProjectMutationAllowed()
-    const preparedSchema = schema ? (this.schemaValidator.prepareNode(schema, '$.document') as RootSchema) : undefined
+    const preparedSchema = schema ? (this.#schemaValidator.prepareNode(schema, '$.document') as RootSchema) : undefined
     const doc = new Document(this, preparedSchema)
-    this.documents.push(doc)
+    try {
+      this.#publishDocument(doc)
+    } catch (error) {
+      throw new ProjectMutationCommittedError([error], doc)
+    }
+    return doc
+  }
+
+  #publishDocument(doc: Document): void {
+    inheritLifecycleMutationGuard(this, doc)
+    this.#documents.push(doc)
     this.#documentsMap.set(doc.id, doc)
 
     this.designer.postEvent(DOCUMENT_EVENT.ADD, doc)
-    return doc
   }
 
   @action
@@ -332,7 +404,7 @@ export class Project {
     this.assertProjectMutationAllowed()
     let document: Document | undefined
     if (typeof idOrDoc === 'string') {
-      document = this.documents.find(document => document.id === idOrDoc)
+      document = this.#documents.find(document => document.id === idOrDoc)
     } else {
       document = idOrDoc
     }
@@ -341,7 +413,7 @@ export class Project {
       return logger.warn('document not found', idOrDoc)
     }
 
-    const index = this.documents.indexOf(document)
+    const index = this.#documents.indexOf(document)
     if (index < 0) {
       return logger.warn('document not found', idOrDoc)
     }
@@ -349,21 +421,17 @@ export class Project {
     document.remove()
   }
 
-  /** @internal Document.remove owns teardown; this method only unlinks project identity. */
-  @action
-  internalUnlinkDocument(document: Document) {
-    this.assertProjectMutationAllowed()
-    const index = this.documents.indexOf(document)
-    if (index < 0) {
-      return logger.warn('document not found', document)
-    }
-
-    this.documents.splice(index, 1)
-    this.#documentsMap.delete(document.id)
+  /** Package-private capability target installed in document/teardown.ts. */
+  #unlinkDocumentDuringTeardown(document: Document): void {
+    runInAction(() => {
+      const index = this.#documents.indexOf(document)
+      if (index > -1) this.#documents.splice(index, 1)
+      if (this.#documentsMap.get(document.id) === document) this.#documentsMap.delete(document.id)
+    })
   }
 
   getDocument(id: string) {
-    return this.documents.find(doc => doc.id === id)
+    return this.#documents.find(doc => doc.id === id)
   }
 
   /** Internal guard that prevents ambient hooks from mutating another document. */
@@ -432,11 +500,11 @@ export class Project {
   }
 
   getDocumentByFileName(fileName: string) {
-    return this.documents.find(doc => doc.fileName === fileName)
+    return this.#documents.find(doc => doc.fileName === fileName)
   }
 
   prepareDocumentSchema(schema: RootSchema): RootSchema {
-    return this.schemaValidator.prepareNode(schema, '$.document') as RootSchema
+    return this.#schemaValidator.prepareNode(schema, '$.document') as RootSchema
   }
 
   /**
@@ -445,7 +513,7 @@ export class Project {
   open(idOrDoc?: string | Document | RootSchema) {
     this.assertProjectMutationAllowed()
     if (!idOrDoc) {
-      const got = this.documents.find(item => item.isBlank())
+      const got = this.#documents.find(item => item.isBlank())
       if (got) {
         return got.open()
       }
@@ -453,12 +521,12 @@ export class Project {
     }
 
     if (typeof idOrDoc === 'string' || typeof idOrDoc === 'number') {
-      const got = this.documents.find(item => item.fileName === String(idOrDoc) || String(item.id) === String(idOrDoc))
+      const got = this.#documents.find(item => item.fileName === String(idOrDoc) || String(item.id) === String(idOrDoc))
       if (got) {
         return got.open()
       }
 
-      const data = this.data.componentsTree.find(data => data.fileName === String(idOrDoc))
+      const data = this.#data.componentsTree.find(data => data.fileName === String(idOrDoc))
       if (data) {
         const doc = this.createDocument(data)
         return doc.open()
@@ -467,6 +535,9 @@ export class Project {
       return null
     }
     if (isDocument(idOrDoc)) {
+      if (idOrDoc.project !== this || idOrDoc.designer !== this.designer || this.getDocument(idOrDoc.id) !== idOrDoc) {
+        throw new Error('Project.open only accepts a canonical Document identity owned by this Project')
+      }
       return idOrDoc.open()
     }
 
@@ -480,18 +551,18 @@ export class Project {
    */
   checkExclusive(curDoc: Document) {
     this.assertProjectMutationAllowed()
-    for (const doc of this.documents) {
+    for (const doc of this.#documents) {
       if (doc !== curDoc) {
         doc.suspense()
       }
     }
 
-    this.emitter.emit(DOCUMENT_EVENT.OPEN_CHANGE, curDoc)
+    this.#emitter.emit(DOCUMENT_EVENT.OPEN_CHANGE, curDoc)
   }
 
   closeOthers(opened: Document) {
     this.assertProjectMutationAllowed()
-    this.documents.forEach(doc => {
+    this.#documents.forEach(doc => {
       if (doc !== opened) {
         doc.close()
       }
@@ -510,7 +581,7 @@ export class Project {
       this.#config = protectedValue as Record<string, any>
     }
 
-    this.data = this.protectProjectDataValue({ ...this.data, [key]: protectedValue })
+    this.#data = this.protectProjectDataValue({ ...this.#data, [key]: protectedValue })
   }
 
   /**
@@ -524,7 +595,7 @@ export class Project {
       return this.#config
     }
 
-    return Reflect.get(this.data, key)
+    return Reflect.get(this.#data, key)
   }
 
   private protectProjectDataValue<T>(value: T, clone = false): T {
@@ -538,7 +609,7 @@ export class Project {
     this.assertProjectMutationAllowed()
     this.isRendererReady = true
     try {
-      this.emitter.emit(PROJECT_EVENT.RENDERER_READY, renderer)
+      this.#emitter.emit(PROJECT_EVENT.RENDERER_READY, renderer)
       return RENDERER_READY_COMMITTED
     } catch (error) {
       const observerErrors = error instanceof AggregateError ? [...error.errors] : [error]
@@ -552,6 +623,9 @@ export class Project {
 
   mountSimulator(simulator: Simulator) {
     this.assertProjectMutationAllowed()
+    if (simulator instanceof Simulator && (simulator.project !== this || simulator.designer !== this.designer)) {
+      throw new Error('Cannot mount a Simulator owned by another project or designer')
+    }
     assertLifecycleMutationAllowed(simulator, 'project.mountSimulator.target')
     if (this.#simulator && this.#simulator !== simulator) {
       const currentSimulator: unknown = this.#simulator
@@ -561,7 +635,7 @@ export class Project {
     inheritLifecycleMutationGuard(this, simulator)
     if (simulator instanceof Simulator) inheritEngineTeardownOwnership(this, simulator)
     this.#simulator = simulator
-    this.emitter.emit(PROJECT_EVENT.SIMULATOR_READY, simulator)
+    this.#emitter.emit(PROJECT_EVENT.SIMULATOR_READY, simulator)
   }
 
   onSimulatorReady(listener: (simulator: Simulator) => void): () => void {
@@ -570,7 +644,7 @@ export class Project {
       listener(this.#simulator)
     }
 
-    return this.emitter.on(PROJECT_EVENT.SIMULATOR_READY, listener)
+    return this.#emitter.on(PROJECT_EVENT.SIMULATOR_READY, listener)
   }
 
   /**
@@ -582,7 +656,7 @@ export class Project {
       listener()
     }
 
-    return this.emitter.on(PROJECT_EVENT.RENDERER_READY, listener)
+    return this.#emitter.on(PROJECT_EVENT.RENDERER_READY, listener)
   }
 
   onDocumentAdd(listener: (document: Document) => void) {

@@ -65,9 +65,9 @@ test('plugin init failure rolls back initialized plugins in reverse order', asyn
   const error = await captureFailure(() => engine.init())
   assert.match(error.message, /c exploded|plugin.*c/i)
   assert.deepEqual(calls, ['init:a', 'init:b', 'init:c', 'destroy:b', 'destroy:a'])
-  assert.equal(engine.plugins.get('a').isInited(), false)
-  assert.equal(engine.plugins.get('b').isInited(), false)
-  assert.equal(engine.plugins.get('c').isInited(), false)
+  assert.equal(engine.innerPlugins.get('a').isInited(), false)
+  assert.equal(engine.innerPlugins.get('b').isInited(), false)
+  assert.equal(engine.innerPlugins.get('c').isInited(), false)
   assert.notEqual(engine.lifecycleState, 'ready')
 })
 
@@ -93,7 +93,7 @@ test('engine initialization retries plugin cleanup after rollback disposal fails
   const error = await captureFailure(() => engine.init())
   assert.match(error.message, /init failed|rollback/i)
   assert.equal(destroyCalls, 2)
-  assert.equal(engine.plugins.get('retry-cleanup').isInited(), false)
+  assert.equal(engine.innerPlugins.get('retry-cleanup').isInited(), false)
   assert.equal(engine.lifecycleState, 'created')
 })
 

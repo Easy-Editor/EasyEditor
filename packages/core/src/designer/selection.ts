@@ -10,6 +10,7 @@ import {
 } from '../lifecycle/teardown-boundary'
 import type { EventBus } from '../utils'
 import type { Designer } from './designer'
+import { createDesignerEventBus } from './event-bus'
 
 export enum SELECTION_EVENT {
   CHANGE = 'selection:change',
@@ -25,7 +26,7 @@ export class Selection {
   }
 
   constructor(readonly designer: Designer) {
-    this.emitter = designer.createEventBus('Selection')
+    this.emitter = createDesignerEventBus(designer, 'Selection')
     lockReadonlyProperties(this, ['designer', 'emitter'])
     lockPrototypeAccessors(this, ['currentDocument', 'selected'])
     installLifecycleTeardownOperation(

@@ -8,15 +8,11 @@ test('constructor rollback releases an acquired restricted-realm lease', async t
     core.createEngine({
       hostWindow: null,
       services: {
-        eventBus: {
-          setDeliveryScheduler() {
-            throw new Error('constructor boundary probe')
-          },
-        },
+        eventBus: {},
       },
     }),
   )
-  assert.match(constructorError.message, /constructor boundary probe/)
+  assert.match(constructorError.message, /EventBus created by the core runtime/)
 
   const plugins = new core.Plugins()
   t.after(async () => plugins.dispose())

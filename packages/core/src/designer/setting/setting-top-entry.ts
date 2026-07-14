@@ -1,12 +1,22 @@
 import type { Node } from '../../document/node/node'
 import type { PropKey } from '../../document/prop/prop'
+import {
+  assertLifecycleMutationAllowed,
+  inheritLifecycleMutationGuard,
+  sealLifecycleMutations,
+} from '../../lifecycle/mutation-barrier'
+import { lockReadonlyProperties } from '../../lifecycle/readonly-properties'
+import { inheritEngineTeardownOwnership, runInternalLifecycleTeardown } from '../../lifecycle/teardown-boundary'
 import type { ComponentMeta } from '../../materials/component-meta'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import type { Setters } from '../../setters/setters'
 import type { Editor } from '../../types/editor'
 import { type EventBus, createEventBus } from '../../utils/event-bus'
 import { DESIGNER_EVENT, type Designer } from '../designer'
+import { createDesignerEventBus } from '../event-bus'
 import type { SettingEntry } from './setting-entry'
 import { SettingField } from './setting-field'
+import { installSettingTopEntryDisposerBoundary } from './setting-top-entry-boundary'
 
 export const generateSessionId = (nodes: Node[]) => {
   return nodes
@@ -16,35 +26,49 @@ export const generateSessionId = (nodes: Node[]) => {
 }
 
 export class SettingTopEntry implements SettingEntry {
-  private emitter: EventBus
+  #emitter: EventBus
 
-  private _items: SettingField[] = []
+  #purged = false
 
-  private _componentMeta: ComponentMeta | null = null
+  readonly #ownedFields = new Set<SettingField>()
 
-  private _isSame = true
+  readonly #ownField = (field: SettingField): void => {
+    this.#ownedFields.add(field)
+  }
 
-  private _settingFieldMap: Record<string, SettingField> = {}
+  #assertEntryMutationAllowed(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+  }
 
-  readonly path = []
+  #items: SettingField[] = []
+
+  #componentMeta: ComponentMeta | null = null
+
+  #isSame = true
+
+  #settingFieldMap: Record<string, SettingField> = {}
+
+  #disposeFunctions: (() => void)[] = []
+
+  readonly path = Object.freeze([]) as []
 
   readonly top = this
 
   readonly parent = this
 
   get componentMeta() {
-    return this._componentMeta
+    return this.#componentMeta
   }
 
   get items() {
-    return this._items
+    return Object.freeze(this.#items.slice())
   }
 
   /**
    * 同样的
    */
   get isSameComponent(): boolean {
-    return this._isSame
+    return this.#isSame
   }
 
   /**
@@ -77,31 +101,39 @@ export class SettingTopEntry implements SettingEntry {
 
   readonly setters: Setters
 
-  disposeFunctions: any[] = []
+  readonly editor: Editor
 
-  constructor(
-    readonly editor: Editor,
-    readonly nodes: Node[],
-  ) {
+  readonly nodes: Node[]
+
+  constructor(editor: Editor, nodes: Node[]) {
     if (!Array.isArray(nodes) || nodes.length < 1) {
       throw new ReferenceError('nodes should not be empty')
     }
+    this.editor = editor
+    this.nodes = Object.freeze(nodes.slice()) as Node[]
     this.id = generateSessionId(nodes)
-    this.first = nodes[0]
+    this.first = this.nodes[0]
+    inheritLifecycleMutationGuard(this.first, this)
     this.designer = this.first.document?.designer
-    this.emitter = this.designer?.createEventBus('SettingTopEntry') || createEventBus('SettingTopEntry')
+    this.#emitter = this.designer
+      ? createDesignerEventBus(this.designer, 'SettingTopEntry')
+      : createEventBus('SettingTopEntry')
+    if (this.designer) inheritEngineTeardownOwnership(this.designer, this.#emitter)
     this.setters = editor.get<Setters>('setterManager')!
+    lockReadonlyProperties(this, ['designer', 'editor', 'first', 'id', 'nodes', 'parent', 'path', 'setters', 'top'])
+    installSettingTopEntryDisposerBoundary(this, dispose => this.#disposeFunctions.push(dispose))
 
     // setups
-    this.setupComponentMeta()
+    this.#setupComponentMeta()
 
     // clear fields
-    this.setupItems()
+    this.#setupItems()
 
-    this.disposeFunctions.push(this.setupEvents())
+    const disposeEvents = this.#setupEvents()
+    if (disposeEvents) this.#disposeFunctions.push(disposeEvents)
   }
 
-  private setupComponentMeta() {
+  #setupComponentMeta() {
     // todo: enhance compile a temp configure.compiled
     const { first } = this
     const meta = first.componentMeta
@@ -115,30 +147,31 @@ export class SettingTopEntry implements SettingEntry {
       }
     }
     if (theSame) {
-      this._isSame = true
-      this._componentMeta = meta
+      this.#isSame = true
+      this.#componentMeta = meta
     } else {
-      this._isSame = false
-      this._componentMeta = null
+      this.#isSame = false
+      this.#componentMeta = null
     }
   }
 
-  private setupItems() {
+  #setupItems() {
+    this.#disposeItems()
     if (this.componentMeta) {
       const settingFieldMap: Record<string, SettingField> = {}
       const settingFieldCollector = (name: string | number, field: SettingField) => {
         settingFieldMap[name] = field
       }
-      this._items = this.componentMeta.configure.map(item => {
-        return new SettingField(this, item as any, settingFieldCollector)
+      this.#items = this.componentMeta.configure.map(item => {
+        return new SettingField(this, item as any, settingFieldCollector, this.#ownField)
       })
-      this._settingFieldMap = settingFieldMap
+      this.#settingFieldMap = settingFieldMap
     }
   }
 
-  private setupEvents() {
+  #setupEvents() {
     return this.componentMeta?.onMetadataChange(() => {
-      this.setupItems()
+      this.#setupItems()
     })
   }
 
@@ -153,23 +186,26 @@ export class SettingTopEntry implements SettingEntry {
    * 设置当前属性值
    */
   setValue(val: any) {
+    this.#assertEntryMutationAllowed('settingEntry.setValue')
     this.setProps(val)
 
-    this.emitter.emit(DESIGNER_EVENT.SETTING_TOP_ENTRY_VALUE_CHANGE, val)
+    this.#emitter.emit(DESIGNER_EVENT.SETTING_TOP_ENTRY_VALUE_CHANGE, val)
   }
 
   /**
    * 获取子项
    */
   get(propName: PropKey): SettingField | null {
+    this.#assertEntryMutationAllowed('settingEntry.get')
     if (!propName) return null
-    return this._settingFieldMap[propName] || new SettingField(this, { name: propName })
+    return this.#settingFieldMap[propName] || new SettingField(this, { name: propName }, undefined, this.#ownField)
   }
 
   /**
    * 设置子级属性值
    */
   setPropValue(propName: PropKey, value: any) {
+    this.#assertEntryMutationAllowed('settingEntry.setPropValue')
     this.nodes.forEach(node => {
       node.setPropValue(propName.toString(), value)
     })
@@ -179,6 +215,7 @@ export class SettingTopEntry implements SettingEntry {
    * 清除已设置值
    */
   clearPropValue(propName: PropKey) {
+    this.#assertEntryMutationAllowed('settingEntry.clearPropValue')
     this.nodes.forEach(node => {
       node.clearPropValue(propName.toString())
     })
@@ -202,6 +239,7 @@ export class SettingTopEntry implements SettingEntry {
    * 设置顶层附属属性值
    */
   setExtraPropValue(propName: string, value: any) {
+    this.#assertEntryMutationAllowed('settingEntry.setExtraPropValue')
     this.nodes.forEach(node => {
       node.getExtraProp(propName, true)?.setValue(value)
     })
@@ -209,6 +247,7 @@ export class SettingTopEntry implements SettingEntry {
 
   // 设置多个属性值，替换原有值
   setProps(data: object) {
+    this.#assertEntryMutationAllowed('settingEntry.setProps')
     this.nodes.forEach(node => {
       node.setProps(data as any)
     })
@@ -216,22 +255,55 @@ export class SettingTopEntry implements SettingEntry {
 
   // 设置多个属性值，和原有值合并
   mergeProps(data: object) {
+    this.#assertEntryMutationAllowed('settingEntry.mergeProps')
     this.nodes.forEach(node => {
       node.mergeProps(data as any)
     })
   }
 
-  private disposeItems() {
-    this._items.forEach(item => isPurgeable(item) && item.purge())
-    this._items = []
+  #disposeItems() {
+    const errors: unknown[] = []
+    for (const field of [...this.#ownedFields].reverse()) {
+      try {
+        field.purge()
+        this.#ownedFields.delete(field)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    this.#items = []
+    if (errors.length) throw new AggregateError(errors, 'Setting fields disposal completed with errors')
   }
 
   purge() {
-    this.disposeItems()
-    this._settingFieldMap = {}
-    // this.emitter.removeAllListeners()
-    this.disposeFunctions.forEach(f => f())
-    this.disposeFunctions = []
+    const errors: unknown[] = []
+    try {
+      this.#disposeItems()
+    } catch (error) {
+      errors.push(error)
+    }
+    this.#settingFieldMap = {}
+    const failedDisposers: (() => void)[] = []
+    for (const dispose of this.#disposeFunctions.splice(0).reverse()) {
+      try {
+        withoutProjectMutationAuthority(this.first.document.project, dispose)
+      } catch (error) {
+        errors.push(error)
+        failedDisposers.unshift(dispose)
+      }
+    }
+    this.#disposeFunctions = failedDisposers
+    if (!this.#purged) {
+      this.#purged = true
+      sealLifecycleMutations(this, 'setting entry generation is disposed')
+      sealLifecycleMutations(this.#emitter, 'setting entry event bus generation is disposed')
+    }
+    try {
+      runInternalLifecycleTeardown(this.#emitter)
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length) throw new AggregateError(errors, 'Setting entry disposal completed with errors')
   }
 
   getProp(propName: PropKey) {

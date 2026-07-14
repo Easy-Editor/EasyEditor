@@ -1,9 +1,20 @@
-import { action, computed, intercept, observable, observe } from 'mobx'
+import { action, computed, observable } from 'mobx'
+import {
+  assertLifecycleMutationAllowed,
+  inheritLifecycleMutationGuard,
+  sealLifecycleMutations,
+} from '../../lifecycle/mutation-barrier'
 import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
+import {
+  inheritEngineTeardownOwnership,
+  installLifecycleTeardownOperation,
+  runInternalLifecycleTeardown,
+} from '../../lifecycle/teardown-boundary'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
 import type { Node } from '../node/node'
-import { Prop, type PropKey, type PropValue, type PropsMap, UNSET, splitPath } from './prop'
+import { Prop, type PropKey, type PropValue, type PropsMap, UNSET, isProp, splitPath } from './prop'
 
 const EXTRA_KEY_PREFIX = '___'
 
@@ -51,22 +62,31 @@ export class Props {
     return this.props
   }
 
-  @observable accessor type = 'map'
+  @observable.ref accessor #type = 'map'
 
-  @observable.shallow accessor items: Prop[] = []
+  get type() {
+    return this.#type
+  }
 
-  private itemsMutationDisposer: () => void = () => {}
+  @observable.shallow accessor #items: Prop[] = []
 
-  private itemsReferenceDisposer: () => void = () => {}
+  get items(): readonly Prop[] {
+    const snapshot = this.#items.slice()
+    inheritLifecycleMutationGuard(this, snapshot)
+    return Object.freeze(snapshot)
+  }
 
-  private itemsReferenceObserverDisposer: () => void = () => {}
+  private assertPropsMutationAllowed(origin: string): void {
+    assertLifecycleMutationAllowed(this, origin)
+    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
+  }
 
   @computed
   private get maps() {
     const maps = new Map<PropKey, Prop>()
 
-    if (this.items.length > 0) {
-      this.items.forEach(prop => {
+    if (this.#items.length > 0) {
+      this.#items.forEach(prop => {
         if (prop.key) {
           maps.set(prop.key, prop)
         }
@@ -78,70 +98,77 @@ export class Props {
 
   @computed
   get size() {
-    return this.items.length
+    return this.#items.length
   }
 
   constructor(owner: Node, props?: PropsMap, extras?: PropsMap) {
     this.owner = owner
+    inheritLifecycleMutationGuard(owner, this)
+    installLifecycleTeardownOperation(this, () => this.#purgeInternal(true))
+    inheritEngineTeardownOwnership(owner, this)
     lockReadonlyProperties(this, ['id', 'owner', 'path'])
     lockPrototypeAccessors(this, ['items', 'props', 'type'])
 
     if (props != null) {
-      this.items = Object.keys(props).map(key => new Prop(this, key, props[key]))
+      this.#items = Object.keys(props).map(key => new Prop(this, key, props[key]))
     }
     if (extras) {
       Object.keys(extras).forEach(key => {
-        this.items.push(new Prop(this, getConvertedExtraKey(key), extras[key]))
+        this.#items.push(new Prop(this, getConvertedExtraKey(key), extras[key]))
       })
     }
-    this.trackItemMutations()
-    this.itemsReferenceDisposer = intercept(this, 'items', change => {
-      this.owner.document.markSchemaMutation()
-      return change
-    })
-    this.itemsReferenceObserverDisposer = observe(this, 'items', () => {
-      this.trackItemMutations()
-    })
+    this.#validateItems(this.#items)
   }
 
-  private trackItemMutations(): void {
-    this.itemsMutationDisposer()
-    this.itemsMutationDisposer = intercept(this.items, change => {
-      this.owner.document.markSchemaMutation()
-      return change
-    })
+  #validateItems(items: readonly Prop[]): void {
+    const identities = new Set<Prop>()
+    const keys = new Set<PropKey>()
+    for (const prop of items) {
+      if (!isProp(prop)) throw new TypeError('Props only accepts Prop identities')
+      if (prop.parent !== this || prop.props !== this || prop.owner !== this.owner) {
+        throw new Error('Props cannot accept a foreign Prop identity')
+      }
+      if (identities.has(prop) || keys.has(prop.key)) {
+        throw new Error(`Props cannot contain duplicate Prop identity or key "${String(prop.key)}"`)
+      }
+      identities.add(prop)
+      keys.add(prop.key)
+    }
   }
 
   @action
   import(props?: PropsMap | null, extras?: PropsMap) {
+    this.assertPropsMutationAllowed('props.import')
     // TODO: 是否需要继承之前相同的 key，来保持响应式
 
     this.owner.document.markSchemaMutation()
-    const originItems = this.items
+    const originItems = this.#items
+    const nextItems: Prop[] = []
     if (props != null) {
-      this.type = 'map'
-      this.items = Object.keys(props).map(key => new Prop(this, key, props[key]))
+      this.#type = 'map'
+      nextItems.push(...Object.keys(props).map(key => new Prop(this, key, props[key])))
     } else {
-      this.type = 'map'
-      this.items = []
+      this.#type = 'map'
     }
     if (extras) {
       Object.keys(extras).forEach(key => {
-        this.items.push(new Prop(this, getConvertedExtraKey(key), extras[key]))
+        nextItems.push(new Prop(this, getConvertedExtraKey(key), extras[key]))
       })
     }
-    originItems.forEach(item => item.purge())
+    this.#validateItems(nextItems)
+    this.#items = nextItems
+    originItems.forEach(item => runInternalLifecycleTeardown(item))
   }
 
   export(stage: TRANSFORM_STAGE = TRANSFORM_STAGE.SAVE) {
-    if (this.items.length < 1) {
+    if (this.#items.length < 1) {
       return {}
     }
 
     const props: PropsMap = {}
     const extras: PropsMap = {}
 
-    this.items.forEach(item => {
+    this.#items.forEach(item => {
       const key = item.key as string
       if (key == null || item.isUnset()) return
       const value = item.export(stage)
@@ -158,6 +185,7 @@ export class Props {
   }
 
   merge(value: PropsMap, extras?: PropsMap) {
+    this.assertPropsMutationAllowed('props.merge')
     Object.keys(value).forEach(key => {
       this.query(key, true)!.setValue(value[key])
       this.query(key, true)!.initItems()
@@ -174,24 +202,38 @@ export class Props {
 
   @action
   purge() {
-    this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
-    if (this.purged) {
-      return
+    if (this.purged) return
+    this.assertPropsMutationAllowed('props.purge')
+    throw new Error('Cannot props.purge; cleanup must be coordinated by its owning Node')
+  }
+
+  #purgeInternal(teardown: boolean): void {
+    if (this.purged && !teardown) return
+    if (!this.purged && !teardown) {
+      this.assertPropsMutationAllowed('props.purge')
+      this.owner.document.markSchemaMutation()
     }
-    this.owner.document.markSchemaMutation()
+    const errors: unknown[] = []
+    const cleanup = (operation: () => void): void => {
+      try {
+        operation()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
     this.purged = true
-    this.itemsMutationDisposer()
-    this.itemsReferenceDisposer()
-    this.itemsReferenceObserverDisposer()
-    for (const item of this.items) {
-      item.purge()
+    for (const item of this.#items) {
+      cleanup(() => runInternalLifecycleTeardown(item))
     }
+    sealLifecycleMutations(this, 'props generation is disposed')
+    if (errors.length) throw new AggregateError(errors, 'Props disposal completed with errors')
   }
 
   /**
    * get a prop, if not found, create a prop when createIfNone is true
    */
   get(path: PropKey, createIfNone = false) {
+    if (createIfNone) this.assertPropsMutationAllowed('props.get')
     const { entry, nest } = splitPath(path)
 
     let prop = this.maps.get(entry)
@@ -219,34 +261,46 @@ export class Props {
   }
 
   setPropValue(path: PropKey, value: any) {
+    this.assertPropsMutationAllowed('props.setPropValue')
     this.getProp(path, true)!.setValue(value)
   }
 
   delete(prop: Prop) {
-    const index = this.items.indexOf(prop)
+    this.assertPropsMutationAllowed('props.delete')
+    const index = this.#items.indexOf(prop)
     if (index > -1) {
       this.owner.document.markSchemaMutation()
-      this.items.splice(index, 1)
-      prop.purge()
+      this.#items.splice(index, 1)
+      runInternalLifecycleTeardown(prop)
     }
   }
 
   deleteKey(key: PropKey) {
-    this.items = this.items.filter((item, i) => {
-      if (item.key === key) {
-        item.purge()
-        this.items.splice(i, 1)
-        return false
+    this.assertPropsMutationAllowed('props.deleteKey')
+    const removed = this.#items.filter(item => item.key === key)
+    if (removed.length === 0) return
+    const retained = this.#items.filter(item => item.key !== key)
+    this.#validateItems(retained)
+    this.owner.document.markSchemaMutation()
+    this.#items = retained
+    const errors: unknown[] = []
+    for (const item of removed) {
+      try {
+        runInternalLifecycleTeardown(item)
+      } catch (error) {
+        errors.push(error)
       }
-      return true
-    })
+    }
+    if (errors.length) throw new AggregateError(errors, `Props key "${String(key)}" cleanup failed`)
   }
 
   @action
   add(key: PropKey, value?: PropValue | UNSET) {
+    this.assertPropsMutationAllowed('props.add')
     const prop = new Prop(this, key, value)
+    this.#validateItems([...this.#items, prop])
     this.owner.document.markSchemaMutation()
-    this.items.push(prop)
+    this.#items.push(prop)
     return prop
   }
 
@@ -255,20 +309,20 @@ export class Props {
   }
 
   forEach(fn: (item: Prop, key: PropKey) => void) {
-    for (const item of this.items) {
-      fn(item, item.key)
+    for (const item of this.#items) {
+      withoutProjectMutationAuthority(this.owner.document.project, () => fn(item, item.key))
     }
   }
 
   map<E>(fn: (item: Prop, key: PropKey) => E): E[] | null {
-    return this.items.map(item => {
-      return fn(item, item.key)
+    return this.#items.map(item => {
+      return withoutProjectMutationAuthority(this.owner.document.project, () => fn(item, item.key))
     })
   }
 
   filter(fn: (item: Prop, key: PropKey) => boolean) {
-    return this.items.filter(item => {
-      return fn(item, item.key)
+    return this.#items.filter(item => {
+      return withoutProjectMutationAuthority(this.owner.document.project, () => fn(item, item.key))
     })
   }
 

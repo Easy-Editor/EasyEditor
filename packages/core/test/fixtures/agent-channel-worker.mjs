@@ -1,5 +1,5 @@
 import { parentPort } from 'node:worker_threads'
-import { connectAgentPort } from '../../dist/index.js'
+import { connectAgentPort } from '../../dist/agent-channel.js'
 
 parentPort.once('message', async ({ documentId, port }) => {
   try {

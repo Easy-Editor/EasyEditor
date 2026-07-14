@@ -32,18 +32,16 @@ const keyBlacklist = [
   'setters',
   'material',
   'innerHotkey',
-  'innerPlugins',
   'engine',
   'clipboard',
   'remote',
   'trustPolicy',
   'transactions',
   'commands',
-  'agentCapabilities',
 ]
 
 export class Editor extends EventEmitter implements IEditor {
-  @observable.shallow private accessor context = new Map<EditorValueKey, any>()
+  @observable.shallow accessor #context = new Map<EditorValueKey, any>()
 
   config?: EditorConfig
 
@@ -53,9 +51,9 @@ export class Editor extends EventEmitter implements IEditor {
 
   components?: IEditor['components']
 
-  private hooks: HookConfig[] = []
+  #hooks: HookConfig[] = []
 
-  private waits = new Map<
+  #waits = new Map<
     EditorValueKey,
     Array<{
       once?: boolean
@@ -115,11 +113,11 @@ export class Editor extends EventEmitter implements IEditor {
   get<T = undefined, KeyOrType extends EditorValueKey = any>(
     keyOrType: KeyOrType,
   ): EditorGetResult<T, KeyOrType> | undefined {
-    return this.context.get(keyOrType)
+    return this.#context.get(keyOrType)
   }
 
   has(keyOrType: EditorValueKey): boolean {
-    return this.context.has(keyOrType)
+    return this.#context.has(keyOrType)
   }
 
   @action
@@ -129,8 +127,8 @@ export class Editor extends EventEmitter implements IEditor {
     if (!keyBlacklist.includes(key as string)) {
       this.engineConfig.set(key as any, data)
     }
-    this.context.set(key, data)
-    this.notifyGot(key)
+    this.#context.set(key, data)
+    this.#notifyGot(key)
   }
 
   /**
@@ -141,12 +139,12 @@ export class Editor extends EventEmitter implements IEditor {
     keyOrType: KeyOrType,
   ): Promise<EditorGetResult<T, KeyOrType>> {
     assertLifecycleMutationAllowed(this, 'editor.onceGot')
-    const x = this.context.get(keyOrType)
+    const x = this.#context.get(keyOrType)
     if (x !== undefined) {
       return Promise.resolve(x)
     }
     return new Promise(resolve => {
-      this.setWait(keyOrType, resolve, true)
+      this.#setWait(keyOrType, resolve, true)
     })
   }
 
@@ -159,13 +157,13 @@ export class Editor extends EventEmitter implements IEditor {
     fn: (data: EditorGetResult<T, KeyOrType>) => void,
   ): () => void {
     assertLifecycleMutationAllowed(this, 'editor.onGot')
-    const x = this.context.get(keyOrType)
+    const x = this.#context.get(keyOrType)
     if (x !== undefined) {
       fn(x)
     }
-    const registration = this.setWait(keyOrType, fn)
+    const registration = this.#setWait(keyOrType, fn)
     return () => {
-      this.removeWait(keyOrType, registration)
+      this.#removeWait(keyOrType, registration)
     }
   }
 
@@ -177,16 +175,16 @@ export class Editor extends EventEmitter implements IEditor {
     fn: (data: EditorGetResult<T, KeyOrType>) => void,
   ): () => void {
     assertLifecycleMutationAllowed(this, 'editor.onChange')
-    const registration = this.setWait(keyOrType, fn)
+    const registration = this.#setWait(keyOrType, fn)
     return () => {
-      this.removeWait(keyOrType, registration)
+      this.#removeWait(keyOrType, registration)
     }
   }
 
   register(data: any, key?: EditorValueKey): void {
     assertLifecycleMutationAllowed(this, 'editor.register')
-    this.context.set(key || data, data)
-    this.notifyGot(key || data)
+    this.#context.set(key || data, data)
+    this.#notifyGot(key || data)
   }
 
   async init(config?: EditorConfig, components?: Editor['components']): Promise<any> {
@@ -234,9 +232,9 @@ export class Editor extends EventEmitter implements IEditor {
       logger.warn(err)
     }
 
-    this.waits.clear()
-    this.context.clear()
-    this.hooks = []
+    this.#waits.clear()
+    this.#context.clear()
+    this.#hooks = []
     this.config = undefined
     this.components = undefined
     runInternalLifecycleTeardown(this.eventBus)
@@ -260,13 +258,13 @@ export class Editor extends EventEmitter implements IEditor {
 
   initHooks = (hooks: HookConfig[]) => {
     assertLifecycleMutationAllowed(this, 'editor.initHooks')
-    this.hooks = hooks.map(hook => ({
+    this.#hooks = hooks.map(hook => ({
       ...hook,
       // 指定第一个参数为 editor
       handler: hook.handler.bind(this, this),
     }))
 
-    return this.hooks
+    return this.#hooks
   }
 
   registerHooks = (hooks: HookConfig[]) => {
@@ -284,7 +282,7 @@ export class Editor extends EventEmitter implements IEditor {
   }
 
   #unregisterHooksInternal(): void {
-    this.hooks.forEach(({ message, handler }) => {
+    this.#hooks.forEach(({ message, handler }) => {
       this.removeListener(message, handler)
     })
   }
@@ -297,8 +295,8 @@ export class Editor extends EventEmitter implements IEditor {
   /**
    * notify all listeners when value is got
    */
-  private notifyGot(key: EditorValueKey) {
-    let waits = this.waits.get(key)
+  #notifyGot(key: EditorValueKey) {
+    let waits = this.#waits.get(key)
     if (!waits) {
       return
     }
@@ -311,46 +309,30 @@ export class Editor extends EventEmitter implements IEditor {
       }
     }
     if (waits.length > 0) {
-      this.waits.set(key, waits)
+      this.#waits.set(key, waits)
     } else {
-      this.waits.delete(key)
+      this.#waits.delete(key)
     }
   }
 
-  private setWait(key: EditorValueKey, resolve: (data: any) => void, once?: boolean) {
+  #setWait(key: EditorValueKey, resolve: (data: any) => void, once?: boolean) {
     assertLifecycleMutationAllowed(this, 'editor.wait')
     const registration = { resolve, once }
-    const waits = this.waits.get(key)
+    const waits = this.#waits.get(key)
     if (waits) {
       waits.push(registration)
     } else {
-      this.waits.set(key, [registration])
+      this.#waits.set(key, [registration])
     }
     return registration
   }
 
-  private removeWait(key: EditorValueKey, registration: { once?: boolean; resolve: (data: any) => void }): void {
-    const waits = this.waits.get(key)
+  #removeWait(key: EditorValueKey, registration: { once?: boolean; resolve: (data: any) => void }): void {
+    const waits = this.#waits.get(key)
     if (!waits) return
     const index = waits.indexOf(registration)
     if (index !== -1) waits.splice(index, 1)
-    if (waits.length < 1) this.waits.delete(key)
-  }
-
-  private delWait(key: EditorValueKey, fn: any) {
-    const waits = this.waits.get(key)
-    if (!waits) {
-      return
-    }
-    let i = waits.length
-    while (i--) {
-      if (waits[i].resolve === fn) {
-        waits.splice(i, 1)
-      }
-    }
-    if (waits.length < 1) {
-      this.waits.delete(key)
-    }
+    if (waits.length < 1) this.#waits.delete(key)
   }
 
   onBeforeInit(listener: (editor: Editor) => void) {

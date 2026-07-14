@@ -66,6 +66,41 @@ test('Viewport listener cleanup remains retryable through Simulator teardown', a
   assert.equal(simulator.viewport.scrollTarget, undefined)
 })
 
+test('engine-owned Viewport teardown is coordinated and cannot be revived after destroy', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  t.after(async () => {
+    if (engine.lifecycleState !== 'disposed') await engine.destroy()
+  })
+  await engine.init()
+
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  engine.project.mountSimulator(simulator)
+  const viewport = simulator.viewport
+  const activeTarget = createFakeWindow()
+  viewport.setScrollTarget(activeTarget)
+
+  assert.throws(
+    () => viewport.dispose(),
+    /cleanup of an engine-owned service must be initiated by EngineInstance\.destroy\(\)/,
+  )
+  assert.deepEqual(Object.fromEntries(['scroll', 'resize'].map(type => [type, activeTarget.listenerCount(type)])), {
+    resize: 1,
+    scroll: 1,
+  })
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.equal(activeTarget.listenerCount(), 0)
+  assert.equal(activeTarget.addCount, activeTarget.removeCount)
+
+  const retainedTarget = createFakeWindow()
+  assert.throws(() => viewport.setScrollTarget(retainedTarget), /viewport generation is disposed/)
+  assert.throws(() => viewport.mount(retainedTarget.document.createElement('div')), /viewport generation is disposed/)
+  assert.equal(retainedTarget.listenerCount(), 0)
+  assert.equal(retainedTarget.addCount, 0)
+})
+
 test('Viewport setup rolls back acquired listeners and retains incomplete rollback for retry', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })

@@ -1,4 +1,4 @@
-import type { EngineInstance, RemoteAccessRequest, RemoteAdapter } from '@easy-editor/core'
+import type { EngineInstance, RemoteAccessRequest, RemoteAdapter } from '@easy-editor/core/instance'
 import { remoteMaterialsConfig, remoteSettersConfig } from './config'
 import {
   CdnProviderManager,

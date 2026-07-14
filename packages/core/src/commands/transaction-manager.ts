@@ -1,6 +1,11 @@
 import { transaction as mobxTransaction } from 'mobx'
 import type { Document } from '../document'
-import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
+import {
+  beginHistoryTransaction,
+  cancelHistoryTransaction,
+  commitHistoryTransaction,
+  rollbackHistoryTransaction,
+} from '../document/history-transaction-boundary'
 import type { Materials } from '../materials'
 import {
   beginMaterialsTransaction,
@@ -11,13 +16,14 @@ import type { Project } from '../project'
 import { beginDocumentMutationBoundary } from '../project/document-mutation-boundary'
 import { withProjectMutationAuthority } from '../project/mutation-authority'
 import { PolicyViolation, type TrustPolicy, findExecutableValue } from '../trust'
-import { EventTransactionCoordinator } from '../utils/event-transaction'
+import type { EventTransactionCoordinator } from '../utils/event-transaction'
 import { applyCommand } from './apply-command'
 import { validateCommands } from './command-validator'
-import { installTransactionBoundaryOperations } from './transaction-boundary'
+import { installTransactionBoundaryOperations, transactionManagerConstructionAuthority } from './transaction-boundary'
 import type { CommandResult, EditorCommand, TransactionResult } from './types'
 
 export interface TransactionHost {
+  assertCompositionMutationAllowed?(origin: string): void
   assertTrustBoundaryIntegrity?(origin: string): void
   readonly lifecycleState: string
   readonly materials: Materials
@@ -26,6 +32,7 @@ export interface TransactionHost {
 }
 
 interface ActiveTransaction {
+  acceptsNestedOperations: boolean
   document: Document
   failure: {
     error: unknown
@@ -87,23 +94,30 @@ interface InternalTransactionOptions extends BoundTransactionOptions {
 }
 
 export class TransactionManager {
-  private active?: ActiveTransaction
+  #active?: ActiveTransaction
 
-  constructor(
-    private readonly host: TransactionHost,
-    private readonly events = new EventTransactionCoordinator(),
-  ) {
+  readonly #events: EventTransactionCoordinator
+
+  readonly #host: TransactionHost
+
+  constructor(host: TransactionHost, events: EventTransactionCoordinator, authority: unknown) {
+    if (authority !== transactionManagerConstructionAuthority) {
+      throw new TypeError('TransactionManager can only be constructed by an EngineInstance')
+    }
+    this.#host = host
+    this.#events = events
     installTransactionBoundaryOperations(this, {
-      runValidatedOnDocument: (document, commands, options) => this.runOnDocumentInternal(document, commands, options),
+      isActive: () => this.#active !== undefined,
+      runValidatedOnDocument: (document, commands, options) => this.#runOnDocumentInternal(document, commands, options),
     })
-    lockReadonlyProperties(this, ['events', 'host'])
+    Object.freeze(this)
   }
 
   run(commands: readonly EditorCommand[]): TransactionResult {
-    this.assertMutable()
-    this.assertCommands(commands)
-    const document = this.requireDocument()
-    return this.executeCommands(document, commands)
+    this.#assertMutable()
+    this.#assertCommands(commands)
+    const document = this.#requireDocument()
+    return this.#executeCommands(document, commands)
   }
 
   runOnDocument(
@@ -111,29 +125,29 @@ export class TransactionManager {
     commands: readonly EditorCommand[],
     preconditionOrOptions?: TransactionPrecondition | BoundTransactionOptions,
   ): TransactionResult {
-    this.assertMutable()
-    this.assertCommands(commands)
-    if (this.active) {
+    this.#assertMutable()
+    this.#assertCommands(commands)
+    if (this.#active) {
       throw new Error('runOnDocument requires an independent top-level transaction')
     }
-    const document = this.requireBoundDocument(documentOrId)
-    const options = this.normalizeBoundOptions(preconditionOrOptions)
-    this.assertExecutableBoundOptionsAllowed(options)
-    return this.executeCommands(document, commands, options)
+    const document = this.#requireBoundDocument(documentOrId)
+    const options = this.#normalizeBoundOptions(preconditionOrOptions)
+    this.#assertExecutableBoundOptionsAllowed(options)
+    return this.#executeCommands(document, commands, options)
   }
 
-  private runOnDocumentInternal(
+  #runOnDocumentInternal(
     document: Document,
     commands: readonly EditorCommand[],
     options: BoundTransactionOptions,
   ): TransactionResult {
-    this.assertMutable()
-    this.assertCommands(commands)
-    if (this.active) throw new Error('runOnDocument requires an independent top-level transaction')
-    return this.executeCommands(this.requireBoundDocument(document), commands, options)
+    this.#assertMutable()
+    this.#assertCommands(commands)
+    if (this.#active) throw new Error('runOnDocument requires an independent top-level transaction')
+    return this.#executeCommands(this.#requireBoundDocument(document), commands, options)
   }
 
-  private executeCommands(
+  #executeCommands(
     document: Document,
     commands: readonly EditorCommand[],
     options: BoundTransactionOptions = {},
@@ -144,17 +158,17 @@ export class TransactionManager {
       // commands have no public escape hatch for cross-document mutation.
       restrictDocumentMutations: true,
     }
-    this.preflight(commands, document)
-    return this.withTransaction(
+    this.#preflight(commands, document)
+    return this.#withTransaction(
       document,
       () => {
-        const results = withProjectMutationAuthority(this.host.project, () =>
+        const results = withProjectMutationAuthority(this.#host.project, () =>
           commands.map(command =>
             applyCommand(document, command, { invokeNodeCallbacks: transactionOptions.invokeNodeCallbacks }),
           ),
         )
-        const result = this.createResult(results)
-        this.runSynchronousBoundary(transactionOptions.postcondition, [document, result], 'postcondition')
+        const result = this.#createResult(results)
+        this.#runSynchronousBoundary(transactionOptions.postcondition, [document, result], 'postcondition')
         return result
       },
       transactionOptions,
@@ -162,41 +176,51 @@ export class TransactionManager {
   }
 
   runSync<T>(operation: () => T): T {
-    this.assertMutable()
+    this.#assertMutable()
     if (typeof operation !== 'function') {
       throw new Error('runSync requires a function')
     }
-    if (!this.host.trustPolicy.allowExecutableCommands) {
+    if (!this.#host.trustPolicy.allowExecutableCommands) {
       throw new PolicyViolation({
         capability: 'command.executable',
         message: 'Callback transactions are disabled by the engine trust policy; use typed commands',
         origin: 'transactions.runSync',
-        rule: `${this.host.trustPolicy.name}.command.executable.deny`,
+        rule: `${this.#host.trustPolicy.name}.command.executable.deny`,
       })
     }
     if (operation.constructor.name === 'AsyncFunction') {
       throw new AsyncTransactionNotSupportedError()
     }
 
-    const document = this.requireDocument()
-    return this.withTransaction(document, () => {
-      const result = operation()
-      if (result && typeof (result as { then?: unknown }).then === 'function') {
-        throw new AsyncTransactionNotSupportedError()
-      }
-      return result
-    })
+    const document = this.#requireDocument()
+    return this.#withTransaction(
+      document,
+      () => {
+        const result = operation()
+        if (result && typeof (result as { then?: unknown }).then === 'function') {
+          throw new AsyncTransactionNotSupportedError()
+        }
+        return result
+      },
+      // A callback transaction may retain the legacy direct-model contract,
+      // but it must never replace the Project or another Document while the
+      // current Document's rollback substrate is active.
+      { restrictDocumentMutations: true },
+    )
   }
 
-  private withTransaction<T>(document: Document, operation: () => T, options: InternalTransactionOptions = {}): T {
-    if (this.active) {
-      if (this.active.failure.occurred) throw this.active.failure.error
+  #withTransaction<T>(document: Document, operation: () => T, options: InternalTransactionOptions = {}): T {
+    if (this.#active) {
+      if (!this.#active.acceptsNestedOperations) {
+        throw new Error('Cannot start nested work while a transaction is settling')
+      }
+      if (this.#active.failure.occurred) throw this.#active.failure.error
       try {
         const result = operation()
-        if (this.active.failure.occurred) throw this.active.failure.error
+        if (this.#active.failure.occurred) throw this.#active.failure.error
         return result
       } catch (error) {
-        this.active.failure = { error, occurred: true }
+        this.#active.failure = { error, occurred: true }
         throw error
       }
     }
@@ -207,6 +231,7 @@ export class TransactionManager {
     const startSchema = JSON.stringify(document.exportRaw())
     const startMutationVersion = document.mutationVersion
     const context: ActiveTransaction = {
+      acceptsNestedOperations: true,
       document,
       failure: { error: undefined, occurred: false },
     }
@@ -215,16 +240,16 @@ export class TransactionManager {
     let mutationBoundary: ReturnType<typeof beginDocumentMutationBoundary> | undefined
     let eventTransaction!: ReturnType<EventTransactionCoordinator['begin']>
     try {
-      materialState = beginMaterialsTransaction(this.host.materials)
+      materialState = beginMaterialsTransaction(this.#host.materials)
       mutationBoundary = options.restrictDocumentMutations
-        ? beginDocumentMutationBoundary(this.host.project, document)
+        ? beginDocumentMutationBoundary(this.#host.project, document)
         : undefined
-      eventTransaction = this.events.begin()
+      eventTransaction = this.#events.begin()
     } catch (error) {
       const acquisitionRollbackErrors: unknown[] = []
       if (eventTransaction) {
         try {
-          this.events.rollback(eventTransaction)
+          this.#events.rollback(eventTransaction)
         } catch (rollbackError) {
           acquisitionRollbackErrors.push(rollbackError)
         }
@@ -238,7 +263,7 @@ export class TransactionManager {
       }
       if (materialState) {
         try {
-          restoreMaterialsTransaction(this.host.materials, materialState)
+          restoreMaterialsTransaction(this.#host.materials, materialState)
         } catch (rollbackError) {
           acquisitionRollbackErrors.push(rollbackError)
         }
@@ -248,7 +273,7 @@ export class TransactionManager {
       }
       throw error
     }
-    this.active = context
+    this.#active = context
     let result!: T
     let failed = false
     let failure: unknown
@@ -264,9 +289,9 @@ export class TransactionManager {
       rollbackAttempted = true
       if (historyStarted) {
         try {
-          withProjectMutationAuthority(this.host.project, () => {
-            if (restoreDocument) document.history.rollbackTransaction()
-            else document.history.cancelTransaction()
+          withProjectMutationAuthority(this.#host.project, () => {
+            if (restoreDocument) rollbackHistoryTransaction(document.history)
+            else cancelHistoryTransaction(document.history)
           })
           historyStarted = false
         } catch (rollbackError) {
@@ -274,7 +299,7 @@ export class TransactionManager {
         }
       }
       try {
-        restoreMaterialsTransaction(this.host.materials, materialState)
+        restoreMaterialsTransaction(this.#host.materials, materialState)
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
       }
@@ -312,14 +337,14 @@ export class TransactionManager {
       try {
         mobxTransaction(() => {
           try {
-            document.history.beginTransaction()
+            beginHistoryTransaction(document.history)
             historyStarted = true
             mutationBoundary?.allowMutations()
-            this.runSynchronousBoundary(options.precondition, [document], 'precondition')
+            this.#runSynchronousBoundary(options.precondition, [document], 'precondition')
             result = operation()
             if (context.failure.occurred) throw context.failure.error
             if (!delayCommitUntilSettled) {
-              document.history.commitTransaction()
+              commitHistoryTransaction(document.history)
               historyStarted = false
               modelCommitted = true
             }
@@ -344,8 +369,8 @@ export class TransactionManager {
         rollbackWithinMobx()
       } else if (!failed) {
         try {
-          this.runSynchronousBoundary(options.settledPostcondition, [document, result], 'settled postcondition')
-          document.history.commitTransaction()
+          this.#runSynchronousBoundary(options.settledPostcondition, [document, result], 'settled postcondition')
+          commitHistoryTransaction(document.history)
           historyStarted = false
           modelCommitted = true
         } catch (error) {
@@ -357,103 +382,111 @@ export class TransactionManager {
         rollbackErrors.push(mobxExitError)
       }
     } finally {
-      this.active = undefined
-    }
-
-    if (modelCommitted) {
-      const postCommitErrors: unknown[] = []
-      if (mobxExitError) postCommitErrors.push(mobxExitError)
-      try {
-        commitMaterialsTransaction(this.host.materials, materialState)
-      } catch (error) {
-        postCommitErrors.push(error)
-      }
-      try {
-        if (options.publishEvents === false) this.events.rollback(eventTransaction)
-        else this.events.commit(eventTransaction)
-      } catch (error) {
-        if (error instanceof AggregateError) {
-          postCommitErrors.push(...error.errors)
-        } else {
-          postCommitErrors.push(error)
-        }
-      }
-      try {
-        if (postCommitErrors.length) throw new TransactionCommittedError(postCommitErrors, result)
-        return result
-      } finally {
-        mutationBoundary?.release()
-      }
-    }
-
-    if (failed) {
-      try {
-        this.events.rollback(eventTransaction)
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError)
-      } finally {
-        mutationBoundary?.release()
-      }
-      if (rollbackErrors.length) {
-        throw new TransactionRollbackIncompleteError(failure, rollbackErrors)
-      }
-      throw failure
+      // The transaction remains active through material commit and deferred
+      // event delivery. Nested lifecycle or command work during that settling
+      // phase must not observe a half-closed rollback substrate.
+      context.acceptsNestedOperations = false
     }
 
     try {
-      this.events.rollback(eventTransaction)
-    } catch (rollbackError) {
-      throw new AggregateError([rollbackError], 'Transaction exited without a commit and event cleanup failed')
+      if (modelCommitted) {
+        const postCommitErrors: unknown[] = []
+        if (mobxExitError) postCommitErrors.push(mobxExitError)
+        try {
+          commitMaterialsTransaction(this.#host.materials, materialState)
+        } catch (error) {
+          postCommitErrors.push(error)
+        }
+        try {
+          if (options.publishEvents === false) this.#events.rollback(eventTransaction)
+          else this.#events.commit(eventTransaction)
+        } catch (error) {
+          if (error instanceof AggregateError) {
+            postCommitErrors.push(...error.errors)
+          } else {
+            postCommitErrors.push(error)
+          }
+        }
+        try {
+          if (postCommitErrors.length) throw new TransactionCommittedError(postCommitErrors, result)
+          return result
+        } finally {
+          mutationBoundary?.release()
+        }
+      }
+
+      if (failed) {
+        try {
+          this.#events.rollback(eventTransaction)
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError)
+        } finally {
+          mutationBoundary?.release()
+        }
+        if (rollbackErrors.length) {
+          throw new TransactionRollbackIncompleteError(failure, rollbackErrors)
+        }
+        throw failure
+      }
+
+      try {
+        this.#events.rollback(eventTransaction)
+      } catch (rollbackError) {
+        throw new AggregateError([rollbackError], 'Transaction exited without a commit and event cleanup failed')
+      } finally {
+        mutationBoundary?.release()
+      }
+      throw new Error('Transaction exited without committing or reporting a failure')
     } finally {
-      mutationBoundary?.release()
+      this.#active = undefined
     }
-    throw new Error('Transaction exited without committing or reporting a failure')
   }
 
-  private assertMutable(): void {
-    this.host.assertTrustBoundaryIntegrity?.('transactions.run')
+  #assertMutable(): void {
+    this.#host.assertCompositionMutationAllowed?.('transactions.run')
+    this.#host.assertTrustBoundaryIntegrity?.('transactions.run')
     if (
-      this.host.lifecycleState === 'disposing' ||
-      this.host.lifecycleState === 'disposed' ||
-      this.host.lifecycleState === 'failed'
+      this.#host.lifecycleState === 'disposing' ||
+      this.#host.lifecycleState === 'disposed' ||
+      this.#host.lifecycleState === 'failed'
     ) {
-      throw new Error(`Cannot start a transaction while engine is ${this.host.lifecycleState}`)
+      throw new Error(`Cannot start a transaction while engine is ${this.#host.lifecycleState}`)
     }
   }
 
-  private assertCommands(commands: readonly EditorCommand[]): void {
+  #assertCommands(commands: readonly EditorCommand[]): void {
     if (!Array.isArray(commands) || commands.length < 1) {
       throw new Error('A transaction requires at least one command')
     }
   }
 
-  private requireDocument(): Document {
-    const document = this.active?.document || this.host.project.currentDocument
-    return this.requireUsableDocument(document)
+  #requireDocument(): Document {
+    const document = this.#active?.document || this.#host.project.currentDocument
+    return this.#requireUsableDocument(document)
   }
 
-  private requireBoundDocument(documentOrId: Document | string): Document {
+  #requireBoundDocument(documentOrId: Document | string): Document {
     const document =
       typeof documentOrId === 'string'
-        ? this.host.project.getDocument(documentOrId)
+        ? this.#host.project.getDocument(documentOrId)
         : documentOrId && typeof documentOrId === 'object'
           ? documentOrId
           : undefined
 
-    if (!document || this.host.project.getDocument(document.id) !== document) {
+    if (!document || this.#host.project.getDocument(document.id) !== document) {
       throw new Error('The bound document does not belong to this engine project')
     }
-    return this.requireUsableDocument(document)
+    return this.#requireUsableDocument(document)
   }
 
-  private requireUsableDocument(document?: Document): Document {
+  #requireUsableDocument(document?: Document): Document {
     if (!document?.root) {
       throw new Error('A V1 transaction requires an active document with a root node')
     }
     return document
   }
 
-  private normalizeBoundOptions(
+  #normalizeBoundOptions(
     value: TransactionPrecondition | BoundTransactionOptions | undefined,
   ): BoundTransactionOptions {
     if (value === undefined) return {}
@@ -464,18 +497,18 @@ export class TransactionManager {
     return value
   }
 
-  private assertExecutableBoundOptionsAllowed(options: BoundTransactionOptions): void {
-    if (this.host.trustPolicy.allowExecutableCommands) return
+  #assertExecutableBoundOptionsAllowed(options: BoundTransactionOptions): void {
+    if (this.#host.trustPolicy.allowExecutableCommands) return
     if (!options.precondition && !options.postcondition && !options.settledPostcondition) return
     throw new PolicyViolation({
       capability: 'command.executable',
       message: 'Executable transaction validators are disabled by the engine trust policy',
       origin: 'transactions.runOnDocument',
-      rule: `${this.host.trustPolicy.name}.command.executable.deny`,
+      rule: `${this.#host.trustPolicy.name}.command.executable.deny`,
     })
   }
 
-  private runSynchronousBoundary(
+  #runSynchronousBoundary(
     boundary: TransactionPrecondition | TransactionPostcondition | undefined,
     args: unknown[],
     name: string,
@@ -493,17 +526,17 @@ export class TransactionManager {
     }
   }
 
-  private preflight(commands: readonly EditorCommand[], document: Document) {
+  #preflight(commands: readonly EditorCommand[], document: Document) {
     for (const command of commands) {
       const executable = findExecutableValue(command)
-      if (executable && !this.host.trustPolicy.allowExecutableCommands) {
+      if (executable && !this.#host.trustPolicy.allowExecutableCommands) {
         throw new PolicyViolation({
           capability: 'command.executable',
           details: executable,
           message: `Executable command value ${executable.type} is not allowed at ${executable.path}`,
           origin: 'commands.execute',
           path: executable.path,
-          rule: `${this.host.trustPolicy.name}.command.executable.deny`,
+          rule: `${this.#host.trustPolicy.name}.command.executable.deny`,
         })
       }
     }
@@ -515,7 +548,7 @@ export class TransactionManager {
     }
   }
 
-  private createResult(results: CommandResult[]): TransactionResult {
+  #createResult(results: CommandResult[]): TransactionResult {
     return {
       affectedNodeIds: [...new Set(results.flatMap(result => result.affectedNodeIds))],
       commandCount: results.length,
@@ -523,3 +556,11 @@ export class TransactionManager {
     }
   }
 }
+
+Object.defineProperty(TransactionManager.prototype, 'constructor', {
+  configurable: false,
+  enumerable: false,
+  value: undefined,
+  writable: false,
+})
+Object.freeze(TransactionManager.prototype)

@@ -3,10 +3,15 @@ import { installLegacyBrowserGlobals } from './fake-browser.mjs'
 
 const coreUrl = new URL('../../dist/index.js', import.meta.url)
 const instanceUrl = new URL('../../dist/instance.js', import.meta.url)
+const kernelUrl = new URL('../dist/kernel.js', import.meta.url)
 
 export async function loadCore() {
   installLegacyBrowserGlobals()
-  return import(coreUrl.href)
+  return import(kernelUrl.href)
+}
+
+export async function loadInstance() {
+  return import(instanceUrl.href)
 }
 
 export function assertKernelApi(core) {

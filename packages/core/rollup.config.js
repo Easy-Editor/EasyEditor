@@ -7,7 +7,7 @@ import cleanup from 'rollup-plugin-cleanup'
 const require = createRequire(import.meta.url)
 const pkg = require('./package.json')
 
-const createPlugins = () => [
+export const createPlugins = () => [
   replace({
     _EASY_EDITOR_VERSION_: pkg.version,
     preventAssignment: true,
@@ -40,42 +40,24 @@ const createPlugins = () => [
 
 export default [
   {
-    input: 'src/index.ts',
+    input: {
+      agent: 'src/agent.ts',
+      'agent-channel': 'src/agent-channel.ts',
+      index: 'src/index.ts',
+      instance: 'src/instance.ts',
+    },
     output: [
       {
-        file: 'dist/index.js',
+        chunkFileNames: 'chunks/[name]-[hash].js',
+        dir: 'dist',
+        entryFileNames: '[name].js',
         format: 'es',
       },
       {
-        file: 'dist/index.cjs',
-        format: 'cjs',
-      },
-    ],
-    plugins: createPlugins(),
-  },
-  {
-    input: 'src/agent-channel.ts',
-    output: [
-      {
-        file: 'dist/agent-channel.js',
-        format: 'es',
-      },
-      {
-        file: 'dist/agent-channel.cjs',
-        format: 'cjs',
-      },
-    ],
-    plugins: createPlugins(),
-  },
-  {
-    input: 'src/instance.ts',
-    output: [
-      {
-        file: 'dist/instance.js',
-        format: 'es',
-      },
-      {
-        file: 'dist/instance.cjs',
+        chunkFileNames: 'chunks/[name]-[hash].cjs',
+        dir: 'dist',
+        entryFileNames: '[name].cjs',
+        exports: 'named',
         format: 'cjs',
       },
     ],

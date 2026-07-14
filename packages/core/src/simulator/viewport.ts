@@ -1,7 +1,9 @@
 import { action, computed, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type Point } from '../designer'
 import { ScrollTarget } from '../designer/scroller'
+import { assertLifecycleMutationAllowed, sealLifecycleMutations } from '../lifecycle/mutation-barrier'
 import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
+import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import type { Disposable } from '../utils'
 
 export type AutoFit = '100%'
@@ -15,6 +17,7 @@ export class Viewport {
   private boundsFrame?: number
 
   get bounds(): DOMRect {
+    assertLifecycleMutationAllowed(this, 'viewport.bounds')
     if (this._bounds) {
       return this._bounds
     }
@@ -36,10 +39,12 @@ export class Viewport {
   private viewportElement?: HTMLElement
 
   constructor(readonly designer: Designer) {
+    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
     lockReadonlyProperties(this, ['designer'])
   }
 
   mount(viewportElement: HTMLElement | null) {
+    assertLifecycleMutationAllowed(this, 'viewport.mount')
     if (!viewportElement || this.viewportElement === viewportElement) {
       return
     }
@@ -54,6 +59,7 @@ export class Viewport {
 
   @action
   touch() {
+    assertLifecycleMutationAllowed(this, 'viewport.touch')
     if (this.viewportElement) {
       this.rect = this.bounds
     }
@@ -68,6 +74,7 @@ export class Viewport {
   }
 
   set height(newHeight: number) {
+    assertLifecycleMutationAllowed(this, 'viewport.height')
     this._contentHeight = newHeight / this.scale
     if (this.viewportElement) {
       this.viewportElement.style.height = `${newHeight}px`
@@ -84,6 +91,7 @@ export class Viewport {
   }
 
   set width(newWidth: number) {
+    assertLifecycleMutationAllowed(this, 'viewport.width')
     this._contentWidth = newWidth / this.scale
     if (this.viewportElement) {
       this.viewportElement.style.width = `${newWidth}px`
@@ -100,6 +108,7 @@ export class Viewport {
 
   @action
   set scale(newScale: number) {
+    assertLifecycleMutationAllowed(this, 'viewport.scale')
     if (Number.isNaN(newScale) || newScale <= 0) {
       throw new Error(`invalid new scale "${newScale}"`)
     }
@@ -119,6 +128,7 @@ export class Viewport {
   }
 
   set contentHeight(newContentHeight: number | AutoFit) {
+    assertLifecycleMutationAllowed(this, 'viewport.contentHeight')
     this._contentHeight = newContentHeight
   }
 
@@ -128,6 +138,7 @@ export class Viewport {
   }
 
   set contentWidth(val: number | AutoFit) {
+    assertLifecycleMutationAllowed(this, 'viewport.contentWidth')
     this._contentWidth = val
   }
 
@@ -161,11 +172,13 @@ export class Viewport {
   }
 
   setScrollTarget(target: Window): Disposable {
-    this.clearScrollTarget()
+    assertLifecycleMutationAllowed(this, 'viewport.setScrollTarget')
+    this.#clearScrollTargetInternal()
     const scrollTarget = new ScrollTarget(target)
 
     let scrollTimer: ReturnType<typeof setTimeout> | undefined
     const onScroll = () => {
+      assertLifecycleMutationAllowed(this, 'viewport.scroll')
       this._scrollX = scrollTarget.left
       this._scrollY = scrollTarget.top
       this._scrolling = true
@@ -244,11 +257,21 @@ export class Viewport {
   }
 
   clearScrollTarget(): void {
-    this.scrollDisposer?.()
+    assertLifecycleMutationAllowed(this, 'viewport.clearScrollTarget')
+    this.#clearScrollTargetInternal()
   }
 
   dispose(): void {
-    this.clearScrollTarget()
+    assertPublicLifecycleTeardownAllowed(this, 'viewport.dispose')
+    this.#disposeInternal()
+  }
+
+  #clearScrollTargetInternal(): void {
+    this.scrollDisposer?.()
+  }
+
+  #disposeInternal(): void {
+    this.#clearScrollTargetInternal()
     const view = this.viewportElement?.ownerDocument.defaultView
     if (this.boundsFrame !== undefined) {
       const cancelFrame = view?.cancelAnimationFrame?.bind(view) || globalThis.cancelAnimationFrame
@@ -257,6 +280,7 @@ export class Viewport {
     }
     this._bounds = undefined
     this.viewportElement = undefined
+    sealLifecycleMutations(this, 'viewport generation is disposed')
   }
 
   toGlobalPoint(point: Point): Point {

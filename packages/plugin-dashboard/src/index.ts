@@ -10,6 +10,7 @@ import {
   type OffsetObserver,
   type PluginCreator,
   type Simulator,
+  assertLegacyTrustedPluginContext,
   getConvertedExtraKey,
 } from '@easy-editor/core/instance'
 import { AlignType, Alignment, DistributeType } from './designer/alignment'
@@ -137,6 +138,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
     extensionFingerprint: `DashboardPlugin:v1:${JSON.stringify(groupInitSchema)}`,
     deps: [],
     init(ctx) {
+      assertLegacyTrustedPluginContext(ctx)
       const { materials, project } = ctx
       const { designer } = project
 

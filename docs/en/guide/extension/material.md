@@ -117,7 +117,7 @@ export default Button
 Define configurable properties of the component in the designer:
 
 ```ts
-import type { Configure } from '@easy-editor/core'
+import type { Configure } from '@easy-editor/core/instance'
 
 const configure: Configure = {
   props: [
@@ -204,7 +204,7 @@ export default configure
 Describe basic information and classification of the component:
 
 ```ts
-import type { ComponentMetadata } from '@easy-editor/core'
+import type { ComponentMetadata } from '@easy-editor/core/instance'
 import configure from './configure'
 import snippets from './snippets'
 
@@ -253,7 +253,7 @@ export default meta
 Define preset usage of the component in the material panel:
 
 ```ts
-import type { Snippet } from '@easy-editor/core'
+import type { Snippet } from '@easy-editor/core/instance'
 
 const snippets: Snippet[] = [
   {
@@ -322,18 +322,16 @@ export default Button
 Register materials during engine initialization:
 
 ```ts
-import {
-  init,
-  materials,
-  setters,
-} from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import Button from './materials/button/component'
 import buttonMeta from './materials/button/meta'
 import Card from './materials/card/component'
 import cardMeta from './materials/card/meta'
 
-// Build component metadata mapping
-materials.buildComponentMetasMap([buttonMeta, cardMeta])
+const engine = createEngine()
+
+// Build component metadata through the host-owned instance
+engine.materials.buildComponentMetasMap([buttonMeta, cardMeta])
 
 // When using in renderer, need to provide component mapping
 export const components = {
@@ -342,7 +340,7 @@ export const components = {
 }
 
 // Initialize engine
-await init({
+await engine.init({
   designMode: 'design',
 })
 ```

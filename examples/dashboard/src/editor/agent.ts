@@ -1,9 +1,15 @@
-import type { AgentExtraValuePolicies, AgentPortSession } from '@easy-editor/core'
-import { AgentCapabilityError } from '@easy-editor/core/instance'
+import {
+  AgentCapabilityError,
+  type AgentExtraValuePolicies,
+  type AgentPortSession,
+  getAgentCapabilities,
+} from '@easy-editor/core/agent'
 import type { DashboardAgentPlanSummary } from '../components/ai-chat/agent-plan-summary.mjs'
 import { AgentRequestBoundaryError, prepareAgentWorkerMessages } from '../components/ai-chat/agent-request-boundary.mjs'
 import { AgentPlanCoordinatorError, coordinatePreparedAgentPlan } from './agent-plan-coordinator.mjs'
 import { engine } from './runtime'
+
+const agentCapabilities = getAgentCapabilities(engine)
 
 const DASHBOARD_AGENT_COMPONENT_NAMES = [
   'AreaChart',
@@ -249,7 +255,7 @@ export const runDashboardAgentRequest = async (
   options.signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
-    session = engine.agentCapabilities.issuePort(
+    session = agentCapabilities.issuePort(
       {
         commandTypes: ['insertNode', 'updateProps', 'removeNode', 'moveNode'],
         componentNames: DASHBOARD_AGENT_COMPONENT_NAMES,

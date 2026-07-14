@@ -1,10 +1,10 @@
 import type { ConfigOptions } from '../config'
-import { EngineInstance } from './engine-instance'
+import { createLegacyEngine } from './engine-instance'
 import { clipboard, commonEvent, config, loadingState, resourceRegistry } from './legacy-services'
 
 export { clipboard, commonEvent, config, loadingState, resourceRegistry } from './legacy-services'
 
-export const defaultEngine = new EngineInstance({
+export const defaultEngine = createLegacyEngine({
   services: {
     clipboard,
     config,

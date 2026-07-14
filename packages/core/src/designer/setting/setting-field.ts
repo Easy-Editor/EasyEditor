@@ -1,5 +1,7 @@
 import { action, computed, observable, untracked } from 'mobx'
 import { isJSExpression } from '../../document/prop/prop'
+import { lockReadonlyProperties } from '../../lifecycle/readonly-properties'
+import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import type { FieldConfig, FieldExtraProps } from '../../types/meta'
 import type { DynamicSetter, SetterType } from '../../types/setter'
 import { cloneDeep } from '../../utils/common'
@@ -41,47 +43,53 @@ export class SettingField extends SettingPropEntry {
 
   readonly isRequired: boolean
 
-  private _config: FieldConfig
+  #config: FieldConfig
 
-  private hotValue: any
-
-  parent: SettingTopEntry | SettingField
+  #hotValue: any
 
   extraProps: FieldExtraProps
 
-  private _title?: string
+  #title?: string
 
   get title() {
-    return this._title || this.name
+    return this.#title || this.name
   }
 
-  private _setter?: SetterType | DynamicSetter
+  #setter?: SetterType | DynamicSetter
 
-  @observable.ref private accessor _expanded = true
+  @observable.ref accessor #expanded = true
 
-  private _items: SettingField[] = []
+  #items: SettingField[] = []
+
+  readonly #settingFieldCollector?: (name: string, field: SettingField) => void
+
+  readonly #settingFieldOwner?: (field: SettingField) => void
 
   constructor(
     parent: SettingTopEntry | SettingField,
     config: FieldConfig,
-    private settingFieldCollector?: (name: string, field: SettingField) => void,
+    settingFieldCollector?: (name: string, field: SettingField) => void,
+    settingFieldOwner?: (field: SettingField) => void,
   ) {
     super(parent, config.name, config.type)
+    this.#settingFieldCollector = settingFieldCollector
+    this.#settingFieldOwner = settingFieldOwner
+    this.#settingFieldOwner?.(this)
     const { title, items, setter, extraProps, ...rest } = config
-    this.parent = parent
-    this._config = config
-    this._title = title
-    this._setter = setter
-    this.extraProps = {
+    this.#config = Object.freeze({ ...config })
+    this.#title = title
+    this.#setter = setter
+    this.extraProps = Object.freeze({
       ...rest,
       ...extraProps,
-    }
+    })
     this.isRequired = !extraProps?.isRequired || (setter as any)?.isRequired
-    this._expanded = !extraProps?.defaultCollapsed
+    this.#expanded = !extraProps?.defaultCollapsed
+    lockReadonlyProperties(this, ['extraProps', 'isRequired'])
 
     // initial items
     if (items && items.length > 0) {
-      this.initItems(items, settingFieldCollector)
+      this.#initItems(items, settingFieldCollector, settingFieldOwner)
     }
     if (this.type !== 'group' && settingFieldCollector && config.name) {
       settingFieldCollector(getSettingFieldCollectorKey(parent, config), this)
@@ -90,49 +98,57 @@ export class SettingField extends SettingPropEntry {
 
   @computed
   get setter(): SetterType | null {
-    if (!this._setter) {
+    if (!this.#setter) {
       return null
     }
-    if (isDynamicSetter(this._setter)) {
+    if (isDynamicSetter(this.#setter)) {
       return untracked(() => {
-        return (this._setter as DynamicSetter)?.call(this, this)
+        return withoutProjectMutationAuthority(this.getNode().document.project, () =>
+          (this.#setter as DynamicSetter)?.call(this, this),
+        )
       })
     }
-    return this._setter
+    return this.#setter
   }
 
   get expanded(): boolean {
-    return this._expanded
+    return this.#expanded
   }
 
   setExpanded(value: boolean) {
-    this._expanded = value
+    this.assertEntryMutationAllowed('settingField.setExpanded')
+    this.#expanded = value
   }
 
   get items(): SettingField[] {
-    return this._items
+    return Object.freeze(this.#items.slice()) as SettingField[]
   }
 
   get config(): FieldConfig {
-    return this._config
+    return this.#config
   }
 
-  private initItems(items: FieldConfig[], settingFieldCollector?: (name: string, field: SettingField) => void) {
-    this._items = items.map(item => new SettingField(this, item, settingFieldCollector))
+  #initItems(
+    items: FieldConfig[],
+    settingFieldCollector?: (name: string, field: SettingField) => void,
+    settingFieldOwner?: (field: SettingField) => void,
+  ) {
+    this.#items = items.map(item => new SettingField(this, item, settingFieldCollector, settingFieldOwner))
   }
 
-  private disposeItems() {
-    this._items.forEach(item => isSettingField(item) && item.purge())
-    this._items = []
+  #disposeItems() {
+    this.#items.forEach(item => isSettingField(item) && item.purge())
+    this.#items = []
   }
 
   createField(config: FieldConfig) {
-    this.settingFieldCollector?.(getSettingFieldCollectorKey(this.parent, config), this)
-    return new SettingField(this, config, this.settingFieldCollector)
+    this.assertEntryMutationAllowed('settingField.createField')
+    return new SettingField(this, config, this.#settingFieldCollector, this.#settingFieldOwner)
   }
 
   purge() {
-    this.disposeItems()
+    this.#disposeItems()
+    this.purgeEntry()
   }
 
   // ======= compatibles for vision ======
@@ -140,20 +156,23 @@ export class SettingField extends SettingPropEntry {
     if (configName) {
       return this.config[configName]
     }
-    return this._config
+    return this.#config
   }
 
   getItems(filter?: (item: SettingField) => boolean): SettingField[] {
-    return this._items.filter(item => {
-      if (filter) {
-        return filter(item)
-      }
-      return true
-    })
+    return Object.freeze(
+      this.#items.filter(item => {
+        if (filter) {
+          return withoutProjectMutationAuthority(this.getNode().document.project, () => filter(item))
+        }
+        return true
+      }),
+    ) as SettingField[]
   }
 
   @action
   setValue(val: any, isHotValue?: boolean, extraOptions?: SetValueOptions) {
+    this.assertEntryMutationAllowed('settingField.setValue')
     if (isHotValue) {
       this.setHotValue(val, extraOptions)
       return
@@ -162,13 +181,14 @@ export class SettingField extends SettingPropEntry {
   }
 
   clearValue() {
-    this.hotValue = null
+    this.assertEntryMutationAllowed('settingField.clearValue')
+    this.#hotValue = null
     super.clearValue()
   }
 
   getHotValue(): any {
-    if (this.hotValue) {
-      return this.hotValue
+    if (this.#hotValue) {
+      return this.#hotValue
     }
     // avoid View modify
     let v = cloneDeep(this.getMockOrValue())
@@ -180,7 +200,8 @@ export class SettingField extends SettingPropEntry {
 
   @action
   setHotValue(data: any, options?: SetValueOptions) {
-    this.hotValue = data
+    this.assertEntryMutationAllowed('settingField.setHotValue')
+    this.#hotValue = data
     const value = data
     if (options) {
       options.fromSetHotValue = true

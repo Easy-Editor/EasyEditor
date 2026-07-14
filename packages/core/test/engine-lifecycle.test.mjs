@@ -8,6 +8,30 @@ import { assertKernelApi, captureFailure, loadCore } from './helpers/kernel.mjs'
 const countHotkeyCallbacks = hotkey =>
   Object.values(hotkey.callBacks).reduce((count, callbacks) => count + callbacks.length, 0)
 
+const settleWithin = (promise, timeoutMs = 250) =>
+  new Promise(resolve => {
+    const timeout = setTimeout(() => resolve({ status: 'timeout' }), timeoutMs)
+    promise.then(
+      value => {
+        clearTimeout(timeout)
+        resolve({ status: 'fulfilled', value })
+      },
+      error => {
+        clearTimeout(timeout)
+        resolve({ error, status: 'rejected' })
+      },
+    )
+  })
+
+const hasNestedErrorName = (error, name) => {
+  if (error?.name === name) return true
+  if (error instanceof AggregateError && error.errors.some(cause => hasNestedErrorName(cause, name))) return true
+  if (Array.isArray(error?.failures)) {
+    return error.failures.some(failure => hasNestedErrorName(failure?.cause ?? failure, name))
+  }
+  return error?.cause ? hasNestedErrorName(error.cause, name) : false
+}
+
 const runServiceMutationMatrix = async ({ engine, hostWindow, materialRegistry, prefix, remoteCalls }) => {
   let eventDeliveries = 0
   const cases = [
@@ -327,7 +351,7 @@ test('public document removal cannot select the notification-free teardown path'
   assert.equal(usageEvents[0].componentName, 'Page')
 })
 
-test('destroy waits for an in-flight init and tears the initialized plugin down once', async () => {
+test('external destroy conflicts with an in-flight async plugin init until an explicit retry', async () => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   let releaseInit
@@ -354,13 +378,293 @@ test('destroy waits for an in-flight init and tears the initialized plugin down 
 
   const initializing = engine.init()
   await started
-  const destroying = engine.destroy()
+  const conflictingDestroy = await settleWithin(
+    Promise.resolve().then(() => engine.destroy()),
+    25,
+  )
+  assert.equal(conflictingDestroy.status, 'rejected', 'external destroy must reject instead of joining owned init')
+  assert.equal(hasNestedErrorName(conflictingDestroy.error, 'LifecycleReentrancyError'), true)
+  assert.equal(engine.lifecycleState, 'initializing')
   releaseInit()
-  await Promise.all([initializing, destroying])
+  await initializing
+
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.deepEqual(calls, ['init:start', 'init:end'])
+  assert.equal(engine.innerPlugins.get('slow').isInited(), true)
+
+  await engine.destroy()
 
   assert.equal(engine.lifecycleState, 'disposed')
   assert.deepEqual(calls, ['init:start', 'init:end', 'destroy'])
-  assert.equal(engine.plugins.get('slow').isInited(), false)
+  assert.equal(engine.innerPlugins.get('slow').isInited(), false)
+})
+
+test('external init conflicts with an in-flight async plugin destroy until an explicit retry', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  let releaseFirstDestroy
+  let signalFirstDestroyStarted
+  const firstDestroyStarted = new Promise(resolve => {
+    signalFirstDestroyStarted = resolve
+  })
+  const firstDestroyReleased = new Promise(resolve => {
+    releaseFirstDestroy = resolve
+  })
+  const calls = []
+  let initCalls = 0
+  let destroyCalls = 0
+  await engine.plugins.register({
+    name: 'slow-destroy',
+    init() {
+      initCalls += 1
+      calls.push(`init:${initCalls}`)
+    },
+    async destroy() {
+      destroyCalls += 1
+      calls.push(`destroy:${destroyCalls}:start`)
+      if (destroyCalls === 1) {
+        signalFirstDestroyStarted()
+        await firstDestroyReleased
+      }
+      calls.push(`destroy:${destroyCalls}:end`)
+    },
+  })
+
+  await engine.init()
+  const destroying = engine.destroy()
+  await firstDestroyStarted
+  const conflictingRestart = await settleWithin(
+    Promise.resolve().then(() => engine.init({ restartProbe: 'must-not-apply' })),
+    25,
+  )
+  assert.equal(conflictingRestart.status, 'rejected', 'external init must reject instead of joining owned destroy')
+  assert.equal(hasNestedErrorName(conflictingRestart.error, 'LifecycleReentrancyError'), true)
+  assert.equal(engine.lifecycleState, 'disposing')
+  assert.equal(engine.config.get('restartProbe'), undefined)
+  releaseFirstDestroy()
+  await destroying
+
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.deepEqual(calls, ['init:1', 'destroy:1:start', 'destroy:1:end'])
+
+  await engine.init({ restartProbe: 'after-destroy' })
+
+  assert.equal(engine.lifecycleState, 'ready')
+  assert.equal(engine.config.get('restartProbe'), 'after-destroy')
+  assert.deepEqual(calls, ['init:1', 'destroy:1:start', 'destroy:1:end', 'init:2'])
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.deepEqual(calls, ['init:1', 'destroy:1:start', 'destroy:1:end', 'init:2', 'destroy:2:start', 'destroy:2:end'])
+})
+
+test('PluginContext never exposes engine init or destroy authority', async () => {
+  const core = await loadCore()
+
+  for (const trustPolicy of ['legacyTrusted', 'agentRestricted']) {
+    const engine = core.createEngine({ trustPolicy, hostWindow: null })
+    await engine.plugins.register({
+      name: `context-lifecycle-${trustPolicy}`,
+      init(context) {
+        assert.equal(context.init, undefined)
+        assert.equal(context.destroy, undefined)
+        assert.equal('init' in context, false)
+        assert.equal('destroy' in context, false)
+        if (trustPolicy === 'agentRestricted') {
+          assert.equal(context.engine, undefined)
+          return
+        }
+        assert.equal(context.engine.init, undefined)
+        assert.equal(context.engine.destroy, undefined)
+        assert.equal('init' in context.engine, false)
+        assert.equal('destroy' in context.engine, false)
+      },
+    })
+
+    await engine.init()
+    await engine.destroy()
+    assert.equal(engine.lifecycleState, 'disposed')
+  }
+})
+
+test('all synchronous plugin lifecycle reentry directions reject promptly and remain retryable', async () => {
+  const core = await loadCore()
+
+  for (const hook of ['init', 'destroy']) {
+    for (const requestedOperation of ['init', 'destroy']) {
+      const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+      let attemptReentry = true
+      await engine.plugins.register({
+        name: `reentry-${hook}-${requestedOperation}`,
+        init() {
+          if (hook !== 'init' || !attemptReentry) return
+          attemptReentry = false
+          return engine[requestedOperation]()
+        },
+        destroy() {
+          if (hook !== 'destroy' || !attemptReentry) return
+          attemptReentry = false
+          return engine[requestedOperation]()
+        },
+      })
+
+      if (hook === 'destroy') await engine.init()
+      const outcome = await settleWithin(engine[hook]())
+      assert.equal(outcome.status, 'rejected', `${hook} -> ${requestedOperation} must reject`)
+      assert.equal(
+        hasNestedErrorName(outcome.error, 'LifecycleReentrancyError'),
+        true,
+        `${hook} -> ${requestedOperation} must retain the structured cause`,
+      )
+      if (hook === 'init') {
+        assert.equal(engine.lifecycleState, 'created')
+        await engine.init()
+        assert.equal(engine.lifecycleState, 'ready')
+      } else {
+        assert.equal(engine.lifecycleState, 'failed')
+      }
+      await engine.destroy()
+      assert.equal(engine.lifecycleState, 'disposed')
+    }
+  }
+})
+
+test('all synchronous RemoteAdapter lifecycle reentry directions reject promptly and remain retryable', async () => {
+  const core = await loadCore()
+
+  for (const hook of ['init', 'dispose']) {
+    for (const requestedOperation of ['init', 'destroy']) {
+      let engine
+      let attemptReentry = true
+      engine = core.createEngine({
+        trustPolicy: 'legacyTrusted',
+        hostWindow: null,
+        remoteAdapter: {
+          init() {
+            if (hook !== 'init' || !attemptReentry) return
+            attemptReentry = false
+            return engine[requestedOperation]()
+          },
+          dispose() {
+            if (hook !== 'dispose' || !attemptReentry) return
+            attemptReentry = false
+            return engine[requestedOperation]()
+          },
+        },
+      })
+
+      if (hook === 'dispose') await engine.init()
+      const lifecycleOperation = hook === 'dispose' ? 'destroy' : 'init'
+      const outcome = await settleWithin(engine[lifecycleOperation]())
+      assert.equal(outcome.status, 'rejected', `${hook} -> ${requestedOperation} must reject`)
+      assert.equal(
+        hasNestedErrorName(outcome.error, 'LifecycleReentrancyError'),
+        true,
+        `${hook} -> ${requestedOperation} must retain the structured cause`,
+      )
+      if (hook === 'init') {
+        assert.equal(engine.lifecycleState, 'created')
+        await engine.init()
+        assert.equal(engine.lifecycleState, 'ready')
+      } else {
+        assert.equal(engine.lifecycleState, 'failed')
+      }
+      await engine.destroy()
+      assert.equal(engine.lifecycleState, 'disposed')
+    }
+  }
+})
+
+test('all asynchronous plugin lifecycle reentry directions reject promptly and remain explicitly recoverable', async () => {
+  const core = await loadCore()
+
+  for (const hook of ['init', 'destroy']) {
+    for (const requestedOperation of ['init', 'destroy']) {
+      const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+      let attemptReentry = true
+      await engine.plugins.register({
+        name: `async-reentry-${hook}-${requestedOperation}`,
+        async init() {
+          if (hook !== 'init' || !attemptReentry) return
+          attemptReentry = false
+          await Promise.resolve()
+          return engine[requestedOperation]()
+        },
+        async destroy() {
+          if (hook !== 'destroy' || !attemptReentry) return
+          attemptReentry = false
+          await Promise.resolve()
+          return engine[requestedOperation]()
+        },
+      })
+
+      if (hook === 'destroy') await engine.init()
+      const outcome = await settleWithin(engine[hook]())
+      assert.equal(outcome.status, 'rejected', `${hook} -> await -> ${requestedOperation} must reject promptly`)
+      assert.equal(
+        hasNestedErrorName(outcome.error, 'LifecycleReentrancyError'),
+        true,
+        `${hook} -> await -> ${requestedOperation} must retain the structured cause`,
+      )
+      if (hook === 'init') {
+        assert.equal(engine.lifecycleState, 'created')
+        await engine.init()
+        assert.equal(engine.lifecycleState, 'ready')
+      } else {
+        assert.equal(engine.lifecycleState, 'failed')
+      }
+      await engine.destroy()
+      assert.equal(engine.lifecycleState, 'disposed')
+    }
+  }
+})
+
+test('all asynchronous RemoteAdapter lifecycle reentry directions reject promptly and remain explicitly recoverable', async () => {
+  const core = await loadCore()
+
+  for (const hook of ['init', 'dispose']) {
+    for (const requestedOperation of ['init', 'destroy']) {
+      let engine
+      let attemptReentry = true
+      engine = core.createEngine({
+        trustPolicy: 'legacyTrusted',
+        hostWindow: null,
+        remoteAdapter: {
+          async init() {
+            if (hook !== 'init' || !attemptReentry) return
+            attemptReentry = false
+            await Promise.resolve()
+            return engine[requestedOperation]()
+          },
+          async dispose() {
+            if (hook !== 'dispose' || !attemptReentry) return
+            attemptReentry = false
+            await Promise.resolve()
+            return engine[requestedOperation]()
+          },
+        },
+      })
+
+      if (hook === 'dispose') await engine.init()
+      const lifecycleOperation = hook === 'dispose' ? 'destroy' : 'init'
+      const outcome = await settleWithin(engine[lifecycleOperation]())
+      assert.equal(outcome.status, 'rejected', `${hook} -> await -> ${requestedOperation} must reject promptly`)
+      assert.equal(
+        hasNestedErrorName(outcome.error, 'LifecycleReentrancyError'),
+        true,
+        `${hook} -> await -> ${requestedOperation} must retain the structured cause`,
+      )
+      if (hook === 'init') {
+        assert.equal(engine.lifecycleState, 'created')
+        await engine.init()
+        assert.equal(engine.lifecycleState, 'ready')
+      } else {
+        assert.equal(engine.lifecycleState, 'failed')
+      }
+      await engine.destroy()
+      assert.equal(engine.lifecycleState, 'disposed')
+    }
+  }
 })
 
 test('engine destroy owns simulator reactions and renderer disposal', async () => {

@@ -1,4 +1,5 @@
 import type { Designer } from '../designer'
+import { createDesignerEventBus } from '../designer/event-bus'
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
 import {
   assertPublicLifecycleTeardownAllowed,
@@ -146,7 +147,7 @@ export class ComponentMeta {
       writable: false,
     })
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
-    this.#emitter = designer.createEventBus('ComponentMeta')
+    this.#emitter = createDesignerEventBus(designer, 'ComponentMeta')
     inheritEngineTeardownOwnership(this, this.#emitter)
     installComponentMetaTransactionOperations(this, {
       capture: () => this.#captureTransactionState(),

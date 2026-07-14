@@ -1,5 +1,4 @@
-// core
-export * from './agent'
+// legacy-compatible core surface
 export * from './config'
 export * from './commands'
 export * from './designer'

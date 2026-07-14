@@ -1,4 +1,4 @@
-import type { AgentExecutionReceipt, AgentPlanPreview } from '@easy-editor/core'
+import type { AgentExecutionReceipt, AgentPlanPreview } from '@easy-editor/core/agent'
 import type { DashboardAgentPlanSummary } from '../components/ai-chat/agent-plan-summary.mjs'
 
 export interface AgentPlanCoordinatorClock {

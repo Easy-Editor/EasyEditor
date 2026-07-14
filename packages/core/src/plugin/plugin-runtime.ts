@@ -13,11 +13,17 @@ import {
 } from '../lifecycle/teardown-boundary'
 import { type Logger, createLogger } from '../utils'
 import type { PluginContext } from './plugin-context'
-import { createLifecycleCapabilityBinder } from './plugin-context-boundary'
+import { createLifecycleCapabilityBinder, markReviewedPluginContextCapability } from './plugin-context-boundary'
 import type { PluginExtend } from './plugin-extend'
-import { deletePluginRuntimeFromManager } from './plugin-manager-boundary'
+import {
+  deletePluginRuntimeFromManager,
+  getPluginContextFromManager,
+  publishPluginContextToManager,
+  releasePluginContextFromManager,
+  runPluginLifecycleHook,
+} from './plugin-manager-boundary'
 import { installPluginRuntimeOperations } from './plugin-runtime-boundary'
-import type { Plugin, PluginMeta, Plugins } from './plugins'
+import type { Plugin, PluginMeta, PluginRuntimeSnapshot, Plugins } from './plugins'
 
 export class PluginRuntime {
   readonly #config: Plugin
@@ -50,6 +56,8 @@ export class PluginRuntime {
 
   #canonicalProxy?: PluginRuntime
 
+  #exportsProxy?: Readonly<Record<string, unknown>>
+
   #destroyHookCompleted = false
 
   readonly meta: PluginMeta
@@ -61,11 +69,14 @@ export class PluginRuntime {
 
   get ctx() {
     assertLifecycleMutationAllowed(this, 'pluginRuntime.ctx')
-    this.#context ||= this.#manager.getPluginContext({ pluginName: this.#pluginName, meta: this.meta }, this)
-    return this.#context
+    return this.#getContextInternal()
   }
 
   constructor(pluginName: string, manager: Plugins, config: Plugin) {
+    Object.defineProperties(this, {
+      logger: { configurable: true, enumerable: true, value: undefined, writable: true },
+      meta: { configurable: true, enumerable: true, value: undefined, writable: true },
+    })
     this.#manager = manager
     this.#config = Object.freeze({
       ...config,
@@ -82,10 +93,13 @@ export class PluginRuntime {
     installPluginRuntimeOperations(this, {
       destroy: () => this.#destroyInternal(),
       getConfig: () => this.#config,
+      getExports: () => this.#toExportsProxyInternal(),
+      getSnapshot: () => this.#createSnapshot(),
       init: forceInit => this.#initInternal(forceInit),
       markExtended: () => this.#markExtendedInternal(),
       prepareExtension: pluginExtend => this.#prepareExtensionInternal(pluginExtend),
       publishContext: () => this.#publishContextInternal(),
+      setDisabled: flag => this.#setDisabledInternal(flag),
     })
     Object.defineProperty(this, 'config', {
       configurable: false,
@@ -96,6 +110,12 @@ export class PluginRuntime {
       configurable: false,
       enumerable: true,
       value: this.meta,
+      writable: false,
+    })
+    Object.defineProperty(this, 'logger', {
+      configurable: false,
+      enumerable: true,
+      value: this.logger,
       writable: false,
     })
     Object.preventExtensions(this)
@@ -171,15 +191,15 @@ export class PluginRuntime {
       try {
         runInternalLifecycleTeardown(precreatedContext)
       } finally {
-        this.#manager.releasePluginContext(this.name, precreatedContext)
+        releasePluginContextFromManager(this.#manager, this.#pluginName, precreatedContext)
         if (this.#context === precreatedContext) this.#context = undefined
       }
     }
-    const context = this.ctx
+    const context = this.#getContextInternal()
     try {
-      await this.#config.init?.call(undefined, context)
+      await runPluginLifecycleHook(this.#manager, () => this.#config.init?.call(undefined, context))
       assertLifecycleMutationTicket(this, ticket, 'pluginRuntime.init.commit')
-      if (this.#initAttempt !== attempt) throw new Error(`Plugin "${this.name}" initialization was superseded`)
+      if (this.#initAttempt !== attempt) throw new Error(`Plugin "${this.#pluginName}" initialization was superseded`)
       this.#inited = true
       this.#destroyHookCompleted = false
     } catch (error) {
@@ -187,10 +207,13 @@ export class PluginRuntime {
         this.#inited = false
         try {
           runInternalLifecycleTeardown(context)
-          this.#manager.releasePluginContext(this.name, context)
+          releasePluginContextFromManager(this.#manager, this.#pluginName, context)
           if (this.#context === context) this.#context = undefined
         } catch (disposeError) {
-          throw new AggregateError([error, disposeError], `Plugin "${this.name}" init and context rollback both failed`)
+          throw new AggregateError(
+            [error, disposeError],
+            `Plugin "${this.#pluginName}" init and context rollback both failed`,
+          )
         }
       }
       throw error
@@ -224,16 +247,16 @@ export class PluginRuntime {
     if (!this.#inited) {
       if (!context) return
       runInternalLifecycleTeardown(context)
-      this.#manager.releasePluginContext(this.name, context)
+      releasePluginContextFromManager(this.#manager, this.#pluginName, context)
       if (this.#context === context) this.#context = undefined
       return
     }
     this.logger.log('method destroy called')
     const errors: unknown[] = []
-    const activeContext = context || this.ctx
+    const activeContext = context || this.#getContextInternal()
     if (!this.#destroyHookCompleted) {
       try {
-        await this.#config.destroy?.call(undefined, activeContext)
+        await runPluginLifecycleHook(this.#manager, () => this.#config.destroy?.call(undefined, activeContext))
         this.#destroyHookCompleted = true
       } catch (error) {
         errors.push(error)
@@ -246,15 +269,15 @@ export class PluginRuntime {
         errors.push(error)
       }
     }
-    if (errors.length) throw new AggregateError(errors, `Plugin "${this.name}" failed to destroy`)
+    if (errors.length) throw new AggregateError(errors, `Plugin "${this.#pluginName}" failed to destroy`)
     this.#inited = false
     this.#destroyHookCompleted = false
-    this.#manager.releasePluginContext(this.name, activeContext)
+    releasePluginContextFromManager(this.#manager, this.#pluginName, activeContext)
     if (this.#context === activeContext) this.#context = undefined
   }
 
   #publishContextInternal(): void {
-    if (this.#context) this.#manager.publishPluginContext(this.name, this, this.#context)
+    if (this.#context) publishPluginContextToManager(this.#manager, this.#pluginName, this, this.#context)
   }
 
   async prepareExtension(pluginExtend: PluginExtend): Promise<boolean> {
@@ -266,7 +289,7 @@ export class PluginRuntime {
     const ticket = captureLifecycleMutationTicket(this, 'pluginRuntime.prepareExtension')
     if (this.#extended) return false
     this.logger.log('method extend called')
-    await this.#config.extend?.call(undefined, pluginExtend)
+    await runPluginLifecycleHook(this.#manager, () => this.#config.extend?.call(undefined, pluginExtend))
     assertLifecycleMutationTicket(this, ticket, 'pluginRuntime.prepareExtension.commit')
     return true
   }
@@ -303,6 +326,11 @@ export class PluginRuntime {
 
   setDisabled(flag = true) {
     assertLifecycleMutationAllowed(this, 'pluginRuntime.setDisabled')
+    this.#setDisabledInternal(flag)
+  }
+
+  #setDisabledInternal(flag = true): void {
+    assertLifecycleMutationAllowed(this, 'pluginRuntime.setDisabled')
     this.#disabled = flag
   }
 
@@ -310,6 +338,67 @@ export class PluginRuntime {
     assertPublicOwnedLifecycleOperationAllowed(this, 'pluginRuntime.dispose')
     assertLifecycleMutationAllowed(this, 'pluginRuntime.dispose')
     await deletePluginRuntimeFromManager(this.#manager, this)
+  }
+
+  #createSnapshot(): PluginRuntimeSnapshot {
+    const dependencies =
+      typeof this.meta.dependencies === 'string' ? [this.meta.dependencies] : [...(this.meta.dependencies || [])]
+    const snapshot = Object.create(null) as PluginRuntimeSnapshot
+    Object.defineProperties(snapshot, {
+      dependencies: { enumerable: true, value: Object.freeze(dependencies) },
+      disabled: { enumerable: true, value: this.#disabled },
+      extended: { enumerable: true, value: this.#extended },
+      initialized: { enumerable: true, value: this.#inited },
+      name: { enumerable: true, value: this.#pluginName },
+    })
+    return Object.freeze(snapshot)
+  }
+
+  #getContextInternal(): PluginContext {
+    this.#context ||= getPluginContextFromManager(
+      this.#manager,
+      { pluginName: this.#pluginName, meta: this.meta },
+      this,
+    )
+    return this.#context
+  }
+
+  /** @internal Legacy access; engine facades use the package-private boundary. */
+  toExportsProxy(): Readonly<Record<string, unknown>> | undefined {
+    return this.#toExportsProxyInternal()
+  }
+
+  #toExportsProxyInternal(): Readonly<Record<string, unknown>> | undefined {
+    assertLifecycleMutationAllowed(this, 'pluginRuntime.exports')
+    if (typeof this.#config.exports !== 'function') return undefined
+    if (this.#exportsProxy) return this.#exportsProxy
+
+    const target = Object.freeze(Object.create(null)) as Readonly<Record<string, unknown>>
+    const proxy = new Proxy(target, {
+      get: (_facade, property) => {
+        assertLifecycleMutationAllowed(this, `pluginRuntime.exports.${String(property)}`)
+        const exports = this.#config.exports?.()
+        if (!Object.prototype.hasOwnProperty.call(exports, property)) return undefined
+        return createLifecycleCapabilityBinder(
+          this,
+          `pluginRuntime.exports.${String(property)}`,
+        )(exports?.[property as string])
+      },
+      getOwnPropertyDescriptor() {
+        return undefined
+      },
+      has: (_facade, property) => {
+        assertLifecycleMutationAllowed(this, `pluginRuntime.exports.${String(property)}.has`)
+        return Object.prototype.hasOwnProperty.call(this.#config.exports?.(), property)
+      },
+      ownKeys() {
+        return []
+      },
+    })
+    markReviewedPluginContextCapability(proxy)
+    inheritLifecycleMutationGuard(this, proxy)
+    this.#exportsProxy = proxy
+    return proxy
   }
 
   toProxy() {

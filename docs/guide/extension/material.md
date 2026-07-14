@@ -112,7 +112,7 @@ export default Button
 定义组件在设计器中的可配置属性：
 
 ```ts
-import type { Configure } from '@easy-editor/core'
+import type { Configure } from '@easy-editor/core/instance'
 
 const configure: Configure = {
   props: [
@@ -199,7 +199,7 @@ export default configure
 描述组件的基本信息和分类：
 
 ```ts
-import type { ComponentMetadata } from '@easy-editor/core'
+import type { ComponentMetadata } from '@easy-editor/core/instance'
 import configure from './configure'
 import snippets from './snippets'
 
@@ -248,7 +248,7 @@ export default meta
 定义组件在物料面板中的预设用法：
 
 ```ts
-import type { Snippet } from '@easy-editor/core'
+import type { Snippet } from '@easy-editor/core/instance'
 
 const snippets: Snippet[] = [
   {
@@ -317,18 +317,16 @@ export default Button
 在引擎初始化时注册物料：
 
 ```ts
-import {
-  init,
-  materials,
-  setters,
-} from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
 import Button from './materials/button/component'
 import buttonMeta from './materials/button/meta'
 import Card from './materials/card/component'
 import cardMeta from './materials/card/meta'
 
-// 构建组件元数据映射
-materials.buildComponentMetasMap([buttonMeta, cardMeta])
+const engine = createEngine()
+
+// 通过宿主拥有的实例构建组件元数据映射
+engine.materials.buildComponentMetasMap([buttonMeta, cardMeta])
 
 // 在渲染器中使用时，需要提供组件映射
 export const components = {
@@ -337,7 +335,7 @@ export const components = {
 }
 
 // 初始化引擎
-await init({
+await engine.init({
   designMode: 'design',
 })
 ```

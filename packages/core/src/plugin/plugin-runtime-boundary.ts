@@ -1,14 +1,17 @@
 import type { PluginExtend } from './plugin-extend'
 import type { PluginRuntime } from './plugin-runtime'
-import type { Plugin } from './plugins'
+import type { Plugin, PluginRuntimeSnapshot } from './plugins'
 
 interface PluginRuntimeOperations {
   destroy(): Promise<void>
   getConfig(): Plugin
+  getExports(): Readonly<Record<string, unknown>> | undefined
+  getSnapshot(): PluginRuntimeSnapshot
   init(forceInit?: boolean): Promise<void>
   markExtended(): void
   prepareExtension(pluginExtend: PluginExtend): Promise<boolean>
   publishContext(): void
+  setDisabled(flag?: boolean): void
 }
 
 const runtimeOperations = new WeakMap<PluginRuntime, PluginRuntimeOperations>()
@@ -26,6 +29,12 @@ const getOperations = (runtime: PluginRuntime): PluginRuntimeOperations => {
 
 export const getPluginRuntimeConfig = (runtime: PluginRuntime): Plugin => getOperations(runtime).getConfig()
 
+export const getPluginRuntimeExports = (runtime: PluginRuntime): Readonly<Record<string, unknown>> | undefined =>
+  getOperations(runtime).getExports()
+
+export const getPluginRuntimeSnapshot = (runtime: PluginRuntime): PluginRuntimeSnapshot =>
+  getOperations(runtime).getSnapshot()
+
 export const initPluginRuntime = (runtime: PluginRuntime, forceInit = false): Promise<void> =>
   getOperations(runtime).init(forceInit)
 
@@ -37,3 +46,6 @@ export const preparePluginRuntimeExtension = (runtime: PluginRuntime, pluginExte
 export const markPluginRuntimeExtended = (runtime: PluginRuntime): void => getOperations(runtime).markExtended()
 
 export const publishPluginRuntimeContext = (runtime: PluginRuntime): void => getOperations(runtime).publishContext()
+
+export const setPluginRuntimeDisabled = (runtime: PluginRuntime, flag = true): void =>
+  getOperations(runtime).setDisabled(flag)

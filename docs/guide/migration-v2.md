@@ -66,10 +66,11 @@ created -> initializing -> ready -> disposing -> disposed
                          \-> failed
 ```
 
-- `init()` 和 `destroy()` 都返回 Promise；并发调用会等待当前操作。
+- `init()` 和 `destroy()` 都返回 Promise。外部同类并发调用共享进行中的 Promise；`destroy()` 会等待初始化 settle 后再清理，`init()` 会等待销毁结束后再启动下一代。
 - `destroy()` 清理实例拥有的插件、监听器、热键、文档、物料、设置器和远程资源。
 - 销毁失败时状态进入 `failed`；再次调用 `destroy()` 会重试未完成的清理。
 - 不要直接调用 `engine.materials.dispose()`、`engine.setters.dispose()` 等子服务清理方法。引擎拥有的服务必须由 `engine.destroy()` 统一销毁。
+- 插件和 `RemoteAdapter` 的生命周期回调不得调用同一引擎的 `init()` / `destroy()`；直接同步重入会抛出 `LifecycleReentrancyError`。在 `await` 后通过预先捕获的原始引擎闭包调用同样违反宿主扩展协议，同 Realm 内核在没有 AsyncContext 类跟踪或隔离 Realm/进程时无法可靠识别其来源。
 
 ```ts
 export function destroyEditor(): Promise<void> {
@@ -115,7 +116,7 @@ try {
 | 原始 Project、Document、Node 直写 | 拒绝 | 允许 |
 | 插件原型扩展 | 拒绝 | 允许 |
 | 远程访问 | 拒绝 | 允许，但仍需宿主 adapter 授权 |
-| 适用场景 | 新宿主、Agent 能力端 | 依赖旧插件或 UMD 的现有 Dashboard |
+| 适用场景 | 新的受约束宿主 | 依赖旧插件或 UMD 的现有 Dashboard |
 
 当前 `DashboardPlugin` 仍依赖同 Realm 原型扩展，因此迁移现有 Dashboard 时需要显式选择：
 
@@ -126,7 +127,7 @@ const engine = createEngine({
 })
 ```
 
-`legacyTrusted` 是兼容模式，不是沙箱。旧 UMD 或原型扩展可能留下无法通过移除 `<script>` 撤销的进程级副作用。受限引擎与这类代码应运行在不同 Worker、iframe 或 Realm 中。
+`agentRestricted` 是 capability、输入校验和模型修改策略，不是恶意代码沙箱。同 Realm 插件与宿主 `RemoteAdapter` 都是受信扩展代码，仍可使用自己的闭包、导入和全局对象。`legacyTrusted` 是更宽的兼容模式；旧 UMD 或原型扩展可能留下无法通过移除 `<script>` 撤销的进程级副作用。需要隔离不可信代码时，必须使用不同 Worker、iframe、Realm 或进程。
 
 ## 4. 通过引擎拥有的写边界加载和修改模型
 
@@ -189,67 +190,9 @@ if (health.lifecycle !== 'ready') {
 - `setters.getSettersMap()` 返回稳定的 `ReadonlyMap` facade；`set`、`delete`、`clear` 会被拒绝。
 - 物料和设置器只能通过各自的注册 API 写入。
 
-## 6. 收紧 Agent 与远程运行时边界
+## 6. 收紧远程资源边界，暂缓 Agent
 
-### Agent
-
-Agent 不应持有 `Project`、`Document` 或 `Node` 引用。宿主应签发最小 capability，限定文档、命令、组件、prop、额外字段和大小上限。执行权由 capability 的交付方式决定：
-
-- `engine.agentCapabilities.issue(grant)` 返回同 Realm capability；持有者可以直接调用 `execute(planId)`。
-- `issuePort(grant, port, { signal })` 的 `executionAuthority` 默认为 `'peer'`；连接端同样可以调用 `execute(planId)`。
-- 只有显式设置 `executionAuthority: 'host'`，才会拒绝连接端的 `execute()`，并要求可信宿主先读取 Core 保存的 authoritative preview，再调用 `approveAndExecute(planId)`。
-
-下面的宿主代码创建强制宿主批准的 Worker 通道：
-
-```ts
-import type {
-  AgentCapabilityGrantInput,
-  EngineInstance,
-} from '@easy-editor/core/instance'
-
-export function openHostApprovedAgentSession(
-  engine: EngineInstance,
-  worker: Worker,
-  grant: AgentCapabilityGrantInput,
-) {
-  const channel = new MessageChannel()
-  const controller = new AbortController()
-  const session = engine.agentCapabilities.issuePort(grant, channel.port1, {
-    executionAuthority: 'host',
-    signal: controller.signal,
-  })
-
-  worker.postMessage(
-    { type: 'easy-editor-agent-port', port: channel.port2 },
-    [channel.port2],
-  )
-
-  return {
-    inspect(planId: string) {
-      return session.getPreparedPlanPreview(planId)
-    },
-    approve(planId: string) {
-      return session.approveAndExecute(planId)
-    },
-    close() {
-      session.close()
-      controller.abort()
-    },
-  }
-}
-```
-
-Worker 端只能获得结构化克隆后的 object capability：
-
-```ts
-import { connectAgentPort } from '@easy-editor/core/agent-channel'
-
-export async function connectAgentCapability(port: MessagePort) {
-  return connectAgentPort(port)
-}
-```
-
-在 `'host'` 模式中，Worker 可以执行 `snapshot()` 与 `preview()`，但 `execute()` 会 fail closed。宿主必须根据 `session.getPreparedPlanPreview(planId)` 返回的 Core 权威数据做授权判断，不能信任 Agent 回传的 effects。`approveAndExecute()` 只能证明可信宿主入口执行了批准，不能证明某个具体用户身份，也不能消除画布文本中的提示注入；Worker 隔离与 capability 策略必须同时存在。
+Agent Runtime、传输、授权和审批协议不属于本轮框架迁移。先完成 `@easy-editor/core/instance` 的所有权、生命周期、事务和信任边界迁移；Agent 契约将在框架稳定后单独设计。
 
 ### 远程资源
 
@@ -259,6 +202,8 @@ export async function connectAgentCapability(port: MessagePort) {
 2. 宿主提供的 `RemoteAdapter` 再校验资源名、类型、URL 和版本 allowlist。
 
 不要把“资源已登记”当作“资源可信”。`engine.remote.registry` 只记录已加载资源的只读 envelope，其中 `data` 仍是 adapter 拥有的不透明能力对象。销毁实例时 adapter、加载状态和 registry 会由 `engine.destroy()` 统一清理。
+
+`RemoteAdapter` 是受信宿主扩展；其 `init()` / `dispose()` 不得调用同一引擎的生命周期。
 
 ## 7. 默认 facade 的兼容边界
 
@@ -271,7 +216,7 @@ import { defaultEngine, destroy, init, project } from '@easy-editor/core'
 它是一个进程级 `legacyTrusted` 默认实例，仅用于渐进迁移：
 
 - 不提供多实例隔离；
-- 不应作为新应用或 Agent 宿主的默认入口；
+- 不应作为新应用的默认入口；
 - 不能与显式实例的模块引用混用；
 - 使用后仍必须调用并等待 `destroy()`。
 

@@ -61,7 +61,7 @@ test('agentRestricted rejects remote access before calling a remote adapter', as
   t.after(() => engine.destroy())
 
   const error = await captureFailure(() =>
-    engine.assertRemoteAccess({ type: 'material', name: 'untrusted', url: 'https://example.invalid/material.js' }),
+    engine.remote.request({ type: 'material', name: 'untrusted', url: 'https://example.invalid/material.js' }),
   )
   assertStructuredPolicyViolation(error, /remote/i)
   assert.equal(remoteCalls, 0)
@@ -118,10 +118,39 @@ test('agentRestricted policy is immutable and extension registration cannot seed
     }),
   )
   assertStructuredPolicyViolation(error, /plugin|extension/i)
-  await engine.plugins.extend()
+  await engine.innerPlugins.extend()
   await engine.innerPlugins.extend()
   assert.equal(extensionCallbackCalls, 0)
   assert.equal(core.Node.prototype.restrictedBypassMarker, undefined)
+})
+
+test('agentRestricted plugin events cannot leak or revive their private EventEmitter receiver', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  t.after(() => engine.destroy())
+  let retainedPluginEvent
+  let receiver
+  let deliveries = 0
+  await engine.plugins.register({
+    name: 'plugin-event-receiver-boundary',
+    init(context) {
+      retainedPluginEvent = context.pluginEvent
+      context.pluginEvent.on('probe:receiver', function () {
+        receiver = this
+        deliveries += 1
+      })
+      context.pluginEvent.emit('probe:receiver')
+    },
+  })
+
+  await engine.init()
+  assert.equal(receiver, undefined)
+  assert.equal(deliveries, 1)
+
+  await engine.destroy()
+  assert.throws(() => retainedPluginEvent.on('probe:revived', () => undefined), /plugin context is disposed/)
+  assert.throws(() => retainedPluginEvent.emit('probe:receiver'), /plugin context is disposed/)
+  assert.equal(deliveries, 1)
 })
 
 test('agentRestricted rejects raw functions and accessors without invoking getters', async t => {

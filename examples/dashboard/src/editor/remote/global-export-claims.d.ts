@@ -1,4 +1,4 @@
-import type { RemoteAccessRequest } from '@easy-editor/core'
+import type { RemoteAccessRequest } from '@easy-editor/core/instance'
 import type { DashboardRemoteServices } from './runtime-services'
 
 export declare class GlobalExportClaims {

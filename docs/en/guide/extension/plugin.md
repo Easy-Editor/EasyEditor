@@ -1,576 +1,243 @@
 ---
 title: Plugin Extension
-description: Developing custom plugins for EasyEditor
+description: Developing trusted, lifecycle-bound plugins for EasyEditor
 ---
 
 # Plugin Extension
 
-Plugins are the functionality extension mechanism of EasyEditor. Through plugins, you can extend editor functionality and enhance core capabilities. This guide will help you understand how to develop and integrate custom plugins.
-
-## Overview
-
-Plugins are extension units of EasyEditor, used to enhance editor functionality. Plugins can:
-
-- Add new features and material components
-- Extend methods and properties of existing classes
-- Listen to and respond to editor events
-- Collaborate and communicate with other plugins
-- Integrate third-party libraries and services
-
-EasyEditor adopts a "microkernel + plugin" architecture design, where most functionality is implemented through plugins, making the editor very flexible and extensible.
+Plugins are EasyEditor's host-extension mechanism. A stable host creates an engine from `@easy-editor/core/instance` and registers plugins through the finite `PluginManager`; a plugin definition never receives `PluginRuntime`, engine lifecycle orchestration, or the manager's internal registries.
 
 ## Lifecycle
 
-Plugins follow the following lifecycle:
+A plugin participates in the engine lifecycle in this order:
 
-1. **Registration Phase**: Plugin registers with the editor, setting basic information like plugin name and dependencies
-2. **Extension Phase**: If an `extend` method exists, call it to extend core classes
-3. **Initialization Phase**: Call the plugin's `init` method, set up event listeners, initialize resources
-4. **Runtime Phase**: Plugin operates normally, responds to events, provides functionality
-5. **Destruction Phase**: Call the plugin's `destroy` method, clean up resources, remove event listeners
-
-The editor ensures plugins are initialized in the correct dependency order and destroys plugins at appropriate times.
-
-## Directory Structure
-
-A complete plugin typically contains the following file structure:
-
-```bash
-my-plugin/
-├── index.ts               # Plugin entry
-└── types.ts               # Type definitions
-```
-
-The simplest plugin can have just one entry file.
-
-## Usage
-
-### Basic Plugin
-
-Most basic plugin example:
+1. **Register**: validate its unique name, dependencies, and registration options.
+2. **Extend**: apply compatibility prototype extensions before initialization when `extend` is present.
+3. **Initialize**: call `init(ctx)` and await a returned Promise.
+4. **Run**: operate through Context capabilities bound to the current generation.
+5. **Destroy**: call and await `destroy(ctx)`, then run Context disposers.
 
 ```ts
-import type { PluginCreator } from '@easy-editor/core'
-
-// Plugin factory function, can accept configuration parameters
-const MyPlugin: PluginCreator<Option> = (options = {}) => {
-  // Return plugin definition
-  return {
-    name: 'MyPlugin',              // Plugin name, must be unique
-    deps: [],                      // Dependencies on other plugins
-    init(ctx) {                    // Initialization method
-      ctx.logger.info('MyPlugin initialized')
-
-      // Register global variables, accessible by other plugins
-      ctx.set('myPluginData', {
-        version: '1.0.0',
-        ...options
-      })
-
-      // Register event listeners
-      ctx.event.on('document.open', (doc) => {
-        ctx.logger.info('Document opened:', doc.id)
-      })
-    },
-    destroy(ctx) {                 // Destruction method
-      ctx.logger.info('MyPlugin destroyed')
-
-      // Remove event listeners to avoid memory leaks
-      ctx.event.off('document.open')
-    }
-  }
+interface Plugin {
+  name: string
+  deps?: string[]
+  eventPrefix?: string
+  extensionFingerprint?: string
+  init(ctx: PluginContext): Promise<void> | void
+  extend?(ctx: PluginExtend): Promise<void> | void
+  destroy?(ctx: PluginContext): Promise<void> | void
+  exports?(): Record<string, unknown>
 }
+```
+
+Plugin lifecycle hooks must not call the same engine's `init()` or `destroy()`. Direct synchronous re-entry throws `LifecycleReentrancyError`; a restricted PluginContext does not expose either method.
+
+A plugin must also not capture a raw engine reference and issue a lifecycle call after a lifecycle hook suspends. Without AsyncContext-like causal tracking or Realm/process isolation, same-realm JavaScript cannot reliably distinguish that call from an external host call. This is an extension-protocol rule, not a sandbox guarantee.
+
+## Basic plugin
+
+```ts
+import type { PluginCreator } from '@easy-editor/core/instance'
+
+interface Options {
+  debug?: boolean
+}
+
+const MyPlugin: PluginCreator<Options> = (options = {}) => ({
+  name: 'MyPlugin',
+  eventPrefix: 'my-plugin',
+
+  init(ctx) {
+    if (options.debug) ctx.logger.info('MyPlugin initialized')
+
+    const disposeEvent = ctx.event.on('common:document-open', documentId => {
+      ctx.logger.info('Document opened:', documentId)
+    })
+    ctx.onDispose(disposeEvent)
+
+    const handleDuplicate = (event: KeyboardEvent) => {
+      event.preventDefault()
+      ctx.event.emit('shortcut', { command: 'duplicate' })
+    }
+    ctx.hotkey.bind('ctrl+d', handleDuplicate)
+    ctx.onDispose(() => ctx.hotkey.unbind('ctrl+d', handleDuplicate))
+  },
+
+  async destroy(ctx) {
+    ctx.logger.info('MyPlugin destroyed')
+  },
+})
 
 export default MyPlugin
 ```
 
-### Event Handling Plugin
+Prefer `ctx.onDispose()` for listeners, hotkeys, timers, and other resource cleanup. The engine owns Context disposal even when the plugin does not define `destroy`.
 
-Plugin example that handles editor events:
+## Register plugins
 
 ```ts
-import { type PluginCreator, DESIGNER_EVENT } from '@easy-editor/core'
+import { createEngine } from '@easy-editor/core/instance'
+import MyPlugin from './my-plugin'
 
-const EventHandlerPlugin: PluginCreator = () => {
-  return {
-    name: 'EventHandlerPlugin',
-    deps: [],
-    init(ctx) {
-      const { designer } = ctx
+const engine = createEngine({
+  trustPolicy: 'agentRestricted',
+  hostWindow: window,
+})
 
-      // Listen to component selection events
-      designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, (nodeIds) => {
-        const node = designer.currentDocument?.getNode(nodeIds[0])
-        if (node) {
-          ctx.logger.info('Selected component:', node.componentName)
-        }
-      })
+await engine.plugins.register(MyPlugin({ debug: true }))
+await engine.init({ designMode: 'design' })
 
-      // Listen to property change events
-      designer.onEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, ({ node, prop, newvalue }) => {
-        ctx.logger.info(`Property ${prop} of ${node.id} changed to:`, newvalue)
-      })
-
-      // Listen to drag events
-      designer.onEvent(DESIGNER_EVENT.DRAG_END, (e) => {
-        ctx.logger.info('Component dropped:', e)
-      })
-    }
-  }
-}
-
-export default EventHandlerPlugin
+// An ordinary plugin registered after readiness needs explicit autoInit.
+await engine.plugins.register(AnotherPlugin(), { autoInit: true })
 ```
 
-### Functionality Extension Plugin
+Registration and deletion are asynchronous and must be awaited:
 
-Plugin example that extends editor core classes:
+- `register(plugin, { autoInit?, override? })`
+- `registerPlugins(plugins, options?)`
+- `delete(name)`
+
+`get()` and `getAll()` return only frozen `PluginRuntimeSnapshot` values. `getExports()` returns a readonly export facade bound to the current generation. Neither hosts nor plugins receive raw `PluginRuntime` objects or their lifecycle methods.
+
+## Plugin communication
+
+### Events
+
+`ctx.event.emit(name, payload)` prefixes the event with the current plugin's `eventPrefix`. Use the complete name when listening across plugins:
 
 ```ts
-import type { Plugin } from '@easy-editor/core'
+const Producer = (): Plugin => ({
+  name: 'Producer',
+  eventPrefix: 'producer',
+  init(ctx) {
+    ctx.event.emit('ready', { version: 1 })
+  },
+})
 
-const ExtendPlugin = (): Plugin => {
+const Consumer = (): Plugin => ({
+  name: 'Consumer',
+  init(ctx) {
+    ctx.onDispose(
+      ctx.event.on('producer:ready', payload => {
+        ctx.logger.info('Producer ready:', payload.version)
+      }),
+    )
+  },
+})
+```
+
+Under the restricted policy, callback arguments also cross the current generation's capability membrane. Do not treat them as raw kernel objects that can be retained across generations.
+
+### Readonly exports
+
+Use explicit plugin exports for a shared API instead of attaching global values to Context:
+
+```ts
+interface CounterApi {
+  read(): number
+}
+
+const Counter = (): Plugin => {
+  let value = 0
   return {
-    name: 'ExtendPlugin',
-    deps: [],
-    init(ctx) {
-      ctx.logger.info('ExtendPlugin initialized')
+    name: 'Counter',
+    init() {
+      value += 1
     },
-    // Extend core classes
-    extend({ extendClass, extend }) {
-      const { Node, Document } = extendClass
-
-      // Extend Node class
-      extend('Node', {
-        // Add custom method
-        duplicate: {
-          value(this: Node) {
-            const parent = this.parent
-            if (!parent) return null
-
-            const index = parent.children.indexOf(this)
-            const schema = this.export()
-
-            // Create duplicate
-            return parent.document.createNode({
-              ...schema,
-              id: undefined,  // Let system generate new ID
-              props: {
-                ...schema.props,
-                label: `${schema.props?.label || 'Component'} Copy`
-              }
-            }, parent, { index: index + 1 })
-          }
-        },
-        // Add custom property
-        isContainer: {
-          get(this: Node) {
-            // Check if node is container type
-            return this.componentMeta?.configure?.component?.isContainer || false
-          }
-        }
-      })
-    }
+    exports: () => ({ read: () => value }),
   }
 }
 
-export default ExtendPlugin
+const Reader = (): Plugin => ({
+  name: 'Reader',
+  deps: ['Counter'],
+  init(ctx) {
+    const counter = ctx.plugins.getExports<CounterApi>('Counter')
+    ctx.logger.info('Counter:', counter?.read())
+  },
+})
 ```
 
-### Registering Plugins
+An export reference is revoked when its generation is disposed. Do not cache it for the next `init()`.
 
-Register plugins when initializing the engine:
+## PluginContext boundary
+
+Context provides these categories of capability:
+
+- `project`: project reads and finite policy-gated project operations;
+- `materials` / `setters`: reviewed registration and read APIs;
+- `plugins`: readonly `PluginRegistry`;
+- `event`: prefix-scoped shared-engine events; `pluginEvent`: the current plugin's private event bus;
+- `hotkey` / `clipboard`: interaction capabilities;
+- `config` / `logger` / `trustPolicy`: configuration, logging, and policy information; and
+- `onDispose(disposer)`: returns resource cleanup to engine ownership.
+
+The default `agentRestricted` Context uses finite, null-prototype root facades and a generation membrane for returned values and callback arguments. It omits engine lifecycle, internal registries, the shared engine's raw event bus, teardown methods, and known reverse-authority fields; `pluginEvent` belongs only to the current plugin. Its `plugins` capability cannot register, override, or delete peers.
+
+This is an **API, input, and model-mutation authority boundary**, not a malicious-code sandbox. Plugins and host-provided `RemoteAdapter` implementations execute in the same JavaScript realm and must be treated as trusted extension code; they can still use their own closures, imports, and globals. Run untrusted code in a Worker, iframe, isolated Realm, or separate process.
+
+Context and its derived capabilities are generation-bound. After instance disposal, retained Context, callback values, material metadata, and plugin exports do not revive in the next generation.
+
+A legacy plugin that must access raw host services such as `Project.designer` or `Project.simulator` must assert that compatibility boundary explicitly, and the host must select `legacyTrusted`:
 
 ```ts
 import {
-  init,
-  plugins,
-} from '@easy-editor/core'
-import MyPlugin from './plugins/my-plugin'
-import EventHandlerPlugin from './plugins/event-handler-plugin'
-import ExtendPlugin from './plugins/extend-plugin'
-import MyNewPlugin from './plugins/my-new-plugin'
+  assertLegacyTrustedPluginContext,
+  type PluginCreator,
+} from '@easy-editor/core/instance'
 
-// Register plugins
-await plugins.registerPlugins([
-  MyPlugin({ debug: true }),
-  EventHandlerPlugin(),
-  ExtendPlugin()
-])
-
-// Initialize engine
-await init({
-  designMode: 'design',
-})
-
-// After initialization, ordinary plugins require explicit autoInit to run init()
-await plugins.registerPlugins(
-  [MyNewPlugin()],
-  { autoInit: true },
-)
-```
-
-Prototype-extension plugins that define `extend` cannot use `autoInit`. Register them before engine initialization. If the engine is already running, destroy and restart the instance, then pre-register them.
-
-## Communication Patterns
-
-Plugins can communicate with each other in the following ways:
-
-### Event Communication
-
-Communicate through the editor's event system:
-
-```ts
-// Plugin A
-init(ctx) {
-  // Trigger custom event
-  ctx.event.emit('pluginA.dataChanged', { someData: 'value' })
-}
-
-// Plugin B
-init(ctx) {
-  // Listen to Plugin A's event
-  ctx.event.on('pluginA.dataChanged', (data) => {
-    console.log('Received data from Plugin A:', data)
-  })
-}
-```
-
-### Shared Context
-
-Share data and methods through plugin context:
-
-```ts
-// Plugin A
-init(ctx) {
-  // Register shared service
-  ctx.set('dataService', {
-    getData: () => ({ value: 42 }),
-    setData: (data) => console.log('Data set:', data)
-  })
-}
-
-// Plugin B
-init(ctx) {
-  // Get service registered by Plugin A
-  const dataService = ctx.get('dataService')
-  if (dataService) {
-    const data = dataService.getData()
-    console.log('Got data:', data)
-    dataService.setData({ newValue: 100 })
-  }
-}
-```
-
-### Accessing Extended Methods
-
-Communicate through extended methods:
-
-```ts
-// Plugin A extended Node class
-extend({ extend }) {
-  extend('Node', {
-    pluginAMethod: {
-      value(this: Node, param: string) {
-        return `Plugin A method: ${param}`
-      }
-    }
-  })
-}
-
-// Plugin B uses Plugin A's extended method
-init(ctx) {
-  ctx.event.on('node.select', (nodeId) => {
-    const node = ctx.designer.currentDocument?.getNode(nodeId)
-    if (node && typeof node['pluginAMethod'] === 'function') {
-      const result = node['pluginAMethod']('test')
-      console.log(result)  // Output: "Plugin A method: test"
-    }
-  })
-}
-```
-
-## Configuration Options
-
-### Core Properties
-
-#### `name` (Required)
-
-Defines the unique name of the plugin, used for identifying the plugin and handling dependencies.
-
-```ts
-{
-  name: 'MyPlugin'
-}
-```
-
-#### `deps` (Optional)
-
-Defines the list of other plugins this plugin depends on. EasyEditor ensures dependent plugins are loaded and initialized before the current plugin.
-
-```ts
-{
-  deps: ['CorePlugin', 'UIPlugin']  // Depends on CorePlugin and UIPlugin
-}
-```
-
-#### `eventPrefix` (Optional)
-
-Defines the event prefix for the plugin, used to distinguish events from different plugins. If not set, 'common' is used as the prefix.
-
-```ts
-{
-  eventPrefix: 'my-plugin'  // Event names become 'my-plugin.eventName'
-}
-```
-
-### Core Methods
-
-#### `init` (Required)
-
-Plugin initialization method, executed when the editor starts. Can be synchronous or asynchronous.
-
-```ts
-{
+const LegacyPlugin: PluginCreator = () => ({
+  name: 'LegacyPlugin',
   init(ctx) {
-    // Initialization logic
-    ctx.logger.info('Plugin initialized')
-
-    // Subscribe to events
-    ctx.event.on('document.open', (doc) => {
-      // Handle event
-    })
-
-    // Async initialization example
-    // return new Promise((resolve) => {
-    //   setTimeout(() => {
-    //     // Async operation completed
-    //     resolve()
-    //   }, 1000)
-    // })
-  }
-}
+    assertLegacyTrustedPluginContext(ctx)
+    ctx.project.designer.onEvent('legacy-event', () => {})
+  },
+})
 ```
 
-#### `destroy` (Optional)
+The assertion fails immediately under `agentRestricted`; it cannot widen a finite Context. Use it only to mark migration-period plugins that still require direct host authority. New plugins should continue to target finite capabilities.
 
-Plugin destruction method, executed when the plugin is removed, used for resource cleanup.
+## Prototype-extension compatibility mode
 
-```ts
-{
-  destroy(ctx) {
-    // Clean up resources
-    ctx.logger.info('Plugin destroyed')
+A plugin with `extend` mutates class prototypes shared by the Realm. It must:
 
-    // Unsubscribe from events
-    ctx.event.off('document.open')
-
-    // Clear timers
-    clearInterval(this.timer)
-
-    // Destroy DOM elements
-    if (this.element && this.element.parentNode) {
-      this.element.parentNode.removeChild(this.element)
-    }
-  }
-}
-```
-
-#### `extend` (Optional)
-
-Method for extending editor core classes, can add new methods or properties, modify existing behavior.
+1. register before engine initialization;
+2. use explicit `legacyTrusted`;
+3. provide a stable `extensionFingerprint` for the process-wide extension; and
+4. accept that script removal and instance disposal cannot undo process-level prototype effects.
 
 ```ts
-{
-  extend({ extendClass, extend }) {
-    const { Node, Document } = extendClass
+import { createEngine, type Node, type Plugin } from '@easy-editor/core/instance'
 
-    // Extend Node class
+const ExtendPlugin = (): Plugin => ({
+  name: 'ExtendPlugin',
+  extensionFingerprint: 'extend-plugin@1',
+  init() {},
+  extend({ extend }) {
     extend('Node', {
-      // Add method
-      customMethod: {
-        value(this: Node, param: string) {
-          return `Custom method with param: ${param}`
-        }
-      },
-
-      // Add property
-      customProperty: {
-        get(this: Node) {
-          return this.getExtraPropValue('customProp')
+      getPluginLabel: {
+        value(this: Node) {
+          return `${this.componentName}:${this.id}`
         },
-        set(this: Node, value) {
-          this.setExtraPropValue('customProp', value)
-        }
-      }
+      },
     })
-
-    // Extend Document class
-    extend('Document', {
-      // Add method
-      customDocumentMethod: {
-        value(this: Document) {
-          return 'Custom document method'
-        }
-      }
-    })
-  }
-}
-```
-
-## Context
-
-The plugin context `ctx` is an object containing editor core functionality, providing the ability to access and manipulate various parts of the editor. It mainly includes:
-
-### Core Module Access
-
-```ts
-// Get editor instance
-const editor = ctx.editor
-// Get designer instance
-const designer = ctx.designer
-// Get project management instance
-const project = ctx.project
-// Get simulator instance
-const simulator = ctx.simulator
-// Get setter manager instance
-const setterManager = ctx.setterManager
-// Get component metadata manager instance
-const componentMetaManager = ctx.componentMetaManager
-// Get hotkey management
-const hotkey = ctx.hotkey
-```
-
-### Logging System
-
-```ts
-// Record logs
-ctx.logger.debug('Debug message')
-ctx.logger.info('Info message')
-ctx.logger.warn('Warning message')
-ctx.logger.error('Error message')
-```
-
-### Event System
-
-The plugin context provides two event systems: global event system `event` and plugin-specific event system `pluginEvent`.
-
-```ts
-// Global event system
-// Subscribe to events
-ctx.event.on('eventName', (data) => {
-  // Handle event
+  },
 })
 
-// Unsubscribe from events
-ctx.event.off('eventName')
-
-// Trigger events
-ctx.event.emit('eventName', eventData)
-
-// Plugin-specific event system
-// Use plugin name as event prefix
-ctx.pluginEvent.emit('dataChanged', { value: 100 })
-ctx.pluginEvent.on('dataChanged', (data) => {
-  console.log('Plugin event received:', data)
-})
+const engine = createEngine({ trustPolicy: 'legacyTrusted' })
+await engine.plugins.register(ExtendPlugin())
+await engine.init()
 ```
 
-### Data Sharing
+A prototype-extension plugin cannot be appended with `autoInit` after readiness. `legacyTrusted` is also a trusted compatibility mode, not a sandbox. New plugins should prefer composition, events, exports, and explicit host APIs over prototype mutation.
 
-```ts
-// Store shared data
-ctx.set('key', value)
+The current extension classes are Simulator, Viewport, Designer, Dragon, Detecting, Selection, DropLocation, OffsetObserver, Project, Document, History, Node, NodeChildren, Props, Prop, Materials, Setters, and ComponentMeta.
 
-// Get shared data
-const value = ctx.get('key')
+## Registration options
 
-// Delete shared data
-ctx.delete('key')
-```
+- `autoInit: true`: only for ordinary plugins registered after the engine is ready.
+- `override: true`: initialize the candidate first, then atomically replace the same-name runtime; keep the previous plugin if initialization fails.
 
-## Core Class Extension
+Same-name registration, override, and deletion are serialized by manager reservations. Do not bypass `engine.plugins` to mutate internal registries.
 
-The `extend` method allows you to extend the following core classes:
-
-### Designer Related Classes
-
-- **Designer**: Main designer class
-- **Dragon**: Drag management
-- **Detecting**: Detection management
-- **Selection**: Selection management
-- **DropLocation**: Drop location
-- **OffsetObserver**: Offset observer
-
-### Simulator Related Classes
-
-- **Simulator**: Main simulator class
-- **Viewport**: Viewport management
-
-### Project Related Classes
-
-- **Project**: Project management
-- **Document**: Document management
-- **History**: History records
-- **Node**: Node
-- **NodeChildren**: Node children
-- **Props**: Property collection
-- **Prop**: Single property
-
-### Component Related Classes
-
-- **ComponentMetaManager**: Component metadata manager
-- **SetterManager**: Setter manager
-- **ComponentMeta**: Component metadata
-
-## Type Extension
-
-Utilize the type extension mechanism with `declare` to extend and customize core type definitions. Here's an example showing how to extend the NodeSchema interface:
-
-```ts
-declare module '@easy-editor/core' {
-  interface NodeSchema {
-    /**
-     * Whether it's a root node
-     */
-    isRoot?: boolean
-
-    /**
-     * Whether it's a group
-     */
-    isGroup?: boolean
-
-    /**
-     * Dashboard additional information
-     */
-    $dashboard?: {
-      /**
-       * Position information
-       */
-      rect?: DashboardRect
-    }
-  }
-}
-```
-
-## Registration Options
-
-When registering plugins, you can provide additional options:
-
-### `autoInit` (Optional)
-
-Whether to auto-initialize the plugin. If set to `true`, the plugin will be initialized immediately after registration, without waiting for the plugin manager to uniformly initialize all plugins.
-
-```ts
-// Register and immediately initialize plugin
-await pluginManager.register(MyPlugin(), { autoInit: true })
-```
-
-### `override` (Optional)
-
-Whether to allow overriding plugins with the same name. If set to `true`, when the registered plugin has the same name as an existing plugin, the existing plugin will be destroyed first, then the new plugin will be registered.
-
-```ts
-// Register and override plugin with same name
-await pluginManager.register(MyPlugin(), { override: true })
-```
+See [Plugin API](/en/reference/plugin/) for types and [Architecture Overview](/en/design/overview) for framework ownership and trust boundaries.

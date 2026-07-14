@@ -1,5 +1,2 @@
-export * from './capability-manager'
-export * from './channel'
-export * from './domain-events'
-export * from './errors'
-export * from './types'
+/** @internal Compatibility barrel; the public contract lives at ../agent.ts. */
+export * from '../agent'

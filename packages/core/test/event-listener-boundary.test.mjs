@@ -67,6 +67,92 @@ test('EventBus off/removeListener preserve EventEmitter duplicate-listener seman
   assert.equal(calls, 3)
 })
 
+test('EventBus never lends its private EventEmitter as a callback receiver', async () => {
+  const core = await loadCore()
+  const rawEmitter = new EventEmitter()
+  const eventBus = new core.EventBus(rawEmitter)
+  let receiver
+
+  eventBus.on('probe:receiver', function () {
+    receiver = this
+  })
+  eventBus.emit('probe:receiver')
+
+  assert.equal(receiver, undefined)
+  assert.notStrictEqual(receiver, rawEmitter)
+})
+
+test('EventBus teardown rejects listener reentry, removes every listener, and remains reusable', async () => {
+  const core = await loadCore()
+  const eventBus = new core.EventBus(new EventEmitter())
+  const reentryErrors = []
+  eventBus.on('probe:retained', () => undefined)
+  eventBus.on('removeListener', event => {
+    if (event !== 'probe:retained') return
+    for (const operation of [
+      () => eventBus.on('probe:revived', () => undefined),
+      () => eventBus.emit('probe:retained'),
+    ]) {
+      try {
+        operation()
+      } catch (error) {
+        reentryErrors.push(error)
+      }
+    }
+    throw new Error('removeListener observer failed')
+  })
+
+  assert.throws(() => eventBus.dispose(), /EventBus listeners failed during removal/)
+  assert.equal(eventBus.listenerCount(), 0)
+  assert.equal(reentryErrors.length, 2)
+  reentryErrors.forEach(error => assert.match(error.message, /teardown is in progress/))
+
+  let deliveries = 0
+  eventBus.on('probe:reused', () => {
+    deliveries += 1
+  })
+  eventBus.emit('probe:reused')
+  assert.equal(deliveries, 1)
+})
+
+test('engine EventBus cleanup is fail-closed and retryable after a removeListener observer fails', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null })
+  let failRemoval = true
+  engine.eventBus.on('probe:retained', () => undefined)
+  engine.eventBus.on('removeListener', event => {
+    if (event === 'probe:retained' && failRemoval) {
+      failRemoval = false
+      throw new Error('engine EventBus cleanup failed')
+    }
+  })
+  await engine.init()
+
+  await assert.rejects(engine.destroy(), /Engine disposal completed with errors/)
+  assert.equal(engine.eventBus.listenerCount(), 0)
+  assert.equal(engine.lifecycleState, 'failed')
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
+test('Designer does not expose an ambiguously owned EventBus factory', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ hostWindow: null })
+  const callerOwnedBus = core.createEventBus('caller-owned')
+  let deliveries = 0
+  callerOwnedBus.on('probe:caller-owned', () => {
+    deliveries += 1
+  })
+  await engine.init()
+
+  assert.equal(engine.designer.createEventBus, undefined)
+  await engine.destroy()
+  callerOwnedBus.emit('probe:caller-owned')
+  assert.equal(deliveries, 1)
+  callerOwnedBus.dispose()
+})
+
 test('engine-owned listener-wide cleanup rejects before mutating ready editor state', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ hostWindow: null })

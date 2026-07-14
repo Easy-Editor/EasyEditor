@@ -1,4 +1,4 @@
-import type { PluginCreator } from '@easy-editor/core'
+import { type PluginCreator, assertLegacyTrustedPluginContext } from '@easy-editor/core/instance'
 
 export const HOTKEY_MAP = {
   UP: ['up'],
@@ -12,6 +12,7 @@ const HotKeyMoveNodePlugin: PluginCreator = () => {
     name: 'HotKeyMoveNodePlugin',
     deps: [],
     init(ctx) {
+      assertLegacyTrustedPluginContext(ctx)
       const { hotkey, project } = ctx
       const { designer } = project
 
@@ -42,10 +43,16 @@ const HotKeyMoveNodePlugin: PluginCreator = () => {
         }
       }
 
-      hotkey.bind(HOTKEY_MAP.UP, () => moveNode('up'))
-      hotkey.bind(HOTKEY_MAP.DOWN, () => moveNode('down'))
-      hotkey.bind(HOTKEY_MAP.LEFT, () => moveNode('left'))
-      hotkey.bind(HOTKEY_MAP.RIGHT, () => moveNode('right'))
+      const bindings = [
+        [HOTKEY_MAP.UP, () => moveNode('up')],
+        [HOTKEY_MAP.DOWN, () => moveNode('down')],
+        [HOTKEY_MAP.LEFT, () => moveNode('left')],
+        [HOTKEY_MAP.RIGHT, () => moveNode('right')],
+      ] as const
+      for (const [keys, handler] of bindings) hotkey.bind(keys, handler)
+      ctx.onDispose(() => {
+        for (const [keys, handler] of bindings) hotkey.unbind(keys, handler)
+      })
     },
   }
 }

@@ -5,7 +5,7 @@ The renderer is the core module of EasyEditor that renders component trees (sche
 ## Renderer
 
 ```tsx
-import { rendererFactory } from '@easyeditor/react-renderer';
+import { rendererFactory } from '@easy-editor/react-renderer';
 const Renderer = rendererFactory()
 
 function App() {

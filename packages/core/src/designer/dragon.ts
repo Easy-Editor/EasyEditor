@@ -13,6 +13,7 @@ import type { Simulator } from '../simulator'
 import { isSimulator } from '../simulator'
 import type { ComponentInstance, NodeSchema } from '../types'
 import type { EventBus } from '../utils'
+import { createDesignerEventBus } from './event-bus'
 import type { LocateEvent } from './location'
 import type { Sensor } from './sensor'
 
@@ -138,7 +139,7 @@ export class Dragon {
   }
 
   constructor(readonly designer: Designer) {
-    this.emitter = designer.createEventBus('Dragon')
+    this.emitter = createDesignerEventBus(designer, 'Dragon')
     lockReadonlyProperties(this, ['designer', 'emitter'])
     lockPrototypeAccessors(this, ['activeSensor', 'dragging'])
     installLifecycleTeardownOperation(

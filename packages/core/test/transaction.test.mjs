@@ -155,7 +155,13 @@ test('runOnDocument rejects stale or foreign bindings without mutation or observ
   assert.deepEqual(document.export(), before)
   assert.strictEqual(document.root, beforeRoot)
   assert.strictEqual(document.root.getProp('title', false), beforeTitleProp)
-  assert.strictEqual(document.root.props.items, beforePropsItems)
+  const afterPropsItems = document.root.props.items
+  assert.notStrictEqual(afterPropsItems, beforePropsItems)
+  assert.equal(Object.isFrozen(afterPropsItems), true)
+  assert.equal(afterPropsItems.length, beforePropsItems.length)
+  for (let index = 0; index < beforePropsItems.length; index += 1) {
+    assert.strictEqual(afterPropsItems[index], beforePropsItems[index])
+  }
   assert.equal(document.mutationVersion, beforeMutationVersion)
   assert.equal(document.history.isUndoable(), false)
   assert.equal(propEvents, 0)
