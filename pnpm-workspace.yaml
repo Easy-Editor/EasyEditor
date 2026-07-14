@@ -6,3 +6,4 @@ packages:
 overrides:
   '@types/react': ^19.2.8
   '@types/react-dom': ^19.2.3
+  '@types/minimatch>minimatch': 9.0.9

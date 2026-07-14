@@ -135,6 +135,12 @@ test('React dashboard Text material does not forward arbitrary schema props to t
 test('React dashboard template pins the compatible engine release set and package manager', () => {
   const manifest = JSON.parse(readTemplate('package.json'))
   const exampleManifest = JSON.parse(readFileSync(join(repositoryRoot, 'examples/dashboard/package.json'), 'utf8'))
+  const rendererManifest = JSON.parse(
+    readFileSync(join(repositoryRoot, 'packages/react-renderer-dashboard/package.json'), 'utf8'),
+  )
+  const resolvedRouterManifest = JSON.parse(
+    readFileSync(join(repositoryRoot, 'examples/dashboard/node_modules/react-router-dom/package.json'), 'utf8'),
+  )
 
   assert.equal(manifest.packageManager, 'pnpm@10.25.0')
   assert.deepEqual(
@@ -147,6 +153,24 @@ test('React dashboard template pins the compatible engine release set and packag
       { '@tailwindcss/vite': '4.1.18', tailwindcss: '4.1.18' },
     ],
     'the generated template and source example must stay on the last Node 18-compatible Tailwind release',
+  )
+  assert.deepEqual(
+    [manifest, exampleManifest, rendererManifest].map(({ dependencies }) => ({
+      'react-router': dependencies['react-router'],
+      'react-router-dom': dependencies['react-router-dom'],
+    })),
+    Array.from({ length: 3 }, () => ({ 'react-router': undefined, 'react-router-dom': '6.30.4' })),
+    'the generated template, source example, and published renderer must pin the Node 18-compatible DOM router',
+  )
+  assert.deepEqual(
+    { node: resolvedRouterManifest.engines?.node, version: resolvedRouterManifest.version },
+    { node: '>=14.0.0', version: '6.30.4' },
+    'the installed router must remain inside the declared Node 18 runtime floor',
+  )
+  assert.deepEqual(
+    [manifest, exampleManifest].map(({ devDependencies }) => devDependencies['@vitejs/plugin-react']),
+    ['4.7.0', '4.7.0'],
+    'the generated template and source example must pin the Node 18-compatible Vite React plugin',
   )
   assert.deepEqual(
     Object.fromEntries(

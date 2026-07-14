@@ -82,7 +82,7 @@ try {
   for (const [packageName, tarball] of tarballs) manifest.dependencies[packageName] = `file:${tarball}`
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
-  run(pnpm, ['install', '--frozen-lockfile=false'], { cwd: projectDirectory })
+  run(pnpm, ['install', '--frozen-lockfile=false', '--config.engine-strict=true'], { cwd: projectDirectory })
   run(pnpm, ['build'], { cwd: projectDirectory })
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true })

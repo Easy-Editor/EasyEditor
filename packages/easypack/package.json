@@ -61,7 +61,7 @@
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^15.3.0",
     "@rollup/plugin-terser": "^0.4.4",
-    "@vitejs/plugin-react": "^5.0.0",
+    "@vitejs/plugin-react": "4.7.0",
     "esbuild": "^0.24.0",
     "mri": "^1.2.0",
     "picocolors": "^1.1.1",

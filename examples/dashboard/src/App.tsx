@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from './components/theme-provider'
 
 const Preview = lazy(() => import('./pages/preview'))
