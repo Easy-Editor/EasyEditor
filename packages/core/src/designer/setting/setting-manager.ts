@@ -1,5 +1,6 @@
 import { action, computed, observable } from 'mobx'
 import type { Node } from '../../document/node/node'
+import { lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   installLifecycleTeardownOperation,
@@ -29,13 +30,14 @@ export class SettingsManager {
     return this._settings
   }
 
-  private disposeEditorListener?: () => void
+  #disposeEditorListener?: () => void
 
-  private disposeSelectionListener?: () => void
+  #disposeSelectionListener?: () => void
 
-  private designer?: Designer
+  #designer?: Designer
 
   constructor(readonly editor: Editor) {
+    lockReadonlyProperties(this, ['editor'])
     installLifecycleTeardownOperation(
       this,
       action(() => this.#purgeInternal()),
@@ -44,7 +46,7 @@ export class SettingsManager {
   }
 
   mount(): void {
-    if (this.disposeEditorListener) return
+    if (this.#disposeEditorListener) return
 
     const setupSelection = (selection?: Selection) => {
       if (selection) {
@@ -54,11 +56,11 @@ export class SettingsManager {
       }
     }
 
-    this.disposeEditorListener = this.editor.onGot<Designer>('designer', designer => {
-      this.disposeSelectionListener?.()
-      this.designer = designer
+    this.#disposeEditorListener = this.editor.onGot<Designer>('designer', designer => {
+      this.#disposeSelectionListener?.()
+      this.#designer = designer
       setupSelection(designer.selection)
-      this.disposeSelectionListener = designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, () => {
+      this.#disposeSelectionListener = designer.onEvent(DESIGNER_EVENT.SELECTION_CHANGE, () => {
         setupSelection(designer.selection)
       })
     })
@@ -75,7 +77,7 @@ export class SettingsManager {
 
     // 当没有选中节点时，自动使用根节点
     if (nodes.length < 1) {
-      const rootNode = this.designer?.project.currentDocument?.rootNode
+      const rootNode = this.#designer?.project.currentDocument?.rootNode
       if (rootNode) {
         this._settings = rootNode.settingEntry
         return
@@ -84,15 +86,15 @@ export class SettingsManager {
       return
     }
 
-    if (!this.designer) {
-      this.designer = nodes[0].document.designer
+    if (!this.#designer) {
+      this.#designer = nodes[0].document.designer
     }
     // 当节点只有一个时，复用 node 上挂载的 settingEntry，不会产生平行的两个实例，这样在整个系统中对
     // 某个节点操作的 SettingTopEntry 只有一个实例，后续的 getProp() 也会拿到相同的 SettingField 实例
     if (nodes.length === 1) {
       this._settings = nodes[0].settingEntry
     } else {
-      this._settings = this.designer.createSettingEntry(nodes)
+      this._settings = this.#designer.createSettingEntry(nodes)
     }
   }
 
@@ -103,12 +105,12 @@ export class SettingsManager {
   }
 
   #purgeInternal(): void {
-    this.disposeSelectionListener?.()
-    this.disposeSelectionListener = undefined
-    this.disposeEditorListener?.()
-    this.disposeEditorListener = undefined
+    this.#disposeSelectionListener?.()
+    this.#disposeSelectionListener = undefined
+    this.#disposeEditorListener?.()
+    this.#disposeEditorListener = undefined
     this._sessionId = ''
     this._settings = undefined
-    this.designer = undefined
+    this.#designer = undefined
   }
 }

@@ -1,6 +1,7 @@
 import { action, observable } from 'mobx'
 import type { Document, Node } from '../document'
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -44,6 +45,8 @@ export class Detecting {
 
   constructor(readonly designer: Designer) {
     this.emitter = designer.createEventBus('Detecting')
+    lockReadonlyProperties(this, ['designer', 'emitter'])
+    lockPrototypeAccessors(this, ['current', 'enable'])
     installLifecycleTeardownOperation(
       this,
       action(() => this.#disposeInternal()),

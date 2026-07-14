@@ -1,6 +1,7 @@
 import { computed, observable, reaction } from 'mobx'
 import { type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
 import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -101,15 +102,15 @@ export class Designer {
 
   private props?: DesignerProps
 
-  private propsReducers = new Map<TRANSFORM_STAGE, PropsTransducer[]>()
+  #propsReducers = new Map<TRANSFORM_STAGE, PropsTransducer[]>()
 
   private oobxList: OffsetObserver[] = []
 
-  private scrollers = new Set<Scroller>()
+  #scrollers = new Set<Scroller>()
 
   private mounted = false
 
-  private disposers: Array<() => void> = []
+  #disposers: Array<() => void> = []
 
   private historyDispose?: () => void
 
@@ -130,16 +131,22 @@ export class Designer {
   constructor(props: DesignerProps) {
     installLifecycleTeardownOperation(this, () => this.#purgeInternal())
     this.eventDelivery = props.eventDelivery
+    lockReadonlyProperties(this, ['eventDelivery', 'oobxList'])
     this.emitter = createEventBus('Designer', undefined, this.eventDelivery)
+    lockReadonlyProperties(this, ['emitter'])
+    lockPrototypeAccessors(this, ['currentDocument', 'currentHistory', 'materials'])
     inheritEngineTeardownOwnership(this, this.emitter)
     this.activeTracker = new ActiveTracker(this)
+    lockReadonlyProperties(this, ['activeTracker'])
     this.setProps(props)
     this.editor = props.editor
+    lockReadonlyProperties(this, ['editor'])
     this.project = new Project(this, props?.defaultSchema)
     this.dragon = new Dragon(this)
     this.detecting = new Detecting(this)
     this.selection = new Selection(this)
     this.settingsManager = new SettingsManager(this.editor)
+    lockReadonlyProperties(this, ['detecting', 'dragon', 'project', 'selection', 'settingsManager'])
     for (const service of [this.activeTracker, this.dragon, this.detecting, this.selection, this.settingsManager]) {
       inheritEngineTeardownOwnership(this, service)
     }
@@ -170,7 +177,7 @@ export class Designer {
     this.mounted = true
     this.settingsManager.mount()
 
-    this.disposers.push(
+    this.#disposers.push(
       this.dragon.onDragstart(e => {
         this.detecting.enable = false
         const { dragObject } = e
@@ -338,7 +345,7 @@ export class Designer {
     const scroller = new Scroller(scrollable)
     inheritLifecycleMutationGuard(this, scroller)
     inheritEngineTeardownOwnership(this, scroller)
-    this.scrollers.add(scroller)
+    this.#scrollers.add(scroller)
     return scroller
   }
 
@@ -426,7 +433,7 @@ export class Designer {
       return props
     }
 
-    const reducers = this.propsReducers.get(stage)
+    const reducers = this.#propsReducers.get(stage)
     if (!reducers) {
       return props
     }
@@ -449,11 +456,11 @@ export class Designer {
       logger.error('reducer is not available')
       return
     }
-    const reducers = this.propsReducers.get(stage)
+    const reducers = this.#propsReducers.get(stage)
     if (reducers) {
       reducers.push(reducer)
     } else {
-      this.propsReducers.set(stage, [reducer])
+      this.#propsReducers.set(stage, [reducer])
     }
   }
 
@@ -480,7 +487,7 @@ export class Designer {
     this.mounted = false
     cleanup(() => this.historyDispose?.())
     this.historyDispose = undefined
-    for (const dispose of this.disposers.splice(0).reverse()) {
+    for (const dispose of this.#disposers.splice(0).reverse()) {
       cleanup(dispose)
     }
 
@@ -497,12 +504,12 @@ export class Designer {
       this._dropLocation.document.dropLocation = null
     }
     this._dropLocation = undefined
-    this.propsReducers.clear()
+    this.#propsReducers.clear()
 
-    for (const scroller of [...this.scrollers].reverse()) {
+    for (const scroller of [...this.#scrollers].reverse()) {
       try {
         runInternalLifecycleTeardown(scroller)
-        this.scrollers.delete(scroller)
+        this.#scrollers.delete(scroller)
       } catch (error) {
         failures.push(error)
       }
@@ -517,7 +524,7 @@ export class Designer {
         retainedObservers.push(observer)
       }
     }
-    this.oobxList = retainedObservers
+    this.oobxList.splice(0, this.oobxList.length, ...retainedObservers)
 
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Designer disposal completed with errors')

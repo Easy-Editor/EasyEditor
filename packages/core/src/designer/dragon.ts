@@ -2,6 +2,7 @@ import { action, observable, runInAction } from 'mobx'
 import type { Designer } from '.'
 import type { Node } from '../document'
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -138,6 +139,8 @@ export class Dragon {
 
   constructor(readonly designer: Designer) {
     this.emitter = designer.createEventBus('Dragon')
+    lockReadonlyProperties(this, ['designer', 'emitter'])
+    lockPrototypeAccessors(this, ['activeSensor', 'dragging'])
     installLifecycleTeardownOperation(
       this,
       action(() => this.#disposeInternal()),

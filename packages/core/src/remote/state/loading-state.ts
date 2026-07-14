@@ -5,6 +5,7 @@
 
 import { action, computed, observable } from 'mobx'
 import { assertLifecycleMutationAllowed } from '../../lifecycle/mutation-barrier'
+import { lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   installLifecycleTeardownOperation,
@@ -100,7 +101,7 @@ const snapshotResourceState = (state: ResourceState): ResourceState => Object.fr
  */
 export class LoadingStateManager {
   /** 资源状态映射 */
-  @observable.shallow private accessor states = new Map<string, ResourceState>()
+  @observable.shallow accessor #states = new Map<string, ResourceState>()
 
   /** 状态变化监听器 */
   private listeners = new Set<StateChangeListener>()
@@ -109,6 +110,7 @@ export class LoadingStateManager {
   private waitCancels = new Set<() => void>()
 
   constructor() {
+    lockReadonlyProperties(this, ['listeners', 'waitCancels'])
     installLifecycleTeardownOperation(
       this,
       action(() => this.#disposeInternal()),
@@ -120,7 +122,7 @@ export class LoadingStateManager {
    */
   @computed
   get isLoading(): boolean {
-    for (const state of this.states.values()) {
+    for (const state of this.#states.values()) {
       if (state.status === LoadingStatus.LOADING) {
         return true
       }
@@ -133,7 +135,7 @@ export class LoadingStateManager {
    */
   @computed
   get loadingResources(): ResourceState[] {
-    return Array.from(this.states.values(), snapshotResourceState).filter(s => s.status === LoadingStatus.LOADING)
+    return Array.from(this.#states.values(), snapshotResourceState).filter(s => s.status === LoadingStatus.LOADING)
   }
 
   /**
@@ -141,7 +143,7 @@ export class LoadingStateManager {
    */
   @computed
   get errors(): ResourceState[] {
-    return Array.from(this.states.values(), snapshotResourceState).filter(s => s.status === LoadingStatus.ERROR)
+    return Array.from(this.#states.values(), snapshotResourceState).filter(s => s.status === LoadingStatus.ERROR)
   }
 
   /**
@@ -149,14 +151,14 @@ export class LoadingStateManager {
    */
   @computed
   get loadedResources(): ResourceState[] {
-    return Array.from(this.states.values(), snapshotResourceState).filter(s => s.status === LoadingStatus.LOADED)
+    return Array.from(this.#states.values(), snapshotResourceState).filter(s => s.status === LoadingStatus.LOADED)
   }
 
   /**
    * 获取指定类型的加载状态
    */
   isTypeLoading(type: ResourceType): boolean {
-    for (const state of this.states.values()) {
+    for (const state of this.#states.values()) {
       if (state.type === type && state.status === LoadingStatus.LOADING) {
         return true
       }
@@ -168,7 +170,7 @@ export class LoadingStateManager {
    * 获取资源状态
    */
   getState(key: string): ResourceState | undefined {
-    const state = this.states.get(key)
+    const state = this.#states.get(key)
     return state ? snapshotResourceState(state) : undefined
   }
 
@@ -178,11 +180,11 @@ export class LoadingStateManager {
   @action
   updateState(key: string, state: Partial<ResourceState>): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.updateState')
-    const existing = this.states.get(key)
+    const existing = this.#states.get(key)
     if (existing) {
-      this.states.set(key, normalizeResourceState({ ...existing, ...state }))
+      this.#states.set(key, normalizeResourceState({ ...existing, ...state }))
     } else {
-      this.states.set(
+      this.#states.set(
         key,
         normalizeResourceState({
           type: 'material',
@@ -201,7 +203,7 @@ export class LoadingStateManager {
   @action
   startLoading(key: string, type: ResourceType, name: string): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.startLoading')
-    this.states.set(key, {
+    this.#states.set(key, {
       type,
       name,
       status: LoadingStatus.LOADING,
@@ -216,9 +218,9 @@ export class LoadingStateManager {
   @action
   updateProgress(key: string, progress: number): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.updateProgress')
-    const state = this.states.get(key)
+    const state = this.#states.get(key)
     if (state) {
-      this.states.set(key, { ...state, progress: Math.min(100, Math.max(0, progress)) })
+      this.#states.set(key, { ...state, progress: Math.min(100, Math.max(0, progress)) })
       this.notifyListeners()
     }
   }
@@ -229,9 +231,9 @@ export class LoadingStateManager {
   @action
   markLoaded(key: string): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.markLoaded')
-    const state = this.states.get(key)
+    const state = this.#states.get(key)
     if (state) {
-      this.states.set(key, {
+      this.#states.set(key, {
         ...state,
         status: LoadingStatus.LOADED,
         progress: 100,
@@ -247,9 +249,9 @@ export class LoadingStateManager {
   @action
   markError(key: string, error: Error): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.markError')
-    const state = this.states.get(key)
+    const state = this.#states.get(key)
     if (state) {
-      this.states.set(key, {
+      this.#states.set(key, {
         ...state,
         status: LoadingStatus.ERROR,
         error: cloneResourceError(error),
@@ -264,7 +266,7 @@ export class LoadingStateManager {
   @action
   clearState(key: string): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.clearState')
-    this.states.delete(key)
+    this.#states.delete(key)
     this.notifyListeners()
   }
 
@@ -274,7 +276,7 @@ export class LoadingStateManager {
   @action
   clearAll(): void {
     assertLifecycleMutationAllowed(this, 'remote.loadingState.clearAll')
-    this.states.clear()
+    this.#states.clear()
     this.notifyListeners()
   }
 
@@ -350,7 +352,7 @@ export class LoadingStateManager {
   private notifyListeners(): void {
     for (const listener of this.listeners) {
       try {
-        listener(new Map(Array.from(this.states, ([key, state]) => [key, snapshotResourceState(state)])))
+        listener(new Map(Array.from(this.#states, ([key, state]) => [key, snapshotResourceState(state)])))
       } catch (error) {
         console.error('[LoadingStateManager] Listener error:', error)
       }
@@ -369,6 +371,6 @@ export class LoadingStateManager {
     }
     this.waitCancels.clear()
     this.listeners.clear()
-    this.states.clear()
+    this.#states.clear()
   }
 }

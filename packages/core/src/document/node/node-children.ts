@@ -1,4 +1,5 @@
 import { action, computed, intercept, observable, observe } from 'mobx'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import type { EventBus } from '../../utils'
 import { NODE_EVENT, type Node, type NodeModelOptions, isNodeSchema } from './node'
@@ -40,7 +41,10 @@ export class NodeChildren {
 
   constructor(owner: Node, data?: NodeSchema[], options: NodeModelOptions = {}) {
     this.owner = owner
+    lockReadonlyProperties(this, ['owner'])
+    lockPrototypeAccessors(this, ['children'])
     this.emitter = owner.document.designer.createEventBus('NodeChildren')
+    lockReadonlyProperties(this, ['emitter'])
     this.children = (Array.isArray(data) ? data : []).map(child => {
       return this.owner.document.createNode(child, true, options)
     })

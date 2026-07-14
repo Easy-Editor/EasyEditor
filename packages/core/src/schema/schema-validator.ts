@@ -1,3 +1,4 @@
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import { PolicyViolation, type TrustPolicy, findExecutableValue } from '../trust'
 import type { NodeSchema, ProjectSchema } from '../types'
 import {
@@ -247,7 +248,9 @@ export class SchemaValidator {
   constructor(
     readonly trustPolicy: TrustPolicy,
     private readonly assertTrustBoundaryIntegrity?: (origin: string) => void,
-  ) {}
+  ) {
+    lockReadonlyProperties(this, ['assertTrustBoundaryIntegrity', 'trustPolicy'])
+  }
 
   prepare(schema: ProjectSchema): ProjectSchema {
     return this.prepareWithReport(schema).schema

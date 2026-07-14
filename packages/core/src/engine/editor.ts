@@ -2,6 +2,7 @@ import EventEmitter from 'events'
 import { action, observable } from 'mobx'
 import { Config } from '../config'
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   installLifecycleTeardownOperation,
@@ -46,7 +47,7 @@ export class Editor extends EventEmitter implements IEditor {
 
   config?: EditorConfig
 
-  eventBus: EventBus
+  readonly eventBus: EventBus
 
   readonly engineConfig: Config
 
@@ -69,6 +70,7 @@ export class Editor extends EventEmitter implements IEditor {
     this.setMaxListeners(200)
     this.eventBus = new EventBus(this, undefined, eventDelivery)
     this.engineConfig = engineConfig || new Config()
+    lockReadonlyProperties(this, ['engineConfig', 'eventBus'])
 
     if (config) {
       this.init(config)

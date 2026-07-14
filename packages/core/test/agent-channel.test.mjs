@@ -152,6 +152,23 @@ test('MessagePort capability performs snapshot, preview and execute without expo
   assert.equal(session.descriptor.isolation, 'structured-clone-object-capability')
   assert.equal(session.descriptor.executionAuthority, 'peer')
   assert.deepEqual(capability.descriptor, session.descriptor)
+  for (const key of [
+    'dependencies',
+    'descriptor',
+    'handleAbort',
+    'queuedEvents',
+    'sessionId',
+    'unacknowledgedEvents',
+  ]) {
+    const original = session[key]
+    assert.equal(Reflect.set(session, key, Object.freeze({ forged: true })), false, `${key} must be readonly`)
+    assert.equal(
+      Reflect.defineProperty(session, key, { configurable: true, value: Object.freeze({ forged: true }) }),
+      false,
+      `${key} must not be redefined`,
+    )
+    assert.strictEqual(session[key], original)
+  }
 
   const snapshot = await capability.snapshot(document.id)
   assert.deepEqual(snapshot.schema, document.export())

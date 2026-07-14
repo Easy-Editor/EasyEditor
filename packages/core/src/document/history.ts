@@ -1,4 +1,5 @@
 import { reaction, untracked } from 'mobx'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -25,30 +26,30 @@ export class History<T = RootSchema> {
   emitter: EventBus
 
   /** current record */
-  private session: Session
+  #session: Session
 
   /** all records */
-  private records: Session[]
+  #records: Session[]
 
   /** as a cursor of records to go back and forward */
-  private savePointSession: Session | null = null
+  #savePointSession: Session | null = null
 
-  private asleep = false
+  #asleep = false
 
-  private transactionDepth = 0
+  #transactionDepth = 0
 
-  private transactionStartData?: string
+  #transactionStartData?: string
 
-  private transactionPendingData?: string
+  #transactionPendingData?: string
 
   /** current recorded data */
   get hotData() {
-    return this.session.data
+    return this.#session.data
   }
 
-  private timeGap = 1000
+  #timeGap = 1000
 
-  private serialization: Serialization<T, string> = {
+  #serialization: Serialization<T, string> = {
     serialize(data: T): string {
       return JSON.stringify(data)
     },
@@ -59,41 +60,43 @@ export class History<T = RootSchema> {
 
   setSerialization(serialization: Serialization<T, string>) {
     this.assertGenerationActive()
-    this.serialization = serialization
+    this.#serialization = serialization
   }
 
-  private disposer: () => void
+  #disposer: () => void
 
   constructor(
     private readonly dataFn: () => T | null,
     private redoer: (data: T) => void,
     readonly document?: Document,
   ) {
+    lockReadonlyProperties(this, ['dataFn', 'document', 'redoer'])
     this.emitter = document?.designer.createEventBus('History') || createEventBus('History')
+    lockReadonlyProperties(this, ['emitter'])
     installLifecycleTeardownOperation(this, () => this.#destroyInternal())
     if (document) {
       inheritEngineTeardownOwnership(document.project, this)
       inheritEngineTeardownOwnership(this, this.emitter)
     }
-    this.session = new Session(0, '', this.timeGap)
-    this.records = [this.session]
-    this.savePointSession = this.session
+    this.#session = new Session(0, '', this.#timeGap)
+    this.#records = [this.#session]
+    this.#savePointSession = this.#session
 
     /**
      * listen the change of schema
      */
-    this.disposer = reaction(
+    this.#disposer = reaction(
       (): any => {
         return this.dataFn()
       },
       (data: T) => {
-        if (this.asleep) return
+        if (this.#asleep) return
 
         untracked(() => {
-          const log = this.serialization.serialize(data)
+          const log = this.#serialization.serialize(data)
 
-          if (this.transactionDepth > 0) {
-            this.transactionPendingData = log
+          if (this.#transactionDepth > 0) {
+            this.#transactionPendingData = log
             return
           }
 
@@ -101,15 +104,15 @@ export class History<T = RootSchema> {
             return
           }
 
-          if (this.session.isActive()) {
-            this.session.log(log)
+          if (this.#session.isActive()) {
+            this.#session.log(log)
           } else {
-            this.session.end()
+            this.#session.end()
             const lastState = this.getState()
-            const cursor = this.session.cursor + 1
-            const session = new Session(cursor, log, this.timeGap)
-            this.session = session
-            this.records.splice(cursor, this.records.length - cursor, session)
+            const cursor = this.#session.cursor + 1
+            const session = new Session(cursor, log, this.#timeGap)
+            this.#session = session
+            this.#records.splice(cursor, this.#records.length - cursor, session)
 
             const currentState = this.getState()
             if (currentState !== lastState) {
@@ -126,41 +129,41 @@ export class History<T = RootSchema> {
    * check if there is unsaved change for history
    */
   isSavePoint(): boolean {
-    return this.savePointSession !== this.session
+    return this.#savePointSession !== this.#session
   }
 
   private sleep() {
-    this.asleep = true
+    this.#asleep = true
   }
 
   private wakeup() {
-    this.asleep = false
+    this.#asleep = false
   }
 
   go(originalCursor: number) {
     this.assertMutationAllowed()
-    this.session.end()
+    this.#session.end()
 
     let cursor = originalCursor
     cursor = +cursor
     if (cursor < 0) {
       cursor = 0
-    } else if (cursor >= this.records.length) {
-      cursor = this.records.length - 1
+    } else if (cursor >= this.#records.length) {
+      cursor = this.#records.length - 1
     }
 
-    const currentCursor = this.session.cursor
+    const currentCursor = this.#session.cursor
     if (cursor === currentCursor) {
       return
     }
 
-    const session = this.records[cursor]
+    const session = this.#records[cursor]
     const hotData = session.data
 
     this.sleep()
     let restored = false
     try {
-      this.redoer(this.serialization.unserialize(hotData))
+      this.redoer(this.#serialization.unserialize(hotData))
       this.emitter.emit(HISTORY_EVENT.CURSOR_CHANGE, hotData)
       restored = true
     } catch (e) {
@@ -170,33 +173,33 @@ export class History<T = RootSchema> {
     }
 
     if (!restored) return
-    this.session = session
+    this.#session = session
     this.emitter.emit(HISTORY_EVENT.STATE_CHANGE, this.getState())
   }
 
   back() {
-    if (!this.session) {
+    if (!this.#session) {
       return
     }
-    const cursor = this.session.cursor - 1
+    const cursor = this.#session.cursor - 1
     this.go(cursor)
   }
 
   forward() {
-    if (!this.session) {
+    if (!this.#session) {
       return
     }
-    const cursor = this.session.cursor + 1
+    const cursor = this.#session.cursor + 1
     this.go(cursor)
   }
 
   savePoint() {
     this.assertGenerationActive()
-    if (!this.session) {
+    if (!this.#session) {
       return
     }
-    this.session.end()
-    this.savePointSession = this.session
+    this.#session.end()
+    this.#savePointSession = this.#session
     this.emitter.emit(HISTORY_EVENT.STATE_CHANGE, this.getState())
   }
 
@@ -205,11 +208,11 @@ export class History<T = RootSchema> {
    */
   beginTransaction() {
     this.assertGenerationActive()
-    if (this.transactionDepth === 0) {
-      this.transactionStartData = this.session.data
-      this.transactionPendingData = this.session.data
+    if (this.#transactionDepth === 0) {
+      this.#transactionStartData = this.#session.data
+      this.#transactionPendingData = this.#session.data
     }
-    this.transactionDepth += 1
+    this.#transactionDepth += 1
   }
 
   /**
@@ -217,27 +220,27 @@ export class History<T = RootSchema> {
    */
   commitTransaction() {
     this.assertGenerationActive()
-    if (this.transactionDepth < 1) {
+    if (this.#transactionDepth < 1) {
       throw new Error('No active history transaction')
     }
-    this.transactionDepth -= 1
-    if (this.transactionDepth > 0) return
+    this.#transactionDepth -= 1
+    if (this.#transactionDepth > 0) return
 
-    const startData = this.transactionStartData
+    const startData = this.#transactionStartData
     const currentData = this.dataFn()
-    const pendingData = currentData == null ? this.transactionPendingData : this.serialization.serialize(currentData)
+    const pendingData = currentData == null ? this.#transactionPendingData : this.#serialization.serialize(currentData)
     this.clearTransactionState()
     if (pendingData === undefined || pendingData === startData) return
 
     // Keep the current coalescing window intact until a transaction actually
     // commits. A rejected or net-zero transaction must be history-transparent.
-    this.session.end()
+    this.#session.end()
     const lastState = this.getState()
-    const cursor = this.session.cursor + 1
-    const session = new Session(cursor, pendingData, this.timeGap)
+    const cursor = this.#session.cursor + 1
+    const session = new Session(cursor, pendingData, this.#timeGap)
     session.end()
-    this.session = session
-    this.records.splice(cursor, this.records.length - cursor, session)
+    this.#session = session
+    this.#records.splice(cursor, this.#records.length - cursor, session)
 
     const currentState = this.getState()
     if (currentState !== lastState) {
@@ -248,14 +251,14 @@ export class History<T = RootSchema> {
   /** Restore the exact pre-transaction snapshot without adding a history unit. */
   rollbackTransaction() {
     this.assertGenerationActive()
-    if (this.transactionDepth < 1) return
-    const startData = this.transactionStartData
+    if (this.#transactionDepth < 1) return
+    const startData = this.#transactionStartData
     this.clearTransactionState()
     if (startData === undefined) return
 
     this.sleep()
     try {
-      this.redoer(this.serialization.unserialize(startData))
+      this.redoer(this.#serialization.unserialize(startData))
     } finally {
       this.wakeup()
     }
@@ -264,14 +267,14 @@ export class History<T = RootSchema> {
   /** Close an untouched transaction without rebuilding the document model. */
   cancelTransaction() {
     this.assertGenerationActive()
-    if (this.transactionDepth < 1) return
+    if (this.#transactionDepth < 1) return
     this.clearTransactionState()
   }
 
   private clearTransactionState() {
-    this.transactionDepth = 0
-    this.transactionStartData = undefined
-    this.transactionPendingData = undefined
+    this.#transactionDepth = 0
+    this.#transactionStartData = undefined
+    this.#transactionPendingData = undefined
   }
 
   destroy() {
@@ -280,10 +283,10 @@ export class History<T = RootSchema> {
   }
 
   #destroyInternal(): void {
-    this.records.forEach(record => record.end())
+    this.#records.forEach(record => record.end())
     this.clearTransactionState()
-    this.records = []
-    this.disposer()
+    this.#records = []
+    this.#disposer()
     runInternalLifecycleTeardown(this.emitter)
   }
 
@@ -297,18 +300,18 @@ export class History<T = RootSchema> {
    *  ...
    */
   getState(): number {
-    const { cursor } = this.session
+    const { cursor } = this.#session
     let state = 7
     // undoable ?
     if (cursor <= 0) {
       state -= 1
     }
     // redoable ?
-    if (cursor >= this.records.length - 1) {
+    if (cursor >= this.#records.length - 1) {
       state -= 2
     }
     // modified ?
-    if (this.savePointSession === this.session) {
+    if (this.#savePointSession === this.#session) {
       state -= 4
     }
     return state
@@ -368,6 +371,7 @@ export class Session<T = string> {
     data: T,
     private timeGap = 1000,
   ) {
+    lockReadonlyProperties(this, ['cursor', 'timeGap'])
     // init data
     this._data = data
     this.setTimer()

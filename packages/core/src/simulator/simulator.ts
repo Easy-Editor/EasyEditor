@@ -18,6 +18,7 @@ import {
   inheritLifecycleMutationGuard,
   sealLifecycleMutations,
 } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -179,13 +180,13 @@ export class Simulator {
 
   private sensing = false
 
-  private readonly lifetimeDisposers = new Set<Disposable>()
+  readonly #lifetimeDisposers = new Set<Disposable>()
 
-  private readonly frameDisposers = new Set<Disposable>()
+  readonly #frameDisposers = new Set<Disposable>()
 
-  private fallbackConfig?: Config
+  #fallbackConfig?: Config
 
-  private fallbackClipboard?: Clipboard
+  #fallbackClipboard?: Clipboard
 
   get currentDocument() {
     return this.project.currentDocument
@@ -194,23 +195,23 @@ export class Simulator {
   private get engineConfig(): Config {
     const engineConfig = (this.editor as typeof this.editor & { engineConfig?: Config }).engineConfig
     if (engineConfig) return engineConfig
-    if (!this.fallbackConfig) {
-      this.fallbackConfig = new Config()
-      inheritLifecycleMutationGuard(this, this.fallbackConfig)
-      inheritEngineTeardownOwnership(this, this.fallbackConfig)
+    if (!this.#fallbackConfig) {
+      this.#fallbackConfig = new Config()
+      inheritLifecycleMutationGuard(this, this.#fallbackConfig)
+      inheritEngineTeardownOwnership(this, this.#fallbackConfig)
     }
-    return this.fallbackConfig
+    return this.#fallbackConfig
   }
 
   private get engineClipboard(): Clipboard {
     const clipboard = this.editor.get<Clipboard>('clipboard')
     if (clipboard) return clipboard
-    if (!this.fallbackClipboard) {
-      this.fallbackClipboard = new Clipboard()
-      inheritLifecycleMutationGuard(this, this.fallbackClipboard)
-      inheritEngineTeardownOwnership(this, this.fallbackClipboard)
+    if (!this.#fallbackClipboard) {
+      this.#fallbackClipboard = new Clipboard()
+      inheritLifecycleMutationGuard(this, this.#fallbackClipboard)
+      inheritEngineTeardownOwnership(this, this.#fallbackClipboard)
     }
-    return this.fallbackClipboard
+    return this.#fallbackClipboard
   }
 
   constructor(project: Project, designer: Designer) {
@@ -221,10 +222,12 @@ export class Simulator {
     inheritEngineTeardownOwnership(this, this.emitter)
     this.viewport = new Viewport(designer)
     this.scroller = this.designer.createScroller(this.viewport)
+    lockReadonlyProperties(this, ['designer', 'emitter', 'isSimulator', 'project', 'scroller', 'viewport'])
+    lockPrototypeAccessors(this, ['currentDocument', 'editor'])
     this.autoRender = !this.engineConfig.get('disableAutoRender', false)
     this._appHelper = this.engineConfig.get('appHelper')
 
-    this.lifetimeDisposers.add(
+    this.#lifetimeDisposers.add(
       this.engineConfig.onGot('appHelper', data => {
         // appHelper被config.set修改后触发injectionConsumer.consume回调
         this._appHelper = data
@@ -298,10 +301,10 @@ export class Simulator {
       rendererDisposed = false
       errors.push(error)
     }
-    for (const dispose of [...this.lifetimeDisposers].reverse()) {
+    for (const dispose of [...this.#lifetimeDisposers].reverse()) {
       try {
         dispose()
-        this.lifetimeDisposers.delete(dispose)
+        this.#lifetimeDisposers.delete(dispose)
       } catch (error) {
         errors.push(error)
       }
@@ -317,14 +320,14 @@ export class Simulator {
       errors.push(error)
     }
     try {
-      if (this.fallbackConfig) runInternalLifecycleTeardown(this.fallbackConfig)
-      this.fallbackConfig = undefined
+      if (this.#fallbackConfig) runInternalLifecycleTeardown(this.#fallbackConfig)
+      this.#fallbackConfig = undefined
     } catch (error) {
       errors.push(error)
     }
     try {
-      if (this.fallbackClipboard) runInternalLifecycleTeardown(this.fallbackClipboard)
-      this.fallbackClipboard = undefined
+      if (this.#fallbackClipboard) runInternalLifecycleTeardown(this.#fallbackClipboard)
+      this.#fallbackClipboard = undefined
     } catch (error) {
       errors.push(error)
     }
@@ -354,10 +357,10 @@ export class Simulator {
 
   private disposeFrame(): void {
     const errors: unknown[] = []
-    for (const dispose of [...this.frameDisposers].reverse()) {
+    for (const dispose of [...this.#frameDisposers].reverse()) {
       try {
         dispose()
-        this.frameDisposers.delete(dispose)
+        this.#frameDisposers.delete(dispose)
       } catch (error) {
         errors.push(error)
       }
@@ -382,19 +385,19 @@ export class Simulator {
         throw error
       }
       state = 'disposed'
-      this.frameDisposers.delete(tracked)
+      this.#frameDisposers.delete(tracked)
     }
-    this.frameDisposers.add(tracked)
+    this.#frameDisposers.add(tracked)
     return tracked as T
   }
 
   private rollbackFrameAcquisition(checkpoint: ReadonlySet<Disposable>): unknown[] {
     const errors: unknown[] = []
-    const acquired = [...this.frameDisposers].filter(dispose => !checkpoint.has(dispose))
+    const acquired = [...this.#frameDisposers].filter(dispose => !checkpoint.has(dispose))
     for (const dispose of acquired.reverse()) {
       try {
         dispose()
-        this.frameDisposers.delete(dispose)
+        this.#frameDisposers.delete(dispose)
       } catch (error) {
         errors.push(error)
       }
@@ -425,9 +428,9 @@ export class Simulator {
         throw error
       }
       state = 'disposed'
-      this.lifetimeDisposers.delete(tracked)
+      this.#lifetimeDisposers.delete(tracked)
     }
-    this.lifetimeDisposers.add(tracked)
+    this.#lifetimeDisposers.add(tracked)
     return tracked as T
   }
 
@@ -456,7 +459,7 @@ export class Simulator {
       contentWindow = contentDocument.defaultView!
     }
 
-    const checkpoint = new Set(this.frameDisposers)
+    const checkpoint = new Set(this.#frameDisposers)
     try {
       // Register ownership immediately after each successful acquisition. The
       // event helpers register their provisional disposers before their first
@@ -506,7 +509,7 @@ export class Simulator {
 
   setupEvents(): Disposable[] {
     assertLifecycleMutationAllowed(this, 'simulator.setupEvents')
-    const checkpoint = new Set(this.frameDisposers)
+    const checkpoint = new Set(this.#frameDisposers)
     try {
       return this.setupFrameEvents(this.contentDocument!)
     } catch (error) {
@@ -516,7 +519,7 @@ export class Simulator {
 
   setupDragAndClick(): Disposable {
     assertLifecycleMutationAllowed(this, 'simulator.setupDragAndClick')
-    const checkpoint = new Set(this.frameDisposers)
+    const checkpoint = new Set(this.#frameDisposers)
     try {
       return this.setupFrameDragAndClick(this.contentDocument!)
     } catch (error) {
@@ -666,7 +669,7 @@ export class Simulator {
 
   setupDetecting(): Disposable {
     assertLifecycleMutationAllowed(this, 'simulator.setupDetecting')
-    const checkpoint = new Set(this.frameDisposers)
+    const checkpoint = new Set(this.#frameDisposers)
     try {
       return this.setupFrameDetecting(this.contentDocument!)
     } catch (error) {

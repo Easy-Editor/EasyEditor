@@ -1,6 +1,7 @@
 import { action, computed, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type Point } from '../designer'
 import { ScrollTarget } from '../designer/scroller'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import type { Disposable } from '../utils'
 
 export type AutoFit = '100%'
@@ -34,7 +35,9 @@ export class Viewport {
 
   private viewportElement?: HTMLElement
 
-  constructor(readonly designer: Designer) {}
+  constructor(readonly designer: Designer) {
+    lockReadonlyProperties(this, ['designer'])
+  }
 
   mount(viewportElement: HTMLElement | null) {
     if (!viewportElement || this.viewportElement === viewportElement) {

@@ -32,6 +32,19 @@ const isPromiseLike = (value: object): value is PromiseLike<unknown> => {
   return typeof (value as { then?: unknown }).then === 'function'
 }
 
+const createCapabilityFacadeTarget = (target: object, callable: boolean): object => {
+  if (callable) return function CapabilityFacade() {}.bind(undefined)
+  if (Array.isArray(target)) {
+    const facade: unknown[] = []
+    // Preserve Array.isArray() without copying any capability-bearing values
+    // onto the Proxy target. Array length stays writable on the facade so the
+    // get trap may safely report the current source length.
+    facade.length = target.length
+    return facade
+  }
+  return Object.create(null) as object
+}
+
 /** Create a deep, generation-bound membrane for one engine-owned capability. */
 export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: string) {
   const ticket = captureLifecycleMutationTicket(owner, `${bindingOrigin}.bind`)
@@ -44,26 +57,40 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
 
   const wrapResult = <T>(result: T, origin: string): T => {
     if (result && typeof (result as { then?: unknown }).then === 'function') {
-      return Promise.resolve(result).then(resolved => {
-        assertActive(`${origin}.complete`)
-        return wrap(resolved, `${origin}.result`)
-      }) as T
+      return Promise.resolve(result).then(
+        resolved => {
+          assertActive(`${origin}.complete`)
+          return wrap(resolved, `${origin}.result`)
+        },
+        reason => {
+          assertActive(`${origin}.reject`)
+          throw wrap(reason, `${origin}.reason`)
+        },
+      ) as T
     }
     return wrap(result, `${origin}.result`)
   }
 
   const wrap = <T>(value: T, origin: string): T => {
     if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return value
-    if (typeof value === 'object' && isPromiseLike(value)) return value
     const target = value as object
     const existing = proxies.get(target)
     if (existing) return existing as T
 
+    if (typeof value === 'object' && isPromiseLike(value)) {
+      const guardedPromise = wrapResult(value, origin) as T & object
+      proxies.set(target, guardedPromise)
+      capabilityProxyTargets.set(guardedPromise, target)
+      return guardedPromise as T
+    }
+
     const callable = typeof value === 'function'
-    // Callable capabilities use a neutral constructable target. Proxying the
-    // original function directly cannot wrap a class's non-configurable
-    // `prototype` property without violating the ECMAScript Proxy invariants.
-    const proxyTarget = callable ? function CapabilityFacade() {}.bind(undefined) : target
+    // Every capability uses a neutral facade target. Proxying the source
+    // object directly forces non-configurable readonly data properties to
+    // expose their raw value, which punches through the generation membrane.
+    // Arrays retain their observable Array identity; callables retain their
+    // callable/constructable shape without copying authority-bearing values.
+    const proxyTarget = createCapabilityFacadeTarget(target, callable)
     const proxy: object = new Proxy(proxyTarget, {
       apply(_innerTarget, thisArg, args) {
         assertActive(`${origin}.apply`)
@@ -79,7 +106,7 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
       },
       defineProperty(_innerTarget, property, descriptor) {
         assertActive(`${origin}.defineProperty`)
-        if (callable && descriptor.configurable !== true) return false
+        if (descriptor.configurable !== true) return false
         return Reflect.defineProperty(target, property, descriptor)
       },
       deleteProperty(_innerTarget, property) {
@@ -88,16 +115,6 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
       },
       get(_innerTarget, property) {
         assertActive(`${origin}.get`)
-        const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
-        if (
-          !callable &&
-          descriptor &&
-          'value' in descriptor &&
-          descriptor.configurable === false &&
-          descriptor.writable === false
-        ) {
-          return descriptor.value
-        }
         const child = Reflect.get(target, property, target)
         if (typeof child !== 'function') return wrap(child, `${origin}.${String(property)}`)
 
@@ -120,21 +137,26 @@ export function createLifecycleCapabilityBinder(owner: object, bindingOrigin: st
         assertActive(`${origin}.getOwnPropertyDescriptor`)
         const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
         if (!descriptor) return descriptor
+        const facadeDescriptor = Reflect.getOwnPropertyDescriptor(proxyTarget, property)
+        if (facadeDescriptor?.configurable === false) {
+          if ('value' in descriptor && 'value' in facadeDescriptor) {
+            return { ...facadeDescriptor, value: descriptor.value }
+          }
+          return facadeDescriptor
+        }
         if (!('value' in descriptor)) {
-          const wrappedDescriptor = {
+          return {
             ...descriptor,
+            configurable: true,
             get: descriptor.get ? wrap(descriptor.get, `${origin}.${String(property)}.get`) : descriptor.get,
             set: descriptor.set ? wrap(descriptor.set, `${origin}.${String(property)}.set`) : descriptor.set,
           }
-          return callable && descriptor.configurable === false
-            ? { ...wrappedDescriptor, configurable: true }
-            : wrappedDescriptor
         }
-        if (!callable && descriptor.configurable === false && descriptor.writable === false) return descriptor
-        const wrappedDescriptor = { ...descriptor, value: wrap(descriptor.value, `${origin}.${String(property)}`) }
-        return callable && descriptor.configurable === false
-          ? { ...wrappedDescriptor, configurable: true }
-          : wrappedDescriptor
+        return {
+          ...descriptor,
+          configurable: true,
+          value: wrap(descriptor.value, `${origin}.${String(property)}`),
+        }
       },
       getPrototypeOf() {
         assertActive(`${origin}.getPrototypeOf`)

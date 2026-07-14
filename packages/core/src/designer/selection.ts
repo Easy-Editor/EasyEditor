@@ -1,6 +1,7 @@
 import { action, observable } from 'mobx'
 import { type Node, PositionNO, comparePosition } from '../document'
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -25,6 +26,8 @@ export class Selection {
 
   constructor(readonly designer: Designer) {
     this.emitter = designer.createEventBus('Selection')
+    lockReadonlyProperties(this, ['designer', 'emitter'])
+    lockPrototypeAccessors(this, ['currentDocument', 'selected'])
     installLifecycleTeardownOperation(
       this,
       action(() => this.#disposeInternal()),

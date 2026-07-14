@@ -1,6 +1,7 @@
 import { action, computed } from 'mobx'
 import type { Designer } from '../designer'
 import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -44,6 +45,8 @@ export class Materials {
   }
 
   constructor(readonly editor: Editor) {
+    lockReadonlyProperties(this, ['editor'])
+    lockPrototypeAccessors(this, ['designer', 'registry', 'version'])
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
     installMaterialsTeardown(this, componentName => {
       if (this.#registry) releaseMaterialRegistryUsageDuringTeardown(this.#registry, componentName)

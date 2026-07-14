@@ -1,5 +1,6 @@
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
 import { sealLifecycleMutations } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import { installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import { isElementNode } from '../utils'
 
@@ -24,6 +25,7 @@ export class ScrollTarget {
     if (isWindow(target)) {
       this.doc = target.document.documentElement
     }
+    lockReadonlyProperties(this, ['doc', 'target'])
   }
 
   scrollTo(options: { left?: number; top?: number }) {
@@ -64,6 +66,8 @@ export class Scroller {
 
   constructor(scrollable: Scrollable) {
     this.scrollable = scrollable
+    lockReadonlyProperties(this, ['scrollable'])
+    lockPrototypeAccessors(this, ['scrollTarget'])
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
   }
 

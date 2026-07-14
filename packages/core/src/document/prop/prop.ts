@@ -1,5 +1,6 @@
 import { action, computed, isObservableArray, observable, set, untracked } from 'mobx'
 import { DESIGNER_EVENT } from '../../designer'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import { type NodeSchema, TRANSFORM_STAGE } from '../../types'
 import { isObject, isPlainObject, uniqueId } from '../../utils'
 import type { Node } from '../node/node'
@@ -109,18 +110,18 @@ export class Prop {
 
   readonly id = uniqueId('prop')
 
-  @observable.ref private accessor _key: PropKey
+  @observable.ref accessor #key: PropKey
 
   get key(): PropKey {
-    return this._key
+    return this.#key
   }
 
   @action
   set key(value: PropKey) {
     this.owner.document.project.assertDocumentMutationAllowed(this.owner.document)
-    if (this._key === value) return
+    if (this.#key === value) return
     this.owner.document.markSchemaMutation()
-    this._key = value
+    this.#key = value
   }
 
   readonly owner: Node
@@ -243,6 +244,8 @@ export class Prop {
   ) {
     this.owner = parent.owner
     this.props = parent.props
+    lockReadonlyProperties(this, ['id', 'owner', 'parent', 'props'])
+    lockPrototypeAccessors(this, ['key'])
     this.key = key
 
     if (value !== UNSET) {

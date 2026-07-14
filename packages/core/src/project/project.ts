@@ -7,6 +7,7 @@ import {
   retireDocumentDuringTeardown,
 } from '../document/teardown'
 import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -95,30 +96,30 @@ export class Project {
 
   @observable.shallow accessor documents: Document[] = []
 
-  private documentsMap = new Map<string, Document>()
+  #documentsMap = new Map<string, Document>()
 
-  private documentMutationBoundary?: ActiveDocumentMutationBoundary
+  #documentMutationBoundary?: ActiveDocumentMutationBoundary
 
-  private documentsMutationDisposer: () => void = () => {}
+  #documentsMutationDisposer: () => void = () => {}
 
   @computed
   get currentDocument() {
     return this.documents.find(document => document.active)
   }
 
-  @observable.ref private accessor _config: Record<string, any> | undefined
+  @observable.ref accessor #config: Record<string, any> | undefined
 
   @computed
   get config(): Record<string, any> | undefined {
-    return this._config
+    return this.#config
   }
 
   set config(value: Record<string, any>) {
     this.assertProjectMutationAllowed()
-    this._config = this.protectProjectDataValue(value, true)
+    this.#config = this.protectProjectDataValue(value, true)
   }
 
-  private _simulator?: Simulator
+  #simulator?: Simulator
 
   private readonly schemaValidator: SchemaValidator
 
@@ -129,21 +130,25 @@ export class Project {
   }
 
   get simulator() {
-    return this._simulator || null
+    return this.#simulator || null
   }
 
   constructor(
     readonly designer: Designer,
     schema?: ProjectSchema,
   ) {
+    lockReadonlyProperties(this, ['designer'])
+    lockPrototypeAccessors(this, ['config', 'currentDocument', 'documents', 'simulator'])
     installLifecycleTeardownOperation(this, () => this.#disposeInternal())
     inheritEngineTeardownOwnership(this.designer, this)
     this.emitter = designer.createEventBus('Project')
+    lockReadonlyProperties(this, ['emitter'])
     inheritEngineTeardownOwnership(this, this.emitter)
     this.trustPolicy = this.designer.editor.get<TrustPolicy>('trustPolicy') || resolveTrustPolicy('legacyTrusted')
     installProjectMutationAuthority(this, this.trustPolicy)
     installDocumentMutationBoundary(this, document => this.#beginDocumentMutationBoundary(document))
     this.schemaValidator = this.designer.get('schemaValidator') || new SchemaValidator(this.trustPolicy)
+    lockReadonlyProperties(this, ['schemaValidator', 'trustPolicy'])
     this.trackDocumentCollectionMutations()
     intercept(this, 'documents', change => {
       this.assertProjectMutationAllowed()
@@ -156,8 +161,8 @@ export class Project {
   }
 
   private trackDocumentCollectionMutations(): void {
-    this.documentsMutationDisposer()
-    this.documentsMutationDisposer = intercept(this.documents, change => {
+    this.#documentsMutationDisposer()
+    this.#documentsMutationDisposer = intercept(this.documents, change => {
       this.assertProjectMutationAllowed()
       return change
     })
@@ -221,7 +226,7 @@ export class Project {
     // would leak stale config, metadata, or extension fields into the new
     // project.
     this.data = this.protectProjectDataValue(preparedSchema)
-    this._config = this.data.config
+    this.#config = this.data.config
 
     // perf: 在 open 的时候才创建 document
     // if (schema?.documents) {
@@ -261,7 +266,7 @@ export class Project {
 
   async #disposeInternal(): Promise<void> {
     const failures: unknown[] = []
-    const simulator: unknown = this._simulator
+    const simulator: unknown = this.#simulator
     const legacySimulator = simulator as LegacySimulatorLifecycle | undefined
     let simulatorDisposed = true
     try {
@@ -295,12 +300,12 @@ export class Project {
         }
 
         if (simulatorDisposed) {
-          this._simulator = undefined
+          this.#simulator = undefined
         }
         this.documents = []
-        this.documentsMap.clear()
+        this.#documentsMap.clear()
         this.data = this.protectProjectDataValue(createEmptyProjectSchema())
-        this._config = undefined
+        this.#config = undefined
         this.isRendererReady = false
         runInternalLifecycleTeardown(this.emitter)
       })
@@ -316,7 +321,7 @@ export class Project {
     const preparedSchema = schema ? (this.schemaValidator.prepareNode(schema, '$.document') as RootSchema) : undefined
     const doc = new Document(this, preparedSchema)
     this.documents.push(doc)
-    this.documentsMap.set(doc.id, doc)
+    this.#documentsMap.set(doc.id, doc)
 
     this.designer.postEvent(DOCUMENT_EVENT.ADD, doc)
     return doc
@@ -354,7 +359,7 @@ export class Project {
     }
 
     this.documents.splice(index, 1)
-    this.documentsMap.delete(document.id)
+    this.#documentsMap.delete(document.id)
   }
 
   getDocument(id: string) {
@@ -363,16 +368,16 @@ export class Project {
 
   /** Internal guard that prevents ambient hooks from mutating another document. */
   #beginDocumentMutationBoundary(document: Document): DocumentMutationBoundary {
-    if (this.documentMutationBoundary) {
+    if (this.#documentMutationBoundary) {
       throw new Error('A document mutation boundary is already active')
     }
     if (this.getDocument(document.id) !== document) {
       throw new Error('The document mutation boundary requires a project-owned document')
     }
     const token = {}
-    this.documentMutationBoundary = { document, mutationsAllowed: false, token }
+    this.#documentMutationBoundary = { document, mutationsAllowed: false, token }
     const requireActiveBoundary = (): ActiveDocumentMutationBoundary => {
-      const boundary = this.documentMutationBoundary
+      const boundary = this.#documentMutationBoundary
       if (!boundary || boundary.token !== token) {
         throw new Error('The document mutation boundary is no longer active')
       }
@@ -383,7 +388,7 @@ export class Project {
         requireActiveBoundary().mutationsAllowed = true
       },
       release: () => {
-        if (this.documentMutationBoundary?.token === token) this.documentMutationBoundary = undefined
+        if (this.#documentMutationBoundary?.token === token) this.#documentMutationBoundary = undefined
       },
       seal: () => {
         requireActiveBoundary().mutationsAllowed = false
@@ -394,7 +399,7 @@ export class Project {
   assertDocumentMutationAllowed(document: Document): void {
     assertLifecycleMutationAllowed(document, 'document.mutation')
     assertProjectMutationAuthority(this, 'document.mutation')
-    const boundary = this.documentMutationBoundary
+    const boundary = this.#documentMutationBoundary
     if (boundary && (boundary.document !== document || !boundary.mutationsAllowed)) {
       throw new Error(`Document mutation is blocked while document "${boundary.document.id}" is isolated`)
     }
@@ -408,7 +413,7 @@ export class Project {
   /** Internal guard for project document identity and lifecycle changes. */
   assertProjectMutationAllowed(): void {
     assertProjectMutationAuthority(this, 'project.mutation')
-    const boundary = this.documentMutationBoundary
+    const boundary = this.#documentMutationBoundary
     if (boundary) {
       throw new Error(`Project mutation is blocked while document "${boundary.document.id}" is isolated`)
     }
@@ -418,7 +423,7 @@ export class Project {
   assertDocumentLifecycleMutationAllowed(document: Document): void {
     assertLifecycleMutationAllowed(document, 'document.lifecycle')
     assertProjectMutationAuthority(this, 'document.lifecycle')
-    const boundary = this.documentMutationBoundary
+    const boundary = this.#documentMutationBoundary
     if (boundary) {
       throw new Error(
         `Document "${document.id}" lifecycle mutation is blocked while document "${boundary.document.id}" is isolated`,
@@ -502,7 +507,7 @@ export class Project {
     this.assertProjectMutationAllowed()
     const protectedValue = this.protectProjectDataValue(value, true)
     if (key === 'config') {
-      this._config = protectedValue as Record<string, any>
+      this.#config = protectedValue as Record<string, any>
     }
 
     this.data = this.protectProjectDataValue({ ...this.data, [key]: protectedValue })
@@ -516,7 +521,7 @@ export class Project {
   get(key: string): unknown
   get(key: string): any {
     if (key === 'config') {
-      return this._config
+      return this.#config
     }
 
     return Reflect.get(this.data, key)
@@ -548,21 +553,21 @@ export class Project {
   mountSimulator(simulator: Simulator) {
     this.assertProjectMutationAllowed()
     assertLifecycleMutationAllowed(simulator, 'project.mountSimulator.target')
-    if (this._simulator && this._simulator !== simulator) {
-      const currentSimulator: unknown = this._simulator
+    if (this.#simulator && this.#simulator !== simulator) {
+      const currentSimulator: unknown = this.#simulator
       if (currentSimulator instanceof Simulator) runInternalLifecycleTeardown(currentSimulator)
       else (currentSimulator as LegacySimulatorLifecycle).dispose?.()
     }
     inheritLifecycleMutationGuard(this, simulator)
     if (simulator instanceof Simulator) inheritEngineTeardownOwnership(this, simulator)
-    this._simulator = simulator
+    this.#simulator = simulator
     this.emitter.emit(PROJECT_EVENT.SIMULATOR_READY, simulator)
   }
 
   onSimulatorReady(listener: (simulator: Simulator) => void): () => void {
     assertLifecycleMutationAllowed(this, 'project.onSimulatorReady')
-    if (this._simulator) {
-      listener(this._simulator)
+    if (this.#simulator) {
+      listener(this.#simulator)
     }
 
     return this.emitter.on(PROJECT_EVENT.SIMULATOR_READY, listener)

@@ -1,3 +1,4 @@
+import { lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import { uniqueId } from '../../utils/unique-id'
 import { AgentCapabilityError } from '../errors'
 import { deepFreezeAgentData } from '../strict-data-validator'
@@ -76,7 +77,13 @@ export class AgentPortHostSession implements AgentPortSession {
 
   private readonly handleAbort = () => this.terminate('agent.transport.aborted')
 
-  constructor(private readonly dependencies: AgentPortHostSessionDependencies) {
+  private readonly dependencies: AgentPortHostSessionDependencies
+
+  constructor(dependencies: AgentPortHostSessionDependencies) {
+    this.dependencies = Object.freeze({
+      ...dependencies,
+      options: Object.freeze({ ...dependencies.options }),
+    })
     this.descriptor = deepFreezeAgentData({
       capability: dependencies.capability.descriptor,
       executionAuthority: dependencies.options.executionAuthority ?? 'peer',
@@ -84,8 +91,16 @@ export class AgentPortHostSession implements AgentPortSession {
       protocol: AGENT_PORT_PROTOCOL,
       transport: 'message-port' as const,
     }) as AgentPortSessionDescriptor
+    lockReadonlyProperties(this, [
+      'dependencies',
+      'descriptor',
+      'handleAbort',
+      'queuedEvents',
+      'sessionId',
+      'unacknowledgedEvents',
+    ])
 
-    const { port, options } = dependencies
+    const { port, options } = this.dependencies
     const portListenerLease = createAgentMessagePortListenerLease(
       port,
       value => this.receive(value),
@@ -107,7 +122,7 @@ export class AgentPortHostSession implements AgentPortSession {
       // implementation that registers and then throws is still cleaned up.
       this.abortListenerRegistered = true
       options.signal.addEventListener('abort', this.handleAbort, { once: true })
-      this.unsubscribeEvents = dependencies.subscribeEvents(event => {
+      this.unsubscribeEvents = this.dependencies.subscribeEvents(event => {
         if (event.capabilityId === this.descriptor.capability.capabilityId) this.enqueueEvent(event)
       })
     } catch (error) {

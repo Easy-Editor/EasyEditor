@@ -7,6 +7,7 @@ import {
 } from '../commands'
 import { runValidatedTransactionOnDocument } from '../commands/transaction-boundary'
 import type { Document } from '../document'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import { assertPublicLifecycleTeardownAllowed, installLifecycleTeardownOperation } from '../lifecycle/teardown-boundary'
 import type { Project } from '../project'
 import type { TrustPolicy } from '../trust'
@@ -595,6 +596,17 @@ export class AgentCapabilityManager {
     installLifecycleTeardownOperation<[reason?: string], void>(this, (reason = 'engine.lifecycle') =>
       this.#revokeAllInternal(reason),
     )
+    lockReadonlyProperties(this, [
+      'auditRecordBytes',
+      'auditRecords',
+      'baselines',
+      'capabilities',
+      'domainEvents',
+      'host',
+      'plans',
+      'portSessions',
+      'terminalPlans',
+    ])
   }
 
   activate(): void {

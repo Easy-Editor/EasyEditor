@@ -1,3 +1,5 @@
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
+
 type DeferredEvent = () => void
 
 export interface EventTransactionScope {
@@ -11,26 +13,31 @@ export interface EventTransactionScope {
  * leaking one engine's transaction state into another engine in the same realm.
  */
 export class EventTransactionCoordinator {
-  private readonly scopes: EventTransactionScope[] = []
+  readonly #scopes: EventTransactionScope[] = []
 
   readonly defer = (deliver: DeferredEvent): boolean => {
-    const scope = this.scopes[this.scopes.length - 1]
+    const scope = this.#scopes[this.#scopes.length - 1]
     if (!scope) return false
     scope.events.push(deliver)
     return true
   }
 
+  constructor() {
+    lockReadonlyProperties(this, ['defer'])
+  }
+
   begin(): EventTransactionScope {
     const scope: EventTransactionScope = { events: [] }
-    this.scopes.push(scope)
+    lockReadonlyProperties(scope, ['events'])
+    this.#scopes.push(scope)
     return scope
   }
 
   commit(scope: EventTransactionScope): void {
     this.requireCurrentScope(scope)
-    this.scopes.pop()
+    this.#scopes.pop()
 
-    const parent = this.scopes[this.scopes.length - 1]
+    const parent = this.#scopes[this.#scopes.length - 1]
     if (parent) {
       parent.events.push(...scope.events)
       scope.events.length = 0
@@ -56,12 +63,12 @@ export class EventTransactionCoordinator {
 
   rollback(scope: EventTransactionScope): void {
     this.requireCurrentScope(scope)
-    this.scopes.pop()
+    this.#scopes.pop()
     scope.events.length = 0
   }
 
   private requireCurrentScope(scope: EventTransactionScope): void {
-    if (this.scopes[this.scopes.length - 1] !== scope) {
+    if (this.#scopes[this.#scopes.length - 1] !== scope) {
       throw new Error('Event transactions must close in last-in-first-out order')
     }
   }

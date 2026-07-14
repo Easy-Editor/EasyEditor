@@ -18,6 +18,7 @@ import {
   sealLifecycleMutations,
 } from '../lifecycle/mutation-barrier'
 import { createMutationGuardedMapView } from '../lifecycle/mutation-guarded-map'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -167,6 +168,16 @@ export class Plugins {
     installPluginManagerOperations(this, {
       deleteRuntime: runtime => this.#deleteRuntimeInternal(runtime),
     })
+    lockReadonlyProperties(this, [
+      'assertPrototypeExtensionsAllowed',
+      'pluginContextMap',
+      'pluginContexts',
+      'plugins',
+      'pluginsMap',
+      'registeredPlugins',
+      'structuralOperations',
+      'structuralReservations',
+    ])
   }
 
   setContextApiAssembler(contextApiAssembler: PluginContextApiAssembler) {
@@ -708,7 +719,7 @@ export class Plugins {
       } catch (error) {
         contextError = error
       }
-      this.plugins = []
+      this.plugins.length = 0
       this.registeredPlugins.clear()
     }
     const errors = [destroyError, contextError].filter(error => error !== undefined)

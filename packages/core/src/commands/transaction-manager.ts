@@ -1,5 +1,6 @@
 import { transaction as mobxTransaction } from 'mobx'
 import type { Document } from '../document'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import type { Materials } from '../materials'
 import {
   beginMaterialsTransaction,
@@ -95,6 +96,7 @@ export class TransactionManager {
     installTransactionBoundaryOperations(this, {
       runValidatedOnDocument: (document, commands, options) => this.runOnDocumentInternal(document, commands, options),
     })
+    lockReadonlyProperties(this, ['events', 'host'])
   }
 
   run(commands: readonly EditorCommand[]): TransactionResult {

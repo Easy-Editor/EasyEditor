@@ -1,4 +1,5 @@
 import { action, computed, intercept, observable, observe } from 'mobx'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import { TRANSFORM_STAGE } from '../../types'
 import { uniqueId } from '../../utils'
 import type { Node } from '../node/node'
@@ -82,6 +83,8 @@ export class Props {
 
   constructor(owner: Node, props?: PropsMap, extras?: PropsMap) {
     this.owner = owner
+    lockReadonlyProperties(this, ['id', 'owner', 'path'])
+    lockPrototypeAccessors(this, ['items', 'props', 'type'])
 
     if (props != null) {
       this.items = Object.keys(props).map(key => new Prop(this, key, props[key]))

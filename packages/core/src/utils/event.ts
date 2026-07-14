@@ -1,3 +1,4 @@
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import type { Editor } from '../types'
 import type { EventBus } from './event-bus'
 import type { Disposable } from './hotkey'
@@ -7,7 +8,7 @@ import { createLogger } from './logger'
 const logger = createLogger('Event')
 
 interface EventOptions {
-  prefix: string
+  readonly prefix: string
 }
 
 export class Event {
@@ -18,7 +19,8 @@ export class Event {
     options: EventOptions,
     public workspaceMode = false,
   ) {
-    this.options = options
+    this.options = Object.freeze({ prefix: options.prefix })
+    lockReadonlyProperties(this, ['eventBus', 'options'])
     if (!this.options.prefix) {
       logger.warn('prefix is required while initializing Event')
     }

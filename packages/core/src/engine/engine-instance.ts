@@ -8,6 +8,7 @@ import { Designer } from '../designer/designer'
 import type { Document } from '../document'
 import { DisposalLedger } from '../lifecycle'
 import { advanceLifecycleMutationEpoch, installLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import { claimEngineTeardownOwnership, runInternalLifecycleTeardown } from '../lifecycle/teardown-boundary'
 import { Materials } from '../materials'
 import {
@@ -114,9 +115,9 @@ export class EngineInstance {
   readonly innerPlugins: Plugins
 
   readonly remote: {
-    registry: ResourceRegistry
-    loadingState: LoadingStateManager
-    request: (request: RemoteAccessRequest) => unknown
+    readonly registry: ResourceRegistry
+    readonly loadingState: LoadingStateManager
+    readonly request: (request: RemoteAccessRequest) => unknown
   }
 
   readonly transactions: TransactionManager
@@ -131,15 +132,15 @@ export class EngineInstance {
 
   private readonly eventTransactions = new EventTransactionCoordinator()
 
-  private initScope?: DisposalLedger
+  #initScope?: DisposalLedger
 
-  private initPromise?: Promise<void>
+  #initPromise?: Promise<void>
 
-  private destroyPromise?: Promise<void>
+  #destroyPromise?: Promise<void>
 
-  private remoteAdapterActive: boolean
+  #remoteAdapterActive = false
 
-  private restrictedPluginBoundaryRelease?: () => void
+  #restrictedPluginBoundaryRelease?: () => void
 
   private readonly assertLifecycleMutationAllowed = (origin: string): void => {
     const state = getEngineLifecycleState(this)
@@ -178,17 +179,17 @@ export class EngineInstance {
       this.materials = new Materials(this.editor)
 
       this.remoteAdapter = options.remoteAdapter
-      this.remoteAdapterActive = !!this.remoteAdapter
+      this.#remoteAdapterActive = !!this.remoteAdapter
       const registry = options.services?.registry || new ResourceRegistry()
       const remoteLoadingState = options.services?.loadingState || new LoadingStateManager()
-      this.remote = {
+      this.remote = Object.freeze({
         loadingState: remoteLoadingState,
         registry,
         request: request => {
           this.assertRemoteAccess(request)
           return this.remoteAdapter?.request?.(request)
         },
-      }
+      })
 
       const pluginContextApiAssembler: PluginContextApiAssembler = {
         assembleApis: (context: PluginContext, pluginName: string, meta: PluginMeta) => {
@@ -221,6 +222,30 @@ export class EngineInstance {
 
       this.hostWindow = options.hostWindow
       this.claimLifecycleMutationOwnership()
+      lockReadonlyProperties(this, [
+        'agentCapabilities',
+        'assertLifecycleMutationAllowed',
+        'clipboard',
+        'commands',
+        'config',
+        'designer',
+        'editor',
+        'event',
+        'eventBus',
+        'eventTransactions',
+        'hostWindow',
+        'hotkey',
+        'innerPlugins',
+        'logger',
+        'materials',
+        'plugins',
+        'project',
+        'remote',
+        'remoteAdapter',
+        'setters',
+        'transactions',
+        'trustPolicy',
+      ])
     } catch (error) {
       this.releaseRestrictedPluginBoundary()
       throw error
@@ -229,34 +254,34 @@ export class EngineInstance {
 
   async init(options?: ConfigOptions): Promise<void> {
     if (this.lifecycleState === 'initializing') {
-      return this.initPromise
+      return this.#initPromise
     }
     if (this.lifecycleState === 'ready') {
       await this.destroy()
     } else if (this.lifecycleState === 'disposing') {
-      await this.destroyPromise
+      await this.#destroyPromise
     } else if (this.lifecycleState === 'failed') {
       await this.destroy()
     }
 
     // Concurrent callers waiting for the same teardown join the first restart.
     const settledState = this.lifecycleState as EngineLifecycleState
-    if (settledState === 'initializing') return this.initPromise
+    if (settledState === 'initializing') return this.#initPromise
     if (settledState === 'ready') return
 
     this.ensureRestrictedPluginBoundary('engine.init')
 
-    this.initPromise = this.initialize(options)
+    this.#initPromise = this.initialize(options)
     try {
-      await this.initPromise
+      await this.#initPromise
     } finally {
-      this.initPromise = undefined
+      this.#initPromise = undefined
     }
   }
 
   private async initialize(options?: ConfigOptions): Promise<void> {
     this.#transitionLifecycle('initializing')
-    this.initScope = new DisposalLedger()
+    this.#initScope = new DisposalLedger()
     try {
       if (options) this.config.setEngineOptions(options)
       this.wireEditorContext()
@@ -274,14 +299,14 @@ export class EngineInstance {
 
       this.innerPlugins.preflight()
       if (this.remoteAdapter?.dispose) {
-        this.remoteAdapterActive = true
-        this.initScope.add(() => this.disposeRemoteAdapter(), 'engine.remoteAdapter')
+        this.#remoteAdapterActive = true
+        this.#initScope.add(() => this.disposeRemoteAdapter(), 'engine.remoteAdapter')
       }
       await this.remoteAdapter?.init?.()
 
       const hostWindow = this.resolveHostWindow()
       if (hostWindow) {
-        this.initScope.add(this.hotkey.mount(hostWindow), 'engine.hotkey')
+        this.#initScope.add(this.hotkey.mount(hostWindow), 'engine.hotkey')
       }
 
       await this.plugins.extend()
@@ -297,7 +322,7 @@ export class EngineInstance {
         rollbackErrors.push(rollbackError)
       }
       try {
-        await this.initScope.dispose()
+        await this.#initScope.dispose()
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
       }
@@ -310,7 +335,7 @@ export class EngineInstance {
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError)
       }
-      this.initScope = undefined
+      this.#initScope = undefined
       this.#transitionLifecycle(rollbackErrors.length ? 'failed' : 'created')
       if (rollbackErrors.length) {
         throw new AggregateError([error, ...rollbackErrors], 'Engine initialization and rollback both failed')
@@ -322,24 +347,24 @@ export class EngineInstance {
   async destroy(): Promise<void> {
     if (this.lifecycleState === 'disposed') return
     if (this.lifecycleState === 'disposing') {
-      return this.destroyPromise
+      return this.#destroyPromise
     }
     if (this.lifecycleState === 'initializing') {
       try {
-        await this.initPromise
+        await this.#initPromise
       } catch {
         // Initialization already rolled its partial resources back.
       }
       const settledState = this.lifecycleState as EngineLifecycleState
       if (settledState === 'disposed') return
-      if (settledState === 'disposing') return this.destroyPromise
+      if (settledState === 'disposing') return this.#destroyPromise
     }
 
-    this.destroyPromise = this.disposeEngine()
+    this.#destroyPromise = this.disposeEngine()
     try {
-      await this.destroyPromise
+      await this.#destroyPromise
     } finally {
-      this.destroyPromise = undefined
+      this.#destroyPromise = undefined
     }
   }
 
@@ -375,9 +400,9 @@ export class EngineInstance {
     }
 
     await cleanup(() => runInternalLifecycleTeardown<[string]>(this.agentCapabilities, 'engine.lifecycle'))
-    const initScope = this.initScope
+    const initScope = this.#initScope
     await cleanup(() => initScope?.dispose())
-    this.initScope = undefined
+    this.#initScope = undefined
     await cleanup(() => runInternalLifecycleTeardown<['destroy'], Promise<void>>(this.innerPlugins, 'destroy'))
     await cleanup(() => runInternalLifecycleTeardown(this.designer))
     await cleanup(() => runInternalLifecycleTeardown<[], Promise<void>>(this.project))
@@ -431,10 +456,10 @@ export class EngineInstance {
   }
 
   private ensureRestrictedPluginBoundary(origin: string): void {
-    if (this.trustPolicy.allowPluginExtensions || this.restrictedPluginBoundaryRelease) return
+    if (this.trustPolicy.allowPluginExtensions || this.#restrictedPluginBoundaryRelease) return
     const release = establishRestrictedPluginBoundary()
     if (release) {
-      this.restrictedPluginBoundaryRelease = release
+      this.#restrictedPluginBoundaryRelease = release
       return
     }
     throw new PolicyViolation({
@@ -450,8 +475,8 @@ export class EngineInstance {
   }
 
   private releaseRestrictedPluginBoundary(): void {
-    this.restrictedPluginBoundaryRelease?.()
-    this.restrictedPluginBoundaryRelease = undefined
+    this.#restrictedPluginBoundaryRelease?.()
+    this.#restrictedPluginBoundaryRelease = undefined
   }
 
   assertRemoteAccess(request: RemoteAccessRequest): true {
@@ -471,9 +496,9 @@ export class EngineInstance {
   }
 
   private async disposeRemoteAdapter(): Promise<void> {
-    if (!this.remoteAdapterActive) return
+    if (!this.#remoteAdapterActive) return
     await this.remoteAdapter?.dispose?.()
-    this.remoteAdapterActive = false
+    this.#remoteAdapterActive = false
   }
 
   private resolveHostWindow(): Window | undefined {

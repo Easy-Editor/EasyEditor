@@ -1,5 +1,6 @@
 import { action, computed, observable, runInAction } from 'mobx'
 import { DESIGNER_EVENT, type SettingTopEntry } from '../../designer'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../../lifecycle/readonly-properties'
 import { withoutProjectMutationAuthority } from '../../project/mutation-authority'
 import { type NodeSchema, type NpmInfo, TRANSFORM_STAGE } from '../../types'
 import { type EventBus, isObject, isRemoteComponent, uniqueId } from '../../utils'
@@ -32,10 +33,10 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   protected _children: NodeChildren | null
 
-  @observable.ref private accessor _parent: Node | null = null
+  @observable.ref accessor #parent: Node | null = null
 
   get parent() {
-    return this._parent
+    return this.#parent
   }
 
   get children() {
@@ -63,8 +64,8 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
    */
   @computed
   get zLevel(): number {
-    if (this._parent) {
-      return this._parent.zLevel + 1
+    if (this.#parent) {
+      return this.#parent.zLevel + 1
     }
     return 0
   }
@@ -139,6 +140,8 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
     this.id = id || uniqueId('node')
     this.componentName = componentName
+    lockReadonlyProperties(this, ['componentName', 'document', 'emitter', 'id'])
+    lockPrototypeAccessors(this, ['children', 'parent', 'props'])
     this.props = new Props(this, props, extras)
     if (options.invokeMaterialHooks !== false) {
       this.props.merge(this.upgradeProps(this.initProps(props || {})), this.upgradeProps(extras))
@@ -147,6 +150,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     const initialChildren =
       options.invokeMaterialHooks === false ? this.explicitChildren(children) : this.initialChildren(children)
     this._children = new NodeChildren(this, initialChildren, options)
+    lockReadonlyProperties(this, ['_children'])
 
     this.onVisibleChange(visible => {
       this.document.designer.postEvent(DESIGNER_EVENT.NODE_VISIBLE_CHANGE, this, visible)
@@ -289,8 +293,8 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     if (callbacks?.onNodeAdd) {
       withoutProjectMutationAuthority(this.document.project, () => callbacks.onNodeAdd?.call(this, dragNode, this))
     }
-    if (this._parent) {
-      this._parent.didDropIn(dragNode)
+    if (this.#parent) {
+      this.#parent.didDropIn(dragNode)
     }
   }
 
@@ -302,8 +306,8 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
     if (callbacks?.onNodeRemove) {
       withoutProjectMutationAuthority(this.document.project, () => callbacks.onNodeRemove?.call(this, dragNode, this))
     }
-    if (this._parent) {
-      this._parent.didDropOut(dragNode)
+    if (this.#parent) {
+      this.#parent.didDropOut(dragNode)
     }
   }
 
@@ -504,20 +508,20 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   internalSetParent(parent: Node | null, useMutator = false) {
     this.document.project.assertDocumentMutationAllowed(this.document)
-    if (this._parent === parent) {
+    if (this.#parent === parent) {
       return
     }
     this.document.markSchemaMutation()
 
-    if (this._parent) {
-      this._parent.children?.unlinkChild(this)
+    if (this.#parent) {
+      this.#parent.children?.unlinkChild(this)
     }
     if (useMutator) {
-      this._parent?.didDropOut(this)
+      this.#parent?.didDropOut(this)
     }
 
     if (parent) {
-      this._parent = parent
+      this.#parent = parent
 
       if (useMutator) {
         parent.didDropIn(this)
@@ -527,7 +531,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   internalUnlinkParent() {
     this.document.markSchemaMutation()
-    this._parent = null
+    this.#parent = null
   }
 
   /**

@@ -76,6 +76,43 @@ test('runtime-private lifecycle state resists backing-field writes, method calls
   )
 })
 
+test('plugin writes to legacy lifecycle slot names cannot redirect engine initialization or teardown', async t => {
+  const core = await loadCore()
+  let adapterDisposeCalls = 0
+  const engine = core.createEngine({
+    hostWindow: null,
+    remoteAdapter: {
+      async dispose() {
+        adapterDisposeCalls += 1
+      },
+      async init() {},
+    },
+    trustPolicy: 'legacyTrusted',
+  })
+  t.after(async () => engine.destroy())
+  const marker = Object.freeze({ forged: true })
+  let writes
+  await engine.plugins.register({
+    name: 'lifecycle-slot-tamper',
+    init(ctx) {
+      writes = [
+        'initScope',
+        'initPromise',
+        'destroyPromise',
+        'remoteAdapterActive',
+        'restrictedPluginBoundaryRelease',
+      ].map(key => Reflect.set(ctx.engine, key, marker))
+    },
+  })
+
+  await engine.init()
+  assert.deepEqual(writes, [true, true, true, true, true])
+  assert.strictEqual(engine.initScope, marker)
+  await engine.destroy()
+  assert.equal(adapterDisposeCalls, 1)
+  assert.equal(engine.lifecycleState, 'disposed')
+})
+
 test('Plugins.toProxy returns one canonical lifecycle-guarded identity', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
@@ -242,6 +279,20 @@ test('a disposed plugin context revokes retained engine capabilities across rest
   t.after(async () => engine.destroy())
   let oldContext
   let deliveries = 0
+  let rejectLateRegistryPromise
+  let rejectRegistryPromise
+  const arrayCapability = [engine.project]
+  const promiseCapability = Promise.resolve(engine.remote.registry)
+  const rejectedPromiseCapability = new Promise((_, reject) => {
+    rejectRegistryPromise = reject
+  })
+  const lateRejectedPromiseCapability = new Promise((_, reject) => {
+    rejectLateRegistryPromise = reject
+  })
+  engine.config.set('array-capability', arrayCapability)
+  engine.config.set('promise-capability', { promise: promiseCapability })
+  engine.config.set('rejected-promise-capability', { promise: rejectedPromiseCapability })
+  engine.config.set('late-rejected-promise-capability', { promise: lateRejectedPromiseCapability })
   await engine.plugins.register({
     name: 'retained-context',
     init(ctx) {
@@ -252,8 +303,34 @@ test('a disposed plugin context revokes retained engine capabilities across rest
   const retainedConfig = oldContext.config
   const retainedPlugins = oldContext.plugins
   const retainedEvent = oldContext.event
+  const retainedEngineConfig = oldContext.engine.config
+  const retainedEngineProject = oldContext.engine.project
+  const retainedEngineMaterials = oldContext.engine.materials
+  const retainedEngineRegistry = oldContext.engine.remote.registry
+  const retainedDescriptorProject = Object.getOwnPropertyDescriptor(oldContext.engine, 'project').value
+  const retainedArray = oldContext.config.get('array-capability')
+  const retainedRegistryPromise = oldContext.config.get('promise-capability').promise
+  const retainedRejectedRegistryPromise = oldContext.config.get('rejected-promise-capability').promise
+  const retainedLateRejectedRegistryPromise = oldContext.config.get('late-rejected-promise-capability').promise
+  assert.strictEqual(retainedEngineConfig, retainedConfig)
+  assert.notStrictEqual(retainedEngineProject, engine.project)
+  assert.notStrictEqual(retainedEngineMaterials, engine.materials)
+  assert.notStrictEqual(retainedDescriptorProject, engine.project)
+  assert.strictEqual(retainedDescriptorProject, retainedEngineProject)
+  assert.notStrictEqual(retainedEngineRegistry, engine.remote.registry)
+  assert.equal(Array.isArray(retainedArray), true)
+  assert.notStrictEqual(retainedArray[0], engine.project)
+  assert.strictEqual(Object.getOwnPropertyDescriptor(retainedArray, '0').value, retainedArray[0])
+  assert.equal(Reflect.defineProperty(retainedArray, 'locked', { configurable: false, value: engine.project }), false)
+  assert.equal(Object.hasOwn(arrayCapability, 'locked'), false)
+  assert.notStrictEqual(retainedRegistryPromise, promiseCapability)
+  rejectRegistryPromise(engine.remote.registry)
+  const retainedRejectedRegistry = await retainedRejectedRegistryPromise.catch(reason => reason)
+  assert.notStrictEqual(retainedRejectedRegistry, engine.remote.registry)
+  assert.equal(Reflect.set(oldContext.engine, 'project', engine.project), false)
   await engine.destroy()
   await engine.init()
+  rejectLateRegistryPromise(engine.remote.registry)
   const currentListener = engine.eventBus.on('retained-context:event', () => {
     deliveries += 1
   })
@@ -268,6 +345,21 @@ test('a disposed plugin context revokes retained engine capabilities across rest
       }),
     ),
     settle(() => retainedEvent.emit('retained-context:event')),
+    settle(() => retainedEngineProject.get('id')),
+    settle(() => retainedEngineMaterials.editor),
+    settle(() => retainedEngineRegistry.has('material', 'stale-context-resource')),
+    settle(() => retainedDescriptorProject.get('id')),
+    settle(() => retainedArray[0].get('id')),
+    settle(async () => (await retainedRegistryPromise).has('material', 'stale-promise-resource')),
+    settle(() => retainedRejectedRegistry.has('material', 'stale-rejected-promise-resource')),
+    settle(async () => {
+      try {
+        await retainedLateRejectedRegistryPromise
+        throw new Error('late rejected capability promise unexpectedly fulfilled')
+      } catch (reason) {
+        return reason.has('material', 'stale-late-rejected-promise-resource')
+      }
+    }),
     settle(() => {
       oldContext.config = engine.config
     }),
@@ -282,7 +374,21 @@ test('a disposed plugin context revokes retained engine capabilities across rest
       registered: engine.plugins.has('stale-context-plugin'),
     },
     {
-      attempts: ['rejected', 'rejected', 'rejected', 'rejected', 'rejected'],
+      attempts: [
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+        'rejected',
+      ],
       config: undefined,
       deliveries: 0,
       registered: false,

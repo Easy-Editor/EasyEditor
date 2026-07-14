@@ -2,6 +2,7 @@ import { action, observable } from 'mobx'
 import { DESIGNER_EVENT, type Designer, type DropLocation } from '../designer'
 import { sealLifecycleMutations } from '../lifecycle/mutation-barrier'
 import { createMutationGuardedMapView } from '../lifecycle/mutation-guarded-map'
+import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import { runInternalLifecycleTeardown } from '../lifecycle/teardown-boundary'
 import { releaseMaterialUsageDuringTeardown } from '../materials/teardown'
 import type { Project } from '../project'
@@ -22,16 +23,16 @@ export enum DOCUMENT_EVENT {
 export class Document {
   readonly isDocument = true
 
-  private schemaMutationVersion = 0
+  #schemaMutationVersion = 0
 
   get mutationVersion(): number {
-    return this.schemaMutationVersion
+    return this.#schemaMutationVersion
   }
 
   /** Internal monotonic clock for every attempted schema write, including ABA and rollback. */
   markSchemaMutation(): void {
     this.project.assertDocumentMutationAllowed(this)
-    this.schemaMutationVersion += 1
+    this.#schemaMutationVersion += 1
   }
 
   private emitter: EventBus
@@ -167,9 +168,13 @@ export class Document {
   constructor(project: Project, schema?: RootSchema) {
     this.project = project
     this.designer = project.designer
+    lockReadonlyProperties(this, ['designer', 'isDocument', 'project'])
+    lockPrototypeAccessors(this, ['id', 'mutationVersion', 'nodesMap', 'root', 'rootNode', 'simulator'])
     this.emitter = this.designer.createEventBus('Document')
+    lockReadonlyProperties(this, ['emitter'])
     this.id = schema?.docId ?? uniqueId('doc')
     this.restrictedNodesMapView = createMutationGuardedMapView(this.#nodesMap, () => this.markSchemaMutation())
+    lockReadonlyProperties(this, ['restrictedNodesMapView'])
 
     if (schema) {
       this.rootNode = this.createNode(schema)
@@ -189,6 +194,7 @@ export class Document {
       remove: () => this.#removeInternal(true),
       retire: () => sealLifecycleMutations(this, 'document generation is disposed'),
     })
+    lockReadonlyProperties(this, ['history'])
   }
 
   @action
@@ -262,7 +268,7 @@ export class Document {
   }
 
   #purgeInternal(teardown: boolean): void {
-    if (teardown) this.schemaMutationVersion += 1
+    if (teardown) this.#schemaMutationVersion += 1
     else {
       this.project.assertDocumentLifecycleMutationAllowed(this)
       this.markSchemaMutation()

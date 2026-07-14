@@ -1,6 +1,7 @@
 import { action, observable } from 'mobx'
 import { type Node, isNode } from '../document'
 import { assertLifecycleMutationAllowed } from '../lifecycle/mutation-barrier'
+import { lockReadonlyProperties } from '../lifecycle/readonly-properties'
 import {
   assertPublicLifecycleTeardownAllowed,
   inheritEngineTeardownOwnership,
@@ -25,6 +26,7 @@ export class ActiveTracker {
 
   constructor(private readonly designer: Designer) {
     this.emitter = designer.createEventBus('ActiveTracker')
+    lockReadonlyProperties(this, ['designer', 'emitter'])
     installLifecycleTeardownOperation(
       this,
       action(() => this.#disposeInternal()),
