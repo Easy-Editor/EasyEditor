@@ -46,7 +46,7 @@ Visit the [online documentation](https://easyeditor.dev/) for more information.
 ## Debug
 
 Environment requirements:
-- node >= 18.0.0
+- node >= 18.12.0
 - pnpm >= 9.12.2
 
 ```bash

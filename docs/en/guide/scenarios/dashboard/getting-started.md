@@ -11,7 +11,7 @@ This guide will help you quickly build a dashboard design application based on E
 
 Ensure your development environment meets the following requirements:
 
-- [Node.js](https://nodejs.org/) version 18 or higher.
+- [Node.js](https://nodejs.org/) version 18.12.0 or higher.
 - [pnpm](https://pnpm.io/) version 9.12.2 or higher.
 
 ::: info Note

@@ -4,7 +4,7 @@
 
 ## 环境准备
 
-- [Node.js](https://nodejs.org/) 18 及以上版本。
+- [Node.js](https://nodejs.org/) 18.12.0 及以上版本。
 - [pnpm](https://pnpm.io/) 9.12.2 及以上版本。
 
 ::: info 提示

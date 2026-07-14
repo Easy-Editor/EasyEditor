@@ -9,7 +9,7 @@ This guide will help you quickly get started with EasyEditor, a pluggable cross-
 
 ## Environment Requirements
 
-- [Node.js](https://nodejs.org/) version 18 or higher.
+- [Node.js](https://nodejs.org/) version 18.12.0 or higher.
 - [pnpm](https://pnpm.io/) version 9.12.2 or higher.
 
 ::: info Note
