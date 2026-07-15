@@ -22,8 +22,7 @@ const readOwnDataValue = (value, key, fallback = OMIT) => {
 
 const normalizeOwnString = (value, fallback) => (typeof value === 'string' && value.length > 0 ? value : fallback)
 
-const normalizePositiveSafeInteger = (value, fallback) =>
-  Number.isSafeInteger(value) && value > 0 ? value : fallback
+const normalizePositiveSafeInteger = (value, fallback) => (Number.isSafeInteger(value) && value > 0 ? value : fallback)
 
 const normalizeNonNegativeSafeInteger = (value, fallback) =>
   Number.isSafeInteger(value) && value >= 0 ? value : fallback
@@ -377,10 +376,7 @@ export const createCoreProjectionProvider = adapter => ({
     return {
       adapterGeneration: normalizePositiveSafeInteger(adapter.readAdapterGeneration(), 0),
       documentId: normalizeOwnString(readOwnDataValue(document, 'id', null), 'none'),
-      documentMutationVersion: normalizeNonNegativeSafeInteger(
-        readOwnDataValue(document, 'mutationVersion', null),
-        -1,
-      ),
+      documentMutationVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(document, 'mutationVersion', null), -1),
       materialRegistryVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(materials, 'version', null), -1),
     }
   },

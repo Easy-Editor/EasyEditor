@@ -287,10 +287,17 @@ test('actual Host.observe omits hostile ComponentMeta scalar and tag accessors',
   for (const key of ['title', 'description', 'group', 'category']) {
     Object.defineProperty(hostileMetadata, key, { enumerable: true, get: getter })
   }
-
-  engine.materials.getComponentMetasMap().set('Hostile', {
-    getMetadata: () => hostileMetadata,
-  })
+  const hostileComponentMeta =
+    engine.materials.createComponentMeta({
+      componentName: 'Hostile',
+      title: 'Hostile',
+      description: 'Hostile',
+      group: 'Hostile',
+      category: 'Hostile',
+      tags: ['public'],
+    }) ?? engine.materials.getComponentMetasMap().get('Hostile')
+  hostileComponentMeta.getMetadata = () => hostileMetadata
+  getterInvocations = 0
 
   const full = await rpc.call('observe', observeRequest())
   const hostile = full.projection['dashboard.core'].materials.summaries.find(

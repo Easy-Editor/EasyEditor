@@ -256,19 +256,16 @@ test('Core hostile scalar fences and descriptor-safe summaries survive full, del
   assert.equal(getterInvocations, 0)
   assert.deepEqual(core.document, { id: 'none', mutationVersion: -1, rootNodeId: 'node-000' })
   assert.equal(core.materials.registryVersion, -1)
-  assert.deepEqual(
-    core.materials.summaries,
-    [
-      {
-        componentName: 'Hostile',
-        title: 'Hostile',
-        description: '',
-        group: '',
-        category: '',
-        tags: ['public'],
-      },
-    ],
-  )
+  assert.deepEqual(core.materials.summaries, [
+    {
+      componentName: 'Hostile',
+      title: 'Hostile',
+      description: '',
+      group: '',
+      category: '',
+      tags: ['public'],
+    },
+  ])
   assert.equal(clone.providerGenerations['dashboard.core'], full.providerGenerations['dashboard.core'])
   assert.doesNotMatch(JSON.stringify(clone), /host-secret-source|getter|password|credential|authorization/)
 
@@ -579,10 +576,7 @@ test('Core document and material registry accessors are normalized without invok
   assert.equal(getterInvocations, 0)
   assert.deepEqual(Object.keys(core.nodes), [])
   assert.deepEqual(core.materials.summaries, [])
-  assert.deepEqual(
-    core.document,
-    sanitizeJsonValue({ id: 'none', mutationVersion: -1, rootNodeId: null }),
-  )
+  assert.deepEqual(core.document, sanitizeJsonValue({ id: 'none', mutationVersion: -1, rootNodeId: null }))
   assert.deepEqual(core.materials, sanitizeJsonValue({ registryVersion: -1, summaries: [] }))
   assert.doesNotMatch(JSON.stringify(structuredClone(full)), /registry-secret|source/)
 })
