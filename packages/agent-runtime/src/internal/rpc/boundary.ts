@@ -1,5 +1,6 @@
 import type { AgentHost, AgentPersistencePort } from '../../contracts.js'
-import { agentBoundaryRpcContracts, type RpcHandlers } from './contracts.js'
+import { agentBoundaryRpcContracts } from './contracts.js'
+import type { RpcHandlers } from './peer.js'
 
 export const createAgentBoundaryRpcHandlers = (
   host: AgentHost,

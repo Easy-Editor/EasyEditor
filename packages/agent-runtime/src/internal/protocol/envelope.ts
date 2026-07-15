@@ -65,7 +65,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 
 const encodedLength = (value: string) => textEncoder.encode(value).byteLength
 
-const assertBoundedString = (value: unknown, field: string): asserts value is string => {
+function assertBoundedString(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new ProtocolValidationError('invalid-field', `${field} must be a non-empty string`)
   }
@@ -74,12 +74,12 @@ const assertBoundedString = (value: unknown, field: string): asserts value is st
   }
 }
 
-export const assertExactFields = (
+export function assertExactFields(
   value: unknown,
   required: readonly string[],
   optional: readonly string[] = [],
   label = 'value',
-): asserts value is Record<string, unknown> => {
+): asserts value is Record<string, unknown> {
   if (!isRecord(value)) {
     throw new ProtocolValidationError('invalid-field', `${label} must be a plain object`)
   }
@@ -97,12 +97,12 @@ export const assertExactFields = (
   }
 }
 
-const assertJsonValueInternal = (
+function assertJsonValueInternal(
   value: unknown,
   depth: number,
   ancestors: WeakSet<object>,
   path: string,
-): asserts value is JsonValue => {
+): asserts value is JsonValue {
   if (depth > MAX_PROTOCOL_NESTING_DEPTH) {
     throw new ProtocolValidationError('nesting-too-deep', `${path} exceeds the nesting depth limit`)
   }
@@ -153,7 +153,7 @@ const assertJsonValueInternal = (
   }
 }
 
-export const assertJsonValue = (value: unknown, path = 'value'): asserts value is JsonValue => {
+export function assertJsonValue(value: unknown, path = 'value'): asserts value is JsonValue {
   assertJsonValueInternal(value, 0, new WeakSet(), path)
 }
 

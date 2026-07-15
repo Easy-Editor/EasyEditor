@@ -419,7 +419,7 @@ export const createRpcPeer = <Contracts extends RpcContractMap>(
       pending.set(requestId, {
         contract,
         context,
-        resolve,
+        resolve: result => (resolve as (value: unknown) => void)(result),
         reject,
         removeAbortListener: () => requestOptions.signal?.removeEventListener('abort', onAbort),
       })

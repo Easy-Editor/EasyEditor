@@ -63,6 +63,10 @@ const optionalStringField = (value: unknown, field: string) => {
   if (value !== undefined) stringField(value, field)
 }
 
+function arrayField(value: unknown, field: string): asserts value is unknown[] {
+  if (!Array.isArray(value)) fail(`${field} must be an array`)
+}
+
 const jsonObjectField = (value: unknown, field: string): JsonObject => {
   assertJsonValue(value, field)
   if (typeof value !== 'object' || value === null || Array.isArray(value)) fail(`${field} must be an object`)
@@ -87,7 +91,7 @@ const parsePersistenceRecord = (value: unknown, field: string): PersistenceRecor
 }
 
 const parseRecords = (value: unknown, field: string): readonly PersistenceRecord[] => {
-  if (!Array.isArray(value)) fail(`${field} must be an array`)
+  arrayField(value, field)
   return value.map((entry, index) => parsePersistenceRecord(entry, `${field}[${index}]`))
 }
 
@@ -138,14 +142,14 @@ const parseHostSnapshotDelta = (value: unknown): HostSnapshotDelta => {
     stringField(value[field], `HostSnapshotDelta.${field}`)
   }
   integerField(value.providerGeneration, 'HostSnapshotDelta.providerGeneration')
-  if (!Array.isArray(value.changes)) fail('HostSnapshotDelta.changes must be an array')
+  arrayField(value.changes, 'HostSnapshotDelta.changes')
   value.changes.forEach((change, index) => jsonObjectField(change, `HostSnapshotDelta.changes[${index}]`))
   return value as unknown as HostSnapshotDelta
 }
 
 export const parseObserveResponse = (value: unknown): HostSnapshot | HostSnapshotDelta => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) fail('observe response must be an object')
-  return Object.hasOwn(value, 'projection') ? parseHostSnapshot(value) : parseHostSnapshotDelta(value)
+  return Object.hasOwn(value as object, 'projection') ? parseHostSnapshot(value) : parseHostSnapshotDelta(value)
 }
 
 export const parseCapabilitySchemaRequest = (value: unknown): CapabilitySchemaRequest => {
