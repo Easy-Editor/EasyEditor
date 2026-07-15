@@ -1,0 +1,23 @@
+{
+  "name": "@easy-editor/agent-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Worker-owned agent orchestration contracts for EasyEditor hosts",
+  "type": "module",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.20.8"
+  },
+  "scripts": {
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "build": "pnpm types",
+    "types": "tsc --project tsconfig.build.json",
+    "test": "node --test test/*.test.mjs && pnpm test-types",
+    "test-types": "tsc --project tsconfig.test.json"
+  }
+}
