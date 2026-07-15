@@ -276,6 +276,153 @@ test('cyclic, oversized, accessor-backed, and malformed configure data produce b
   assert.ok(malformed.diagnostics.some(item => item.code === 'invalid-configure'))
 })
 
+test('descriptor-only hostile traversal invokes zero getters and never leaks inspection errors', () => {
+  let getterInvocations = 0
+  const secret = 'descriptor-secret-must-not-leak'
+  const poison = (target, key) => {
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        getterInvocations += 1
+        throw new Error(secret)
+      },
+    })
+    return target
+  }
+  const poisonedArray = value => poison([value], '0')
+  const compile = options => compileSafeMaterialManifest({ materialRegistryVersion: 1, ...options })
+  const manifests = []
+
+  manifests.push(
+    compile({ metadata: { componentName: 'Text', configure: { props: poisonedArray({ name: 'value' }) } } }),
+  )
+  const proxiedConfigure = new Proxy([{ name: 'value', setter: 'StringSetter' }], {
+    get() {
+      getterInvocations += 1
+      throw new Error(secret)
+    },
+  })
+  const proxiedManifest = compile({ metadata: { componentName: 'Text', configure: { props: proxiedConfigure } } })
+  assert.equal(field(proxiedManifest, 'props.value')?.access, 'read-write')
+  manifests.push(compile({ metadata: { componentName: 'Text', configure: { props: [poison({}, 'name')] } } }))
+  manifests.push(
+    compile({
+      metadata: createMetadata({
+        extraFields: [
+          {
+            name: 'mode',
+            setter: { componentName: 'StringSetter', props: { options: poisonedArray('safe') } },
+          },
+        ],
+      }),
+    }),
+  )
+  manifests.push(
+    compile({
+      metadata: createMetadata({
+        extraFields: [
+          {
+            name: 'mode',
+            setter: { componentName: 'StringSetter', props: { options: [poison({}, 'value')] } },
+          },
+        ],
+      }),
+    }),
+  )
+  manifests.push(
+    compile({
+      annotationBindings: { Text: { schema: 'custom.schema' } },
+      annotations: {
+        ...dashboardConfigureAnnotations,
+        'custom.schema': {
+          access: 'read-write',
+          fieldId: 'custom.schema',
+          readPath: ['props', 'schema'],
+          valueSchema: { enum: poisonedArray('safe') },
+          verifyPaths: [['props', 'schema']],
+          writeTargets: [{ path: ['props', 'schema'] }],
+        },
+      },
+      metadata: createMetadata({ extraFields: [{ name: 'schema', setter: 'StringSetter' }] }),
+    }),
+  )
+  manifests.push(
+    compile({
+      metadata: createMetadata({
+        extraFields: [
+          {
+            extraProps: { defaultValue: poison({}, 'secret') },
+            name: 'defaulted',
+            setter: 'StringSetter',
+          },
+        ],
+      }),
+    }),
+  )
+
+  const labelMetadata = createMetadata()
+  poison(labelMetadata, 'category')
+  poison(labelMetadata, 'group')
+  poison(labelMetadata, 'title')
+  manifests.push(compile({ metadata: labelMetadata }))
+
+  const bindingMap = poison({}, 'title')
+  manifests.push(compile({ annotationBindings: { Text: bindingMap }, metadata: createMetadata() }))
+
+  const descriptorTrap = new Proxy(
+    {},
+    {
+      getOwnPropertyDescriptor() {
+        throw new Error(secret)
+      },
+      getPrototypeOf() {
+        return Object.prototype
+      },
+    },
+  )
+  manifests.push(compile({ metadata: { componentName: 'Text', configure: { props: [descriptorTrap] } } }))
+
+  assert.equal(getterInvocations, 0)
+  assert.ok(manifests.every(manifest => manifest.diagnostics.length <= 8))
+  assert.ok(
+    manifests.every(manifest =>
+      manifest.diagnostics.some(item => ['accessor-rejected', 'invalid-configure'].includes(item.code)),
+    ),
+  )
+  assert.doesNotMatch(JSON.stringify(manifests), /descriptor-secret/)
+})
+
+test('manifest ordering uses UTF-16 code units without consulting localeCompare', () => {
+  const originalLocaleCompare = String.prototype.localeCompare
+  let localeCompareCalls = 0
+  let manifest
+  String.prototype.localeCompare = () => {
+    localeCompareCalls += 1
+    throw new Error('localeCompare must not be consulted')
+  }
+  try {
+    manifest = compileSafeMaterialManifest({
+      materialRegistryVersion: 1,
+      metadata: {
+        componentName: 'SortFixture',
+        configure: {
+          props: ['😀', 'ä', 'a', 'Z'].map(name => ({ name, setter: 'UnknownSetter' })),
+        },
+      },
+    })
+  } finally {
+    String.prototype.localeCompare = originalLocaleCompare
+  }
+
+  assert.equal(localeCompareCalls, 0)
+  assert.deepEqual(
+    manifest.fields.map(item => item.fieldId),
+    ['props.Z', 'props.a', 'props.ä', 'props.😀'],
+  )
+  assert.equal(manifest.diagnostics.length, 4)
+})
+
 test('field-name bindings survive reorder and fail closed on duplicate, unnamed, or ambiguous callback fields', () => {
   const id = { name: 'id', setter: 'NodeIdSetter', title: 'ID' }
   const title = { extraProps: { setValue: callback }, name: 'title', setter: 'StringSetter', title: '标题' }
@@ -312,6 +459,64 @@ test('field-name bindings survive reorder and fail closed on duplicate, unnamed,
   })
   assert.ok(field(specificWins, 'image.source'))
   assert.equal(field(specificWins, 'shared.title'), undefined)
+})
+
+test('wildcard shared bindings are limited to built-ins while exact third-party overrides remain explicit', () => {
+  const unknown = compileSafeMaterialManifest({
+    materialRegistryVersion: 1,
+    metadata: createMetadata({ componentName: 'ThirdPartyUnknown' }),
+  })
+
+  assert.equal(field(unknown, 'shared.title'), undefined)
+  assert.equal(field(unknown, 'shared.rect'), undefined)
+  assert.equal(field(unknown, 'shared.visibility'), undefined)
+  assert.equal(unknown.fields.filter(item => item.access === 'unsupported').length, 3)
+
+  const exact = compileSafeMaterialManifest({
+    annotationBindings: { ThirdPartyUnknown: { title: 'shared.title' } },
+    materialRegistryVersion: 1,
+    metadata: createMetadata({ componentName: 'ThirdPartyUnknown' }),
+  })
+  assert.equal(field(exact, 'shared.title')?.access, 'read-write')
+  assert.equal(field(exact, 'shared.rect'), undefined)
+  assert.equal(field(exact, 'shared.visibility'), undefined)
+})
+
+test('leaf names win over key fallback and group keys never become fields', () => {
+  const manifest = compileSafeMaterialManifest({
+    materialRegistryVersion: 1,
+    metadata: {
+      componentName: 'Text',
+      configure: {
+        props: [
+          {
+            items: [
+              {
+                extraProps: { condition: callback },
+                key: 'condition',
+                setter: 'SwitchSetter',
+              },
+              {
+                extraProps: { setValue: callback },
+                key: 'condition',
+                name: 'title',
+                setter: 'StringSetter',
+              },
+            ],
+            key: 'group-only',
+            type: 'group',
+          },
+        ],
+      },
+    },
+  })
+
+  assert.equal(field(manifest, 'shared.visibility')?.access, 'read-write')
+  assert.equal(field(manifest, 'shared.title')?.access, 'read-write')
+  assert.equal(
+    manifest.fields.some(item => item.fieldId.includes('group-only')),
+    false,
+  )
 })
 
 test('manifest readiness reports future material gaps without inventing Text or chart fields', () => {
@@ -445,6 +650,34 @@ test('manifest cache single-flights requests and caches fail-closed load results
   assert.equal(failedLoads, 1)
   assert.equal(firstFailure.diagnostics[0].code, 'material-load-failed')
   assert.doesNotMatch(JSON.stringify(firstFailure), /secret-token/)
+})
+
+test('manifest cache rejects and safely caches metadata whose component identity mismatches the request', async () => {
+  const loads = []
+  const cache = createSafeMaterialManifestCache({
+    loadMetadata(componentName) {
+      loads.push(componentName)
+      return createMetadata({ componentName: 'Image' })
+    },
+    readMaterialRegistryVersion: () => 1,
+  })
+
+  const mismatch = await cache.get('Text', 1)
+  const cachedMismatch = await cache.get('Text', 1)
+  assert.strictEqual(cachedMismatch, mismatch)
+  assert.equal(mismatch.componentName, 'Text')
+  assert.deepEqual(mismatch.fields, [])
+  assert.equal(mismatch.diagnostics[0].code, 'material-component-name-mismatch')
+  assert.deepEqual(loads, ['Text'])
+
+  const image = await cache.get('Image', 1)
+  assert.notStrictEqual(image, mismatch)
+  assert.equal(image.componentName, 'Image')
+  assert.equal(
+    image.diagnostics.some(item => item.code === 'material-component-name-mismatch'),
+    false,
+  )
+  assert.deepEqual(loads, ['Text', 'Image'])
 })
 
 test('stale delayed compiles cannot poison a newer material registry version', async () => {

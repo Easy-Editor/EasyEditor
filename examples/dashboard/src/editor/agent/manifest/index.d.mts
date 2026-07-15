@@ -29,6 +29,7 @@ export type SafeManifestDiagnosticCode =
   | 'invalid-json'
   | 'json-limit-exceeded'
   | 'manifest-limit-exceeded'
+  | 'material-component-name-mismatch'
   | 'material-load-failed'
   | 'missing-annotation'
   | 'overlapping-write-targets'

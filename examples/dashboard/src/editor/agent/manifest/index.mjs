@@ -33,6 +33,17 @@ export const DASHBOARD_MATERIAL_READINESS_REQUIREMENTS = Object.freeze({
 
 const DANGEROUS_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 const CALLBACK_KEYS = Object.freeze(['getValue', 'setValue', 'condition', 'autorun', 'onChange'])
+const DASHBOARD_SHARED_CONFIG_COMPONENTS = new Set([
+  'AreaChart',
+  'BarChart',
+  'Image',
+  'LineChart',
+  'PieChart',
+  'RadarChart',
+  'RadialChart',
+  'Root',
+  'Text',
+])
 const PROJECTION_ROOTS = new Set(['extra', 'node', 'props'])
 const WRITE_ROOTS = new Set(['extra', 'props'])
 const SETTER_SCHEMAS = Object.freeze({
@@ -77,6 +88,25 @@ const readOwnDataProperty = (value, key, label) => {
     throw new ManifestCompileIssue('accessor-rejected', `${label}.${String(key)} must be a data property`)
   }
   return descriptor.value
+}
+
+const compareUtf16 = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
+
+const readArrayDataProperty = (value, index, label) => {
+  const descriptor = Reflect.getOwnPropertyDescriptor(value, String(index))
+  if (!descriptor) return undefined
+  if (!('value' in descriptor)) {
+    throw new ManifestCompileIssue('accessor-rejected', `${label}[${index}] must be a data property`)
+  }
+  return descriptor.value
+}
+
+const readArrayLength = (value, label) => {
+  const length = readOwnDataProperty(value, 'length', label)
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new ManifestCompileIssue('invalid-configure', `${label}.length must be a non-negative safe integer`)
+  }
+  return length
 }
 
 const normalizeLimits = input => {
@@ -144,11 +174,17 @@ const cloneJsonValue = (value, state, path = '$', depth = 0) => {
   state.ancestors.add(value)
   try {
     if (Array.isArray(value)) {
-      return value.map((item, index) => cloneJsonValue(item, state, `${path}[${index}]`, depth + 1))
+      const result = []
+      const length = readArrayLength(value, path)
+      for (let index = 0; index < length; index += 1) {
+        const item = readArrayDataProperty(value, index, path)
+        result.push(cloneJsonValue(item, state, `${path}[${index}]`, depth + 1))
+      }
+      return result
     }
     if (!isPlainRecord(value)) throw new ManifestCompileIssue('invalid-json', `${path} must be a plain object`)
     const result = {}
-    for (const key of Object.keys(value).sort()) {
+    for (const key of Object.keys(value).sort(compareUtf16)) {
       if (DANGEROUS_PATH_SEGMENTS.has(key)) {
         throw new ManifestCompileIssue('invalid-json', `${path}.${key} is not allowed`)
       }
@@ -165,7 +201,7 @@ const cloneJson = (value, limits, path) => cloneJsonValue(value, createJsonClone
 
 const deepFreezeJson = value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
-  for (const child of Object.values(value)) deepFreezeJson(child)
+  for (const key of Object.keys(value)) deepFreezeJson(readOwnDataProperty(value, key, 'manifest'))
   return Object.freeze(value)
 }
 
@@ -178,20 +214,24 @@ const createDiagnostic = (code, message, options = {}) => {
 
 const addIssueDiagnostic = (diagnostics, error, options = {}) => {
   const code = error instanceof ManifestCompileIssue ? error.code : 'invalid-configure'
-  const message = error instanceof Error ? error.message : 'Unknown configure compiler failure'
+  const message = error instanceof ManifestCompileIssue ? error.message : 'Configure data could not be inspected safely'
   diagnostics.push(createDiagnostic(code, message, options))
 }
 
 const normalizePathSegments = (value, label, allowedRoots) => {
-  if (!Array.isArray(value) || value.length === 0) {
+  if (!Array.isArray(value)) {
     throw new ManifestCompileIssue('invalid-annotation', `${label} must be a non-empty path`)
   }
-  const segments = value.map((segment, index) => {
+  const length = readArrayLength(value, label)
+  if (length === 0) throw new ManifestCompileIssue('invalid-annotation', `${label} must be a non-empty path`)
+  const segments = []
+  for (let index = 0; index < length; index += 1) {
+    const segment = readArrayDataProperty(value, index, label)
     if (typeof segment !== 'string' || segment.length === 0 || DANGEROUS_PATH_SEGMENTS.has(segment)) {
       throw new ManifestCompileIssue('invalid-annotation', `${label}[${index}] is not a safe path segment`)
     }
-    return segment
-  })
+    segments.push(segment)
+  }
   if (!allowedRoots.has(segments[0])) {
     throw new ManifestCompileIssue('invalid-annotation', `${label} has an unsupported projection root`)
   }
@@ -201,18 +241,25 @@ const normalizePathSegments = (value, label, allowedRoots) => {
 const normalizeValuePath = (value, label) => {
   if (value === undefined) return undefined
   if (!Array.isArray(value)) throw new ManifestCompileIssue('invalid-annotation', `${label} must be an array`)
-  return value.map((segment, index) => {
+  const segments = []
+  const length = readArrayLength(value, label)
+  for (let index = 0; index < length; index += 1) {
+    const segment = readArrayDataProperty(value, index, label)
     if (typeof segment !== 'string' || segment.length === 0 || DANGEROUS_PATH_SEGMENTS.has(segment)) {
       throw new ManifestCompileIssue('invalid-annotation', `${label}[${index}] is not a safe path segment`)
     }
-    return segment
-  })
+    segments.push(segment)
+  }
+  return segments
 }
 
 const normalizeTargets = (value, label) => {
   if (value === undefined) return undefined
   if (!Array.isArray(value)) throw new ManifestCompileIssue('invalid-annotation', `${label} must be an array`)
-  const targets = value.map((target, index) => {
+  const targets = []
+  const length = readArrayLength(value, label)
+  for (let index = 0; index < length; index += 1) {
+    const target = readArrayDataProperty(value, index, label)
     if (!isPlainRecord(target)) {
       throw new ManifestCompileIssue('invalid-annotation', `${label}[${index}] must be a plain object`)
     }
@@ -225,8 +272,8 @@ const normalizeTargets = (value, label) => {
       readOwnDataProperty(target, 'valuePath', `${label}[${index}]`),
       `${label}[${index}].valuePath`,
     )
-    return valuePath === undefined ? { path } : { path, valuePath }
-  })
+    targets.push(valuePath === undefined ? { path } : { path, valuePath })
+  }
   for (let leftIndex = 0; leftIndex < targets.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < targets.length; rightIndex += 1) {
       const leftPath = targets[leftIndex].path
@@ -244,7 +291,13 @@ const normalizeTargets = (value, label) => {
 const normalizeVerifyPaths = value => {
   if (value === undefined) return undefined
   if (!Array.isArray(value)) throw new ManifestCompileIssue('invalid-annotation', 'verifyPaths must be an array')
-  return value.map((path, index) => normalizePathSegments(path, `verifyPaths[${index}]`, PROJECTION_ROOTS))
+  const paths = []
+  const length = readArrayLength(value, 'verifyPaths')
+  for (let index = 0; index < length; index += 1) {
+    const path = readArrayDataProperty(value, index, 'verifyPaths')
+    paths.push(normalizePathSegments(path, `verifyPaths[${index}]`, PROJECTION_ROOTS))
+  }
+  return paths
 }
 
 const compileAnnotation = ({ annotation, annotationKey, field, limits }) => {
@@ -349,7 +402,9 @@ const readConstraint = (props, key) => (props ? readOwnDataProperty(props, key, 
 const enumValuesFromOptions = options => {
   if (!Array.isArray(options)) return undefined
   const values = []
-  for (const option of options) {
+  const length = readArrayLength(options, 'field.setter.props.options')
+  for (let index = 0; index < length; index += 1) {
+    const option = readArrayDataProperty(options, index, 'field.setter.props.options')
     let value = option
     if (isPlainRecord(option)) value = readOwnDataProperty(option, 'value', 'field.setter.props.options')
     if (!['boolean', 'number', 'string'].includes(typeof value) && value !== null) return undefined
@@ -473,15 +528,20 @@ const buildAnnotationBindings = (componentName, overrides) => {
   if (overrides !== undefined && !isPlainRecord(overrides)) {
     throw new TypeError('annotationBindings must be a plain component binding table')
   }
-  const defaultWildcard = normalizeBindingMap(DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS['*'], 'bindings.*')
+  const allowWildcard = DASHBOARD_SHARED_CONFIG_COMPONENTS.has(componentName)
+  const defaultWildcard = allowWildcard
+    ? normalizeBindingMap(DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS['*'], 'bindings.*')
+    : {}
   const defaultSpecific = normalizeBindingMap(
-    DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS[componentName],
+    readOwnDataProperty(DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS, componentName, 'bindings'),
     `bindings.${componentName}`,
   )
-  const overrideWildcard = normalizeBindingMap(
-    overrides ? readOwnDataProperty(overrides, '*', 'annotationBindings') : undefined,
-    'annotationBindings.*',
-  )
+  const overrideWildcard = allowWildcard
+    ? normalizeBindingMap(
+        overrides ? readOwnDataProperty(overrides, '*', 'annotationBindings') : undefined,
+        'annotationBindings.*',
+      )
+    : {}
   const overrideSpecific = normalizeBindingMap(
     overrides ? readOwnDataProperty(overrides, componentName, 'annotationBindings') : undefined,
     `annotationBindings.${componentName}`,
@@ -489,7 +549,8 @@ const buildAnnotationBindings = (componentName, overrides) => {
   return { ...defaultWildcard, ...overrideWildcard, ...defaultSpecific, ...overrideSpecific }
 }
 
-const resolveAnnotationKey = (field, bindings) => (field.name ? bindings[field.name] : undefined)
+const resolveAnnotationKey = (field, bindings) =>
+  field.bindingKey ? readOwnDataProperty(bindings, field.bindingKey, 'bindings') : undefined
 
 const readAnnotation = (annotations, annotationKey) => {
   if (!isPlainRecord(annotations)) throw new TypeError('annotations must be a plain object')
@@ -521,7 +582,8 @@ const collectFields = ({ configure, diagnostics, limits }) => {
     }
     ancestors.add(items)
     try {
-      for (let index = 0; index < items.length; index += 1) {
+      const length = readArrayLength(items, sourcePath)
+      for (let index = 0; index < length; index += 1) {
         visitedNodes += 1
         if (visitedNodes > limits.maxJsonNodes) {
           diagnostics.push(createDiagnostic('configure-limit-exceeded', 'Configure node count exceeds the safe limit'))
@@ -533,8 +595,14 @@ const collectFields = ({ configure, diagnostics, limits }) => {
           limitReached = true
           return
         }
-        const fieldValue = items[index]
         const fieldPath = `${sourcePath}[${index}]`
+        let fieldValue
+        try {
+          fieldValue = readArrayDataProperty(items, index, sourcePath)
+        } catch (error) {
+          addIssueDiagnostic(diagnostics, error, { sourcePath: fieldPath })
+          continue
+        }
         if (!isPlainRecord(fieldValue)) {
           diagnostics.push(
             createDiagnostic('invalid-configure', 'Configure field must be a plain object', { sourcePath: fieldPath }),
@@ -557,15 +625,19 @@ const collectFields = ({ configure, diagnostics, limits }) => {
             continue
           }
           const normalizedName = typeof name === 'string' && name.length > 0 ? name : undefined
+          const key = normalizedName === undefined ? readOwnDataProperty(fieldValue, 'key', fieldPath) : undefined
+          const normalizedKey = typeof key === 'string' && key.length > 0 ? key : undefined
+          const bindingKey = normalizedName || normalizedKey
           const ordinal = fields.length
           fields.push({
-            fieldId: normalizedName ? `configure.${normalizedName}` : `configure.${fieldPath}`,
+            bindingKey,
+            fieldId: bindingKey ? `configure.${bindingKey}` : `configure.${fieldPath}`,
             name: normalizedName,
             ordinal,
             source: fieldValue,
             sourcePath: fieldPath,
             title,
-            unsupportedFieldId: `unsupported:${normalizedName || 'anonymous'}:${ordinal}`,
+            unsupportedFieldId: bindingKey ? `unsupported:${bindingKey}:binding` : `unsupported:anonymous:${ordinal}`,
           })
         } catch (error) {
           addIssueDiagnostic(diagnostics, error, { sourcePath: fieldPath })
@@ -595,9 +667,12 @@ const collectFields = ({ configure, diagnostics, limits }) => {
 const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) => {
   const compiled = []
   const seenFieldIds = new Set()
-  const fieldNameCounts = new Map()
+  const bindingKeyCounts = new Map()
+  const bindingKeyOccurrences = new Map()
   for (const field of fields) {
-    if (field.name) fieldNameCounts.set(field.name, (fieldNameCounts.get(field.name) || 0) + 1)
+    if (field.bindingKey) {
+      bindingKeyCounts.set(field.bindingKey, (bindingKeyCounts.get(field.bindingKey) || 0) + 1)
+    }
   }
   for (const field of fields) {
     let setterInfo
@@ -611,18 +686,27 @@ const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) =
       continue
     }
 
-    const duplicateName = field.name && fieldNameCounts.get(field.name) > 1
+    const duplicateBindingKey = field.bindingKey && bindingKeyCounts.get(field.bindingKey) > 1
+    const bindingKeyOccurrence = field.bindingKey ? (bindingKeyOccurrences.get(field.bindingKey) || 0) + 1 : undefined
+    if (field.bindingKey) bindingKeyOccurrences.set(field.bindingKey, bindingKeyOccurrence)
     const annotationKey = resolveAnnotationKey(field, bindings)
     let result
     try {
-      if (duplicateName) {
+      if (duplicateBindingKey) {
         diagnostics.push(
-          createDiagnostic('ambiguous-field-binding', 'Duplicate same-material field names cannot be bound safely', {
-            fieldId: field.fieldId,
-            sourcePath: field.sourcePath,
-          }),
+          createDiagnostic(
+            'ambiguous-field-binding',
+            'Duplicate same-material field binding keys cannot be bound safely',
+            {
+              fieldId: field.fieldId,
+              sourcePath: field.sourcePath,
+            },
+          ),
         )
-        result = createUnsupportedField(field)
+        result = createUnsupportedField({
+          ...field,
+          unsupportedFieldId: `${field.unsupportedFieldId}:${bindingKeyOccurrence}`,
+        })
       } else if (annotationKey) {
         const annotation = readAnnotation(annotations, annotationKey)
         if (annotation === undefined) {
@@ -666,22 +750,21 @@ const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) =
     seenFieldIds.add(result.fieldId)
     compiled.push(result)
   }
-  return compiled.sort((left, right) => left.fieldId.localeCompare(right.fieldId))
+  return compiled.sort((left, right) => compareUtf16(left.fieldId, right.fieldId))
 }
 
 const compareDiagnostics = (left, right) =>
-  left.code.localeCompare(right.code) ||
-  (left.fieldId || '').localeCompare(right.fieldId || '') ||
-  (left.sourcePath || '').localeCompare(right.sourcePath || '') ||
-  left.message.localeCompare(right.message)
+  compareUtf16(left.code, right.code) ||
+  compareUtf16(left.fieldId || '', right.fieldId || '') ||
+  compareUtf16(left.sourcePath || '', right.sourcePath || '') ||
+  compareUtf16(left.message, right.message)
 
 const manifestByteLength = value => new TextEncoder().encode(JSON.stringify(value)).byteLength
 
 const createReadiness = (componentName, fields) => {
   const emittedFieldIds = new Set(fields.map(field => field.fieldId))
-  const missingFieldIds = (DASHBOARD_MATERIAL_READINESS_REQUIREMENTS[componentName] || []).filter(
-    fieldId => !emittedFieldIds.has(fieldId),
-  )
+  const requirements = readOwnDataProperty(DASHBOARD_MATERIAL_READINESS_REQUIREMENTS, componentName, 'readiness') || []
+  const missingFieldIds = requirements.filter(fieldId => !emittedFieldIds.has(fieldId))
   const unsupportedFieldIds = fields.filter(field => field.access === 'unsupported').map(field => field.fieldId)
   return {
     missingFieldIds,
@@ -697,7 +780,7 @@ const createFailureManifest = (componentName, materialRegistryVersion, code, mes
     fields: [],
     materialRegistryVersion,
     readiness: {
-      missingFieldIds: DASHBOARD_MATERIAL_READINESS_REQUIREMENTS[componentName] || [],
+      missingFieldIds: readOwnDataProperty(DASHBOARD_MATERIAL_READINESS_REQUIREMENTS, componentName, 'readiness') || [],
       status: 'not-ready',
       unsupportedFieldIds: [],
     },
@@ -715,7 +798,12 @@ export const compileSafeMaterialManifest = ({
   const componentName = normalizeComponentName(metadata)
   const normalizedRegistryVersion = normalizeRegistryVersion(materialRegistryVersion)
   const diagnostics = []
-  const bindings = buildAnnotationBindings(componentName, annotationBindings)
+  let bindings = {}
+  try {
+    bindings = buildAnnotationBindings(componentName, annotationBindings)
+  } catch (error) {
+    addIssueDiagnostic(diagnostics, error)
+  }
   let configure
   try {
     configure = readOwnDataProperty(metadata, 'configure', 'metadata')
@@ -724,6 +812,15 @@ export const compileSafeMaterialManifest = ({
   }
   const sourceFields = collectFields({ configure, diagnostics, limits })
   const fields = compileFields({ annotations, bindings, diagnostics, fields: sourceFields, limits })
+  const metadataLabels = {}
+  for (const key of ['category', 'group', 'title']) {
+    try {
+      const value = safeString(readOwnDataProperty(metadata, key, 'metadata'), limits)
+      if (value) metadataLabels[key] = value
+    } catch (error) {
+      addIssueDiagnostic(diagnostics, error)
+    }
+  }
   const manifest = {
     componentName,
     diagnostics: diagnostics.sort(compareDiagnostics),
@@ -731,10 +828,7 @@ export const compileSafeMaterialManifest = ({
     materialRegistryVersion: normalizedRegistryVersion,
     readiness: createReadiness(componentName, fields),
     schemaVersion: SAFE_MATERIAL_MANIFEST_SCHEMA_VERSION,
-  }
-  for (const key of ['category', 'group', 'title']) {
-    const value = safeString(readOwnDataProperty(metadata, key, 'metadata'), limits)
-    if (value) manifest[key] = value
+    ...metadataLabels,
   }
 
   if (manifestByteLength(manifest) > limits.maxManifestBytes) {
@@ -809,13 +903,22 @@ export class SafeMaterialManifestCache {
       let manifest
       try {
         const metadata = await this.#loadMetadata(componentName)
-        manifest = compileSafeMaterialManifest({
-          annotationBindings: await this.#loadAnnotationBindings?.(componentName),
-          annotations: (await this.#loadAnnotations?.(componentName)) ?? dashboardConfigureAnnotations,
-          limits: this.#limits,
-          materialRegistryVersion: observedVersion,
-          metadata,
-        })
+        if (normalizeComponentName(metadata) !== componentName) {
+          manifest = createFailureManifest(
+            componentName,
+            observedVersion,
+            'material-component-name-mismatch',
+            'Loaded material metadata did not match the requested component',
+          )
+        } else {
+          manifest = compileSafeMaterialManifest({
+            annotationBindings: await this.#loadAnnotationBindings?.(componentName),
+            annotations: (await this.#loadAnnotations?.(componentName)) ?? dashboardConfigureAnnotations,
+            limits: this.#limits,
+            materialRegistryVersion: observedVersion,
+            metadata,
+          })
+        }
       } catch {
         manifest = createFailureManifest(
           componentName,
