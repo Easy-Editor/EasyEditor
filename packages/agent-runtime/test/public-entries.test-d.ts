@@ -1,5 +1,13 @@
 import { createAgentRuntime } from '../src/index.js'
-import type { AgentHost, AgentPersistencePort, AgentRuntime, AgentWorkerEndpoint } from '../src/index.js'
+import type {
+  AgentHost,
+  AgentPersistencePort,
+  AgentRuntime,
+  AgentWorkerEndpoint,
+  HostSnapshotDeltaChange,
+  HostSnapshotRemoveChange,
+  HostSnapshotSetChange,
+} from '../src/index.js'
 import {
   DeterministicClock,
   DeterministicIdFactory,
@@ -24,6 +32,9 @@ const runtime: AgentRuntime = createAgentRuntime({
 })
 const events: AsyncIterable<ModelEvent> = model.run(request, new AbortController().signal)
 const worker: Promise<void> = startAgentWorker({ port: new MessageChannel().port1, model })
+const setChange: HostSnapshotSetChange = { op: 'set', path: ['nodes', 'node-1'], value: {} }
+const removeChange: HostSnapshotRemoveChange = { op: 'remove', path: ['nodes', 'node-2'] }
+const changes: readonly HostSnapshotDeltaChange[] = [setChange, removeChange]
 
 new ScriptedModelAdapter([{ expectedPhase: 'BLUEPRINT', events: [] }])
 new MemoryAgentPersistence()
@@ -40,5 +51,6 @@ type RootProtocolEnvelope = import('../src/index.js').ProtocolEnvelope
 void runtime
 void events
 void worker
+void changes
 void (undefined as unknown as RootModelAdapter)
 void (undefined as unknown as RootProtocolEnvelope)

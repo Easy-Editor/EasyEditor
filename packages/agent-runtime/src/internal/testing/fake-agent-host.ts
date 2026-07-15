@@ -3,12 +3,14 @@ import type {
   CapabilitySchema,
   CapabilitySchemaRequest,
   HostSnapshot,
+  HostSnapshotDelta,
   InvocationResult,
   ObserveRequest,
   ReceiptQueryRequest,
   SemanticCall,
   ToolReceipt,
 } from '../../contracts.js'
+import { applyHostSnapshotDelta } from '../snapshot/index.js'
 
 export interface FakeInvocationStep {
   readonly result: InvocationResult
@@ -18,6 +20,7 @@ export interface FakeInvocationStep {
 
 export interface FakeAgentHostOptions {
   readonly snapshot?: HostSnapshot
+  readonly observationSteps?: readonly (HostSnapshot | HostSnapshotDelta)[]
   readonly capabilities?: readonly CapabilitySchema[]
   readonly invocationSteps?: readonly FakeInvocationStep[]
   readonly receipts?: readonly ToolReceipt[]
@@ -27,6 +30,7 @@ const clone = <Value>(value: Value): Value => structuredClone(value)
 
 export class FakeAgentHost implements AgentHost {
   #snapshot: HostSnapshot
+  readonly #observationSteps: (HostSnapshot | HostSnapshotDelta)[]
   readonly #capabilities = new Map<string, CapabilitySchema>()
   readonly #invocationSteps: FakeInvocationStep[]
   readonly #receipts = new Map<string, ToolReceipt>()
@@ -36,6 +40,7 @@ export class FakeAgentHost implements AgentHost {
 
   constructor(options: FakeAgentHostOptions = {}) {
     this.#snapshot = clone(options.snapshot ?? { schemaVersion: 1, revision: 'revision-0', projection: {} })
+    this.#observationSteps = [...clone(options.observationSteps ?? [])]
     for (const capability of options.capabilities ?? []) {
       this.#capabilities.set(capability.capability, clone(capability))
     }
@@ -47,13 +52,29 @@ export class FakeAgentHost implements AgentHost {
     this.#snapshot = clone(snapshot)
   }
 
+  enqueueObservation(observation: HostSnapshot | HostSnapshotDelta): void {
+    this.#observationSteps.push(clone(observation))
+  }
+
   enqueueInvocation(step: FakeInvocationStep): void {
     this.#invocationSteps.push(clone(step))
   }
 
-  async observe(request: ObserveRequest): Promise<HostSnapshot> {
+  async observe(request: ObserveRequest): Promise<HostSnapshot | HostSnapshotDelta> {
     this.observations.push(clone(request))
-    return clone(this.#snapshot)
+    const scripted = this.#observationSteps.shift()
+    if (!scripted) return clone(this.#snapshot)
+    const observation = clone(scripted)
+    if (Object.hasOwn(observation, 'projection')) {
+      this.#snapshot = clone(observation as HostSnapshot)
+    } else {
+      try {
+        this.#snapshot = clone(applyHostSnapshotDelta(this.#snapshot, observation as HostSnapshotDelta))
+      } catch {
+        // Invalid scripted deltas remain observable so fallback paths can be tested.
+      }
+    }
+    return observation
   }
 
   async describeCapability(request: CapabilitySchemaRequest): Promise<CapabilitySchema> {

@@ -200,6 +200,44 @@ test('Host and Persistence contracts reject unknown fields and preserve structur
     error => error.code === 'unknown-field',
   )
 
+  const delta = {
+    schemaVersion: 1,
+    baseRevision: 'revision-1',
+    newRevision: 'revision-2',
+    providerId: 'dashboard.core',
+    providerGeneration: 1,
+    baseCursor: 'cursor-1',
+    newCursor: 'cursor-2',
+    changes: [
+      { op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'After' },
+      { op: 'remove', path: ['nodes', 'node-2'] },
+    ],
+  }
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['host.observe'].parseResponse(delta), delta)
+  const invalidChanges = [
+    [{ op: 'set', path: [], value: true }],
+    [{ op: 'remove', path: ['nodes', '__proto__'] }],
+    [{ op: 'set', path: ['nodes'], value: {}, extra: true }],
+    [
+      { op: 'set', path: ['nodes'], value: {} },
+      { op: 'remove', path: ['nodes', 'node-1'] },
+    ],
+    [
+      { op: 'set', path: ['nodes', 'node-1'], value: {} },
+      { op: 'remove', path: ['nodes', 'node-1'] },
+    ],
+  ]
+  for (const changes of invalidChanges) {
+    assert.throws(
+      () => rpc.agentBoundaryRpcContracts['host.observe'].parseResponse({ ...delta, changes }),
+      error => ['invalid-field', 'unknown-field'].includes(error.code),
+    )
+  }
+  assert.throws(
+    () => rpc.agentBoundaryRpcContracts['host.observe'].parseResponse({ ...delta, providerId: '__proto__' }),
+    error => error.code === 'invalid-field',
+  )
+
   const batch = {
     schemaVersion: 1,
     projectId: 'project-1',

@@ -22,6 +22,7 @@ import type {
   UserResponse,
 } from '../../contracts.js'
 import { collectModelEvents } from '../model/index.js'
+import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
 
 export type WorkerStateMachineErrorCode =
   | 'disposed'
@@ -268,12 +269,34 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (!Object.hasOwn(observed, 'projection')) {
       throw new WorkerStateMachineError('invalid-model-turn', 'full observation returned a delta')
     }
-    task.latestSnapshot = observed as HostSnapshot
+    task.latestSnapshot = cloneFrozenHostSnapshot(observed)
     if (runtimeStatus === 'recovering') {
       runtimeStatus = 'ready'
       runtimeFailure = undefined
     }
     return task.latestSnapshot
+  }
+
+  const observeAfterInvoke = async (task: MutableTask) => {
+    const current = task.latestSnapshot
+    if (!current?.cursor) return observeFull(task)
+
+    const observed = await options.host.observe({
+      schemaVersion: 1,
+      projectId: binding.projectId,
+      branchId: binding.branchId,
+      sessionId: task.sessionId,
+      taskId: task.taskId,
+      mode: 'delta',
+      cursor: current.cursor,
+    })
+    try {
+      task.latestSnapshot =
+        'projection' in observed ? cloneFrozenHostSnapshot(observed) : applyHostSnapshotDelta(current, observed)
+      return task.latestSnapshot
+    } catch {
+      return observeFull(task)
+    }
   }
 
   const turnRequest = (task: MutableTask, phase: ModelTurnPhase): ModelTurnRequest => {
@@ -386,7 +409,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       if (result.status !== 'applied') return false
 
       setPhase(task, 'VERIFY')
-      const observed = await observeFull(task)
+      const observed = await observeAfterInvoke(task)
       return result.revision === undefined || result.revision === observed.revision
     })
   }

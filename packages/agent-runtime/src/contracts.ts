@@ -128,6 +128,19 @@ export interface HostSnapshot {
   readonly projection: JsonObject
 }
 
+export interface HostSnapshotSetChange {
+  readonly op: 'set'
+  readonly path: readonly [string, ...string[]]
+  readonly value: JsonValue
+}
+
+export interface HostSnapshotRemoveChange {
+  readonly op: 'remove'
+  readonly path: readonly [string, ...string[]]
+}
+
+export type HostSnapshotDeltaChange = HostSnapshotSetChange | HostSnapshotRemoveChange
+
 export interface HostSnapshotDelta {
   readonly schemaVersion: 1
   readonly baseRevision: string
@@ -136,7 +149,7 @@ export interface HostSnapshotDelta {
   readonly providerGeneration: number
   readonly baseCursor: string
   readonly newCursor: string
-  readonly changes: readonly JsonObject[]
+  readonly changes: readonly HostSnapshotDeltaChange[]
 }
 
 export interface CapabilitySchemaRequest {

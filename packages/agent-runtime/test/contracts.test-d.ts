@@ -7,6 +7,8 @@ import type {
   AgentRuntimeSnapshot,
   AgentWorkerOptions,
   HostSnapshot,
+  HostSnapshotDelta,
+  HostSnapshotDeltaChange,
   JsonObject,
   ModelAdapter,
   ModelTurnRequest,
@@ -31,6 +33,20 @@ const observation: Promise<HostSnapshot | { readonly schemaVersion: 1 }> = host.
   taskId: 'task-1',
   mode: 'full',
 })
+const deltaChange: HostSnapshotDeltaChange = { op: 'set', path: ['nodes', 'node-1', 'props'], value: {} }
+const delta: HostSnapshotDelta = {
+  schemaVersion: 1,
+  baseRevision: 'revision-1',
+  newRevision: 'revision-2',
+  providerId: 'dashboard.core',
+  providerGeneration: 1,
+  baseCursor: 'cursor-1',
+  newCursor: 'cursor-2',
+  changes: [deltaChange, { op: 'remove', path: ['nodes', 'node-2'] }],
+}
+
+// @ts-expect-error delta paths must be non-empty
+const invalidDeltaChange: HostSnapshotDeltaChange = { op: 'remove', path: [] }
 const invocation = host.invoke(call)
 const events = model.run(request, new AbortController().signal)
 
@@ -68,6 +84,8 @@ const invalidOptions: AgentRuntimeOptions = { ...options, model }
 void snapshot
 void task
 void observation
+void delta
+void invalidDeltaChange
 void invocation
 void events
 void commit

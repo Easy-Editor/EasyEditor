@@ -38,6 +38,10 @@ const { createWorkerStateMachine, WorkerStateMachineError } = await import(
 const { ScriptedModelAdapter, ScriptedModelError } = await import(
   pathToFileURL(join(compiledRoot, 'internal/testing/scripted-model.js'))
 )
+const { FakeAgentHost } = await import(pathToFileURL(join(compiledRoot, 'internal/testing/fake-agent-host.js')))
+const { HostSnapshotDeltaApplyError, applyHostSnapshotDelta } = await import(
+  pathToFileURL(join(compiledRoot, 'internal/snapshot/index.js'))
+)
 
 const binding = { projectId: 'project-1', branchId: 'branch-1' }
 
@@ -139,6 +143,29 @@ const blueprint = { schemaVersion: 1, kind: 'blueprint', summary: 'Update the da
 const complete = { schemaVersion: 1, kind: 'complete', summary: 'Done' }
 const toolCall = value => ({ schemaVersion: 1, kind: 'tool-call', call: value })
 
+const hostSnapshot = (revision = 'r0', cursor = 'cursor-0', value = 'before') => ({
+  schemaVersion: 1,
+  revision,
+  cursor,
+  projection: {
+    'dashboard.core': {
+      nodes: { 'node-1': { props: { title: value, values: [1, 2] } } },
+    },
+  },
+})
+
+const hostDelta = (overrides = {}) => ({
+  schemaVersion: 1,
+  baseRevision: 'r0',
+  newRevision: 'r1',
+  providerId: 'dashboard.core',
+  providerGeneration: 1,
+  baseCursor: 'cursor-0',
+  newCursor: 'cursor-1',
+  changes: [{ op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'after' }],
+  ...overrides,
+})
+
 const createMachine = (steps, overrides = {}) => {
   const model = new ScriptedModelAdapter(steps)
   const host = overrides.host ?? new TestHost()
@@ -194,7 +221,221 @@ test('runs the deterministic happy path and commits a serializable checkpoint', 
   assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
   assert.equal(fixture.persistence.commits.length, 1)
   assert.equal(fixture.persistence.records[0].value.phase, 'COMPLETED')
+  assert.deepEqual(
+    fixture.host.observations.map(observation => observation.mode),
+    ['full', 'full'],
+  )
   assertOrdered(fixture.phases, ['OBSERVE', 'BLUEPRINT', 'PLAN_STEP', 'EXECUTE', 'VERIFY', 'CHECKPOINT', 'COMPLETED'])
+  fixture.model.assertFullyConsumed()
+})
+
+test('immutable host delta application preserves ordered equivalence without aliases', () => {
+  const base = hostSnapshot()
+  const arrayValue = [7, 8, 9]
+  const first = applyHostSnapshotDelta(
+    base,
+    hostDelta({
+      changes: [
+        { op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'middle' },
+        { op: 'set', path: ['nodes', 'node-1', 'props', 'values'], value: arrayValue },
+      ],
+    }),
+  )
+  const second = applyHostSnapshotDelta(
+    first,
+    hostDelta({
+      baseRevision: 'r1',
+      newRevision: 'r2',
+      baseCursor: 'cursor-1',
+      newCursor: 'cursor-2',
+      changes: [
+        { op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'after' },
+        { op: 'remove', path: ['nodes', 'node-1', 'props', 'values'] },
+      ],
+    }),
+  )
+
+  arrayValue.push(10)
+  assert.equal(base.projection['dashboard.core'].nodes['node-1'].props.title, 'before')
+  assert.deepEqual(first.projection['dashboard.core'].nodes['node-1'].props.values, [7, 8, 9])
+  assert.deepEqual(second, {
+    schemaVersion: 1,
+    revision: 'r2',
+    cursor: 'cursor-2',
+    projection: { 'dashboard.core': { nodes: { 'node-1': { props: { title: 'after' } } } } },
+  })
+  assert.ok(Object.isFrozen(second))
+  assert.ok(Object.isFrozen(second.projection['dashboard.core']))
+})
+
+test('host delta application rejects fence, path, remove, overlap, prototype, and array traversal errors', () => {
+  const base = hostSnapshot()
+  const invalid = [
+    hostDelta({ baseRevision: 'stale' }),
+    hostDelta({ baseCursor: 'stale-cursor' }),
+    hostDelta({ providerId: 'missing' }),
+    hostDelta({ providerId: '__proto__' }),
+    hostDelta({ changes: [{ op: 'remove', path: ['nodes', 'missing'] }] }),
+    hostDelta({ changes: [{ op: 'set', path: ['nodes', 'node-1', 'props', 'values', '0'], value: 7 }] }),
+    hostDelta({
+      changes: [
+        { op: 'set', path: ['nodes', 'node-1'], value: {} },
+        { op: 'remove', path: ['nodes', 'node-1', 'props'] },
+      ],
+    }),
+    hostDelta({
+      changes: [
+        { op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'first' },
+        { op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'second' },
+      ],
+    }),
+    hostDelta({ changes: [{ op: 'set', path: ['nodes', '__proto__'], value: {} }] }),
+  ]
+
+  for (const delta of invalid) {
+    assert.throws(
+      () => applyHostSnapshotDelta(base, delta),
+      error => error instanceof HostSnapshotDeltaApplyError || error.code === 'invalid-field',
+    )
+  }
+})
+
+test('FakeAgentHost scripts deltas and advances its full mirror only for valid patches', async () => {
+  const base = hostSnapshot()
+  const delta = hostDelta()
+  const host = new FakeAgentHost({ snapshot: base, observationSteps: [delta] })
+  const request = {
+    schemaVersion: 1,
+    projectId: binding.projectId,
+    branchId: binding.branchId,
+    sessionId: 'session-1',
+    taskId: 'task-1',
+    mode: 'delta',
+    cursor: base.cursor,
+  }
+
+  assert.deepEqual(await host.observe(request), delta)
+  assert.deepEqual(await host.observe({ ...request, mode: 'full' }), applyHostSnapshotDelta(base, delta))
+  assert.deepEqual(
+    host.observations.map(observation => observation.mode),
+    ['delta', 'full'],
+  )
+})
+
+test('post-invoke verification applies an exact delta before the next model turn', async () => {
+  const base = hostSnapshot()
+  const delta = hostDelta()
+  const host = new FakeAgentHost({
+    snapshot: base,
+    observationSteps: [base, delta],
+    invocationSteps: [{ result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'r1' } }],
+  })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call())] },
+      {
+        expectedPhase: 'PLAN_STEP',
+        matchRequest: request =>
+          request.snapshot.revision === 'r1' &&
+          request.snapshot.cursor === 'cursor-1' &&
+          request.snapshot.projection['dashboard.core'].nodes['node-1'].props.title === 'after',
+        events: [complete],
+      },
+    ],
+    { host },
+  )
+
+  await fixture.machine.submit({ text: 'Apply a delta' })
+  await fixture.machine.waitForIdle()
+
+  assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
+  assert.deepEqual(
+    host.observations.map(observation => [observation.mode, observation.cursor]),
+    [
+      ['full', undefined],
+      ['delta', 'cursor-0'],
+    ],
+  )
+  fixture.model.assertFullyConsumed()
+})
+
+test('lost, reordered, cursor-mismatched, and malformed deltas force an immediate full observation', async () => {
+  const scenarios = [
+    ['lost base revision', hostDelta({ baseRevision: 'r-lost' })],
+    ['reordered revision', hostDelta({ baseRevision: 'r-previous', baseCursor: 'cursor-previous' })],
+    ['cursor mismatch', hostDelta({ baseCursor: 'cursor-other' })],
+    ['malformed remove', hostDelta({ changes: [{ op: 'remove', path: ['nodes', 'missing'] }] })],
+  ]
+
+  for (const [label, invalidDelta] of scenarios) {
+    const base = hostSnapshot()
+    const recovered = hostSnapshot('r2', 'cursor-2', `full-${label}`)
+    const host = new FakeAgentHost({
+      snapshot: base,
+      observationSteps: [base, invalidDelta, recovered],
+      invocationSteps: [{ result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'r2' } }],
+    })
+    const fixture = createMachine(
+      [
+        { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+        { expectedPhase: 'PLAN_STEP', events: [toolCall(call())] },
+        {
+          expectedPhase: 'PLAN_STEP',
+          matchRequest: request =>
+            request.snapshot.revision === 'r2' &&
+            request.snapshot.projection['dashboard.core'].nodes['node-1'].props.title === `full-${label}`,
+          events: [complete],
+        },
+      ],
+      { host },
+    )
+
+    await fixture.machine.submit({ text: label })
+    await fixture.machine.waitForIdle()
+
+    assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED', label)
+    assert.deepEqual(
+      host.observations.map(observation => observation.mode),
+      ['full', 'delta', 'full'],
+      label,
+    )
+    fixture.model.assertFullyConsumed()
+  }
+})
+
+test('a transport or protocol rejection propagates without being hidden by a full resync', async () => {
+  const base = hostSnapshot()
+  class RejectingDeltaHost extends FakeAgentHost {
+    async observe(request) {
+      if (request.mode === 'delta') {
+        this.observations.push(structuredClone(request))
+        throw Object.assign(new Error('malformed delta response'), { code: 'invalid-field' })
+      }
+      return super.observe(request)
+    }
+  }
+  const host = new RejectingDeltaHost({
+    snapshot: base,
+    observationSteps: [base],
+    invocationSteps: [{ result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'r2' } }],
+  })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call())] },
+    ],
+    { host },
+  )
+
+  await fixture.machine.submit({ text: 'Reject malformed transport delta' })
+  await fixture.machine.waitForIdle()
+
+  assert.equal(fixture.machine.getSnapshot().phase, 'FAILED')
+  assert.deepEqual(
+    host.observations.map(observation => observation.mode),
+    ['full', 'delta'],
+  )
   fixture.model.assertFullyConsumed()
 })
 
@@ -261,6 +502,7 @@ test('pause/resume aborts the current turn and re-observes before replanning', a
 
   assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
   assert.equal(fixture.host.observations.length, 2)
+  assert.ok(fixture.host.observations.every(observation => observation.mode === 'full'))
   assertOrdered(fixture.phases, ['PAUSED', 'OBSERVE', 'BLUEPRINT', 'PLAN_STEP', 'CHECKPOINT'])
   fixture.model.assertFullyConsumed()
 })
@@ -293,6 +535,7 @@ test('respond accepts only the matching WAITING_USER question and keeps the task
   assert.equal(fixture.machine.getSnapshot().activeTask.taskId, ref.taskId)
   assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
   assert.equal(fixture.host.observations.length, 2)
+  assert.ok(fixture.host.observations.every(observation => observation.mode === 'full'))
   fixture.model.assertFullyConsumed()
 })
 

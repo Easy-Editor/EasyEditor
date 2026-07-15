@@ -18,6 +18,10 @@ import type {
   ToolReceipt,
 } from '../../contracts.js'
 import { ProtocolValidationError, assertExactFields, assertJsonValue } from '../protocol/index.js'
+import {
+  parseHostSnapshotDelta as parseSnapshotDeltaResponse,
+  parseHostSnapshot as parseSnapshotResponse,
+} from '../snapshot/index.js'
 
 export interface RpcValueContract<Request = unknown, Response = unknown> {
   readonly parseRequest: (value: unknown) => Request
@@ -110,44 +114,9 @@ export const parseObserveRequest = (value: unknown): ObserveRequest => {
   return value as unknown as ObserveRequest
 }
 
-const parseHostSnapshot = (value: unknown): HostSnapshot => {
-  assertExactFields(value, ['schemaVersion', 'revision', 'projection'], ['cursor'], 'HostSnapshot')
-  schemaVersion(value.schemaVersion)
-  stringField(value.revision, 'HostSnapshot.revision')
-  optionalStringField(value.cursor, 'HostSnapshot.cursor')
-  jsonObjectField(value.projection, 'HostSnapshot.projection')
-  return value as unknown as HostSnapshot
-}
-
-const parseHostSnapshotDelta = (value: unknown): HostSnapshotDelta => {
-  assertExactFields(
-    value,
-    [
-      'schemaVersion',
-      'baseRevision',
-      'newRevision',
-      'providerId',
-      'providerGeneration',
-      'baseCursor',
-      'newCursor',
-      'changes',
-    ],
-    [],
-    'HostSnapshotDelta',
-  )
-  schemaVersion(value.schemaVersion)
-  for (const field of ['baseRevision', 'newRevision', 'providerId', 'baseCursor', 'newCursor'] as const) {
-    stringField(value[field], `HostSnapshotDelta.${field}`)
-  }
-  integerField(value.providerGeneration, 'HostSnapshotDelta.providerGeneration')
-  arrayField(value.changes, 'HostSnapshotDelta.changes')
-  value.changes.forEach((change, index) => jsonObjectField(change, `HostSnapshotDelta.changes[${index}]`))
-  return value as unknown as HostSnapshotDelta
-}
-
 export const parseObserveResponse = (value: unknown): HostSnapshot | HostSnapshotDelta => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) fail('observe response must be an object')
-  return Object.hasOwn(value as object, 'projection') ? parseHostSnapshot(value) : parseHostSnapshotDelta(value)
+  return Object.hasOwn(value as object, 'projection') ? parseSnapshotResponse(value) : parseSnapshotDeltaResponse(value)
 }
 
 export const parseCapabilitySchemaRequest = (value: unknown): CapabilitySchemaRequest => {
