@@ -7,6 +7,7 @@ import {
   createDashboardSnapshotService,
   createHostRevision,
   createProjectionChanges,
+  sanitizeJsonValue,
   stableStringify,
   validateProjectionChanges,
 } from '../src/editor/agent/snapshot/index.mjs'
@@ -74,11 +75,21 @@ test('revision and full projection are stable across provider insertion and mate
     documentId: 'doc',
     documentMutationVersion: 9,
     materialRegistryVersion: 3,
+    providerVersions: { a: '2', z: '1' },
   }
-  assert.equal(
-    createHostRevision({ ...revisionInput, providerVersions: { z: '1', a: '2' } }),
-    createHostRevision({ ...revisionInput, providerVersions: { a: '2', z: '1' } }),
-  )
+  const revision = createHostRevision(revisionInput)
+  assert.equal(revision, 'v1-09b578c0e299571d')
+  assert.match(revision, /^v1-/)
+  assert.equal(createHostRevision({ ...revisionInput, providerVersions: { z: '1', a: '2' } }), revision)
+  for (const changed of [
+    { ...revisionInput, adapterGeneration: 5 },
+    { ...revisionInput, documentId: 'other-doc' },
+    { ...revisionInput, documentMutationVersion: 10 },
+    { ...revisionInput, materialRegistryVersion: 4 },
+    { ...revisionInput, providerVersions: { ...revisionInput.providerVersions, a: '3' } },
+  ]) {
+    assert.notEqual(createHostRevision(changed), revision)
+  }
 
   const first = createHarness()
   const firstFull = await first.service.observe({ mode: 'full' })
@@ -127,6 +138,117 @@ test('full snapshots are structured-clone JSON and omit host objects, callbacks,
   assert.match(serialized, /"safe":"value"/)
   assert.equal(typeof clone.revision, 'string')
   assert.equal(typeof clone.cursor, 'string')
+})
+
+test('JSON sanitization omits nested and array accessors without invoking getters', () => {
+  let getterInvocations = 0
+  const getter = () => {
+    getterInvocations += 1
+    return 'getter-secret-source'
+  }
+  const nested = { safe: 'nested-safe' }
+  Object.defineProperty(nested, 'credential', { enumerable: true, get: getter })
+  const values = ['first', 'second', 'third']
+  Object.defineProperty(values, '1', { configurable: true, enumerable: true, get: getter })
+  const input = { nested, values }
+  Object.defineProperty(input, 'sourceCode', { enumerable: true, get: getter })
+
+  const sanitized = sanitizeJsonValue(input)
+  const clone = structuredClone(sanitized)
+  const jsonRoundTrip = JSON.parse(JSON.stringify(sanitized))
+
+  assert.equal(getterInvocations, 0)
+  assert.deepEqual(clone, jsonRoundTrip)
+  assert.deepEqual(jsonRoundTrip, {
+    nested: { safe: 'nested-safe' },
+    values: ['first', null, 'third'],
+  })
+  assert.doesNotMatch(JSON.stringify(jsonRoundTrip), /getter-secret|credential|sourceCode/)
+})
+
+test('Core node and material summaries omit structural accessors without invoking getters', async () => {
+  let getterInvocations = 0
+  const getter = () => {
+    getterInvocations += 1
+    return 'getter-secret-source'
+  }
+  const { registry, service, state } = createHarness()
+  const root = state.document.schema
+  const nested = { safe: 'root-safe' }
+  Object.defineProperty(nested, 'password', { enumerable: true, get: getter })
+  const values = [1, 2, 3]
+  Object.defineProperty(values, '1', { configurable: true, enumerable: true, get: getter })
+  root.props = { nested, values }
+
+  const safeChild = { id: 'safe-child' }
+  Object.defineProperty(safeChild, 'componentName', { enumerable: true, get: getter })
+  Object.defineProperty(safeChild, 'props', { enumerable: true, get: getter })
+  Object.defineProperty(safeChild, 'children', { enumerable: true, get: getter })
+  const accessorIdChild = { componentName: 'Text', props: { text: 'must-not-appear' } }
+  Object.defineProperty(accessorIdChild, 'id', { enumerable: true, get: getter })
+  const children = [safeChild, createNode(2), accessorIdChild]
+  Object.defineProperty(children, '1', { configurable: true, enumerable: true, get: getter })
+  root.children = children
+
+  const textMaterial = state.materials.entries.get('Text')
+  Object.defineProperty(state.materials.entries, 'values', { configurable: true, enumerable: true, get: getter })
+  Object.defineProperty(textMaterial, 'title', { configurable: true, enumerable: true, get: getter })
+  Object.defineProperty(textMaterial, 'description', { configurable: true, enumerable: true, get: getter })
+  const tags = ['basic', 'poisoned']
+  Object.defineProperty(tags, '1', { configurable: true, enumerable: true, get: getter })
+  textMaterial.tags = tags
+
+  const hostileProjection = { safe: 'provider-safe' }
+  Object.defineProperty(hostileProjection, 'authorization', { enumerable: true, get: getter })
+  registry.register({ id: 'hostile.provider', getVersion: () => '1', capture: () => hostileProjection })
+
+  const full = await service.observe({ mode: 'full' })
+  const clone = structuredClone(full)
+  const jsonRoundTrip = JSON.parse(JSON.stringify(full))
+  const core = full.projection['dashboard.core']
+  const material = core.materials.summaries.find(summary => summary.componentName === 'Text')
+
+  assert.equal(getterInvocations, 0)
+  assert.equal(JSON.stringify(clone), JSON.stringify(jsonRoundTrip))
+  assert.equal(full.projection['hostile.provider'].safe, 'provider-safe')
+  assert.deepEqual(core.nodes['node-000'].props.values, [1, null, 3])
+  assert.deepEqual(core.nodes['node-000'].childIds, ['safe-child'])
+  assert.equal(core.nodes['safe-child'].componentName, 'Unknown')
+  assert.equal(Object.hasOwn(core.nodes['safe-child'], 'props'), false)
+  assert.equal(Object.hasOwn(core.nodes, 'getter-secret-source'), false)
+  assert.equal(material.title, 'Text')
+  assert.equal(material.description, '')
+  assert.deepEqual(material.tags, ['basic', null])
+  assert.doesNotMatch(
+    JSON.stringify(jsonRoundTrip),
+    /getter-secret|must-not-appear|password|authorization|credentialRef|artifactSource/,
+  )
+})
+
+test('Core document and material registry accessors are omitted without invoking getters', async () => {
+  let getterInvocations = 0
+  const getter = () => {
+    getterInvocations += 1
+    return 'registry-secret-source'
+  }
+  const { service, state } = createHarness()
+  for (const key of ['id', 'mutationVersion', 'schema']) {
+    Object.defineProperty(state.document, key, { configurable: true, enumerable: true, get: getter })
+  }
+  for (const key of ['version', 'entries']) {
+    Object.defineProperty(state.materials, key, { configurable: true, enumerable: true, get: getter })
+  }
+
+  const full = await service.observe({ mode: 'full' })
+  const core = full.projection['dashboard.core']
+
+  assert.equal(getterInvocations, 0)
+  assert.deepEqual(Object.keys(core.nodes), [])
+  assert.deepEqual(core.materials.summaries, [])
+  assert.equal(Object.hasOwn(core.document, 'id'), false)
+  assert.equal(Object.hasOwn(core.document, 'mutationVersion'), false)
+  assert.equal(Object.hasOwn(core.materials, 'registryVersion'), false)
+  assert.doesNotMatch(JSON.stringify(structuredClone(full)), /registry-secret|source/)
 })
 
 test('ordered deltas carry exact revision, cursor, provider generation, and atomic array patches', async () => {

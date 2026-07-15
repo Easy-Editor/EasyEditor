@@ -5,6 +5,35 @@ const SOURCE_KEYS = new Set(['artifactSource', 'rawSource', 'sourceCode', 'cssTe
 
 export const compareCodeUnits = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 
+const isObjectLike = value => (typeof value === 'object' && value !== null) || typeof value === 'function'
+
+const readOwnDataValue = (value, key, fallback = OMIT) => {
+  if (!isObjectLike(value)) return fallback
+  const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+  return descriptor && 'value' in descriptor ? descriptor.value : fallback
+}
+
+const ownEnumerableDataEntries = value => {
+  if (!isObjectLike(value)) return []
+  const entries = []
+  for (const key of Object.keys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+    if (descriptor && 'value' in descriptor) entries.push([key, descriptor.value])
+  }
+  return entries
+}
+
+const arrayDataEntries = value => {
+  if (!Array.isArray(value)) return []
+  const length = readOwnDataValue(value, 'length', 0)
+  const entries = []
+  for (let index = 0; index < length; index += 1) {
+    const item = readOwnDataValue(value, String(index))
+    if (item !== OMIT) entries.push([index, item])
+  }
+  return entries
+}
+
 const isPlainRecord = value => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)
@@ -26,18 +55,23 @@ const sanitizeValue = (value, state, depth, path) => {
   state.visited.add(value)
   try {
     if (Array.isArray(value)) {
-      if (value.length > state.maxArrayLength) return OMIT
-      return value.map((item, index) => {
+      const length = readOwnDataValue(value, 'length', 0)
+      if (length > state.maxArrayLength) return OMIT
+      const result = Array.from({ length }, () => null)
+      for (const [index, item] of arrayDataEntries(value)) {
         const sanitized = sanitizeValue(item, state, depth + 1, [...path, String(index)])
-        return sanitized === OMIT ? null : sanitized
-      })
+        result[index] = sanitized === OMIT ? null : sanitized
+      }
+      return result
     }
     if (!isPlainRecord(value)) return OMIT
 
     const result = Object.create(null)
-    for (const key of Object.keys(value).sort(compareCodeUnits)) {
+    for (const [key, item] of ownEnumerableDataEntries(value).sort(([left], [right]) =>
+      compareCodeUnits(left, right),
+    )) {
       if (forbiddenProjectionKey(key, path)) continue
-      const sanitized = sanitizeValue(value[key], state, depth + 1, [...path, key])
+      const sanitized = sanitizeValue(item, state, depth + 1, [...path, key])
       if (sanitized !== OMIT) result[key] = sanitized
     }
     return result
@@ -50,10 +84,10 @@ export const sanitizeJsonValue = (value, options = {}) => {
   const result = sanitizeValue(
     value,
     {
-      maxDepth: options.maxDepth ?? 32,
-      maxNodes: options.maxNodes ?? 25_000,
-      maxArrayLength: options.maxArrayLength ?? 5_000,
-      maxStringLength: options.maxStringLength ?? 100_000,
+      maxDepth: readOwnDataValue(options, 'maxDepth', null) ?? 32,
+      maxNodes: readOwnDataValue(options, 'maxNodes', null) ?? 25_000,
+      maxArrayLength: readOwnDataValue(options, 'maxArrayLength', null) ?? 5_000,
+      maxStringLength: readOwnDataValue(options, 'maxStringLength', null) ?? 100_000,
       nodes: 0,
       visited: new WeakSet(),
     },
@@ -101,10 +135,10 @@ const diffInto = (base, next, path, changes) => {
       continue
     }
     if (!Object.hasOwn(base, key)) {
-      changes.push({ op: 'set', path: [...path, key], value: sanitizeJsonValue(next[key]) })
+      changes.push({ op: 'set', path: [...path, key], value: sanitizeJsonValue(readOwnDataValue(next, key)) })
       continue
     }
-    diffInto(base[key], next[key], [...path, key], changes)
+    diffInto(readOwnDataValue(base, key), readOwnDataValue(next, key), [...path, key], changes)
   }
 }
 
@@ -124,7 +158,8 @@ const hasOwnPath = (value, path) => {
   let current = value
   for (const segment of path) {
     if (!isPlainRecord(current) || !Object.hasOwn(current, segment)) return false
-    current = current[segment]
+    current = readOwnDataValue(current, segment)
+    if (current === OMIT) return false
   }
   return true
 }
@@ -158,12 +193,14 @@ export const validateProjectionChanges = (base, changes) => {
 
 export const createHostRevision = input =>
   hashStableValue({
-    adapterGeneration: input.adapterGeneration,
-    documentId: input.documentId,
-    documentMutationVersion: input.documentMutationVersion,
-    materialRegistryVersion: input.materialRegistryVersion,
+    adapterGeneration: readOwnDataValue(input, 'adapterGeneration'),
+    documentId: readOwnDataValue(input, 'documentId'),
+    documentMutationVersion: readOwnDataValue(input, 'documentMutationVersion'),
+    materialRegistryVersion: readOwnDataValue(input, 'materialRegistryVersion'),
     providerVersions: Object.fromEntries(
-      Object.entries(input.providerVersions).sort(([left], [right]) => compareCodeUnits(left, right)),
+      ownEnumerableDataEntries(readOwnDataValue(input, 'providerVersions')).sort(([left], [right]) =>
+        compareCodeUnits(left, right),
+      ),
     ),
   })
 
@@ -171,12 +208,21 @@ const flattenDocument = root => {
   const nodes = Object.create(null)
   const visit = (node, parentId = null, index = 0) => {
     if (!isPlainRecord(node)) return
-    const id = typeof node.id === 'string' && node.id ? node.id : null
+    const rawId = readOwnDataValue(node, 'id')
+    const id = typeof rawId === 'string' && rawId ? rawId : null
     if (!id) return
-    const { children, componentName, props, ...extra } = node
-    const childIds = Array.isArray(children)
-      ? children.flatMap(child => (typeof child?.id === 'string' && child.id ? [child.id] : []))
-      : []
+    const children = readOwnDataValue(node, 'children')
+    const componentName = readOwnDataValue(node, 'componentName')
+    const props = readOwnDataValue(node, 'props')
+    const extra = Object.create(null)
+    for (const [key, value] of ownEnumerableDataEntries(node)) {
+      if (!['children', 'componentName', 'props'].includes(key)) extra[key] = value
+    }
+    const childrenEntries = arrayDataEntries(children)
+    const childIds = childrenEntries.flatMap(([, child]) => {
+      const childId = readOwnDataValue(child, 'id')
+      return typeof childId === 'string' && childId ? [childId] : []
+    })
     nodes[id] = sanitizeJsonValue({
       id,
       componentName: typeof componentName === 'string' ? componentName : 'Unknown',
@@ -186,7 +232,7 @@ const flattenDocument = root => {
       props: props ?? {},
       extra,
     })
-    if (Array.isArray(children)) children.forEach((child, childIndex) => visit(child, id, childIndex))
+    for (const [childIndex, child] of childrenEntries) visit(child, id, childIndex)
   }
   visit(root)
   return Object.fromEntries(Object.entries(nodes).sort(([left], [right]) => compareCodeUnits(left, right)))
@@ -194,27 +240,41 @@ const flattenDocument = root => {
 
 const structureFingerprint = projection =>
   hashStableValue({
-    documentId: projection.document?.id ?? null,
+    documentId: readOwnDataValue(readOwnDataValue(projection, 'document'), 'id', null) ?? null,
     nodes: Object.fromEntries(
-      Object.entries(projection.nodes ?? {})
+      ownEnumerableDataEntries(readOwnDataValue(projection, 'nodes', {}))
         .sort(([left], [right]) => compareCodeUnits(left, right))
-        .map(([id, node]) => [id, { parentId: node.parentId, index: node.index, childIds: node.childIds }]),
+        .map(([id, node]) => [
+          id,
+          {
+            parentId: readOwnDataValue(node, 'parentId'),
+            index: readOwnDataValue(node, 'index'),
+            childIds: readOwnDataValue(node, 'childIds'),
+          },
+        ]),
     ),
   })
 
 const materialSummaries = registry => {
-  const values = registry?.entries instanceof Map ? [...registry.entries.values()] : [...(registry?.entries ?? [])]
+  const entries = readOwnDataValue(registry, 'entries')
+  const values =
+    entries instanceof Map
+      ? [...Map.prototype.values.call(entries)]
+      : arrayDataEntries(entries).map(([, value]) => value)
   return values
-    .map(material =>
-      sanitizeJsonValue({
-        componentName: material?.componentName ?? '',
-        title: material?.title ?? material?.componentName ?? '',
-        description: material?.description ?? '',
-        group: material?.group ?? '',
-        category: material?.category ?? '',
-        tags: Array.isArray(material?.tags) ? material.tags : [],
-      }),
-    )
+    .map(material => {
+      const componentName = readOwnDataValue(material, 'componentName', null) ?? ''
+      const title = readOwnDataValue(material, 'title', null) ?? componentName
+      const tags = readOwnDataValue(material, 'tags')
+      return sanitizeJsonValue({
+        componentName,
+        title,
+        description: readOwnDataValue(material, 'description', null) ?? '',
+        group: readOwnDataValue(material, 'group', null) ?? '',
+        category: readOwnDataValue(material, 'category', null) ?? '',
+        tags: Array.isArray(tags) ? tags : [],
+      })
+    })
     .sort((left, right) => compareCodeUnits(left.componentName, right.componentName))
 }
 
@@ -225,9 +285,9 @@ export const createCoreProjectionProvider = adapter => ({
     const materials = adapter.readMaterials()
     return {
       adapterGeneration: adapter.readAdapterGeneration(),
-      documentId: document?.id ?? 'none',
-      documentMutationVersion: document?.mutationVersion ?? -1,
-      materialRegistryVersion: materials.version,
+      documentId: readOwnDataValue(document, 'id', null) ?? 'none',
+      documentMutationVersion: readOwnDataValue(document, 'mutationVersion', null) ?? -1,
+      materialRegistryVersion: readOwnDataValue(materials, 'version', null) ?? -1,
     }
   },
   getVersion() {
@@ -236,18 +296,19 @@ export const createCoreProjectionProvider = adapter => ({
   capture() {
     const document = adapter.readDocument()
     const materials = adapter.readMaterials()
-    const nodes = document ? flattenDocument(document.schema) : {}
+    const schema = readOwnDataValue(document, 'schema')
+    const nodes = document ? flattenDocument(schema) : {}
     return sanitizeJsonValue({
       document: document
         ? {
-            id: document.id,
-            mutationVersion: document.mutationVersion,
-            rootNodeId: typeof document.schema?.id === 'string' ? document.schema.id : null,
+            id: readOwnDataValue(document, 'id'),
+            mutationVersion: readOwnDataValue(document, 'mutationVersion'),
+            rootNodeId: typeof readOwnDataValue(schema, 'id') === 'string' ? readOwnDataValue(schema, 'id') : null,
           }
         : null,
       nodes,
       materials: {
-        registryVersion: materials.version,
+        registryVersion: readOwnDataValue(materials, 'version'),
         summaries: materialSummaries(materials),
       },
     })
