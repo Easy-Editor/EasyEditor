@@ -628,16 +628,15 @@ test('Dashboard production code does not value-import the legacy Core facade', a
   assert.deepEqual(violations, [])
 })
 
-test('Dashboard framework baseline has no Agent or AI runtime entrypoints', async () => {
+test('Dashboard production code does not import deleted Core-owned Agent or AI entrypoints', async () => {
   const productionFiles = [
     ...(await walk(sourceRoot)).filter(path => ['.js', '.mjs', '.mts', '.ts', '.tsx'].includes(extname(path))),
     join(dashboardRoot, 'server/index.mjs'),
     join(dashboardRoot, 'vite.config.mts'),
   ]
   const forbiddenPatterns = [
-    ['Core Agent import', /@easy-editor\/core\/agent(?:-channel)?/],
-    ['Agent Worker entry', /agent\.worker/],
-    ['AI gateway route', /\/api\/ai\/chat/],
+    ['Core Agent import', /@easy-editor\/core\/agent(?:-channel)?(?:\/[^'"\s]*)?/],
+    ['Core AI import', /@easy-editor\/core\/ai(?:\/[^'"\s]*)?/],
   ]
   const violations = []
 
@@ -648,12 +647,20 @@ test('Dashboard framework baseline has no Agent or AI runtime entrypoints', asyn
     }
   }
 
-  const manifest = JSON.parse(await readFile(join(dashboardRoot, 'package.json'), 'utf8'))
-  const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
-  for (const dependency of ['@ai-sdk/openai', '@ai-sdk/react', 'ai', 'zod']) {
-    if (dependency in dependencies) violations.push(`package.json: ${dependency}`)
+  for (const allowedPath of [
+    '@easy-editor/agent-runtime',
+    '@easy-editor/agent-runtime/worker',
+    'src/editor/agent/agent.worker.ts',
+    '/api/ai/chat',
+  ]) {
+    for (const [name, pattern] of forbiddenPatterns) {
+      assert.equal(
+        pattern.test(allowedPath),
+        false,
+        `${name} guard must not reject the independent runtime path ${allowedPath}`,
+      )
+    }
   }
-  if ('verify:ai-bundle' in manifest.scripts) violations.push('package.json: verify:ai-bundle')
 
   assert.deepEqual(violations, [])
 })
