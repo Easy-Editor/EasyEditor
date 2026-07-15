@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const dashboardRoot = fileURLToPath(new URL('..', import.meta.url))
+const coreInstanceUrl = new URL('../../../packages/core/dist/instance.js', import.meta.url)
 const moduleCache = new Map()
 
 const resolveTypeScriptModule = (request, parentFilename) => {
@@ -63,11 +64,15 @@ const namedFields = configure => flattenFields(configure.props ?? []).filter(fie
 test('shared configure fields expose stable binding identities', () => {
   const { generalAdvancedConfigure, generalBasicConfigure } = loadConfigureModule('src/editor/materials/configure.ts')
   const fields = [...flattenFields(generalBasicConfigure), ...flattenFields(generalAdvancedConfigure)]
-  const fieldsByName = new Map(fields.filter(field => field.name).map(field => [field.name, field]))
+  const fieldsByIdentity = new Map(
+    fields.map(field => [field.name ?? field.key, field]).filter(([identity]) => typeof identity === 'string'),
+  )
 
-  assert.deepEqual([...fieldsByName.keys()], ['id', 'title', 'rect', 'condition'])
+  assert.deepEqual([...fieldsByIdentity.keys()], ['id', 'title', 'rect', 'condition'])
   assert.deepEqual(
-    Object.fromEntries([...fieldsByName].map(([name, field]) => [name, { title: field.title, setter: field.setter }])),
+    Object.fromEntries(
+      [...fieldsByIdentity].map(([identity, field]) => [identity, { title: field.title, setter: field.setter }]),
+    ),
     {
       id: { title: 'ID', setter: 'NodeIdSetter' },
       title: { title: '标题', setter: 'StringSetter' },
@@ -77,15 +82,67 @@ test('shared configure fields expose stable binding identities', () => {
   )
 })
 
-test('callback-backed visibility keeps a stable sidecar lookup name', () => {
+test('callback-backed visibility keeps a stable non-prop identity', () => {
   const { generalAdvancedConfigure } = loadConfigureModule('src/editor/materials/configure.ts')
-  const [conditionField] = flattenFields(generalAdvancedConfigure).filter(field => field.name === 'condition')
+  const [conditionField] = flattenFields(generalAdvancedConfigure).filter(field => field.key === 'condition')
 
+  assert.equal(conditionField.name, undefined)
+  assert.equal(conditionField.key, 'condition')
   assert.equal(typeof conditionField.extraProps.getValue, 'function')
   assert.equal(typeof conditionField.extraProps.setValue, 'function')
   assert.equal(conditionField.extraProps.condition, undefined)
   assert.equal(conditionField.extraProps.autorun, undefined)
   assert.equal(conditionField.extraProps.onChange, undefined)
+})
+
+test('built Core SettingField mutates only the visibility sidecar', async t => {
+  const { createEngine } = await import(coreInstanceUrl.href)
+  const { generalAdvancedConfigure } = loadConfigureModule('src/editor/materials/configure.ts')
+  const engine = createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  t.after(async () => engine.destroy())
+  await engine.init()
+
+  engine.materials.createComponentMeta({
+    componentName: 'VisibilityProbe',
+    configure: { props: generalAdvancedConfigure },
+  })
+  engine.loadProject(
+    {
+      id: 'visibility-binding-project',
+      version: '0.0.1',
+      componentsMap: [],
+      componentsTree: [
+        {
+          docId: 'visibility-page',
+          id: 'visibility-root',
+          componentName: 'VisibilityProbe',
+          props: {},
+          children: [],
+        },
+      ],
+    },
+    true,
+  )
+
+  const document = engine.project.currentDocument
+  const visibilityField = document.root.settingEntry.items[0].items[0]
+
+  assert.equal(visibilityField.name, undefined)
+  assert.equal(visibilityField.config.key, 'condition')
+  assert.equal(visibilityField.title, '显隐')
+  assert.equal(visibilityField.setter, 'SwitchSetter')
+
+  visibilityField.setValue(false)
+  let schema = document.exportRaw()
+  assert.equal(Object.hasOwn(schema.props ?? {}, 'condition'), false)
+  assert.equal(document.root.getExtraPropValue('condition'), false)
+  assert.equal(schema.condition, false)
+
+  visibilityField.clearValue()
+  schema = document.exportRaw()
+  assert.equal(Object.hasOwn(schema.props ?? {}, 'condition'), false)
+  assert.equal(document.root.getExtraPropValue('condition'), undefined)
+  assert.equal(Object.hasOwn(schema, 'condition'), false)
 })
 
 test('Phase 2 does not pretend Text or charts are material-ready', () => {
@@ -117,6 +174,6 @@ test('Phase 2 does not pretend Text or charts are material-ready', () => {
 test('binding repair adds no Agent-specific material API', () => {
   const source = readFileSync(resolve(dashboardRoot, 'src/editor/materials/configure.ts'), 'utf8')
 
-  assert.match(source, /name: 'condition'/)
+  assert.match(source, /key: 'condition'/)
   assert.doesNotMatch(source, /\bAgent(?:Host|Runtime|Capability|Material)?\b/)
 })
