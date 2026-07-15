@@ -289,10 +289,19 @@ const flattenDocument = root => {
   return Object.fromEntries(Object.entries(nodes).sort(([left], [right]) => compareCodeUnits(left, right)))
 }
 
+const emptyMaterialSummary = () =>
+  sanitizeJsonValue({
+    componentName: '',
+    title: '',
+    description: '',
+    group: '',
+    category: '',
+    tags: [],
+  })
+
 const summarizeMaterial = material => {
   try {
     const componentName = readOwnDataValue(material, 'componentName', null) ?? ''
-    if (!componentName) return null
     const title = readOwnDataValue(material, 'title', null) ?? componentName
     const tags = readOwnDataValue(material, 'tags')
     return sanitizeJsonValue({
@@ -304,15 +313,7 @@ const summarizeMaterial = material => {
       tags: Array.isArray(tags) ? tags : [],
     })
   } catch {
-    return null
-  }
-}
-
-const resolveMaterialMetadata = (resolver, material) => {
-  try {
-    return resolver(material)
-  } catch {
-    return null
+    return emptyMaterialSummary()
   }
 }
 
@@ -335,18 +336,19 @@ const structureFingerprint = projection =>
 
 const materialSummaries = registry => {
   const entries = readOwnDataValue(registry, 'entries')
-  const resolveEntry = readOwnDataValue(registry, 'resolveEntry')
+  const resolver = readOwnDataValue(registry, 'resolver')
   const values =
     entries instanceof Map
       ? [...Map.prototype.values.call(entries)]
       : arrayDataEntries(entries).map(([, value]) => value)
   return values
-    .map(material =>
-      summarizeMaterial(
-        typeof resolveEntry === 'function' ? resolveMaterialMetadata(resolveEntry, material) : material,
-      ),
-    )
-    .filter(summary => summary !== null)
+    .map(material => summarizeMaterial(typeof resolver === 'function' ? (() => {
+      try {
+        return resolver(material)
+      } catch {
+        return null
+      }
+    })() : material))
     .sort((left, right) => compareCodeUnits(left.componentName, right.componentName))
 }
 
