@@ -1,17 +1,12 @@
 import type { Clock, IdFactory } from '../../contracts.js'
 import {
   MAX_PROTOCOL_DEDUPE_ENTRIES,
-  ProtocolValidationError,
   type ProtocolEnvelope,
+  ProtocolValidationError,
   createProtocolEnvelope,
   parseProtocolEnvelope,
 } from '../protocol/index.js'
-import type {
-  RpcContractMap,
-  RpcContractRequest,
-  RpcContractResponse,
-  RpcValueContract,
-} from './contracts.js'
+import type { RpcContractMap, RpcContractRequest, RpcContractResponse, RpcValueContract } from './contracts.js'
 import {
   type RpcAbortPayload,
   type RpcErrorPayload,
@@ -174,8 +169,11 @@ const contextsMatch = (left: RpcRequestContext, right: RpcRequestContext) =>
 const errorPayload = (requestId: string, error: unknown): RpcErrorPayload => ({
   requestId,
   error: {
-    code: error instanceof ProtocolValidationError ? error.code : 'rpc-handler-failed',
-    message: error instanceof Error ? error.message : 'RPC handler failed',
+    code:
+      error instanceof ProtocolValidationError || error instanceof RpcRemoteError
+        ? error.code
+        : 'rpc-handler-failed',
+    message: (error instanceof Error ? error.message : 'RPC handler failed').slice(0, 4096),
   },
 })
 
@@ -261,7 +259,11 @@ export const createRpcPeer = <Contracts extends RpcContractMap>(
       stepId: envelope.stepId,
     }
     if (!contract || !handler) {
-      sendError(context, payload.requestId, new RpcRemoteError('unknown-operation', `unsupported RPC operation ${payload.operation}`))
+      sendError(
+        context,
+        payload.requestId,
+        new RpcRemoteError('unknown-operation', `unsupported RPC operation ${payload.operation}`),
+      )
       return
     }
 
@@ -378,7 +380,8 @@ export const createRpcPeer = <Contracts extends RpcContractMap>(
   const request: RpcPeer<Contracts>['request'] = (operation, value, requestOptions) => {
     if (disposed) return Promise.reject(new RpcDisposedError())
     const contract = options.contracts[operation] as RpcValueContract | undefined
-    if (!contract) return Promise.reject(new RpcRemoteError('unknown-operation', `unsupported RPC operation ${operation}`))
+    if (!contract)
+      return Promise.reject(new RpcRemoteError('unknown-operation', `unsupported RPC operation ${operation}`))
     if (requestOptions.signal?.aborted) return Promise.reject(new RpcAbortError())
 
     let requestValue: unknown
@@ -403,9 +406,7 @@ export const createRpcPeer = <Contracts extends RpcContractMap>(
           post(
             createEnvelope('rpc.abort', context, {
               requestId,
-              reason: requestOptions.signal?.reason
-                ? String(requestOptions.signal.reason)
-                : 'caller-aborted',
+              reason: requestOptions.signal?.reason ? String(requestOptions.signal.reason) : 'caller-aborted',
             } satisfies RpcAbortPayload),
           )
         } catch {

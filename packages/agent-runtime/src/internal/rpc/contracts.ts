@@ -26,9 +26,7 @@ export interface RpcValueContract<Request = unknown, Response = unknown> {
 
 export type RpcContractMap = Readonly<Record<string, RpcValueContract>>
 
-export type RpcContractRequest<Contract> = Contract extends RpcValueContract<infer Request, unknown>
-  ? Request
-  : never
+export type RpcContractRequest<Contract> = Contract extends RpcValueContract<infer Request, unknown> ? Request : never
 
 export type RpcContractResponse<Contract> = Contract extends RpcValueContract<unknown, infer Response>
   ? Response
@@ -277,15 +275,7 @@ export const parsePersistenceReadResult = (value: unknown): PersistenceReadResul
 export const parsePersistenceBatch = (value: unknown): AgentPersistenceBatch => {
   assertExactFields(
     value,
-    [
-      'schemaVersion',
-      'projectId',
-      'branchId',
-      'sessionId',
-      'batchId',
-      'expectedDraftGeneration',
-      'records',
-    ],
+    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'batchId', 'expectedDraftGeneration', 'records'],
     [],
     'AgentPersistenceBatch',
   )

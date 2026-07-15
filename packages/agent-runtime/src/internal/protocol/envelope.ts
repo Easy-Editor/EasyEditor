@@ -43,10 +43,7 @@ export class ProtocolValidationError extends Error {
   }
 }
 
-export interface ProtocolEnvelope<
-  Kind extends RpcMessageKind = RpcMessageKind,
-  Payload = unknown,
-> {
+export interface ProtocolEnvelope<Kind extends RpcMessageKind = RpcMessageKind, Payload = unknown> {
   readonly protocolVersion: typeof AGENT_PROTOCOL_VERSION
   readonly sessionId: string
   readonly taskId: string
