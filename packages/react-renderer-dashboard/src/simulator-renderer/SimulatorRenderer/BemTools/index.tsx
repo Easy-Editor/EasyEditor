@@ -15,7 +15,7 @@ interface BemToolsProps {
 
 export const BemTools: React.FC<BemToolsProps> = observer(({ host }) => {
   return (
-    <div className='lc-bem-tools'>
+    <div className='lc-bem-tools' data-easy-editor-surface-tools='editor'>
       <BorderDetecting host={host} />
       <BorderSelecting host={host} />
       <BorderResizing host={host} />

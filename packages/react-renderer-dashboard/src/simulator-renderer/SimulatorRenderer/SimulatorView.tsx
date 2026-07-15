@@ -98,8 +98,9 @@ export const Canvas: React.FC<{ host: Simulator }> = observer(({ host }) => {
         className='lc-simulator-canvas-viewport'
         style={{ ...viewportStyle, ...viewportFrameStyle }}
       >
-        <BemTools host={host} />
         <Content host={host} />
+        <div data-easy-editor-surface-overlay-mount='editor' className='lc-surface-overlay-mount' />
+        <BemTools host={host} />
       </div>
     </div>
   )

@@ -34,6 +34,7 @@
     overflow: hidden;
     height: 100%;
     width: 100%;
+    z-index: 0;
 
     .lc-editor-content-frame {
       border: none;
@@ -41,6 +42,14 @@
       height: 100%;
       width: 100%;
     }
+  }
+
+  .lc-surface-overlay-mount {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 1;
   }
 }
 

@@ -56,6 +56,7 @@ const DashboardRenderer: React.FC<DashboardRendererProps> = props => {
               <LowCodeRenderer {...(rendererProps as RendererProps)} />
             </div>
           </div>
+          <div data-easy-editor-surface-overlay-mount='preview' className='lc-surface-overlay-mount' />
         </div>
       </div>
     </div>
