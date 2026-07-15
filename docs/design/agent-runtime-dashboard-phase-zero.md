@@ -1,7 +1,7 @@
 # Agent Runtime Dashboard Phase 0 Contracts
 
-**Status:** Accepted  
-**Scope:** Phase 0 only  
+**Status:** Accepted\
+**Scope:** Phase 0 only\
 **Source of truth:** the approved Agent Runtime Dashboard PRD, test specification, and execution handoff under `.omx/plans/`
 
 This document freezes the repository-native decisions that must be true before any Agent runtime implementation starts. Phase 0 adds no writable Agent capability, no runtime package, no generated-component host, and no Core behavior change.
