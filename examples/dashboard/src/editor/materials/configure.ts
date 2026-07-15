@@ -61,6 +61,7 @@ export const generalAdvancedConfigure: FieldConfig[] = [
     },
     items: [
       {
+        name: 'condition',
         title: '显隐',
         setter: 'SwitchSetter',
         extraProps: {
