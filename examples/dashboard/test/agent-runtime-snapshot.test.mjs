@@ -523,10 +523,7 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
   assert.equal(delta.providerGeneration, generation)
   assert.notEqual(delta.newRevision, delta.baseRevision)
   assert.notEqual(delta.newCursor, delta.baseCursor)
-  assert.ok(
-    delta.changes.length > 0 &&
-      delta.changes.some(change => change.path.includes('title') || change.path.includes('rect')),
-  )
+  assert.ok(delta.changes.some(change => change.path.at(-1) === 'title'))
 
   arrayValues = [7, 8, 9]
   arrayVersion += 1
@@ -556,6 +553,7 @@ test('loss, reorder, structural change, and provider generation changes force fu
   state.document.mutationVersion += 1
   const delta = await service.observe({ mode: 'delta', cursor: first.cursor })
   assert.equal(isFull(delta), false)
+  assert.ok(delta.changes.length > 0 && delta.changes.some(change => change.path.at(-1) === 'title'))
 
   state.document.schema.children[0].$dashboard.rect.x += 1
   state.document.mutationVersion += 1
