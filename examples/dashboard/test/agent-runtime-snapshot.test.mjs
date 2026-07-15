@@ -306,6 +306,7 @@ test('Core material summaries use the explicit resolver seam without touching pr
       this.#metadata = metadata
     }
 
+    #componentName
     #metadata
 
     getMetadata() {
