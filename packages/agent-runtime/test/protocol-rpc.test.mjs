@@ -362,6 +362,81 @@ test('AbortSignal propagates as an explicit request-id abort envelope and dispos
   assert.equal(server.getStats().activeHandlers, 0)
 })
 
+test('rpc.abort cannot cancel a handler from a mismatched request context', async () => {
+  const { port1, port2 } = new MessageChannel()
+  const contracts = createEchoContracts()
+  let remoteAborted = false
+  let handlerStarted
+  const started = new Promise(resolve => {
+    handlerStarted = resolve
+  })
+  const protocolErrors = []
+  const server = rpc.createRpcPeer({
+    port: port2,
+    contracts,
+    handlers: {
+      echo(_value, context) {
+        handlerStarted()
+        return new Promise((resolve, reject) => {
+          context.signal.addEventListener(
+            'abort',
+            () => {
+              remoteAborted = true
+              reject(context.signal.reason)
+            },
+            { once: true },
+          )
+        })
+      },
+    },
+    clock: createClock(),
+    idFactory: createIdFactory('server-context-abort'),
+    closePortOnDispose: true,
+    onProtocolError: error => protocolErrors.push(error),
+  })
+  port1.start()
+  port1.postMessage(
+    protocol.createProtocolEnvelope({
+      ...baseContext,
+      messageId: 'context-request',
+      kind: 'rpc.request',
+      sentAt: 1,
+      payload: { requestId: 'context-request-1', operation: 'echo', value: null },
+    }),
+  )
+  await started
+
+  port1.postMessage(
+    protocol.createProtocolEnvelope({
+      ...baseContext,
+      stepId: 'attacker-step',
+      messageId: 'context-abort-wrong',
+      kind: 'rpc.abort',
+      sentAt: 2,
+      payload: { requestId: 'context-request-1', reason: 'mismatched-context' },
+    }),
+  )
+  await delay(5)
+  assert.equal(remoteAborted, false)
+  assert.equal(server.getStats().abortedRequests, 0)
+  assert.equal(protocolErrors.length, 1)
+
+  port1.postMessage(
+    protocol.createProtocolEnvelope({
+      ...baseContext,
+      messageId: 'context-abort-correct',
+      kind: 'rpc.abort',
+      sentAt: 3,
+      payload: { requestId: 'context-request-1', reason: 'matching-context' },
+    }),
+  )
+  for (let attempt = 0; attempt < 20 && !remoteAborted; attempt += 1) await delay(1)
+  assert.equal(remoteAborted, true)
+  assert.equal(server.getStats().abortedRequests, 1)
+  await server.dispose()
+  port1.close()
+})
+
 test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessagePorts', async () => {
   const { port1, port2 } = new MessageChannel()
   const snapshot = { schemaVersion: 1, revision: 'revision-1', projection: { nodes: 2 } }

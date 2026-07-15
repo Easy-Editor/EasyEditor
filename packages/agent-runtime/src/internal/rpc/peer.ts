@@ -119,6 +119,7 @@ interface PendingRequest {
 
 interface ActiveHandler {
   readonly controller: AbortController
+  readonly context: RpcRequestContext
 }
 
 class BoundedMap<Key, Value> {
@@ -274,7 +275,7 @@ export const createRpcPeer = <Contracts extends RpcContractMap>(
     }
 
     const controller = new AbortController()
-    active.set(payload.requestId, { controller })
+    active.set(payload.requestId, { controller, context })
     const handlerContext: RpcHandlerContext = { ...context, requestId: payload.requestId, signal: controller.signal }
 
     void Promise.resolve(handler(requestValue, handlerContext))
@@ -345,6 +346,17 @@ export const createRpcPeer = <Contracts extends RpcContractMap>(
     }
     const running = active.get(payload.requestId)
     if (!running || running.controller.signal.aborted) return
+    const abortContext: RpcRequestContext = {
+      sessionId: envelope.sessionId,
+      taskId: envelope.taskId,
+      stepId: envelope.stepId,
+    }
+    if (!contextsMatch(running.context, abortContext)) {
+      reportProtocolError(
+        new ProtocolValidationError('invalid-envelope', 'rpc.abort context does not match the active request'),
+      )
+      return
+    }
     stats.abortedRequests += 1
     running.controller.abort(payload.reason)
   }
