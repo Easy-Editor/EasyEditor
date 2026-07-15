@@ -100,6 +100,7 @@ export interface AgentRuntime {
 
 export interface AgentWorkerEndpoint {
   readonly port: MessagePort
+  onFault(listener: (error: unknown) => void): () => void
   terminate(): void
 }
 

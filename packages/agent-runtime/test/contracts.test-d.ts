@@ -47,7 +47,7 @@ const commit = persistence.commit(batch)
 
 const options: AgentRuntimeOptions = {
   binding: { projectId: 'project-1', branchId: 'branch-1' },
-  worker: { port: new MessageChannel().port1, terminate() {} },
+  worker: { port: new MessageChannel().port1, onFault: () => () => {}, terminate() {} },
   host,
   persistence,
 }
