@@ -1,0 +1,5 @@
+# Agent Runtime Dashboard release draft
+
+This draft is intentionally deferred during Phase 0 because no publishable package or default runtime behavior changes yet.
+
+The future release must keep `@easy-editor/core` Agent-free, publish the independent `@easy-editor/agent-runtime` root/worker/testing entry split, and preserve default-off Dashboard rollout flags until each later phase gate passes.
