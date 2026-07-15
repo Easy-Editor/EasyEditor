@@ -11,6 +11,7 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 const workerScript = fileURLToPath(new URL('./fixtures/module-worker.mjs', import.meta.url))
 let emittedRoot
 let runtimeModule
+let rpcModule
 let hostModule
 let persistenceModule
 let fixturesModule
@@ -39,6 +40,7 @@ before(async () => {
     [],
   )
   runtimeModule = await import(pathToFileURL(path.join(emittedRoot, 'internal/runtime/index.js')).href)
+  rpcModule = await import(pathToFileURL(path.join(emittedRoot, 'internal/rpc/index.js')).href)
   hostModule = await import(pathToFileURL(path.join(emittedRoot, 'internal/testing/fake-agent-host.js')).href)
   persistenceModule = await import(
     pathToFileURL(path.join(emittedRoot, 'internal/testing/memory-agent-persistence.js')).href
@@ -71,10 +73,14 @@ const call = {
 const createEndpointFactory = scripts => {
   const workers = []
   let faultSubscriptions = 0
+  let liveWorkers = 0
   return {
     workers,
     get faultSubscriptions() {
       return faultSubscriptions
+    },
+    get liveWorkers() {
+      return liveWorkers
     },
     factory() {
       const { port1, port2 } = new MessageChannel()
@@ -83,12 +89,16 @@ const createEndpointFactory = scripts => {
         transferList: [port2],
       })
       workers.push(worker)
+      liveWorkers += 1
       const faultListeners = new Set()
       const publishFault = error => {
         for (const listener of [...faultListeners]) listener(error)
       }
       worker.on('error', publishFault)
-      worker.on('exit', code => publishFault(new Error(`agent worker exited with code ${code}`)))
+      worker.on('exit', code => {
+        liveWorkers -= 1
+        publishFault(new Error(`agent worker exited with code ${code}`))
+      })
       return {
         port: port1,
         terminate: () => void worker.terminate(),
@@ -103,6 +113,51 @@ const createEndpointFactory = scripts => {
           }
         },
       }
+    },
+  }
+}
+
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+const waitFor = async (predicate, label) => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await delay(5)
+  }
+  throw new Error(`timed out waiting for ${label}`)
+}
+
+const createControlledEndpoint = snapshot => {
+  const { port1, port2 } = new MessageChannel()
+  const listeners = new Set()
+  const leakyPort = {
+    postMessage: message => port1.postMessage(message),
+    addEventListener: (type, listener) => port1.addEventListener(type, listener),
+    removeEventListener() {},
+    start: () => port1.start(),
+    close() {},
+  }
+  let sequence = 0
+  const peer = rpcModule.createRpcPeer({
+    port: port2,
+    contracts: runtimeModule.runtimeRpcContracts,
+    handlers: {
+      'runtime.initialize': () => snapshot,
+      'runtime.dispose': () => null,
+    },
+    clock: { now: () => ++sequence },
+    idFactory: { next: kind => `${kind}-${++sequence}` },
+    closePortOnDispose: true,
+  })
+  return {
+    peer,
+    endpoint: {
+      port: leakyPort,
+      terminate() {},
+      onFault(listener) {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
     },
   }
 }
@@ -159,6 +214,60 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
   await runtime.dispose()
   assert.equal(runtime.getSnapshot().status, 'disposed')
   assert.ok(phases.includes('EXECUTE') && phases.includes('CHECKPOINT'))
+})
+
+test('initial transport failures stay API-visible without process rejection events', async () => {
+  const unhandled = []
+  const warnings = []
+  const onUnhandled = reason => unhandled.push(reason)
+  const onWarning = warning => warnings.push(warning)
+  process.on('unhandledRejection', onUnhandled)
+  process.on('warning', onWarning)
+  try {
+    const startFailure = new Error('initial transport start failed')
+    const cases = [
+      () => {
+        throw new Error('initial worker factory failed')
+      },
+      () => ({
+        port: {
+          postMessage() {
+            throw startFailure
+          },
+          addEventListener() {},
+          removeEventListener() {},
+          start() {},
+          close() {},
+        },
+        onFault: () => () => {},
+        terminate() {},
+      }),
+    ]
+
+    for (const worker of cases) {
+      const runtime = runtimeModule.createAgentRuntime({
+        binding,
+        worker,
+        host: new hostModule.FakeAgentHost(),
+        persistence: new persistenceModule.MemoryAgentPersistence(),
+      })
+      await delay(10)
+      assert.equal(runtime.getSnapshot().status, 'failed')
+      await assert.rejects(runtime.ready())
+      await assert.rejects(runtime.submit({ text: 'must reject' }))
+      await assert.rejects(runtime.dispose())
+      await delay(10)
+    }
+
+    assert.deepEqual(unhandled, [])
+    assert.equal(
+      warnings.some(warning => warning.name === 'PromiseRejectionHandledWarning'),
+      false,
+    )
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
+    process.removeListener('warning', onWarning)
+  }
 })
 
 test('real module Worker repairs a verification mismatch before completing', async () => {
@@ -276,6 +385,134 @@ test('restart recovers persisted work and forces a full observation', async () =
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(endpoints.workers.length, 2)
   assert.equal(endpoints.faultSubscriptions, 0)
+})
+
+test('concurrent restarts serialize to one live transport and dispose to zero', async () => {
+  const endpoints = createEndpointFactory([[], [], []])
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host: new hostModule.FakeAgentHost(),
+    persistence: new persistenceModule.MemoryAgentPersistence(),
+  })
+  await runtime.ready()
+
+  await Promise.all([runtime.restart(), runtime.restart()])
+  await waitFor(() => endpoints.liveWorkers === 1, 'one live Worker after concurrent restart')
+  assert.equal(endpoints.faultSubscriptions, 1)
+  assert.equal(endpoints.workers.length, 3)
+
+  await runtime.dispose()
+  await waitFor(() => endpoints.liveWorkers === 0, 'zero live Workers after dispose')
+  assert.equal(endpoints.faultSubscriptions, 0)
+})
+
+test('fault during restart is linearized before recovery and leaves one transport', async () => {
+  const endpoints = createEndpointFactory([[], [], []])
+  const backing = new persistenceModule.MemoryAgentPersistence()
+  let reads = 0
+  let startBlockedRead
+  let releaseBlockedRead
+  const blockedReadStarted = new Promise(resolve => {
+    startBlockedRead = resolve
+  })
+  const blockedRead = new Promise(resolve => {
+    releaseBlockedRead = resolve
+  })
+  const persistence = {
+    async read(request) {
+      reads += 1
+      if (reads === 2) {
+        startBlockedRead()
+        await blockedRead
+      }
+      return backing.read(request)
+    },
+    commit: batch => backing.commit(batch),
+  }
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host: new hostModule.FakeAgentHost(),
+    persistence,
+  })
+  await runtime.ready()
+
+  const restart = runtime.restart()
+  await blockedReadStarted
+  await endpoints.workers[1].terminate()
+  releaseBlockedRead()
+  await assert.rejects(restart)
+  await runtime.ready()
+  await waitFor(() => endpoints.liveWorkers === 1, 'one live Worker after restart fault recovery')
+  assert.equal(endpoints.workers.length, 3)
+  assert.equal(endpoints.faultSubscriptions, 1)
+  await runtime.dispose()
+  await waitFor(() => endpoints.liveWorkers === 0, 'zero live Workers after recovered dispose')
+  assert.equal(endpoints.faultSubscriptions, 0)
+})
+
+test('restart racing dispose cannot create or retain a post-dispose transport', async () => {
+  const endpoints = createEndpointFactory([[], []])
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host: new hostModule.FakeAgentHost(),
+    persistence: new persistenceModule.MemoryAgentPersistence(),
+  })
+  await runtime.ready()
+
+  const outcomes = await Promise.allSettled([runtime.restart(), runtime.dispose()])
+  assert.equal(outcomes[0].status, 'fulfilled')
+  assert.equal(outcomes[1].status, 'fulfilled')
+  await waitFor(() => endpoints.liveWorkers === 0, 'zero live Workers after restart/dispose race')
+  assert.equal(endpoints.faultSubscriptions, 0)
+  assert.equal(runtime.getSnapshot().status, 'disposed')
+})
+
+test('stale generation publishes are ignored and facade revisions remain strictly monotonic', async () => {
+  const first = createControlledEndpoint({
+    schemaVersion: 1,
+    binding,
+    status: 'ready',
+    phase: 'IDLE',
+    revision: 5,
+    tasks: [],
+  })
+  const second = createControlledEndpoint({
+    schemaVersion: 1,
+    binding,
+    status: 'ready',
+    phase: 'IDLE',
+    revision: 0,
+    tasks: [],
+  })
+  const endpoints = [first.endpoint, second.endpoint]
+  const revisions = []
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: () => endpoints.shift(),
+    host: new hostModule.FakeAgentHost(),
+    persistence: new persistenceModule.MemoryAgentPersistence(),
+  })
+  runtime.subscribe(snapshot => revisions.push(snapshot.revision))
+  await runtime.ready()
+  await runtime.restart()
+  const stable = runtime.getSnapshot()
+
+  const stalePublish = first.peer.request(
+    'runtime.publishSnapshot',
+    { ...stable, status: 'failed', phase: 'FAILED', revision: 0 },
+    { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'stale-publish' },
+  )
+  void stalePublish.catch(() => {})
+  await delay(10)
+  assert.equal(runtime.getSnapshot().status, 'ready')
+  assert.equal(runtime.getSnapshot().phase, 'IDLE')
+  assert.ok(revisions.every((revision, index) => index === 0 || revision > revisions[index - 1]))
+
+  await runtime.dispose()
+  await Promise.all([first.peer.dispose(), second.peer.dispose()])
 })
 
 test('unexpected Worker exit automatically recovers persisted work without transport leaks', async () => {

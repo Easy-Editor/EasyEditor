@@ -36,6 +36,13 @@ const createIdFactory = (): IdFactory => {
   return { next: kind => `${kind}-${++sequence}` }
 }
 
+const observeRejection = <Value>(promise: Promise<Value>): Promise<Value> => {
+  void promise.catch(() => {
+    // Lifecycle failures remain visible to API callers through the original promise.
+  })
+  return promise
+}
+
 export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions): AgentRuntimeInternal => {
   const clock = options.clock ?? systemClock
   const idFactory = options.idFactory ?? createIdFactory()
@@ -45,10 +52,16 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
   })
   const listeners = new Set<(snapshot: AgentRuntimeSnapshot) => void>()
   const endpointFactory = typeof options.worker === 'function' ? options.worker : undefined
-  let endpoint: AgentWorkerEndpoint | undefined
-  let unsubscribeEndpointFault: (() => void) | undefined
-  let peer: RpcPeer<typeof runtimeRpcContracts> | undefined
+  type RuntimeTransport = {
+    readonly generation: number
+    readonly endpoint: AgentWorkerEndpoint
+    readonly peer: RpcPeer<typeof runtimeRpcContracts>
+    unsubscribeFault: () => void
+    closed: boolean
+  }
+  let transport: RuntimeTransport | undefined
   let transportGeneration = 0
+  let singleEndpointConsumed = false
   let disposed = false
   let current = frozenClone<AgentRuntimeSnapshot>({
     schemaVersion: 1,
@@ -61,7 +74,10 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
 
   const mirror = (snapshot: AgentRuntimeSnapshot) => {
     if (disposed && snapshot.status !== 'disposed') return
-    current = frozenClone(snapshot)
+    current = frozenClone({
+      ...snapshot,
+      revision: Math.max(current.revision + 1, snapshot.revision),
+    })
     for (const listener of [...listeners]) listener(current)
   }
 
@@ -82,109 +98,160 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
 
   const nextEndpoint = () => {
     if (endpointFactory) return endpointFactory()
-    if (!endpoint && typeof options.worker !== 'function') return options.worker
+    if (!singleEndpointConsumed && typeof options.worker !== 'function') {
+      singleEndpointConsumed = true
+      return options.worker
+    }
     throw new Error('runtime restart requires a worker endpoint factory')
+  }
+
+  const closeTransport = async (candidate: RuntimeTransport, reason: string) => {
+    if (candidate.closed) return
+    candidate.closed = true
+    candidate.unsubscribeFault()
+    try {
+      await candidate.peer.dispose(reason)
+    } catch {
+      // Cleanup is best-effort; the lifecycle failure remains authoritative.
+    }
+    try {
+      candidate.endpoint.terminate()
+    } catch {
+      // Cleanup is best-effort; the lifecycle failure remains authoritative.
+    }
   }
 
   const cleanupTransport = async (reason: string, expectedGeneration = transportGeneration) => {
     if (expectedGeneration !== transportGeneration) return
     transportGeneration += 1
-    const activePeer = peer
-    const activeEndpoint = endpoint
-    const unsubscribeFault = unsubscribeEndpointFault
-    peer = undefined
-    endpoint = undefined
-    unsubscribeEndpointFault = undefined
-    unsubscribeFault?.()
-    if (activePeer) {
-      try {
-        await activePeer.dispose(reason)
-      } catch {
-        // Cleanup is best-effort; the lifecycle failure remains authoritative.
-      }
-    }
-    if (activeEndpoint) {
-      try {
-        activeEndpoint.terminate()
-      } catch {
-        // Cleanup is best-effort; the lifecycle failure remains authoritative.
-      }
-    }
+    const active = transport
+    transport = undefined
+    if (active) await closeTransport(active, reason)
   }
 
   let initialization: Promise<void> = Promise.resolve()
+  let lifecycleTail: Promise<void> = Promise.resolve()
+
+  const enqueueLifecycle = <Value>(operation: () => Promise<Value>): Promise<Value> => {
+    const result = observeRejection(lifecycleTail.then(operation))
+    lifecycleTail = observeRejection(
+      result.then(
+        () => undefined,
+        () => undefined,
+      ),
+    )
+    return result
+  }
+
+  const handleEndpointFault = (candidate: RuntimeTransport, error: unknown) => {
+    if (disposed || candidate.closed || candidate.generation !== transportGeneration || transport !== candidate) {
+      return
+    }
+    const cleanup = cleanupTransport(
+      `worker fault: ${error instanceof Error ? error.message : String(error)}`,
+      candidate.generation,
+    )
+    const recovery = enqueueLifecycle(async () => {
+      await cleanup
+      if (disposed) return
+      mirror({
+        ...current,
+        status: 'recovering',
+        phase: 'RECOVERING',
+        revision: current.revision + 1,
+      })
+      if (!endpointFactory) {
+        const unavailable = new Error('runtime crash recovery requires a worker endpoint factory')
+        mirrorFailure('worker-restart-unavailable', unavailable, false)
+        throw unavailable
+      }
+      await initializeTransport(true)
+    })
+    initialization = observeRejection(recovery)
+  }
 
   const startTransport = async (recover: boolean, generation: number) => {
-    endpoint = nextEndpoint()
-    unsubscribeEndpointFault = endpoint.onFault(error => {
-      if (disposed || generation !== transportGeneration) return
-      void initialization.catch(() => {
-        // The fault recovery promise supersedes this initialization attempt.
-      })
-      const recovery = (async () => {
-        mirror({
-          ...current,
-          status: 'recovering',
-          phase: 'RECOVERING',
-          revision: current.revision + 1,
-        })
-        await cleanupTransport(`worker fault: ${error instanceof Error ? error.message : String(error)}`, generation)
-        if (disposed) return
-        if (!endpointFactory) {
-          const unavailable = new Error('runtime crash recovery requires a worker endpoint factory')
-          mirrorFailure('worker-restart-unavailable', unavailable, false)
-          throw unavailable
-        }
-        await initializeTransport(true)
-      })()
-      initialization = recovery
-      void recovery.catch(() => {
-        // initializeTransport mirrors the terminal failure for background recovery.
-      })
-    })
-    peer = createRpcPeer({
-      port: endpoint.port,
-      contracts: runtimeRpcContracts,
-      clock,
-      idFactory,
-      closePortOnDispose: true,
-      handlers: {
-        ...createAgentBoundaryRpcHandlers(options.host, options.persistence),
-        'runtime.publishSnapshot'(snapshot) {
-          mirror(snapshot)
-          return null
+    const endpoint = nextEndpoint()
+    let candidate: RuntimeTransport
+    let peer: RpcPeer<typeof runtimeRpcContracts>
+    try {
+      peer = createRpcPeer({
+        port: endpoint.port,
+        contracts: runtimeRpcContracts,
+        clock,
+        idFactory,
+        closePortOnDispose: true,
+        handlers: {
+          ...createAgentBoundaryRpcHandlers(options.host, options.persistence),
+          'runtime.publishSnapshot'(snapshot) {
+            if (!disposed && generation === transportGeneration && transport === candidate && !candidate.closed) {
+              mirror(snapshot)
+            }
+            return null
+          },
         },
-      },
-    })
-    const snapshot = await peer.request(
+      })
+    } catch (error) {
+      try {
+        endpoint.terminate()
+      } catch {
+        // Preserve the transport construction failure as the authoritative error.
+      }
+      throw error
+    }
+    candidate = {
+      generation,
+      endpoint,
+      peer,
+      unsubscribeFault: () => {},
+      closed: false,
+    }
+    transport = candidate
+    const unsubscribeFault = endpoint.onFault(error => handleEndpointFault(candidate, error))
+    candidate.unsubscribeFault = unsubscribeFault
+    if (candidate.closed) unsubscribeFault()
+    const snapshot = await candidate.peer.request(
       'runtime.initialize',
       { binding, recover },
       { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'initialize' },
     )
-    if (!disposed && generation === transportGeneration) mirror(snapshot)
-  }
-
-  const initializeTransport = async (recover: boolean) => {
-    const generation = transportGeneration + 1
-    transportGeneration = generation
-    try {
-      await startTransport(recover, generation)
-    } catch (error) {
-      if (generation === transportGeneration) {
-        await cleanupTransport('worker initialization failed', generation)
-        mirrorFailure('worker-initialization-failed', error, true)
-      }
-      throw error
+    if (disposed || generation !== transportGeneration || transport !== candidate || candidate.closed) {
+      await closeTransport(candidate, 'stale worker initialization')
+      throw new Error('agent runtime transport generation was superseded')
     }
+    mirror(snapshot)
   }
 
-  initialization = initializeTransport(true)
+  const initializeTransport = (recover: boolean) =>
+    observeRejection(
+      (async () => {
+        const generation = transportGeneration + 1
+        transportGeneration = generation
+        try {
+          await startTransport(recover, generation)
+        } catch (error) {
+          if (generation === transportGeneration) {
+            await cleanupTransport('worker initialization failed', generation)
+            mirrorFailure('worker-initialization-failed', error, true)
+          }
+          throw error
+        }
+      })(),
+    )
+
+  initialization = observeRejection(initializeTransport(true))
+  lifecycleTail = observeRejection(
+    initialization.then(
+      () => undefined,
+      () => undefined,
+    ),
+  )
 
   const requirePeer = async () => {
     if (disposed) throw new Error('agent runtime is disposed')
     await initialization
-    if (!peer) throw new Error('agent runtime transport is unavailable')
-    return peer
+    if (!transport || transport.closed) throw new Error('agent runtime transport is unavailable')
+    return transport.peer
   }
 
   const context = (taskId: string, stepId: string) => ({ sessionId: binding.sessionId, taskId, stepId })
@@ -218,34 +285,48 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
     async diagnostics() {
       return (await requirePeer()).request('runtime.diagnostics', null, context('runtime', 'diagnostics'))
     },
-    async restart() {
+    restart() {
       if (!endpointFactory) throw new Error('runtime restart requires a worker endpoint factory')
-      if (disposed) throw new Error('agent runtime is disposed')
-      void initialization.catch(() => {
-        // Manual restart supersedes an in-flight initialization attempt.
+      const restart = enqueueLifecycle(async () => {
+        if (disposed) throw new Error('agent runtime is disposed')
+        mirror({ ...current, status: 'recovering', phase: 'RECOVERING', revision: current.revision + 1 })
+        await cleanupTransport('worker restart')
+        if (disposed) throw new Error('agent runtime is disposed')
+        await initializeTransport(true)
       })
-      mirror({ ...current, status: 'recovering', phase: 'RECOVERING', revision: current.revision + 1 })
-      await cleanupTransport('worker restart')
-      initialization = initializeTransport(true)
-      await initialization
+      initialization = observeRejection(restart)
+      return restart
     },
-    async dispose() {
-      if (disposed) return
-      disposed = true
-      try {
-        await initialization
-        await peer?.request('runtime.dispose', null, context('runtime', 'dispose'))
-      } finally {
-        await cleanupTransport('runtime disposed')
-        listeners.clear()
-        if (current.status !== 'disposed') {
-          current = frozenClone({
-            ...current,
-            status: 'disposed',
-            revision: current.revision + 1,
-          })
+    dispose() {
+      if (disposed) return Promise.resolve()
+      const priorInitialization = initialization
+      const disposal = enqueueLifecycle(async () => {
+        if (disposed) return
+        let initializationError: unknown
+        try {
+          await priorInitialization
+        } catch (error) {
+          initializationError = error
         }
-      }
+        disposed = true
+        try {
+          if (!initializationError) {
+            await transport?.peer.request('runtime.dispose', null, context('runtime', 'dispose'))
+          }
+        } finally {
+          await cleanupTransport('runtime disposed')
+          listeners.clear()
+          if (current.status !== 'disposed') {
+            current = frozenClone({
+              ...current,
+              status: 'disposed',
+              revision: current.revision + 1,
+            })
+          }
+        }
+        if (initializationError) throw initializationError
+      })
+      return observeRejection(disposal)
     },
   }
 
