@@ -303,10 +303,11 @@ test('Core material summaries use the explicit resolver seam without touching pr
 
   class ComponentMetaLike {
     constructor(componentName, metadata) {
-      this.componentName = componentName
+      this.#componentName = componentName
       this.#metadata = metadata
     }
 
+    #componentName
     #metadata
 
     getMetadata() {
@@ -357,24 +358,27 @@ test('Core material summaries use the explicit resolver seam without touching pr
   assert.equal(getterInvocations, 0)
   assert.equal(resolverInvocations, 2)
   assert.deepEqual(summaries.map(material => material.componentName), ['Image', 'Root'])
-  assert.deepEqual(summaries, [
-    {
-      componentName: 'Image',
-      title: 'Image',
-      description: 'Image summary',
-      group: 'Media',
-      category: 'Display',
-      tags: ['visual'],
-    },
-    {
-      componentName: 'Root',
-      title: 'Root',
-      description: 'Root summary',
-      group: 'Layouts',
-      category: 'Structure',
-      tags: ['base'],
-    },
-  ])
+  assert.deepEqual(
+    summaries,
+    [
+      sanitizeJsonValue({
+        componentName: 'Image',
+        title: 'Image',
+        description: 'Image summary',
+        group: 'Media',
+        category: 'Display',
+        tags: ['visual'],
+      }),
+      sanitizeJsonValue({
+        componentName: 'Root',
+        title: 'Root',
+        description: 'Root summary',
+        group: 'Layouts',
+        category: 'Structure',
+        tags: ['base'],
+      }),
+    ],
+  )
   assert.equal(JSON.stringify(clone), serialized)
   assert.doesNotMatch(serialized, /prototype getter|credential|authorization|secret|password/)
 })
