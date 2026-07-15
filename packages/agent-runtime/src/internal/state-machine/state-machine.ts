@@ -93,9 +93,7 @@ interface TurnOutcome {
 const terminalPhases = new Set<AgentPhase>(['COMPLETED', 'CANCELLED', 'FAILED'])
 
 const isAbortError = (error: unknown) =>
-  error instanceof DOMException
-    ? error.name === 'AbortError'
-    : error instanceof Error && error.name === 'AbortError'
+  error instanceof DOMException ? error.name === 'AbortError' : error instanceof Error && error.name === 'AbortError'
 
 const failureFrom = (code: string, error: unknown, retryable = false): AgentRuntimeFailure => ({
   code,
@@ -339,7 +337,11 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
 
   const runTurn = async (task: MutableTask, phase: ModelTurnPhase) => {
     task.nextModelPhase = phase
-    const events = await collectModelEvents(options.model, turnRequest(task, phase), task.controller?.signal ?? new AbortController().signal)
+    const events = await collectModelEvents(
+      options.model,
+      turnRequest(task, phase),
+      task.controller?.signal ?? new AbortController().signal,
+    )
     return interpretEvents(events)
   }
 
@@ -506,7 +508,10 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       .catch(error => {
         if (task.phase === 'PAUSED' || task.phase === 'CANCELLED' || disposed) return
         if (isAbortError(error) || task.controller?.signal.aborted) return
-        setFailure(task, failureFrom(error instanceof WorkerStateMachineError ? error.code : 'worker-task-failed', error))
+        setFailure(
+          task,
+          failureFrom(error instanceof WorkerStateMachineError ? error.code : 'worker-task-failed', error),
+        )
       })
       .finally(() => {
         runs.delete(run)
@@ -526,7 +531,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       runtimeStatus = 'ready'
       runtimeFailure = undefined
       const previous = activeTask
-      if (previous && !terminalPhases.has(previous.phase)) {
+      const supersedesPrevious = previous !== undefined && !terminalPhases.has(previous.phase)
+      if (supersedesPrevious) {
         previous.controller?.abort(new DOMException('Task superseded', 'AbortError'))
         setPhase(previous, 'CANCELLED')
       }
@@ -542,7 +548,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         controller: new AbortController(),
         nextModelPhase: 'PLAN_STEP',
         ...(previous ? { parentTaskId: previous.taskId } : {}),
-        ...(previous && !terminalPhases.has(previous.phase) ? { supersedesTaskId: previous.taskId } : {}),
+        ...(supersedesPrevious ? { supersedesTaskId: previous.taskId } : {}),
       }
       tasks.set(task.taskId, task)
       activeTask = task

@@ -65,12 +65,14 @@ export const parseModelEvent = (value: unknown): ModelEvent => {
       assertExactFields(value.question, ['questionId', 'prompt'], ['responseSchema'])
       nonEmptyString(value.question.questionId, 'question.questionId')
       nonEmptyString(value.question.prompt, 'question.prompt')
+      if (value.question.responseSchema !== undefined) assertRecord(value.question.responseSchema)
       break
     }
     case 'tool-call': {
       assertExactFields(value, ['schemaVersion', 'kind', 'call'])
       assertRecord(value.call)
-      for (const field of [
+      const callFields = [
+        'schemaVersion',
         'projectId',
         'branchId',
         'sessionId',
@@ -78,8 +80,12 @@ export const parseModelEvent = (value: unknown): ModelEvent => {
         'stepId',
         'callId',
         'capability',
+        'arguments',
         'expectedRevision',
-      ]) {
+      ] as const
+      assertExactFields(value.call, callFields)
+      for (const field of callFields) {
+        if (field === 'schemaVersion' || field === 'arguments') continue
         nonEmptyString(value.call[field], `tool-call.call.${field}`)
       }
       if (value.call.schemaVersion !== 1) {
@@ -103,7 +109,7 @@ export const parseModelEvent = (value: unknown): ModelEvent => {
       )
   }
 
-  return Object.freeze(value) as unknown as ModelEvent
+  return structuredClone(value) as unknown as ModelEvent
 }
 
 export const collectModelEvents = async (
