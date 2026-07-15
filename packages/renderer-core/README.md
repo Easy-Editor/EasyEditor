@@ -91,6 +91,8 @@ The renderer-core provides utilities for handling data and expressions:
 import {
   createDenyExpressionEvaluator,
   createTrustedExpressionEvaluator,
+  legacyTrustedExpressionEvaluator,
+  parseData,
   parseExpression,
 } from '@easy-editor/renderer-core';
 
@@ -107,15 +109,22 @@ const result = parseExpression({
 
 // Restricted hosts can deny executable schema expressions before they run.
 const denyEvaluator = createDenyExpressionEvaluator();
+
+// Existing trusted documents can opt into legacy execution explicitly.
+const legacyResult = parseData(schema, context, {
+  expressionEvaluator: legacyTrustedExpressionEvaluator,
+});
 ```
 
-The legacy overloads still select the named `legacyTrustedExpressionEvaluator`
-for backward compatibility. This applies only when the evaluator field or
-argument is omitted. An explicitly owned evaluator field containing `undefined`
-is treated as missing and raises a structured `PolicyViolation`; it never falls
-back to dynamic execution. New hosts should always inject a trusted, denied, or
-isolated evaluator explicitly. Policy denials propagate through data parsing and
-prop-type validation rather than being converted to compatibility fallbacks.
+Executable schema is fail-closed across `parseExpression`, `parseData`,
+`transformStringToFunction`, `checkPropTypes`, and `DataHelper`. Omitting the
+evaluator, or explicitly passing `undefined`, raises a structured
+`PolicyViolation` with reason `missing-evaluator`; renderer-core never upgrades
+the request to dynamic execution. Hosts must inject a trusted, denied, or
+isolated evaluator explicitly. Compatibility remains available only by passing
+the clearly named `legacyTrustedExpressionEvaluator`. Policy denials propagate
+through data parsing and prop-type validation rather than being converted to
+compatibility fallbacks.
 
 ### Data Source Types
 

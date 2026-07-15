@@ -59,7 +59,7 @@ export async function startEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`ConfigOptions.designMode` 只接受 `'design' | 'live'`。初始化成功后 `lifecycleState` 为 `ready`。外部并发 `init()` 会等待同一轮初始化；若销毁正在进行，则初始化先等待销毁结束。对已经就绪的实例再次调用 `init()` 会先销毁当前运行代，再重新初始化。
+`ConfigOptions.designMode` 只接受 `'design' | 'live'`。初始化成功后 `lifecycleState` 为 `ready`。正在初始化或销毁时再调用 `init()` 会立即以 `LifecycleReentrancyError` 拒绝；它不会合并 Promise，也不会自动等待。宿主必须等待原操作完成后显式重试。对 `ready` 实例再次调用 `init()` 是已解决的空操作，不会应用新 options；需要新运行代时必须先显式 `destroy()`。
 
 ### `engine.destroy()`
 
@@ -73,7 +73,7 @@ export function destroyEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`destroy()` 会阻止新写入，并清理实例拥有的插件、监听器、Designer、Project、热键、物料、设置器、远程 adapter/registry、事件及内部资源。外部并发销毁会合并到同一轮操作；若初始化正在进行，则销毁先等待初始化 settle，再清理已建立的运行代。清理失败时状态进入 `failed`，再次调用会重试。
+`destroy()` 会阻止新写入，并清理实例拥有的插件、监听器、Designer、Project、热键、物料、设置器、远程 adapter/registry、事件及内部资源。正在初始化或销毁时再调用 `destroy()` 会立即以 `LifecycleReentrancyError` 拒绝；它不会合并或自动等待。宿主必须等待原操作完成后显式重试。清理失败时状态进入 `failed`，再次调用会重试保留的未完成清理。对 `disposed` 实例调用 `destroy()` 是已解决的空操作。
 
 不要永久缓存已经 settle 的销毁 Promise，也不要单独销毁 `materials`、`setters`、`project` 等引擎拥有的子服务。
 
@@ -90,6 +90,19 @@ type EngineLifecycleState =
 ```
 
 这是只读状态源。宿主可以据此拒绝未就绪请求，但不能通过赋值改变生命周期。
+
+### 生命周期状态 × 公共操作
+
+| 状态 | `init()` | `destroy()` | 其他公共操作 |
+| --- | --- | --- | --- |
+| `created` | 开始初始化 | 销毁尚未初始化的实例 | 允许宿主配置和注册；应用模型操作应等待 `ready` |
+| `initializing` | 拒绝；等待原 `init()` 后再按需重试 | 拒绝；等待原 `init()` 后再显式销毁 | 不是宿主受支持的操作窗口 |
+| `ready` | 已解决的空操作；不应用新 options | 开始销毁 | 按信任、所有权和事务规则允许 |
+| `disposing` | 拒绝；等待原 `destroy()` 后重试 | 拒绝；等待原 `destroy()` | 拒绝新写入和订阅 |
+| `disposed` | 开始新运行代 | 已解决的空操作 | 在成功 `init()` 前拒绝 |
+| `failed` | 拒绝 | 重试保留的清理；成功后进入 `disposed` | 清理成功并重新初始化前拒绝 |
+
+初始化失败且回滚完整时返回 `created`；回滚不完整时进入 `failed`。活跃事务、引擎拥有的生命周期回调或宿主模型回调中也不得调用生命周期方法。
 
 ### 生命周期回调约束
 
@@ -236,7 +249,7 @@ export function getEngineHealth(engine: EngineInstance) {
 
 同 Realm 插件与宿主提供的 `RemoteAdapter` 都是受信扩展代码；它们仍可使用自己捕获的闭包、导入和全局对象。`legacyTrusted` 只为依赖旧插件或 UMD 的受信宿主提供更宽的兼容表面；两种策略都不提供进程、iframe、Realm 或 SES 隔离。
 
-当前 `DashboardPlugin` 依赖同 Realm 原型扩展，因此 Dashboard 兼容宿主需要显式使用 `legacyTrusted`。受限引擎必须与这类代码隔离在不同 Worker、iframe 或 Realm 中。
+当前 `DashboardPlugin` 依赖同 Realm 原型扩展，因此 Dashboard 兼容宿主需要显式使用 `legacyTrusted`。活动原型租约与受限引擎必须隔离在不同 Worker、iframe 或 Realm；最后一个兼容引擎成功销毁并恢复描述符后，同一 Realm 才可顺序创建受限引擎。
 
 ### Agent 阶段暂缓
 
@@ -256,6 +269,17 @@ Agent Runtime、传输、授权和审批协议不属于本阶段的 Stable 框�
 ## 旧模型 API 的兼容地位
 
 为支持现有渲染器和 `legacyTrusted` 应用，包仍导出 Designer、Project、Document、Node、Selection、Event 和 Simulator 相关类型。它们的公开存在不等于其全部方法都是稳定的 v2 写 API。本参考不再为这些遗留对象承诺方法清单；迁移代码应把读取限制在渲染适配层，把业务写入收束到 EngineInstance 边界。
+
+## 支持与验证矩阵
+
+| 表面 | 支持契约 | 当前验证状态 |
+| --- | --- | --- |
+| 框架运行时包与仓库工具 | Node.js `>=18.20.8` | CI 在精确最低版本运行质量门禁；Node 20 是 strict-engine 主车道 |
+| `@easy-editor/easypack` | Node.js `>=20.0.0` | 只在 Node 20 车道验证 |
+| 仓库包管理器 | pnpm `>=9.12.2`；CI 与 lockfile 使用 pnpm `10.25.0` | CI 使用 frozen lockfile 安装 |
+| 渲染器 | 已交付 React 渲染器 | 其他框架是扩展目标，不是已交付支持 |
+| 浏览器 | 通过 `pnpm example:dashboard` 进行 Dashboard 开发验证 | Chromium 人工 smoke；自动浏览器 E2E 尚未进入发布门禁 |
+| 操作系统 | 包应保持平台无关 | Ubuntu 运行全量门禁；macOS 与 Windows 运行 generator 和 packed-template 发布 smoke |
 
 ## 根入口 facade
 

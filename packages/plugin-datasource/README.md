@@ -42,7 +42,8 @@ import DataSourcePlugin, {
   createTrustedExpressionEvaluator,
 } from '@easy-editor/plugin-datasource';
 
-// Initialize the plugin with default configuration
+// Non-executable datasource schemas need no evaluator. Executable fields are
+// fail-closed until the host makes an explicit trust decision.
 const plugin = DataSourcePlugin();
 
 // Or with custom request handlers
@@ -67,8 +68,8 @@ const customPlugin = DataSourcePlugin({
   }
 });
 
-// Hosts that do not trust executable datasource schema can deny it before
-// datasource construction. PolicyViolation is propagated and no request runs.
+// Hosts that do not trust executable datasource schema can deny it before the
+// affected side effect. PolicyViolation is propagated and no request runs.
 const restrictedPlugin = DataSourcePlugin({
   expressionEvaluator: createDenyExpressionEvaluator(),
 });
@@ -148,12 +149,13 @@ By default, the plugin includes a `fetch` handler that uses the `universal-reque
 }
 ```
 
-For backward compatibility, omitting this option selects the explicitly named
-`legacyTrustedExpressionEvaluator`. This applies only when the option is absent;
-an explicitly owned `expressionEvaluator: undefined` is a missing evaluator and
-produces a structured `PolicyViolation`. Restricted or multi-tenant hosts should
-inject a deny or isolated evaluator instead. Policy denials propagate before
-datasource construction and never fall through to dynamic execution.
+Omitting this option is fail-closed for every executable `JSExpression` or
+`JSFunction` field and produces a structured `PolicyViolation`. A trusted legacy
+host must explicitly inject `legacyTrustedExpressionEvaluator` (or create its own
+trusted evaluator). Restricted or multi-tenant hosts should inject a deny or
+isolated evaluator instead. Construction-time expressions fail construction;
+request-time expressions fail before the request starts. Policy denials never
+fall through to dynamic execution.
 
 ## API
 

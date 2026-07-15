@@ -85,8 +85,7 @@ const MyPlugin: PluginCreator<Options> = () => {
         e.preventDefault();
         logger.log('Hotkey triggered');
       };
-      hotkey.bind('ctrl+d', handleDuplicate);
-      ctx.onDispose(() => hotkey.unbind('ctrl+d', handleDuplicate));
+      ctx.onDispose(hotkey.acquireBinding('ctrl+d', handleDuplicate));
     }
   };
 };
@@ -98,7 +97,7 @@ const MyPlugin: PluginCreator<Options> = () => {
 - Parameters:
   - `ctx`: Plugin extension context that provides the ability to extend core classes
 
-Method to extend core classes for compatibility plugins. When it returns a Promise, the engine waits for extension to complete. Prototype extension is available only to `legacyTrusted` plugins registered before initialization; `agentRestricted` rejects it.
+Method to extend core classes for compatibility plugins. When it returns a Promise, the engine waits for extension to complete. Prototype extension is available only to `legacyTrusted` plugins registered before initialization; `agentRestricted` rejects it. The engine leases descriptors by manager ownership and reference-counts them only when both the fingerprint and runtime function/getter/setter identities match; equal source text is not treated as equal closure identity. Extension batches commit atomically, the original prototype is restored after the final owner is destroyed, and an active lease cannot share its Realm with a restricted engine.
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {

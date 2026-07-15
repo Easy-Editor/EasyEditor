@@ -43,7 +43,7 @@ Do not mix the root `project` facade with `engine.project` in one runtime path. 
 
 ## Own the lifecycle
 
-The lifecycle is `created -> initializing -> ready -> disposing -> disposed`, with `failed` representing incomplete initialization rollback or disposal. External callers of the same operation join its in-flight Promise; `destroy()` waits for initialization to settle before disposing, while `init()` waits for disposal before starting the next generation. A failed disposal can be retried with another `destroy()` call.
+The lifecycle is `created -> initializing -> ready -> disposing -> disposed`, with `failed` representing incomplete initialization rollback or disposal. While any lifecycle operation is in flight, a new `init()` or `destroy()` fails immediately with `LifecycleReentrancyError`; wait for settlement and retry explicitly. `ready.init()` and `disposed.destroy()` are no-ops. A failed disposal can be retried with another `destroy()` call.
 
 Plugin and `RemoteAdapter` lifecycle callbacks must not call the same engine's `init()` or `destroy()`. Direct synchronous re-entry throws `LifecycleReentrancyError`. Issuing the call after an `await` through a previously captured raw engine closure also violates the host-extension protocol; without AsyncContext-like tracking or Realm/process isolation, a same-realm kernel cannot reliably attribute that call.
 
@@ -51,8 +51,8 @@ Only `engine.destroy()` may tear down engine-owned child services. Await it duri
 
 ```ts
 export function destroyEditor(): Promise<void> {
-  // EngineInstance joins concurrent destroy calls. Do not retain a settled
-  // Promise: it would suppress disposal retries or cleanup after a restart.
+  // The host must serialize lifecycle calls. Do not retain a settled Promise:
+  // it would suppress disposal retries or cleanup after a restart.
   return engine.destroy()
 }
 

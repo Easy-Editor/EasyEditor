@@ -35,3 +35,36 @@ test('prototype extension graph is preflighted before any callback operation mut
   assert.equal(Object.hasOwn(Object.getPrototypeOf(document.root), 'mustNotLeak'), false)
   assert.equal(Object.hasOwn(Object.getPrototypeOf(document.root), 'collision'), false)
 })
+
+test('an invalid MobX descriptor rolls back every earlier property in the batch', async t => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+  await engine.plugins.register({
+    name: 'atomic-invalid-mobx-extension',
+    extend(api) {
+      api.extend('Node', {
+        mustRollbackAfterMobxFailure() {
+          return true
+        },
+      })
+      api.extend('Node', {
+        invalidMobxExtension: {
+          [core.MOBX_EXTEND_SYMBOL]: true,
+          config: { type: 'not-a-mobx-extension-type' },
+        },
+      })
+    },
+    init() {},
+  })
+
+  const error = await captureFailure(() => engine.init())
+  assert.match(error.message, /invalid|mobx|extension|type/i)
+  assert.equal(Object.hasOwn(core.Node.prototype, 'mustRollbackAfterMobxFailure'), false)
+  assert.equal(Object.hasOwn(core.Node.prototype, 'invalidMobxExtension'), false)
+
+  await engine.destroy()
+  const restricted = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
+  await restricted.init()
+  await restricted.destroy()
+})

@@ -5,7 +5,6 @@ import {
   type ExpressionEvaluator,
   evaluateExpression,
   isPolicyViolation,
-  legacyTrustedExpressionEvaluator,
 } from '../expression-evaluator'
 import { logger } from './logger'
 
@@ -110,6 +109,7 @@ export const transformArrayToMap = (arr: any[], key: string, overwrite = true) =
 
 export interface ParseDataOptions {
   logScope?: string
+  /** Omission is fail-closed when executable schema is encountered. */
   expressionEvaluator?: ExpressionEvaluator
 }
 
@@ -120,9 +120,7 @@ export const parseData = (schema: unknown, self: any, options: ParseDataOptions 
       self,
       thisRequired: true,
       logScope: options.logScope,
-    }
-    if (Object.hasOwn(options, 'expressionEvaluator')) {
-      parseOptions.evaluator = options.expressionEvaluator
+      evaluator: options.expressionEvaluator,
     }
     return parseExpression(parseOptions)
   }
@@ -176,7 +174,7 @@ export function checkPropTypes(
   componentName: string,
   ...evaluatorArgs: [] | [ExpressionEvaluator | undefined]
 ): boolean {
-  const selectedEvaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
+  const selectedEvaluator = evaluatorArgs[0]
   let ruleFunction = rule
   if (typeof rule === 'string') {
     try {
@@ -227,7 +225,7 @@ export function transformStringToFunction(str: string, ...evaluatorArgs: [] | [E
   if (typeof str !== 'string') {
     return str
   }
-  const selectedEvaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
+  const selectedEvaluator = evaluatorArgs[0]
   return evaluateExpression(selectedEvaluator, {
     source: str,
     kind: 'function',
@@ -245,6 +243,7 @@ export interface ParseExpressionOptions {
   self: any
   thisRequired?: boolean
   logScope?: string
+  /** Omission is treated as a missing host policy and raises `PolicyViolation`. */
   evaluator?: ExpressionEvaluator
 }
 
@@ -260,12 +259,12 @@ function parseExpression(a: any, b?: any, c = false, ...evaluatorArgs: [] | [Exp
     str = a.str
     self = a.self
     thisRequired = a.thisRequired
-    evaluator = Object.hasOwn(a, 'evaluator') ? a.evaluator : legacyTrustedExpressionEvaluator
+    evaluator = a.evaluator
   } else {
     str = a
     self = b
     thisRequired = c
-    evaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
+    evaluator = evaluatorArgs[0]
   }
   let sourceLength = 0
   try {
@@ -289,8 +288,8 @@ function parseExpression(a: any, b?: any, c = false, ...evaluatorArgs: [] | [Exp
 
 export { parseExpression }
 
-export const parseThisRequiredExpression = (str: any, self: any) => {
-  return parseExpression(str, self, true)
+export const parseThisRequiredExpression = (str: any, self: any, evaluator?: ExpressionEvaluator) => {
+  return parseExpression(str, self, true, evaluator)
 }
 
 /**

@@ -14,3 +14,11 @@ test('hotkey actions use the plugin context clipboard instead of the legacy faca
   assert.match(source, /clipboard\.setData\(data\)/)
   assert.match(source, /clipboard\.waitPasteData\(/)
 })
+
+test('hotkey bindings are engine-owned leases instead of destroy-time capability calls', () => {
+  assert.match(source, /hotkey\.acquireBinding\(keys, handler\)/)
+  assert.match(source, /ctx\.onDispose\(release\)/)
+  assert.match(source, /release\(\)/)
+  assert.doesNotMatch(source, /hotkey\.unbind/)
+  assert.doesNotMatch(source, /destroy\(ctx\)/)
+})

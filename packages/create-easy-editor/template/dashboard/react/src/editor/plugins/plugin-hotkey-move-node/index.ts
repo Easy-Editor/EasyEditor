@@ -8,6 +8,8 @@ export const HOTKEY_MAP = {
 }
 
 const HotKeyMoveNodePlugin: PluginCreator = () => {
+  type HotkeyBinding = readonly [keys: string[], handler: () => void]
+
   return {
     name: 'HotKeyMoveNodePlugin',
     deps: [],
@@ -15,6 +17,23 @@ const HotKeyMoveNodePlugin: PluginCreator = () => {
       assertLegacyTrustedPluginContext(ctx)
       const { hotkey, project } = ctx
       const { designer } = project
+
+      const ownBinding = (...binding: HotkeyBinding) => {
+        const release = hotkey.acquireBinding(...binding)
+        try {
+          ctx.onDispose(release)
+        } catch (error) {
+          try {
+            release()
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Move-node hotkey ownership registration failed to roll back',
+            )
+          }
+          throw error
+        }
+      }
 
       const moveNode = (type: 'up' | 'down' | 'left' | 'right', step = 1) => {
         const selectedNodes = designer.selection.getTopNodes(false)
@@ -43,16 +62,13 @@ const HotKeyMoveNodePlugin: PluginCreator = () => {
         }
       }
 
-      const bindings = [
+      const nextBindings: HotkeyBinding[] = [
         [HOTKEY_MAP.UP, () => moveNode('up')],
         [HOTKEY_MAP.DOWN, () => moveNode('down')],
         [HOTKEY_MAP.LEFT, () => moveNode('left')],
         [HOTKEY_MAP.RIGHT, () => moveNode('right')],
-      ] as const
-      for (const [keys, handler] of bindings) hotkey.bind(keys, handler)
-      ctx.onDispose(() => {
-        for (const [keys, handler] of bindings) hotkey.unbind(keys, handler)
-      })
+      ]
+      for (const binding of nextBindings) ownBinding(...binding)
     },
   }
 }

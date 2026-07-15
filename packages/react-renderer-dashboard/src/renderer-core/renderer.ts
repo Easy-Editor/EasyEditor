@@ -1,11 +1,16 @@
-import { adapter, componentRendererFactory, pageRendererFactory, rendererFactory } from '@easy-editor/react-renderer'
+import {
+  componentRendererFactory,
+  createRendererAdapter,
+  pageRendererFactory,
+  rendererFactory,
+} from '@easy-editor/react-renderer'
 import { dashboardBaseRendererFactory } from './renderer/base'
 
-// 抽离开单独设置，不然下面的 page 和 component 会走老的
-adapter.setBaseRenderer(dashboardBaseRendererFactory())
-adapter.setRenderers({
-  PageRenderer: pageRendererFactory(),
-  ComponentRenderer: componentRendererFactory(),
+const dashboardRendererAdapter = createRendererAdapter()
+dashboardRendererAdapter.setBaseRenderer(dashboardBaseRendererFactory(dashboardRendererAdapter))
+dashboardRendererAdapter.setRenderers({
+  PageRenderer: pageRendererFactory(dashboardRendererAdapter),
+  ComponentRenderer: componentRendererFactory(dashboardRendererAdapter),
 })
 
-export const LowCodeRenderer = rendererFactory()
+export const LowCodeRenderer = rendererFactory(dashboardRendererAdapter)

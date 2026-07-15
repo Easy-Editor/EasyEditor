@@ -11,7 +11,7 @@ This guide will help you quickly build a dashboard design application based on E
 
 Ensure your development environment meets the following requirements:
 
-- [Node.js](https://nodejs.org/) version 18.12.0 or higher.
+- [Node.js](https://nodejs.org/) version 18.20.8 or higher.
 - [pnpm](https://pnpm.io/) version 9.12.2 or higher.
 
 ::: info Note
@@ -22,7 +22,7 @@ We strongly recommend using pnpm as the package manager, and EasyEditor's depend
 
 ```bash
 # Install core dependencies
-pnpm add @easy-editor/core @easy-editor/plugin-dashboard @easy-editor/react-renderer @easy-editor/react-renderer-dashboard
+pnpm add @easy-editor/core @easy-editor/plugin-dashboard @easy-editor/renderer-core @easy-editor/react-renderer @easy-editor/react-renderer-dashboard
 
 # Install runtime dependencies
 pnpm add mobx mobx-react
@@ -54,6 +54,7 @@ import {
   validateProjectSchema,
 } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { legacyTrustedExpressionEvaluator } from '@easy-editor/renderer-core'
 import { Group, componentMetaMap } from './materials'
 import { engine } from './runtime'
 import { setterMap } from './setters'
@@ -96,7 +97,10 @@ export async function bootstrapEditor(schema: ProjectSchema): Promise<void> {
 
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
     engine.setters.registerSetter(setterMap)
-    await engine.init({ designMode: 'design' })
+    await engine.init({
+      designMode: 'design',
+      appHelper: { expressionEvaluator: legacyTrustedExpressionEvaluator },
+    })
 
     releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
       simulator.set('deviceStyle', {
@@ -141,7 +145,7 @@ if (import.meta.hot) {
 }
 ```
 
-Do not retain a settled destroy Promise permanently. `EngineInstance` already joins concurrent calls in the same disposal attempt; returning the current `destroy()` call preserves retry semantics after cleanup failure.
+Do not retain a settled destroy Promise permanently or issue concurrent lifecycle calls; the engine fails immediately with `LifecycleReentrancyError` while another operation is in flight. Returning the current `destroy()` call preserves retry semantics after cleanup failure.
 
 ::: warning Compatibility boundary
 `legacyTrusted` only provides compatibility for the current Dashboard plugin and legacy UMD resources. It is not a sandbox. Agents and other untrusted runtimes should cross a Worker/iframe capability boundary and must not receive `engine.project` or Node references.
@@ -172,6 +176,7 @@ The runtime renderer is used for preview or deployment rendering:
 import { components } from '@/editor/materials'
 import { getPageSchemaFromLocalStorage } from '@/lib/schema'
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
+import { legacyTrustedExpressionEvaluator } from '@easy-editor/renderer-core'
 
 const Preview = () => {
   // Get page Schema
@@ -183,6 +188,7 @@ const Preview = () => {
         <Renderer
           schema={schema}
           components={components}
+          expressionEvaluator={legacyTrustedExpressionEvaluator}
           viewport={{ width: 1920, height: 1080 }}
         />
       )}

@@ -133,6 +133,7 @@ export const Renderer = observer(
           schema={documentInstance.schema}
           components={container.components}
           appHelper={container.context}
+          expressionEvaluator={container.context.expressionEvaluator}
           designMode={designMode}
           device={device}
           documentId={document.id}

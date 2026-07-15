@@ -1,6 +1,6 @@
 import type { IReactionDisposer, IReactionOptions, IReactionPublic } from 'mobx'
 import { action, autorun, computed, observable, reaction } from 'mobx'
-import { Config } from '../config'
+import { Config, type ConfigOptions } from '../config'
 import { Clipboard } from '../designer/clipboard'
 import { DESIGNER_EVENT, type Designer } from '../designer/designer'
 import { DragObjectType, type NodeInstance, isDragAnyObject, isShaken } from '../designer/dragon'
@@ -16,7 +16,9 @@ import type { Scroller } from '../designer/scroller'
 import { type Node, getClosestClickableNode, getClosestNode } from '../document'
 import {
   assertLifecycleMutationAllowed,
+  assertLifecycleMutationUnsealed,
   inheritLifecycleMutationGuard,
+  isLifecycleMutationSealed,
   sealLifecycleMutations,
 } from '../lifecycle/mutation-barrier'
 import { lockPrototypeAccessors, lockReadonlyProperties } from '../lifecycle/readonly-properties'
@@ -84,6 +86,11 @@ export class Simulator {
     return this.designer.editor
   }
 
+  /** Whether this Simulator generation has completed its owned teardown. */
+  get isDisposed(): boolean {
+    return isLifecycleMutationSealed(this)
+  }
+
   @computed
   get renderEnv(): string {
     return this.get('renderEnv') || 'default'
@@ -114,6 +121,11 @@ export class Simulator {
   get dataSourceEngine(): DataSourceEngine | undefined {
     // renderer 依赖
     return this.engineConfig.get('dataSourceEngine')
+  }
+
+  @computed
+  get appHelper(): ConfigOptions['appHelper'] {
+    return this._appHelper
   }
 
   get enableStrictNotFoundMode(): any {
@@ -233,7 +245,7 @@ export class Simulator {
     inheritEngineTeardownOwnership(this, this.viewport)
     this.scroller = this.designer.createScroller(this.viewport)
     lockReadonlyProperties(this, ['designer', 'emitter', 'isSimulator', 'project', 'scroller', 'viewport'])
-    lockPrototypeAccessors(this, ['currentDocument', 'editor'])
+    lockPrototypeAccessors(this, ['appHelper', 'currentDocument', 'editor', 'isDisposed'])
     this.autoRender = !this.engineConfig.get('disableAutoRender', false)
     this._appHelper = this.engineConfig.get('appHelper')
 
@@ -351,14 +363,17 @@ export class Simulator {
       this._renderer = undefined
     }
 
+    if (errors.length) {
+      throw new AggregateError(errors, 'Simulator disposal completed with errors')
+    }
+    // A failed renderer unmount can deliver React ref detachments on the next
+    // destroy() attempt. Keep both the instance identities and the monotonic
+    // settlement path alive until every owned cleanup step has completed.
     for (const docId in this.instancesMap) {
       this.instancesMap[docId].clear()
     }
     this.instancesMap = {}
     sealLifecycleMutations(this, 'simulator generation is disposed')
-    if (errors.length) {
-      throw new AggregateError(errors, 'Simulator disposal completed with errors')
-    }
   }
 
   dispose() {
@@ -750,6 +765,26 @@ export class Simulator {
   @action
   setInstance(docId: string, id: string, instances: ComponentInstance[] | null) {
     assertLifecycleMutationAllowed(this, 'simulator.setInstance')
+    this.#updateInstances(docId, id, instances)
+  }
+
+  /**
+   * Monotonic ref settlement used by an owned renderer while React detaches.
+   * It may only remove identities that were already registered, so disposal
+   * cannot use this path to revive or expand a Simulator generation.
+   */
+  @action
+  settleInstance(docId: string, id: string, instances: ComponentInstance[] | null) {
+    assertLifecycleMutationUnsealed(this, 'simulator.settleInstance')
+    const currentInstances = this.instancesMap[docId]?.get(id) || []
+    if (instances?.some(instance => !currentInstances.includes(instance))) {
+      throw new Error('Simulator instance settlement cannot register a new component identity')
+    }
+    this.#updateInstances(docId, id, instances)
+  }
+
+  #updateInstances(docId: string, id: string, instances: ComponentInstance[] | null): void {
+    if (instances == null && !Object.prototype.hasOwnProperty.call(this.instancesMap, docId)) return
     if (!Object.prototype.hasOwnProperty.call(this.instancesMap, docId)) {
       this.instancesMap[docId] = new Map()
     }

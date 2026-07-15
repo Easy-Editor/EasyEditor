@@ -35,6 +35,11 @@ export interface RegisteredSetter {
   readonly [key: string]: unknown
 }
 
+interface SetterContent {
+  component: Component | null | undefined
+  props: Record<string, any>
+}
+
 interface RegisterSetterOption {
   overwrite?: boolean
 }
@@ -236,7 +241,7 @@ export class Setters {
     this.#registeredSetters.set(typeOrMaps, Object.freeze({ ...normalizedSetter, type: typeOrMaps }))
   }
 
-  createSetterContent = (setter: any, props: Record<string, any>): Component => {
+  createSetterContent = (setter: any, props: Record<string, any>): SetterContent | null => {
     if (typeof setter === 'string') {
       setter = this.getSetter(setter)
       if (!setter) {

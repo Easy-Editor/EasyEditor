@@ -1,15 +1,22 @@
 import { defaultRootSchema } from '@/editor/const'
-import { CURRENT_PROJECT_SCHEMA_VERSION, type ProjectSchema } from '@easy-editor/core/instance'
+import { CURRENT_PROJECT_SCHEMA_VERSION, type ProjectSchema, type RootSchema } from '@easy-editor/core/instance'
 
 const PROJECT_SCHEMA = 'projectSchema'
 const PAGE_INFO = 'pageInfo'
 const PREFIX_PAGE_SCHEMA = 'pageSchema'
 
+type LegacyProjectSchema = {
+  componentsMap?: ProjectSchema<RootSchema>['componentsMap']
+  componentsTree: RootSchema[]
+}
+
+type ProjectSchemaInput = LegacyProjectSchema | ProjectSchema<RootSchema> | RootSchema
+
 const getPageName = (pageId: string) => {
   return `${PREFIX_PAGE_SCHEMA}:${pageId}`
 }
 
-const generateProjectSchema = (pageSchema: any): ProjectSchema => {
+const generateProjectSchema = (pageSchema: RootSchema): ProjectSchema<RootSchema> => {
   return {
     componentsTree: [pageSchema],
     // componentsMap: material.componentsMap as any,
@@ -17,22 +24,41 @@ const generateProjectSchema = (pageSchema: any): ProjectSchema => {
   }
 }
 
-export const getProjectSchemaFromLocalStorage = (): ProjectSchema => {
-  const projectSchema = localStorage.getItem(PROJECT_SCHEMA)
-  return projectSchema ? JSON.parse(projectSchema) : generateProjectSchema(defaultRootSchema)
+const normalizeProjectSchema = (value: unknown): ProjectSchema<RootSchema> | null => {
+  if (!value || typeof value !== 'object') return null
+  if (Array.isArray((value as Partial<ProjectSchema>).componentsTree)) {
+    const schema = value as ProjectSchema<RootSchema>
+    return {
+      ...schema,
+      version: schema.version ?? CURRENT_PROJECT_SCHEMA_VERSION,
+    }
+  }
+  return generateProjectSchema(value as RootSchema)
 }
 
-export const saveProjectSchemaToLocalStorage = (schema: any) => {
-  localStorage.setItem(PROJECT_SCHEMA, JSON.stringify(schema))
+export const getProjectSchemaFromLocalStorage = (): ProjectSchema => {
+  const projectSchema = localStorage.getItem(PROJECT_SCHEMA)
+  return (
+    normalizeProjectSchema(projectSchema ? JSON.parse(projectSchema) : defaultRootSchema) ??
+    generateProjectSchema(defaultRootSchema)
+  )
+}
+
+export const saveProjectSchemaToLocalStorage = (schema: ProjectSchemaInput) => {
+  const normalizedSchema = normalizeProjectSchema(schema)
+  if (!normalizedSchema) throw new TypeError('Project schema must be an object')
+  localStorage.setItem(PROJECT_SCHEMA, JSON.stringify(normalizedSchema))
 }
 
 export const getPageSchemaFromLocalStorage = (pageId: string) => {
   const pageSchema = localStorage.getItem(getPageName(pageId))
-  return pageSchema ? (JSON.parse(pageSchema) as ProjectSchema) : null
+  return pageSchema ? normalizeProjectSchema(JSON.parse(pageSchema)) : null
 }
 
-export const savePageSchemaToLocalStorage = (pageId: string, schema: any) => {
-  localStorage.setItem(getPageName(pageId), JSON.stringify(schema))
+export const savePageSchemaToLocalStorage = (pageId: string, schema: ProjectSchemaInput) => {
+  const normalizedSchema = normalizeProjectSchema(schema)
+  if (!normalizedSchema) throw new TypeError('Page schema must be an object')
+  localStorage.setItem(getPageName(pageId), JSON.stringify(normalizedSchema))
 }
 
 export const savePageInfoToLocalStorage = (info: Array<{ path: string; title: string }>) => {

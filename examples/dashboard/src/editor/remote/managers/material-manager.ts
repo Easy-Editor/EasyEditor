@@ -218,13 +218,15 @@ export class MaterialManagerClass {
     return this.remoteMaterialPackages.get(packageName)
   }
 
-  dispose(): void {
+  dispose(releaseEngineRegistrations = true): void {
     this.packageOperations.invalidateAll()
     this.componentRegistrations.clear()
-    for (const data of this.remoteMaterialPackages.values()) {
-      this.services.materials.removeComponentMeta(data.meta.componentName)
+    if (releaseEngineRegistrations) {
+      for (const data of this.remoteMaterialPackages.values()) {
+        this.services.materials.removeComponentMeta(data.meta.componentName)
+      }
+      for (const packageName of this.registeredResources) this.services.registry.unload('material', packageName)
     }
-    for (const packageName of this.registeredResources) this.services.registry.unload('material', packageName)
     this.registeredResources.clear()
     this.remoteMaterialPackages.clear()
   }

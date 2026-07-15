@@ -37,7 +37,7 @@ The root `@easy-editor/core` entry still exports `defaultEngine`, `init`, `destr
 
 ## Kernel contracts
 
-- **Lifecycle**: external calls are awaitable and serialized. Callers of the same operation join its in-flight Promise; `init()` waits for disposal and `destroy()` waits for initialization before proceeding. Failed disposal can be retried. Plugin and `RemoteAdapter` lifecycle callbacks must not call the same engine's `init()` or `destroy()`; direct synchronous re-entry throws `LifecycleReentrancyError`. Runtime-private lifecycle state is exposed through a non-configurable read-only accessor, terminal instances reject new mutations/listeners, and asynchronous plugin work is generation-checked before commit. Engine-owned services can only be torn down through `EngineInstance.destroy()`.
+- **Lifecycle**: `init()` and `destroy()` are awaitable but an in-flight lifecycle operation is exclusively owned by its original caller. A second lifecycle call rejects immediately with `LifecycleReentrancyError`; it never joins or waits for the active operation. Await the original Promise, then retry explicitly. `init()` on `ready` and `destroy()` on `disposed` are no-ops. Failed disposal remains retryable. Plugin and `RemoteAdapter` lifecycle callbacks must not call the same engine's `init()` or `destroy()`. Runtime-private lifecycle state is exposed through a non-configurable read-only accessor, terminal instances reject new mutations/listeners, and asynchronous plugin work is generation-checked before commit. Engine-owned services can only be torn down through `EngineInstance.destroy()`.
 - **Generation ownership**: a generation begins when initialization starts and ends when disposal starts or initialization rolls back. Reusable root services reactivate only through `init()`; retained `Document`, `History`, Simulator, material registry/meta, and plugin-context references from a disposed generation stay permanently revoked. Plugin contexts receive generation-bound capability views rather than reusable raw engine services.
 - **Schema**: the current version is `1.0.0`; legacy `0.0.1` input migrates explicitly and invalid input fails before the current project unloads.
 - **Transactions**: command batches commit as one undo/redo unit or roll back model, history, selection, complete material entry/meta state, and deferred events. Restricted public transactions reject executable validators.
@@ -48,5 +48,29 @@ The root `@easy-editor/core` entry still exports `defaultEngine`, `init`, `destr
 Same-realm JavaScript cannot reliably distinguish a lifecycle call made by an external host from one made through a raw engine closure retained across an `await` without an AsyncContext-like mechanism or realm/process isolation. Capturing the engine in a plugin or adapter lifecycle callback and calling its lifecycle after suspension is therefore a host-protocol violation, not an isolation guarantee.
 
 Agent Runtime design is intentionally deferred until this framework contract is stable. Existing Agent experiments are outside the stable `@easy-editor/core/instance` surface and may change during the later Agent phase.
+
+## Lifecycle operation matrix
+
+| State | `init()` | `destroy()` | Other public work |
+| --- | --- | --- | --- |
+| `created` | Starts initialization | Disposes the uninitialized instance | Setup and registration are supported; application model work should wait for `ready` |
+| `initializing` | Rejects; await the original `init()` and retry if still needed | Rejects; await the original `init()`, then call `destroy()` | Not a supported host-operation window |
+| `ready` | Resolved no-op; new options are not applied | Starts disposal | Allowed subject to trust, ownership, and transaction rules |
+| `disposing` | Rejects; await the original `destroy()`, then retry | Rejects; await the original `destroy()` | New writes and subscriptions are rejected |
+| `disposed` | Starts a new generation | Resolved no-op | Rejected until a successful `init()` |
+| `failed` | Rejects | Retries retained cleanup; success moves to `disposed` | Rejected until cleanup succeeds and the engine is initialized again |
+
+Initialization failure returns to `created` when rollback succeeds and enters `failed` when rollback is incomplete. Lifecycle methods must also not run from an active transaction or an engine-owned lifecycle/model callback.
+
+## Support matrix
+
+| Surface | Supported contract | Verification status |
+| --- | --- | --- |
+| Framework runtime packages and repository tooling | Node.js `>=18.20.8` | Exact floor is a CI quality-gate lane; Node 20 is the primary strict-engine lane |
+| `@easy-editor/easypack` | Node.js `>=20.0.0` | Verified only in the Node 20 lane |
+| Repository package manager | pnpm `>=9.12.2`; CI and lockfile use pnpm `10.25.0` | Frozen-lockfile install in CI |
+| Renderer | React renderer is delivered | Other framework adapters are extension targets, not shipped support |
+| Browser | Dashboard development smoke through `pnpm example:dashboard` | Chromium manual smoke; automated browser E2E is not yet a release gate |
+| Operating system | Platform-neutral packages | Full suite on Ubuntu; generator and packed-template smoke are release-gated on macOS and Windows |
 
 See the [architecture overview](https://github.com/Easy-Editor/EasyEditor/blob/main/docs/en/design/overview.md) for the ownership and trust model.

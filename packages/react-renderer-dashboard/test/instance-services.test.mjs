@@ -16,6 +16,10 @@ test('DesignerView owns the instance clipboard injection lifecycle', () => {
   assert.ok(injectedDisposer, 'expected the clipboard injection disposer to be retained')
   assert.match(source, new RegExp(`catch\\s*\\([^)]*\\)\\s*{[\\s\\S]*?${injectedDisposer[1]}\\(\\)[\\s\\S]*?throw`))
   assert.match(source, new RegExp(`return\\s*\\(\\)\\s*=>\\s*{[\\s\\S]*?${injectedDisposer[1]}\\(\\)`))
+  assert.doesNotMatch(source, /\b(?:propsDesigner|designer)\.purge\s*\(/)
+  assert.doesNotMatch(source, /nextProps\.designer\.setProps/)
+  assert.match(source, /\['disposing', 'disposed', 'failed'\]\.includes\(lifecycleState/)
+  assert.match(source, /designer\.setProps\(designerProps\)/)
 })
 
 test('ProjectView reads loading configuration from its designer instance', () => {
@@ -27,6 +31,14 @@ test('ProjectView reads loading configuration from its designer instance', () =>
   assert.match(source, /designer\.editor\.engineConfig\.get\(['"]loadingComponent['"],\s*BuiltinLoading\)/)
 })
 
+test('dashboard overlays stop reading plugin helpers after their Simulator generation is disposed', () => {
+  const guideLineSource = readSource('../src/simulator-renderer/SimulatorRenderer/BemTools/GuideLine/index.tsx')
+  const marqueeSource = readSource('../src/simulator-renderer/SimulatorRenderer/BemTools/MarqueeSelection/index.tsx')
+
+  assert.match(guideLineSource, /host\.isDisposed\s*\?\s*null\s*:\s*host\.designer\.guideline/)
+  assert.match(marqueeSource, /host\.isDisposed\s*\?\s*null\s*:\s*designer\.marqueeSelection/)
+})
+
 test('each Canvas owns and disposes its own simulator renderer container', () => {
   const source = readSource('../src/simulator-renderer/SimulatorRenderer/SimulatorView.tsx')
 
@@ -34,4 +46,27 @@ test('each Canvas owns and disposes its own simulator renderer container', () =>
   assert.match(source, /renderer\.mount\(host\)/)
   assert.match(source, /return\s*\(\)\s*=>\s*renderer\.dispose\(\)/)
   assert.doesNotMatch(source, /import\s*{[^}]*\bsimulatorRenderer\b[^}]*}/)
+})
+
+test('the dashboard renderer composes a local adapter without module mutation side effects', () => {
+  const source = readSource('../src/renderer-core/renderer.ts')
+
+  assert.match(source, /createRendererAdapter\(/)
+  assert.doesNotMatch(source, /import\s*{[^}]*\badapter\b[^}]*}/)
+})
+
+test('the package does not publish a shared simulator renderer container', () => {
+  const packageEntry = readSource('../src/index.ts')
+  const simulatorSource = readSource('../src/simulator-renderer/simulator-renderer.ts')
+
+  assert.doesNotMatch(packageEntry, /\bsimulatorRenderer\b/)
+  assert.doesNotMatch(simulatorSource, /export\s+const\s+simulatorRenderer\b/)
+})
+
+test('the simulator renderer propagates the instance-owned expression policy explicitly', () => {
+  const simulatorSource = readSource('../src/simulator-renderer/simulator-renderer.ts')
+  const rendererViewSource = readSource('../src/simulator-renderer/RendererView.tsx')
+
+  assert.match(simulatorSource, /this\.host\.appHelper/)
+  assert.match(rendererViewSource, /expressionEvaluator=\{container\.context\.expressionEvaluator\}/)
 })

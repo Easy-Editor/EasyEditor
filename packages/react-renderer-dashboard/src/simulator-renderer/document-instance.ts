@@ -88,7 +88,7 @@ export class DocumentInstance {
       const i = instances.indexOf(instance)
       if (i > -1) {
         instances.splice(i, 1)
-        this.host.setInstance(this.document.id, id, instances)
+        this.host.settleInstance(this.document.id, id, instances)
       }
     }
   }
@@ -102,10 +102,10 @@ export class DocumentInstance {
         instances = instances.filter(checkInstanceMounted)
         if (instances.length > 0) {
           instancesMap.set(id, instances)
-          this.host.setInstance(this.document.id, id, instances)
+          this.host.settleInstance(this.document.id, id, instances)
         } else {
           instancesMap.delete(id)
-          this.host.setInstance(this.document.id, id, null)
+          this.host.settleInstance(this.document.id, id, null)
         }
       }
       return

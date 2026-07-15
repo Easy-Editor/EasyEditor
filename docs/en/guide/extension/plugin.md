@@ -59,8 +59,7 @@ const MyPlugin: PluginCreator<Options> = (options = {}) => ({
       event.preventDefault()
       ctx.event.emit('shortcut', { command: 'duplicate' })
     }
-    ctx.hotkey.bind('ctrl+d', handleDuplicate)
-    ctx.onDispose(() => ctx.hotkey.unbind('ctrl+d', handleDuplicate))
+    ctx.onDispose(ctx.hotkey.acquireBinding('ctrl+d', handleDuplicate))
   },
 
   async destroy(ctx) {
@@ -71,7 +70,7 @@ const MyPlugin: PluginCreator<Options> = (options = {}) => ({
 export default MyPlugin
 ```
 
-Prefer `ctx.onDispose()` for listeners, hotkeys, timers, and other resource cleanup. The engine owns Context disposal even when the plugin does not define `destroy`.
+Prefer `ctx.onDispose()` for listeners, hotkeys, timers, and other resource cleanup. Hotkeys should be acquired through `acquireBinding()` so the engine can release the lease through its internal teardown boundary after Context capabilities are revoked, instead of asking `destroy` to access a revoked `ctx.hotkey`. The engine owns Context disposal even when the plugin does not define `destroy`.
 
 ## Register plugins
 
@@ -203,31 +202,38 @@ A plugin with `extend` mutates class prototypes shared by the Realm. It must:
 
 1. register before engine initialization;
 2. use explicit `legacyTrusted`;
-3. provide a stable `extensionFingerprint` for the process-wide extension; and
-4. accept that script removal and instance disposal cannot undo process-level prototype effects.
+3. provide a stable `extensionFingerprint` for the Realm-wide descriptor; and
+4. accept that compatible live engines share one descriptor lease.
 
 ```ts
-import { createEngine, type Node, type Plugin } from '@easy-editor/core/instance'
+import { createEngine, type Node, type Plugin, type PluginExtend } from '@easy-editor/core/instance'
+
+function getPluginLabel(this: Node) {
+  return `${this.componentName}:${this.id}`
+}
+
+const nodeExtensions = {
+  getPluginLabel: { value: getPluginLabel },
+}
+
+const extendNode = ({ extend }: PluginExtend) => {
+  extend('Node', nodeExtensions)
+}
 
 const ExtendPlugin = (): Plugin => ({
   name: 'ExtendPlugin',
   extensionFingerprint: 'extend-plugin@1',
   init() {},
-  extend({ extend }) {
-    extend('Node', {
-      getPluginLabel: {
-        value(this: Node) {
-          return `${this.componentName}:${this.id}`
-        },
-      },
-    })
-  },
+  extend: extendNode,
 })
 
 const engine = createEngine({ trustPolicy: 'legacyTrusted' })
 await engine.plugins.register(ExtendPlugin())
 await engine.init()
+await engine.destroy() // restores the original descriptor after the final owner
 ```
+
+A plugin manager reference-counts descriptors only when both the fingerprint **and runtime property identity** match. Equal function source does not imply equal closures, so methods shared across engines must explicitly reuse the same module-level function/getter/setter references. The complete extension batch is preflighted, and a failed commit rolls back every lease and property acquired by that batch. The original descriptor is restored or deleted after the final owner is successfully destroyed. An `agentRestricted` engine cannot share the Realm while a lease is active; external descriptor tampering makes disposal fail and remain retryable. Unmanaged direct extensions through the root compatibility surface, and global effects created by legacy UMD code itself, may still be permanent.
 
 A prototype-extension plugin cannot be appended with `autoInit` after readiness. `legacyTrusted` is also a trusted compatibility mode, not a sandbox. New plugins should prefer composition, events, exports, and explicit host APIs over prototype mutation.
 

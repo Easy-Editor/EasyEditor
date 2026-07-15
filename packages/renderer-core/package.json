@@ -13,6 +13,9 @@
     "LICENSE",
     "README.md"
   ],
+  "engines": {
+    "node": ">=18.20.8"
+  },
   "publishConfig": {
     "access": "public",
     "main": "dist/index.js",

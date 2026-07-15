@@ -156,7 +156,7 @@ test('dashboard plugin owns listeners and invalidates disposed per-designer help
 
   const { DesignerClass, extensions, initSchema, meta, plugin } = preparePlugin()
   assert.equal(plugin.name, 'DashboardPlugin')
-  assert.equal(plugin.extensionFingerprint, `DashboardPlugin:v1:${JSON.stringify(initSchema)}`)
+  assert.equal(plugin.extensionFingerprint, 'DashboardPlugin:v2')
 
   const first = createDesigner(DesignerClass)
   const second = createDesigner(DesignerClass)
@@ -236,6 +236,36 @@ test('public helper disposal evicts runtime caches without exposing engine teard
   for (const disposer of [...registeredDisposers].reverse()) disposer()
   assert.throws(() => getGuideline(), /runtime is not active/)
   assert.throws(() => getMarquee(), /runtime is not active/)
+})
+
+test('dashboard runtime teardown keeps owned helpers readable only while they settle', () => {
+  const { DesignerClass, extensions, meta, plugin } = preparePlugin()
+  const target = createDesigner(DesignerClass)
+  const registeredDisposers = initializeFakePlugin(plugin, target, meta)
+  const designerExtensions = extensions.get('Designer')
+  const getGuideline = () => designerExtensions.guideline.get.call(target.designer)
+  const getAlignment = () => designerExtensions.alignment.get.call(target.designer)
+  const getMarquee = () => designerExtensions.marqueeSelection.get.call(target.designer)
+  const guideline = getGuideline()
+  const alignment = getAlignment()
+  const marquee = getMarquee()
+  const originalGuidelineDispose = guideline.dispose.bind(guideline)
+  const observedDuringDispose = []
+
+  guideline.dispose = () => {
+    observedDuringDispose.push(getGuideline(), getAlignment(), getMarquee())
+    originalGuidelineDispose()
+  }
+
+  registeredDisposers[0]()
+
+  assert.deepEqual(observedDuringDispose, [guideline, alignment, marquee])
+  assert.throws(() => getGuideline(), /runtime is not active/)
+  assert.throws(() => getAlignment(), /runtime is not active/)
+  assert.throws(() => getMarquee(), /runtime is not active/)
+
+  for (const disposer of [...registeredDisposers.slice(1)].reverse()) disposer()
+  assert.equal(target.registered.filter(item => item.active).length, 0)
 })
 
 test('dashboard runtime activation rolls back atomically when disposal registration fails', () => {
@@ -724,6 +754,55 @@ const createWriteCountingSchema = () => {
   }
 }
 
+test('two dashboard engines share stable descriptors while keeping runtime options instance-owned', async t => {
+  const first = createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  const second = createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  t.after(() => Promise.allSettled([first.destroy(), second.destroy()]))
+  await first.plugins.register(
+    DashboardPlugin({
+      group: {
+        initSchema: { componentName: 'FirstGroup', isGroup: true },
+        meta: { componentName: 'FirstGroup' },
+      },
+    }),
+  )
+  await second.plugins.register(
+    DashboardPlugin({
+      group: {
+        initSchema: { componentName: 'SecondGroup', isGroup: true },
+        meta: { componentName: 'SecondGroup' },
+      },
+    }),
+  )
+
+  await first.init()
+  await second.init()
+
+  const firstGuideline = first.designer.guideline
+  const secondGuideline = second.designer.guideline
+  assert.notEqual(firstGuideline, secondGuideline)
+
+  const firstDocument = first.project.createDocument({
+    componentName: 'Page',
+    id: 'first-root',
+    children: [{ componentName: 'Text', id: 'first-child' }],
+  })
+  const secondDocument = second.project.createDocument({
+    componentName: 'Page',
+    id: 'second-root',
+    children: [{ componentName: 'Text', id: 'second-child' }],
+  })
+  assert.equal(firstDocument.group(['first-child']).componentName, 'FirstGroup')
+  assert.equal(secondDocument.group(['second-child']).componentName, 'SecondGroup')
+
+  await first.destroy()
+  assert.throws(() => first.designer.guideline, /runtime is not active/)
+  assert.equal(second.designer.guideline, secondGuideline)
+
+  await second.destroy()
+  assert.equal(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(second.designer), 'guideline'), undefined)
+})
+
 test('real engine restart crosses capability disposal and rebuilds dashboard runtime once', async t => {
   await withFakeWindow(async topDocument => {
     const engine = createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
@@ -769,9 +848,9 @@ test('real engine restart crosses capability disposal and rebuilds dashboard run
     assert.equal(shell.listenerCount('mousedown'), 0)
     assert.equal(topDocument.listenerCount('mousemove'), 0)
     disposeBinding()
-    assert.throws(() => engine.designer.guideline, /runtime is not active/)
-    assert.throws(() => engine.designer.alignment, /runtime is not active/)
-    assert.throws(() => engine.designer.marqueeSelection, /runtime is not active/)
+    assert.equal(engine.designer.guideline, undefined)
+    assert.equal(engine.designer.alignment, undefined)
+    assert.equal(engine.designer.marqueeSelection, undefined)
     await engine.init()
 
     const restartedGuideline = engine.designer.guideline
@@ -890,7 +969,7 @@ test('process-level dashboard getters cannot be borrowed by an unregistered lega
   await unregistered.destroy()
 })
 
-test('dashboard context cleanup restores active marquee state during init rollback', async t => {
+test('dashboard context cleanup restores active marquee state and prototype descriptors during init rollback', async t => {
   await withFakeWindow(async topDocument => {
     const engine = createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
     t.after(() => engine.destroy())
@@ -926,9 +1005,9 @@ test('dashboard context cleanup restores active marquee state during init rollba
     assert.equal(shell.listenerCount('mousedown'), 0)
     assert.equal(topDocument.listenerCount('mousemove'), 0)
     assert.equal(topDocument.listenerCount('mouseup'), 0)
-    assert.throws(() => engine.designer.guideline, /runtime is not active/)
-    assert.throws(() => engine.designer.alignment, /runtime is not active/)
-    assert.throws(() => engine.designer.marqueeSelection, /runtime is not active/)
+    assert.equal(engine.designer.guideline, undefined)
+    assert.equal(engine.designer.alignment, undefined)
+    assert.equal(engine.designer.marqueeSelection, undefined)
     await engine.destroy()
   })
 })

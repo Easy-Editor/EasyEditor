@@ -16,9 +16,10 @@ React renderer implementation for EasyEditor. This package provides the React-sp
 ## Expression trust boundary
 
 Executable schema fields are routed through the `expressionEvaluator` renderer
-prop. Omitting the prop preserves the deprecated legacy trusted behavior for
-backward compatibility. Supplying the prop explicitly, including as `undefined`,
-is an explicit policy decision: a deny or missing evaluator raises a structured
-`PolicyViolation` through state/data parsing, custom methods, lifecycle methods,
-dynamic props, and prop-type rules. It does not silently fall back to trusted
+prop. Omitting the prop, or explicitly supplying `undefined`, is fail-closed: a
+missing evaluator raises a structured `PolicyViolation` through state/data
+parsing, custom methods, lifecycle methods, dynamic props, and prop-type rules.
+Trusted legacy hosts must explicitly pass the named
+`legacyTrustedExpressionEvaluator`; restricted hosts should pass a deny or
+isolated evaluator. No modern renderer path silently falls back to trusted
 execution.

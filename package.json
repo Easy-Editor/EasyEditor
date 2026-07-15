@@ -36,6 +36,8 @@
     "types": "turbo types --filter=\"@easy-editor/*\"",
     "test-types": "turbo test-types",
     "test": "turbo test",
+    "public-api:check": "node test/public-package-api-baseline.mjs",
+    "public-api:update": "node test/public-package-api-baseline.mjs --update",
     "example:dashboard": "turbo dev --filter ./examples/dashboard",
     "pub:changeset": "pnpm changeset",
     "pub:build": "pnpm build && pnpm types",
@@ -77,7 +79,7 @@
     "typescript": "^5.7.2"
   },
   "engines": {
-    "node": ">=18.12.0",
+    "node": ">=18.20.8",
     "pnpm": ">=9.12.2"
   },
   "packageManager": "pnpm@10.25.0"

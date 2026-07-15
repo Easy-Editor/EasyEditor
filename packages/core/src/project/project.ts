@@ -95,6 +95,8 @@ interface LegacySimulatorLifecycle {
   purge?: () => void | Promise<void>
 }
 
+type ProjectTeardownPhase = 'all' | 'model' | 'simulator'
+
 export class Project {
   readonly #emitter: EventBus
 
@@ -149,7 +151,7 @@ export class Project {
   ) {
     lockReadonlyProperties(this, ['designer'])
     lockPrototypeAccessors(this, ['config', 'currentDocument', 'documents', 'simulator'])
-    installLifecycleTeardownOperation(this, () => this.#disposeInternal())
+    installLifecycleTeardownOperation(this, (phase: ProjectTeardownPhase = 'all') => this.#disposeInternal(phase))
     inheritEngineTeardownOwnership(this.designer, this)
     this.#emitter = createDesignerEventBus(designer, 'Project')
     inheritEngineTeardownOwnership(this, this.#emitter)
@@ -327,51 +329,63 @@ export class Project {
   async dispose() {
     assertPublicLifecycleTeardownAllowed(this, 'project.dispose')
     this.assertProjectMutationAllowed()
-    await this.#disposeInternal()
+    await this.#disposeInternal('all')
   }
 
-  async #disposeInternal(): Promise<void> {
+  async #disposeInternal(phase: ProjectTeardownPhase): Promise<void> {
     const failures: unknown[] = []
-    const simulator: unknown = this.#simulator
-    const legacySimulator = simulator as LegacySimulatorLifecycle | undefined
-    let simulatorDisposed = true
-    try {
-      if (simulator instanceof Simulator) {
-        await runInternalLifecycleTeardown<[], void | Promise<void>>(simulator)
-      } else if (legacySimulator?.dispose) {
-        await legacySimulator.dispose()
-      } else {
-        await legacySimulator?.purge?.()
-      }
-    } catch (error) {
-      simulatorDisposed = false
-      failures.push(error)
-    }
+    const disposeSimulator = phase !== 'model'
+    const disposeModel = phase !== 'simulator'
+    let simulatorDisposed = !disposeSimulator
 
-    const documents = new Set([...getPendingDocumentTeardowns(this), ...this.#documents])
-    for (const document of [...documents].reverse()) {
+    if (disposeSimulator) {
+      const simulator: unknown = this.#simulator
+      const legacySimulator = simulator as LegacySimulatorLifecycle | undefined
+      simulatorDisposed = true
       try {
-        removeDocumentDuringTeardown(document)
+        if (simulator instanceof Simulator) {
+          await runInternalLifecycleTeardown<[], void | Promise<void>>(simulator)
+        } else if (legacySimulator?.dispose) {
+          await legacySimulator.dispose()
+        } else {
+          await legacySimulator?.purge?.()
+        }
       } catch (error) {
+        simulatorDisposed = false
         failures.push(error)
       }
     }
 
+    if (disposeModel) {
+      const documents = new Set([...getPendingDocumentTeardowns(this), ...this.#documents])
+      for (const document of [...documents].reverse()) {
+        try {
+          removeDocumentDuringTeardown(document)
+        } catch (error) {
+          failures.push(error)
+        }
+      }
+    }
+
     runInAction(() => {
-      if (simulatorDisposed) {
+      if (disposeSimulator && simulatorDisposed) {
         this.#simulator = undefined
       }
-      this.#documents = []
-      this.#documentsMap.clear()
-      this.#data = this.protectProjectDataValue(createEmptyProjectSchema())
-      this.#config = undefined
-      this.isRendererReady = false
+      if (disposeModel) {
+        this.#documents = []
+        this.#documentsMap.clear()
+        this.#data = this.protectProjectDataValue(createEmptyProjectSchema())
+        this.#config = undefined
+      }
+      if (disposeSimulator || disposeModel) this.isRendererReady = false
     })
-    try {
-      // Listener removal must not inherit Project teardown authority.
-      runInternalLifecycleTeardown(this.#emitter)
-    } catch (error) {
-      failures.push(error)
+    if (disposeModel) {
+      try {
+        // Listener removal must not inherit Project teardown authority.
+        runInternalLifecycleTeardown(this.#emitter)
+      } catch (error) {
+        failures.push(error)
+      }
     }
     if (failures.length) {
       throw new AggregateError(failures, 'Project disposal completed with errors')

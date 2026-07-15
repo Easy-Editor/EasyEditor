@@ -16,7 +16,17 @@ import type { Project } from '../project/project'
 import type { Setters } from '../setters/setters'
 import type { Simulator } from '../simulator/simulator'
 import type { Viewport } from '../simulator/viewport'
-import { type MobxExtendDescriptor, addMobxExtendProperty, isMobxExtendProperty } from './plugin-extend-mobx'
+import {
+  type ActionConfig,
+  type ComputedConfig,
+  type MobxConfig,
+  type MobxExtendDescriptor,
+  MobxExtendType,
+  type ObservableConfig,
+  addMobxExtendProperty,
+  assertMobxExtendConfig,
+  isMobxExtendProperty,
+} from './plugin-extend-mobx'
 
 export interface PrototypeExtensionRegistration {
   fingerprint: string
@@ -35,44 +45,34 @@ interface PrototypeExtensionRecord {
   descriptor: PropertyDescriptor
   extensionFingerprint: string
   key: PropertyKey
-  origins: Set<string>
+  originalDescriptor: PropertyDescriptor | undefined
+  owners: Map<object, Set<string>>
+  propertyPlan: PrototypeExtensionPropertyPlan
   prototype: object
 }
 
+interface DescriptorPropertyPlan {
+  descriptor: PropertyDescriptor
+  kind: 'descriptor'
+}
+
+interface MobxPropertyPlan {
+  config: MobxConfig
+  kind: 'mobx'
+}
+
+type PrototypeExtensionPropertyPlan = DescriptorPropertyPlan | MobxPropertyPlan
+
 const recordsByPrototype = new WeakMap<object, Map<PropertyKey, PrototypeExtensionRecord>>()
 const processExtensionRecords = new Set<PrototypeExtensionRecord>()
+const permanentPrototypeExtensionOwner = Object.freeze({})
 let activeRestrictedPluginBoundaries = 0
 
+const getRecordOrigins = (record: PrototypeExtensionRecord): string[] => [
+  ...new Set([...record.owners.values()].flatMap(origins => [...origins])),
+]
+
 const keyLabel = (key: PropertyKey): string => (typeof key === 'symbol' ? key.toString() : String(key))
-
-const functionFingerprint = (value: unknown): string => Function.prototype.toString.call(value)
-
-const valueFingerprint = (value: unknown, seen = new WeakSet<object>()): string => {
-  if (typeof value === 'function') return `function:${functionFingerprint(value)}`
-  if (typeof value === 'symbol') return `symbol:${String(value.description)}`
-  if (value === null || typeof value !== 'object') return `${typeof value}:${String(value)}`
-  if (seen.has(value)) return 'object:[circular]'
-  seen.add(value)
-  const entries = Reflect.ownKeys(value)
-    .sort((left, right) => keyLabel(left).localeCompare(keyLabel(right)))
-    .map(key => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)
-      return `${keyLabel(key)}=${descriptorFingerprint(descriptor, seen)}`
-    })
-  return `object:{${entries.join(',')}}`
-}
-
-const descriptorFingerprint = (descriptor: PropertyDescriptor | undefined, seen?: WeakSet<object>): string => {
-  if (!descriptor) return 'descriptor:missing'
-  return [
-    `configurable:${Boolean(descriptor.configurable)}`,
-    `enumerable:${Boolean(descriptor.enumerable)}`,
-    `writable:${Boolean(descriptor.writable)}`,
-    `value:${valueFingerprint(descriptor.value, seen)}`,
-    `get:${valueFingerprint(descriptor.get, seen)}`,
-    `set:${valueFingerprint(descriptor.set, seen)}`,
-  ].join('|')
-}
 
 const descriptorMatches = (expected: PropertyDescriptor, actual: PropertyDescriptor | undefined): boolean => {
   if (!actual) return false
@@ -85,9 +85,6 @@ const descriptorMatches = (expected: PropertyDescriptor, actual: PropertyDescrip
     Object.is(expected.set, actual.set)
   )
 }
-
-const extensionPropertyFingerprint = (property: unknown, registration: PrototypeExtensionRegistration): string =>
-  `${registration.fingerprint}|${valueFingerprint(property)}`
 
 export class PrototypeExtensionConflictError extends Error {
   readonly name = 'PrototypeExtensionConflictError'
@@ -112,7 +109,7 @@ export const getProcessPrototypeExtensionIntegrityIssues = (): Array<{
       issues.push({
         className: record.className,
         key: keyLabel(record.key),
-        origins: [...record.origins],
+        origins: getRecordOrigins(record),
       })
     }
   }
@@ -120,10 +117,10 @@ export const getProcessPrototypeExtensionIntegrityIssues = (): Array<{
 }
 
 /**
- * Acquires a fail-closed lease for a restricted engine. Prototype extensions are
- * process-wide and non-unloadable, so a restricted engine cannot share a realm
- * with any registered extension. While the lease is active legacy engines also
- * cannot add a new extension to the realm.
+ * Acquires a fail-closed lease for a restricted engine. Active legacy prototype
+ * descriptors are Realm-wide, so restricted and legacy extension leases cannot
+ * overlap. Plugin-manager leases are restored after their final owner is
+ * destroyed; unmanaged compatibility calls may intentionally remain permanent.
  */
 export const establishRestrictedPluginBoundary = (): (() => void) | undefined => {
   if (processExtensionRecords.size > 0 || getProcessPrototypeExtensionIntegrityIssues().length > 0) {
@@ -183,82 +180,226 @@ export interface PluginExtendClass {
   ComponentMeta: typeof ComponentMeta
 }
 
-const applyProperty = (prototype: object, key: PropertyKey, property: unknown): void => {
+const snapshotMobxConfig = (config: MobxConfig): MobxConfig => {
+  switch (config.type) {
+    case MobxExtendType.OBSERVABLE:
+    case MobxExtendType.OBSERVABLE_REF:
+    case MobxExtendType.OBSERVABLE_SHALLOW: {
+      const { type, initialValue, getter, setter } = config as ObservableConfig
+      return { type, initialValue, getter, setter }
+    }
+    case MobxExtendType.COMPUTED: {
+      const { type, getter, setter } = config as ComputedConfig
+      return { type, getter, setter }
+    }
+    case MobxExtendType.ACTION: {
+      const { type, method, name } = config as ActionConfig
+      return { type, method, name }
+    }
+  }
+}
+
+const prepareProperty = (key: PropertyKey, property: unknown): PrototypeExtensionPropertyPlan => {
   if (isMobxExtendProperty(property)) {
     if (typeof key !== 'string') {
       throw new TypeError('MobX prototype extension keys must be strings')
     }
-    addMobxExtendProperty(prototype, key, property.config)
-    return
+    assertMobxExtendConfig(property.config)
+    return { kind: 'mobx', config: snapshotMobxConfig(property.config) }
+  }
+  if (typeof property !== 'function' && (!property || typeof property !== 'object')) {
+    throw new TypeError(`Invalid prototype extension descriptor for ${keyLabel(key)}`)
   }
   const descriptor: PropertyDescriptor =
     typeof property === 'function'
-      ? {
-          value: property,
-        }
-      : (property as PropertyDescriptor)
-  Object.defineProperty(prototype, key, descriptor)
+      ? { configurable: true, value: property }
+      : { ...(property as PropertyDescriptor), configurable: true }
+  const validationTarget = {}
+  Object.defineProperty(validationTarget, key, descriptor)
+  return {
+    kind: 'descriptor',
+    descriptor: Object.getOwnPropertyDescriptor(validationTarget, key) as PropertyDescriptor,
+  }
 }
 
-const assertPropertyCanBeApplied = (key: PropertyKey, property: unknown): void => {
-  if (isMobxExtendProperty(property)) {
-    if (typeof key !== 'string') {
-      throw new TypeError('MobX prototype extension keys must be strings')
-    }
-    if (!property.config || typeof property.config.type !== 'string') {
-      throw new TypeError(`Invalid MobX prototype extension descriptor for ${keyLabel(key)}`)
-    }
+const propertyPlansMatch = (
+  expected: PrototypeExtensionPropertyPlan,
+  actual: PrototypeExtensionPropertyPlan,
+): boolean => {
+  if (expected.kind !== actual.kind) return false
+  if (expected.kind === 'descriptor' && actual.kind === 'descriptor') {
+    return descriptorMatches(expected.descriptor, actual.descriptor)
+  }
+  if (expected.kind !== 'mobx' || actual.kind !== 'mobx') return false
+  const left = expected.config as unknown as Record<string, unknown>
+  const right = actual.config as unknown as Record<string, unknown>
+  return (
+    left.type === right.type &&
+    Object.is(left.initialValue, right.initialValue) &&
+    Object.is(left.getter, right.getter) &&
+    Object.is(left.setter, right.setter) &&
+    Object.is(left.method, right.method) &&
+    Object.is(left.name, right.name)
+  )
+}
+
+const applyProperty = (prototype: object, key: PropertyKey, propertyPlan: PrototypeExtensionPropertyPlan): void => {
+  if (propertyPlan.kind === 'mobx') {
+    addMobxExtendProperty(prototype, key as string, propertyPlan.config)
     return
   }
-  const descriptor: PropertyDescriptor =
-    typeof property === 'function' ? { value: property } : (property as PropertyDescriptor)
-  Object.defineProperty({}, key, descriptor)
+  Object.defineProperty(prototype, key, propertyPlan.descriptor)
+}
+
+const restoreOriginalDescriptor = (record: PrototypeExtensionRecord): void => {
+  if (record.originalDescriptor) {
+    Object.defineProperty(record.prototype, record.key, record.originalDescriptor)
+    return
+  }
+  if (!Reflect.deleteProperty(record.prototype, record.key)) {
+    throw new PrototypeExtensionConflictError(
+      `Prototype extension could not be removed from ${record.className}.${keyLabel(record.key)}`,
+      { className: record.className, key: keyLabel(record.key), origins: getRecordOrigins(record) },
+    )
+  }
+}
+
+const addExtensionOwner = (record: PrototypeExtensionRecord, owner: object, pluginName: string): void => {
+  const origins = record.owners.get(owner) || new Set<string>()
+  origins.add(pluginName)
+  record.owners.set(owner, origins)
 }
 
 /**
- * Registers a process-wide legacy prototype extension. Every target/key is
- * fingerprinted, identical registrations are idempotent, and conflicts are
- * rejected before any property in the current call is mutated.
+ * Releases every prototype descriptor leased by one plugin manager generation.
+ * The release is preflighted before mutation so either the whole owner lease is
+ * restored or a tamper/configurability error leaves it available for retry.
  */
-export const applyPrototypeExtensionBatch = (operations: readonly PrototypeExtensionOperation[]): void => {
+export const releasePrototypeExtensionOwner = (owner: object): void => {
+  const ownedRecords = [...processExtensionRecords].filter(record => record.owners.has(owner))
+  for (const record of ownedRecords) {
+    const current = Object.getOwnPropertyDescriptor(record.prototype, record.key)
+    if (!descriptorMatches(record.descriptor, current)) {
+      throw new PrototypeExtensionConflictError(
+        `Prototype extension integrity violation while releasing ${record.className}.${keyLabel(record.key)}`,
+        { className: record.className, key: keyLabel(record.key), origins: getRecordOrigins(record) },
+      )
+    }
+    if (record.owners.size === 1 && current?.configurable !== true) {
+      throw new PrototypeExtensionConflictError(
+        `Prototype extension cannot be released from ${record.className}.${keyLabel(record.key)}`,
+        { className: record.className, key: keyLabel(record.key), origins: getRecordOrigins(record) },
+      )
+    }
+  }
+
+  const released: Array<{
+    record: PrototypeExtensionRecord
+    removedRecord: boolean
+    origins: Set<string>
+  }> = []
+  try {
+    for (const record of ownedRecords) {
+      const origins = new Set(record.owners.get(owner) as Set<string>)
+      if (record.owners.size > 1) {
+        record.owners.delete(owner)
+        released.push({ record, removedRecord: false, origins })
+        continue
+      }
+
+      restoreOriginalDescriptor(record)
+      record.owners.delete(owner)
+      recordsByPrototype.get(record.prototype)?.delete(record.key)
+      processExtensionRecords.delete(record)
+      released.push({ record, removedRecord: true, origins })
+    }
+  } catch (error) {
+    const rollbackErrors: unknown[] = []
+    for (const mutation of released.reverse()) {
+      try {
+        if (mutation.removedRecord) {
+          Object.defineProperty(mutation.record.prototype, mutation.record.key, mutation.record.descriptor)
+          const registry = recordsByPrototype.get(mutation.record.prototype) || new Map()
+          registry.set(mutation.record.key, mutation.record)
+          recordsByPrototype.set(mutation.record.prototype, registry)
+          processExtensionRecords.add(mutation.record)
+        }
+        mutation.record.owners.set(owner, mutation.origins)
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'Prototype extension release failed and rollback was incomplete',
+      )
+    }
+    throw error
+  }
+}
+
+/**
+ * Acquires an owner-scoped Realm-wide prototype-extension lease. Registrations
+ * are shareable only when both their declared fingerprint and runtime property
+ * identities match; function source text is never treated as closure identity.
+ * Every mutation in the batch is rolled back if commit cannot complete.
+ * @internal
+ */
+export const acquirePrototypeExtensionBatch = (
+  operations: readonly PrototypeExtensionOperation[],
+  owner: object,
+): (() => void) => {
   if (operations.length > 0) assertProcessPrototypeExtensionsAllowed()
-  const pending = new WeakMap<object, Map<PropertyKey, string>>()
+  const pending = new WeakMap<
+    object,
+    Map<PropertyKey, { extensionFingerprint: string; propertyPlan: PrototypeExtensionPropertyPlan }>
+  >()
   const prepared = operations.flatMap(operation => {
     const { extendClass, extendMap, properties, registration } = operation
     const prototype = extendMap[extendClass].prototype
     const className = String(extendClass)
     const registry = recordsByPrototype.get(prototype) || new Map<PropertyKey, PrototypeExtensionRecord>()
-    const pendingForPrototype = pending.get(prototype) || new Map<PropertyKey, string>()
+    const pendingForPrototype =
+      pending.get(prototype) ||
+      new Map<PropertyKey, { extensionFingerprint: string; propertyPlan: PrototypeExtensionPropertyPlan }>()
     pending.set(prototype, pendingForPrototype)
 
     return Reflect.ownKeys(properties).map(key => {
       const property = properties[key]
-      assertPropertyCanBeApplied(key, property)
-      const extensionFingerprint = extensionPropertyFingerprint(property, registration)
+      const propertyPlan = prepareProperty(key, property)
+      const extensionFingerprint = registration.fingerprint
       const existing = registry.get(key)
       if (existing) {
         const current = Object.getOwnPropertyDescriptor(prototype, key)
         if (!descriptorMatches(existing.descriptor, current)) {
           throw new PrototypeExtensionConflictError(
             `Prototype extension integrity violation at ${className}.${keyLabel(key)}`,
-            { className, key: keyLabel(key), origins: [...existing.origins] },
+            { className, key: keyLabel(key), origins: getRecordOrigins(existing) },
           )
         }
-        if (existing.extensionFingerprint !== extensionFingerprint) {
+        if (
+          existing.extensionFingerprint !== extensionFingerprint ||
+          !propertyPlansMatch(existing.propertyPlan, propertyPlan)
+        ) {
           throw new PrototypeExtensionConflictError(
-            `Prototype extension fingerprint conflict at ${className}.${keyLabel(key)}`,
-            { className, key: keyLabel(key), origins: [...existing.origins] },
+            `Prototype extension identity conflict at ${className}.${keyLabel(key)}`,
+            { className, key: keyLabel(key), origins: getRecordOrigins(existing) },
           )
         }
       } else {
-        const pendingFingerprint = pendingForPrototype.get(key)
-        if (pendingFingerprint && pendingFingerprint !== extensionFingerprint) {
+        const pendingRegistration = pendingForPrototype.get(key)
+        if (
+          pendingRegistration &&
+          (pendingRegistration.extensionFingerprint !== extensionFingerprint ||
+            !propertyPlansMatch(pendingRegistration.propertyPlan, propertyPlan))
+        ) {
           throw new PrototypeExtensionConflictError(
-            `Prototype extension batch conflict at ${className}.${keyLabel(key)}`,
+            `Prototype extension batch identity conflict at ${className}.${keyLabel(key)}`,
             { className, key: keyLabel(key) },
           )
         }
-        if (!pendingFingerprint) {
+        if (!pendingRegistration) {
           const currentDescriptor = Object.getOwnPropertyDescriptor(prototype, key)
           if (currentDescriptor && !currentDescriptor.configurable) {
             throw new PrototypeExtensionConflictError(
@@ -266,40 +407,120 @@ export const applyPrototypeExtensionBatch = (operations: readonly PrototypeExten
               { className, key: keyLabel(key) },
             )
           }
-          pendingForPrototype.set(key, extensionFingerprint)
+          pendingForPrototype.set(key, { extensionFingerprint, propertyPlan })
         }
       }
-      return { className, extensionFingerprint, key, property, prototype, registration }
+      return {
+        className,
+        extensionFingerprint,
+        key,
+        originalDescriptor: Object.getOwnPropertyDescriptor(prototype, key),
+        propertyPlan,
+        prototype,
+        registration,
+      }
     })
   })
 
-  for (const item of prepared) {
-    const registry = recordsByPrototype.get(item.prototype) || new Map<PropertyKey, PrototypeExtensionRecord>()
-    recordsByPrototype.set(item.prototype, registry)
-    const existing = registry.get(item.key)
-    if (existing) {
-      existing.origins.add(item.registration.pluginName)
-      continue
+  const committed: Array<
+    | { kind: 'created'; record: PrototypeExtensionRecord; registry: Map<PropertyKey, PrototypeExtensionRecord> }
+    | { kind: 'owner'; owner: object; previousOrigins: Set<string> | undefined; record: PrototypeExtensionRecord }
+  > = []
+  try {
+    for (const item of prepared) {
+      const registry = recordsByPrototype.get(item.prototype) || new Map<PropertyKey, PrototypeExtensionRecord>()
+      recordsByPrototype.set(item.prototype, registry)
+      const existing = registry.get(item.key)
+      if (existing) {
+        const previousOrigins = existing.owners.get(owner)
+        committed.push({
+          kind: 'owner',
+          owner,
+          previousOrigins: previousOrigins ? new Set(previousOrigins) : undefined,
+          record: existing,
+        })
+        addExtensionOwner(existing, owner, item.registration.pluginName)
+        continue
+      }
+
+      applyProperty(item.prototype, item.key, item.propertyPlan)
+      const appliedDescriptor = Object.getOwnPropertyDescriptor(item.prototype, item.key)
+      if (!appliedDescriptor) {
+        throw new PrototypeExtensionConflictError(
+          `Prototype extension did not define ${item.className}.${keyLabel(item.key)}`,
+          { className: item.className, key: keyLabel(item.key) },
+        )
+      }
+      const record: PrototypeExtensionRecord = {
+        className: item.className,
+        descriptor: appliedDescriptor,
+        extensionFingerprint: item.extensionFingerprint,
+        key: item.key,
+        originalDescriptor: item.originalDescriptor,
+        owners: new Map(),
+        propertyPlan: item.propertyPlan,
+        prototype: item.prototype,
+      }
+      addExtensionOwner(record, owner, item.registration.pluginName)
+      registry.set(item.key, record)
+      processExtensionRecords.add(record)
+      committed.push({ kind: 'created', record, registry })
     }
-    applyProperty(item.prototype, item.key, item.property)
-    const appliedDescriptor = Object.getOwnPropertyDescriptor(item.prototype, item.key)
-    if (!appliedDescriptor) {
-      throw new PrototypeExtensionConflictError(
-        `Prototype extension did not define ${item.className}.${keyLabel(item.key)}`,
-        { className: item.className, key: keyLabel(item.key) },
+  } catch (error) {
+    const rollbackErrors: unknown[] = []
+    for (const mutation of committed.reverse()) {
+      try {
+        if (mutation.kind === 'owner') {
+          if (mutation.previousOrigins) {
+            mutation.record.owners.set(mutation.owner, mutation.previousOrigins)
+          } else {
+            mutation.record.owners.delete(mutation.owner)
+          }
+          continue
+        }
+        const current = Object.getOwnPropertyDescriptor(mutation.record.prototype, mutation.record.key)
+        if (!descriptorMatches(mutation.record.descriptor, current)) {
+          throw new PrototypeExtensionConflictError(
+            `Prototype extension integrity violation while rolling back ${mutation.record.className}.${keyLabel(
+              mutation.record.key,
+            )}`,
+            {
+              className: mutation.record.className,
+              key: keyLabel(mutation.record.key),
+              origins: getRecordOrigins(mutation.record),
+            },
+          )
+        }
+        restoreOriginalDescriptor(mutation.record)
+        mutation.registry.delete(mutation.record.key)
+        processExtensionRecords.delete(mutation.record)
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'Prototype extension batch failed and rollback was incomplete',
       )
     }
-    const record: PrototypeExtensionRecord = {
-      className: item.className,
-      descriptor: appliedDescriptor,
-      extensionFingerprint: item.extensionFingerprint,
-      key: item.key,
-      origins: new Set([item.registration.pluginName]),
-      prototype: item.prototype,
-    }
-    registry.set(item.key, record)
-    processExtensionRecords.add(record)
+    throw error
   }
+
+  let active = true
+  return () => {
+    if (!active) return
+    releasePrototypeExtensionOwner(owner)
+    active = false
+  }
+}
+
+/**
+ * Legacy root compatibility API. Calls are intentionally permanent for the
+ * lifetime of the Realm and therefore never expose teardown authority.
+ */
+export const applyPrototypeExtensionBatch = (operations: readonly PrototypeExtensionOperation[]): void => {
+  acquirePrototypeExtensionBatch(operations, permanentPrototypeExtensionOwner)
 }
 
 export const extend = <T extends keyof PluginExtendClass>(
@@ -307,4 +528,6 @@ export const extend = <T extends keyof PluginExtendClass>(
   extendClass: T,
   properties: Record<PropertyKey, any> | (PropertyDescriptorMap & ThisType<InstanceType<PluginExtendClass[T]>>),
   registration: PrototypeExtensionRegistration,
-) => applyPrototypeExtensionBatch([{ extendClass, extendMap, properties, registration } as PrototypeExtensionOperation])
+): void => {
+  applyPrototypeExtensionBatch([{ extendClass, extendMap, properties, registration } as PrototypeExtensionOperation])
+}

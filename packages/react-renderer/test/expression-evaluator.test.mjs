@@ -2,8 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 globalThis.location = { href: '?__logConf__=error:test-silent' }
-const { baseRendererFactory, createDenyExpressionEvaluator, executeLifeCycleMethod, pageRendererFactory } =
-  await import('../.test-dist/index.js')
+const {
+  baseRendererFactory,
+  createDenyExpressionEvaluator,
+  executeLifeCycleMethod,
+  legacyTrustedExpressionEvaluator,
+  pageRendererFactory,
+} = await import('../.test-dist/index.js')
 
 const expression = value => ({ type: 'JSExpression', value })
 const jsFunction = value => ({ type: 'JSFunction', value })
@@ -146,7 +151,7 @@ test('an explicit undefined evaluator never falls back to the app helper or lega
   globalThis.__reactRendererExpressionExecuted = undefined
 })
 
-test('omitting expressionEvaluator preserves legacy trusted renderer behavior', () => {
+test('omitting expressionEvaluator fails closed while explicit legacy compatibility remains available', () => {
   const schema = {
     componentName: 'Page',
     props: {},
@@ -155,7 +160,12 @@ test('omitting expressionEvaluator preserves legacy trusted renderer behavior', 
     dataSource: { dataHandler: expression('value => value + 1') },
   }
   const PageRenderer = pageRendererFactory()
-  const page = new PageRenderer(createProps(schema))
+  assert.throws(
+    () => new PageRenderer(createProps(schema)),
+    error => error.code === 'EXPRESSION_EVALUATION_DENIED' && error.reason === 'missing-evaluator',
+  )
+
+  const page = new PageRenderer(createProps(schema, { expressionEvaluator: legacyTrustedExpressionEvaluator }))
 
   assert.equal(page.state.answer, 42)
   assert.equal(page.double(4), 8)
@@ -189,6 +199,7 @@ test('omitting expressionEvaluator preserves legacy trusted renderer behavior', 
       },
       'probe',
       [],
+      legacyTrustedExpressionEvaluator,
     ),
     42,
   )

@@ -353,7 +353,7 @@ test('restricted plugin roots expose only the reviewed finite capability surface
     clipboard: ['initCopyPaster', 'injectCopyPaster', 'isCopyPasteEvent', 'setData', 'waitPasteData'],
     config: ['get', 'has', 'onGot', 'onceGot', 'set', 'setConfig'],
     event: ['emit', 'off', 'on', 'prependListener'],
-    hotkey: ['activate', 'bind', 'callBacks', 'unbind'],
+    hotkey: ['acquireBinding', 'activate', 'bind', 'callBacks', 'unbind'],
     logger: ['debug', 'error', 'info', 'log', 'warn'],
     materials: [
       'buildComponentMetasMap',
@@ -385,6 +385,9 @@ test('restricted plugin roots expose only the reviewed finite capability surface
   }
 
   const hotkeyCallback = () => {}
+  const hotkeyLease = context.hotkey.acquireBinding('mod+shift+l', hotkeyCallback)
+  assert.equal(typeof hotkeyLease, 'function')
+  hotkeyLease()
   const chainedHotkey = context.hotkey.bind('mod+shift+e', hotkeyCallback)
   assert.strictEqual(chainedHotkey, context.hotkey, 'Hotkey chaining must retain the finite facade')
   assertRuntimePropertyIsPrivate(chainedHotkey, 'mount')

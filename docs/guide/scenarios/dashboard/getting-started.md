@@ -6,7 +6,7 @@
 
 确保你的开发环境满足以下要求：
 
-- [Node.js](https://nodejs.org/) 18.12.0 及以上版本。
+- [Node.js](https://nodejs.org/) 18.20.8 及以上版本。
 - [pnpm](https://pnpm.io/) 9.12.2 及以上版本。
 
 ::: info 提示
@@ -17,7 +17,7 @@
 
 ```bash
 # 安装核心依赖
-pnpm add @easy-editor/core @easy-editor/plugin-dashboard @easy-editor/react-renderer @easy-editor/react-renderer-dashboard
+pnpm add @easy-editor/core @easy-editor/plugin-dashboard @easy-editor/renderer-core @easy-editor/react-renderer @easy-editor/react-renderer-dashboard
 
 # 安装运行时依赖
 pnpm add mobx mobx-react
@@ -49,6 +49,7 @@ import {
   validateProjectSchema,
 } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
+import { legacyTrustedExpressionEvaluator } from '@easy-editor/renderer-core'
 import { Group, componentMetaMap } from './materials'
 import { engine } from './runtime'
 import { setterMap } from './setters'
@@ -91,7 +92,10 @@ export async function bootstrapEditor(schema: ProjectSchema): Promise<void> {
 
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
     engine.setters.registerSetter(setterMap)
-    await engine.init({ designMode: 'design' })
+    await engine.init({
+      designMode: 'design',
+      appHelper: { expressionEvaluator: legacyTrustedExpressionEvaluator },
+    })
 
     releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
       simulator.set('deviceStyle', {
@@ -136,7 +140,7 @@ if (import.meta.hot) {
 }
 ```
 
-不要永久缓存已经 settle 的销毁 Promise。`EngineInstance` 自身会合并同一轮并发 `destroy()`；直接返回当前销毁调用，才能保留清理失败后的重试语义。
+不要永久缓存已经 settle 的销毁 Promise，也不要并发发起生命周期调用；当前操作进行中时，引擎会立即抛出 `LifecycleReentrancyError`。直接返回当前销毁调用，才能保留清理失败后的重试语义。
 
 ::: warning 兼容边界
 `legacyTrusted` 只用于兼容当前 Dashboard 插件和旧 UMD 资源，不提供沙箱隔离。Agent 或其他不可信运行时应通过 Worker/iframe capability 边界访问宿主，不应获得 `engine.project` 或 Node 引用。
@@ -167,6 +171,7 @@ export const DesignRenderer = () => {
 import { components } from '@/editor/materials'
 import { getPageSchemaFromLocalStorage } from '@/lib/schema'
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
+import { legacyTrustedExpressionEvaluator } from '@easy-editor/renderer-core'
 
 const Preview = () => {
   // 获取页面 Schema
@@ -178,6 +183,7 @@ const Preview = () => {
         <Renderer
           schema={schema}
           components={components}
+          expressionEvaluator={legacyTrustedExpressionEvaluator}
           viewport={{ width: 1920, height: 1080 }}
         />
       )}

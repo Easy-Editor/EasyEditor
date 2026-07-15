@@ -491,6 +491,47 @@ test('dispose retries only the cleanup steps that previously failed', async t =>
   })
 })
 
+test('dispose detaches renderer observers before React unmount and retries only failed detachments', () => {
+  const document = new FakeDocument()
+  const controller = createRootController([{}])
+  const renderer = createRenderer({ controller, document, host: createHost() })
+  const trace = []
+  let retryableCalls = 0
+
+  renderer.run()
+  const root = controller.calls[0].root
+  const originalUnmount = root.unmount.bind(root)
+  root.unmount = () => {
+    trace.push('root:unmount')
+    originalUnmount()
+  }
+  renderer.disposeFunctions.push(
+    () => {
+      trace.push('observer:stable')
+    },
+    () => {
+      retryableCalls += 1
+      trace.push(`observer:retry:${retryableCalls}`)
+      if (retryableCalls === 1) throw new Error('transient observer detachment failure')
+    },
+  )
+
+  assert.match(captureFailure(() => renderer.dispose()).message, /disposal completed with errors/)
+  assert.deepEqual(trace, ['observer:retry:1', 'observer:stable', 'root:unmount'])
+
+  renderer.dispose()
+  assert.deepEqual(trace, ['observer:retry:1', 'observer:stable', 'root:unmount', 'observer:retry:2'])
+  assert.equal(root.unmountCalls, 1)
+})
+
+test('observable renderer state is reset inside a MobX action boundary', () => {
+  assert.doesNotMatch(rendererSource, /\buntracked\s*\(/)
+  assert.match(
+    rendererSource,
+    /runInAction\s*\(\s*\(\)\s*=>\s*{[\s\S]*?this\._documentInstances\s*=\s*failedDocumentInstances/,
+  )
+})
+
 test('mount retries retained renderer cleanup before accepting a new host', () => {
   const unmountFailure = new Error('unmount failed')
   const document = new FakeDocument()

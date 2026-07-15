@@ -15,7 +15,7 @@ export const MarqueeSelection: React.FC<MarqueeSelectionProps> = observer(({ hos
   const { designer } = host
   const [isSelecting, setIsSelecting] = useState(false)
   const [rect, setRect] = useState<MarqueeRect | null>(null)
-  const marqueeSelection = designer.marqueeSelection
+  const marqueeSelection = host.isDisposed ? null : designer.marqueeSelection
 
   const handleMarqueeStart = useCallback((evt: MarqueeEvent) => {
     setIsSelecting(true)
@@ -77,6 +77,7 @@ export const MarqueeSelection: React.FC<MarqueeSelectionProps> = observer(({ hos
 
   // 绑定框选引擎事件
   useEffect(() => {
+    if (!marqueeSelection) return
     // 通过 DOM 查询获取视口元素
     const viewportElement = document.querySelector('.lc-simulator-canvas-viewport') as HTMLElement
     if (!viewportElement) return
@@ -94,7 +95,7 @@ export const MarqueeSelection: React.FC<MarqueeSelectionProps> = observer(({ hos
     }
   }, [host, marqueeSelection, isClickOnNode, handleMarqueeStart, handleMarquee, handleMarqueeEnd])
 
-  if (!isSelecting || !rect) {
+  if (!marqueeSelection || !isSelecting || !rect) {
     return null
   }
 

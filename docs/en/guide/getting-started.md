@@ -9,7 +9,7 @@ This guide will help you quickly get started with EasyEditor, a pluggable cross-
 
 ## Environment Requirements
 
-- [Node.js](https://nodejs.org/) version 18.12.0 or higher.
+- [Node.js](https://nodejs.org/) version 18.20.8 or higher.
 - [pnpm](https://pnpm.io/) version 9.12.2 or higher.
 
 ::: info Note
@@ -94,6 +94,7 @@ import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import DataSourcePlugin from '@easy-editor/plugin-datasource'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import { legacyTrustedExpressionEvaluator } from '@easy-editor/renderer-core'
 import { Group, componentMetaMap } from './materials'
 import { setterMap } from './setters'
 
@@ -113,19 +114,24 @@ await engine.plugins.registerPlugins([
       },
     },
   }),
-  DataSourcePlugin(),
+  DataSourcePlugin({ expressionEvaluator: legacyTrustedExpressionEvaluator }),
   HotkeyPlugin(),
 ])
 
 engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 engine.setters.registerSetter(setterMap)
-await engine.init({ designMode: 'design' })
+await engine.init({
+  designMode: 'design',
+  appHelper: { expressionEvaluator: legacyTrustedExpressionEvaluator },
+})
 
 export const project = engine.project
 export const designer = engine.designer
 ```
 
 Each instance owns its Project, materials, setters, plugins, and events. Do not mix these objects with the default facade exported from the `@easy-editor/core` root entry.
+
+The renderer and DataSource plugin are independent execution boundaries, so the example injects the same trusted evaluator into both. A restricted host should use a deny or isolated evaluator rather than relying on omission as a compatibility fallback.
 
 ### 2. Validate and load a project
 

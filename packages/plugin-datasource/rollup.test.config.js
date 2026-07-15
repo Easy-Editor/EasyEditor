@@ -4,7 +4,7 @@ import nodeResolve from '@rollup/plugin-node-resolve'
 import cleanup from 'rollup-plugin-cleanup'
 
 export default {
-  input: 'src/index.ts',
+  input: 'test-runtime-entry.ts',
   output: {
     file: '.test-dist/index.js',
     format: 'es',

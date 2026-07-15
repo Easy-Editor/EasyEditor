@@ -24,6 +24,7 @@ interface HotkeyPluginOptions {
 
 const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = (options = {} as HotkeyPluginOptions) => {
   const { config = {} } = options
+  type HotkeyHandler = (event: KeyboardEvent) => unknown
 
   return {
     name: 'HotkeyPlugin',
@@ -35,6 +36,20 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = (options = {} as Hotkey
         throw new Error('HotkeyPlugin requires an engine-owned clipboard service')
       }
       const { designer } = project
+
+      const ownBinding = (keys: string[], handler: HotkeyHandler) => {
+        const release = hotkey.acquireBinding(keys, handler)
+        try {
+          ctx.onDispose(release)
+        } catch (error) {
+          try {
+            release()
+          } catch (cleanupError) {
+            throw new AggregateError([error, cleanupError], 'Hotkey binding ownership registration failed to roll back')
+          }
+          throw error
+        }
+      }
 
       // Define the default handler functions
       const handlers = {
@@ -181,7 +196,7 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = (options = {} as Hotkey
 
           selection.clear()
         },
-      }
+      } satisfies Record<keyof typeof HOTKEY_MAP, HotkeyHandler>
 
       // 根据 config 处理 hotkey 的绑定
       Object.entries(HOTKEY_MAP).forEach(([action, defaultKeys]) => {
@@ -207,8 +222,9 @@ const HotkeyPlugin: PluginCreator<HotkeyPluginOptions> = (options = {} as Hotkey
           return
         }
 
-        if (keysToUse.length > 0 && handlers[actionKey]) {
-          hotkey.bind(keysToUse, handlers[actionKey])
+        const handler = handlers[actionKey]
+        if (keysToUse.length > 0) {
+          ownBinding([...keysToUse], handler)
         }
       })
     },

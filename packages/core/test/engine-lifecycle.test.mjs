@@ -149,13 +149,14 @@ test('init and destroy are idempotent and balance owned browser listeners', asyn
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow })
   const baseline = hostWindow.document.listenerCount()
 
-  await engine.init()
+  await engine.init({ settledInitOption: 'first' })
   const mounted = hostWindow.document.listenerCount()
   assert.equal(engine.lifecycleState, 'ready')
   assert.ok(mounted > baseline, 'init must mount the engine browser adapter')
 
-  await engine.init()
+  await engine.init({ settledInitOption: 'second-must-not-apply' })
   assert.equal(hostWindow.document.listenerCount(), mounted, 'second init must not duplicate listeners')
+  assert.equal(engine.config.get('settledInitOption'), 'first', 'ready-state init must be a no-op')
 
   await engine.destroy()
   assert.equal(hostWindow.document.listenerCount(), baseline)
@@ -349,6 +350,70 @@ test('public document removal cannot select the notification-free teardown path'
   assert.equal(engine.materials.getUsageCount('Page'), 0)
   assert.equal(usageEvents.length, 1)
   assert.equal(usageEvents[0].componentName, 'Page')
+})
+
+test('same-direction engine lifecycle calls reject instead of joining an in-flight Promise', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  let releaseInit
+  let signalInitStarted
+  const initStarted = new Promise(resolve => {
+    signalInitStarted = resolve
+  })
+  const initReleased = new Promise(resolve => {
+    releaseInit = resolve
+  })
+  let releaseDestroy
+  let signalDestroyStarted
+  const destroyStarted = new Promise(resolve => {
+    signalDestroyStarted = resolve
+  })
+  const destroyReleased = new Promise(resolve => {
+    releaseDestroy = resolve
+  })
+
+  await engine.plugins.register({
+    name: 'same-direction-lifecycle-blocker',
+    async init() {
+      signalInitStarted()
+      await initReleased
+    },
+    async destroy() {
+      signalDestroyStarted()
+      await destroyReleased
+    },
+  })
+
+  const initializing = engine.init()
+  await initStarted
+  try {
+    const secondInit = await settleWithin(
+      Promise.resolve().then(() => engine.init()),
+      25,
+    )
+    assert.equal(secondInit.status, 'rejected')
+    assert.equal(hasNestedErrorName(secondInit.error, 'LifecycleReentrancyError'), true)
+    assert.equal(engine.lifecycleState, 'initializing')
+  } finally {
+    releaseInit()
+  }
+  await initializing
+
+  const destroying = engine.destroy()
+  await destroyStarted
+  try {
+    const secondDestroy = await settleWithin(
+      Promise.resolve().then(() => engine.destroy()),
+      25,
+    )
+    assert.equal(secondDestroy.status, 'rejected')
+    assert.equal(hasNestedErrorName(secondDestroy.error, 'LifecycleReentrancyError'), true)
+    assert.equal(engine.lifecycleState, 'disposing')
+  } finally {
+    releaseDestroy()
+  }
+  await destroying
+  assert.equal(engine.lifecycleState, 'disposed')
 })
 
 test('external destroy conflicts with an in-flight async plugin init until an explicit retry', async () => {
@@ -696,6 +761,79 @@ test('engine destroy owns simulator reactions and renderer disposal', async () =
   assert.equal(rendererDisposals, 1)
 })
 
+test('engine revokes mutation authority before UI teardown and settles renderer dependencies in reverse order', async () => {
+  const core = await loadCore()
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  const trace = []
+  let pluginDestroyCalls = 0
+
+  await engine.plugins.register({
+    name: 'teardown-order-probe',
+    init() {},
+    destroy() {
+      pluginDestroyCalls += 1
+      trace.push(`plugin:${pluginDestroyCalls}`)
+      if (pluginDestroyCalls === 1) throw new Error('transient plugin cleanup failure')
+    },
+  })
+  await engine.init()
+
+  const designerEventBus = engine.designer.dragon.emitter
+  assert.ok(designerEventBus.listenerCount() > 0)
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  assert.equal(simulator.isDisposed, false)
+  engine.project.mountSimulator(simulator)
+  const mountedInstance = {}
+  simulator.setInstance('teardown-document', 'teardown-node', [mountedInstance])
+  let rendererDisposals = 0
+  simulator.connect(
+    {
+      isSimulatorRenderer: true,
+      dispose() {
+        rendererDisposals += 1
+        trace.push('renderer')
+        assert.equal(engine.lifecycleState, 'disposing')
+        assert.ok(designerEventBus.listenerCount() > 0, 'renderer teardown still depends on a live Designer')
+        simulator.settleInstance('teardown-document', 'teardown-node', null)
+        assert.equal(simulator.getInstance('teardown-document', 'teardown-node'), undefined)
+      },
+    },
+    () => simulator.get('probe'),
+  )
+
+  const firstFailure = await captureFailure(() => engine.destroy())
+  assert.equal(firstFailure.name, 'AggregateError')
+  assert.equal(engine.lifecycleState, 'failed')
+  assert.deepEqual(trace, ['renderer', 'plugin:1'])
+  assert.equal(rendererDisposals, 1)
+
+  await engine.destroy()
+  assert.equal(engine.lifecycleState, 'disposed')
+  assert.deepEqual(trace, ['renderer', 'plugin:1', 'plugin:2'])
+  assert.equal(rendererDisposals, 1)
+  assert.equal(simulator.isDisposed, true)
+  assert.throws(
+    () => simulator.settleInstance('teardown-document', 'teardown-node', null),
+    /simulator generation is disposed/,
+  )
+})
+
+test('simulator exposes the instance-owned appHelper and observes configuration replacement', async t => {
+  const core = await loadCore()
+  const firstAppHelper = { expressionEvaluator: { policy: 'first' } }
+  const secondAppHelper = { expressionEvaluator: { policy: 'second' } }
+  const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  t.after(() => engine.destroy())
+
+  await engine.init({ appHelper: firstAppHelper })
+  const simulator = new core.Simulator(engine.project, engine.designer)
+  engine.project.mountSimulator(simulator)
+
+  assert.strictEqual(simulator.appHelper, firstAppHelper)
+  engine.config.set('appHelper', secondAppHelper)
+  assert.strictEqual(simulator.appHelper, secondAppHelper)
+})
+
 test('engine destroy owns Scroller animation frames and seals the disposed generation', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
@@ -808,6 +946,9 @@ test('project documents still purge when simulator disposal fails', async () => 
   const document = engine.project.currentDocument
   const simulator = new core.Simulator(engine.project, engine.designer)
   engine.project.mountSimulator(simulator)
+  const mountedInstance = {}
+  simulator.setInstance('retry-document', 'retry-node', [mountedInstance])
+  const registeredInstance = simulator.getInstance('retry-document', 'retry-node')
   let rendererDisposals = 0
   simulator.connect(
     {
@@ -815,6 +956,7 @@ test('project documents still purge when simulator disposal fails', async () => 
       dispose() {
         rendererDisposals += 1
         if (rendererDisposals === 1) throw new Error('renderer teardown failed')
+        simulator.settleInstance('retry-document', 'retry-node', null)
       },
     },
     () => simulator.get('probe'),
@@ -826,10 +968,14 @@ test('project documents still purge when simulator disposal fails', async () => 
   assert.equal(engine.project.documents.length, 0)
   assert.equal(document.root, null)
   assert.equal(rendererDisposals, 1)
+  assert.equal(simulator.isDisposed, false)
+  assert.strictEqual(simulator.getInstance('retry-document', 'retry-node'), registeredInstance)
 
   await engine.destroy()
   assert.equal(engine.lifecycleState, 'disposed')
   assert.equal(rendererDisposals, 2)
+  assert.equal(simulator.isDisposed, true)
+  assert.equal(simulator.getInstance('retry-document', 'retry-node'), undefined)
 })
 
 test('destroy reports failed cleanup truthfully and retries it on the next destroy', async () => {

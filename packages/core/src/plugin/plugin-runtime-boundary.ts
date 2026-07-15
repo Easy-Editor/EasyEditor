@@ -11,6 +11,7 @@ interface PluginRuntimeOperations {
   markExtended(): void
   prepareExtension(pluginExtend: PluginExtend): Promise<boolean>
   publishContext(): void
+  resetExtended(): void
   setDisabled(flag?: boolean): void
 }
 
@@ -46,6 +47,8 @@ export const preparePluginRuntimeExtension = (runtime: PluginRuntime, pluginExte
 export const markPluginRuntimeExtended = (runtime: PluginRuntime): void => getOperations(runtime).markExtended()
 
 export const publishPluginRuntimeContext = (runtime: PluginRuntime): void => getOperations(runtime).publishContext()
+
+export const resetPluginRuntimeExtended = (runtime: PluginRuntime): void => getOperations(runtime).resetExtended()
 
 export const setPluginRuntimeDisabled = (runtime: PluginRuntime, flag = true): void =>
   getOperations(runtime).setDisabled(flag)

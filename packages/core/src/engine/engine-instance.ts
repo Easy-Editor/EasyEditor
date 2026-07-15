@@ -637,9 +637,12 @@ class EngineInstanceImpl implements EngineInstance {
     const initScope = this.#initScope
     await cleanup(() => initScope?.dispose())
     this.#initScope = undefined
+    // The mounted renderer depends on both plugin-provided helpers and the
+    // Designer. Settle that UI generation before revoking either dependency.
+    await cleanup(() => runInternalLifecycleTeardown<['simulator'], Promise<void>>(this.project, 'simulator'))
     await cleanup(() => runInternalLifecycleTeardown<['destroy'], Promise<void>>(this.#innerPlugins, 'destroy'))
     await cleanup(() => runInternalLifecycleTeardown(this.designer))
-    await cleanup(() => runInternalLifecycleTeardown<[], Promise<void>>(this.project))
+    await cleanup(() => runInternalLifecycleTeardown<['model'], Promise<void>>(this.project, 'model'))
     if (!initScope) {
       await cleanup(() => this.#disposeRemoteAdapter())
     }

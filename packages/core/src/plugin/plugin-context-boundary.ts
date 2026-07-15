@@ -46,6 +46,7 @@ const blockedCapabilityProperties = new Set<PropertyKey>([
 ])
 
 const callbackArgumentIndexesByMethod = new Map<PropertyKey, readonly number[]>([
+  ['acquireBinding', [1]],
   ['addListener', [1]],
   ['bind', [1]],
   ['every', [0]],

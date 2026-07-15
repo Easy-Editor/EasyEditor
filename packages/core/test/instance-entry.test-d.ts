@@ -3,6 +3,7 @@ import { createEngine as legacyCreateEngine } from '@easy-editor/core'
 import type * as instanceEntry from '@easy-editor/core/instance'
 import {
   CURRENT_PROJECT_SCHEMA_VERSION,
+  type Disposable,
   type EngineInstance,
   type EngineInstanceOptions,
   type EngineLifecycleState,
@@ -42,6 +43,10 @@ pluginContext.config.get('designMode')
 pluginContext.project.export()
 const pluginHotkey = pluginContext.hotkey.bind('mod+s', () => {})
 pluginHotkey.activate(true)
+const pluginHotkeyLease: Disposable = pluginContext.hotkey.acquireBinding('mod+shift+s', () => {})
+pluginHotkeyLease()
+// @ts-expect-error a binding lease is disposal authority, not the Hotkey capability
+pluginHotkeyLease.activate(true)
 const pluginComponentMeta = pluginContext.materials.getComponentMeta('Text')
 pluginComponentMeta.getMetadata()
 // @ts-expect-error the policy-independent plugin contract does not expose raw Config internals

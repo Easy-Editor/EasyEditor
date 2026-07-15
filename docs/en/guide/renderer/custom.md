@@ -50,17 +50,21 @@ These factory functions work together to build a complete rendering system:
 
 ```tsx
 import {
-  adapter,
+  type RendererAdapter,
+  createRendererAdapter,
   rendererFactory,
   componentRendererFactory,
   pageRendererFactory,
   baseRendererFactory
 } from '@easy-editor/react-renderer'
 
+// Each renderer composition owns an independent adapter instance
+const rendererAdapter = createRendererAdapter()
+
 // Custom base renderer factory
-export const customBaseRendererFactory = () => {
+export const customBaseRendererFactory = (rendererAdapter: RendererAdapter) => {
   // Get original base renderer
-  const OriginBase = baseRendererFactory();
+  const OriginBase = baseRendererFactory(rendererAdapter);
 
   // Return extended base renderer class
   return class BaseRenderer extends OriginBase {
@@ -77,16 +81,14 @@ export const customBaseRendererFactory = () => {
 }
 
 // Register to adapter
-adapter.setBaseRenderer(customBaseRendererFactory());
+rendererAdapter.setBaseRenderer(customBaseRendererFactory(rendererAdapter));
 
 // Register page renderer and component renderer
-adapter.setRenderers({
-  PageRenderer: pageRendererFactory(),  // Use default page renderer
-  ComponentRenderer: componentRendererFactory(),  // Use default component renderer
-});
+rendererAdapter.setPageRenderer(pageRendererFactory(rendererAdapter));
+rendererAdapter.setComponentRenderer(componentRendererFactory(rendererAdapter));
 
 // Create final renderer
-export const CustomRenderer = rendererFactory();
+export const CustomRenderer = rendererFactory(rendererAdapter);
 ```
 
 ### Relationship Between Base Renderer, Page Renderer, and Component Renderer
@@ -101,9 +103,9 @@ Page Renderer (PageRenderer) and Component Renderer (ComponentRenderer) both inh
 
 ```tsx
 // Page renderer factory
-export function pageRendererFactory(): BaseRenderComponent {
+export function pageRendererFactory(rendererAdapter: RendererAdapter): BaseRenderComponent {
   // Get base renderer
-  const BaseRenderer = baseRendererFactory()
+  const BaseRenderer = baseRendererFactory(rendererAdapter)
 
   // Extend base renderer, add page-specific logic
   return class PageRenderer extends BaseRenderer {
@@ -134,9 +136,9 @@ export function pageRendererFactory(): BaseRenderComponent {
 }
 
 // Component renderer factory
-export function componentRendererFactory(): BaseRenderComponent {
+export function componentRendererFactory(rendererAdapter: RendererAdapter): BaseRenderComponent {
   // Get base renderer
-  const BaseRenderer = baseRendererFactory()
+  const BaseRenderer = baseRendererFactory(rendererAdapter)
 
   // Extend base renderer, add component-specific logic
   return class CompRenderer extends BaseRenderer {
@@ -173,9 +175,9 @@ export function componentRendererFactory(): BaseRenderComponent {
 The main renderer is created through rendererFactory and is responsible for coordinating different types of renderers:
 
 ```tsx
-export function rendererFactory(): RenderComponent {
+export function rendererFactory(rendererAdapter: RendererAdapter): RenderComponent {
   // Get registered renderers
-  const RENDERER_COMPS = adapter.getRenderers()
+  const RENDERER_COMPS = rendererAdapter.getRenderers()
 
   // Return renderer class
   return class Renderer extends Component<RendererProps> {
@@ -389,13 +391,22 @@ The following is a dashboard renderer implementation case, showing how to extend
 
 ```tsx
 import { useRef } from 'react'
-import { adapter, componentRendererFactory, pageRendererFactory, rendererFactory } from '@easy-editor/react-renderer'
+import {
+  type RendererAdapter,
+  baseRendererFactory,
+  componentRendererFactory,
+  createRendererAdapter,
+  pageRendererFactory,
+  rendererFactory,
+} from '@easy-editor/react-renderer'
 import { useResizeObserver } from '../hooks/useResizeObserver'
 
+const rendererAdapter = createRendererAdapter()
+
 // 1. Custom dashboard base renderer
-const dashboardBaseRendererFactory = () => {
+const dashboardBaseRendererFactory = (rendererAdapter: RendererAdapter) => {
   // Get original base renderer
-  const BaseRenderer = baseRendererFactory();
+  const BaseRenderer = baseRendererFactory(rendererAdapter);
 
   return class DashboardBaseRenderer extends BaseRenderer {
     // Custom component higher-order component chain, add dashboard-specific wrappers
@@ -411,14 +422,12 @@ const dashboardBaseRendererFactory = () => {
 }
 
 // 2. Register dashboard renderer
-adapter.setBaseRenderer(dashboardBaseRendererFactory());
-adapter.setRenderers({
-  PageRenderer: pageRendererFactory(),
-  ComponentRenderer: componentRendererFactory(),
-});
+rendererAdapter.setBaseRenderer(dashboardBaseRendererFactory(rendererAdapter));
+rendererAdapter.setPageRenderer(pageRendererFactory(rendererAdapter));
+rendererAdapter.setComponentRenderer(componentRendererFactory(rendererAdapter));
 
 // 3. Create dashboard renderer
-const DashboardRenderer = rendererFactory();
+const DashboardRenderer = rendererFactory(rendererAdapter);
 
 // 4. Wrap dashboard renderer, handle scaling and other special logic
 const DashboardRendererWrapper = (props) => {

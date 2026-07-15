@@ -8,6 +8,7 @@ import {
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { defaultRootSchema } from './const'
+import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import { engine } from './runtime'
@@ -92,7 +93,9 @@ const bootstrapEditor = async () => {
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
     engine.setters.registerSetter(setterMap)
 
-    await engine.init()
+    await engine.init({
+      appHelper: { expressionEvaluator: dashboardExpressionEvaluator },
+    })
     releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
       simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
     })

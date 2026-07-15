@@ -44,6 +44,44 @@ export const isMobxExtendProperty = (value: any): value is MobxExtendDescriptor 
   return value && typeof value === 'object' && value[MOBX_EXTEND_SYMBOL] === true
 }
 
+const assertOptionalFunction = (value: unknown, field: string, type: MobxExtendType): void => {
+  if (value !== undefined && typeof value !== 'function') {
+    throw new TypeError(`MobX ${type} extension ${field} must be a function`)
+  }
+}
+
+export function assertMobxExtendConfig(config: unknown): asserts config is MobxConfig {
+  if (!config || typeof config !== 'object') {
+    throw new TypeError('MobX prototype extension config must be an object')
+  }
+
+  const candidate = config as Record<string, unknown>
+  switch (candidate.type) {
+    case MobxExtendType.OBSERVABLE:
+    case MobxExtendType.OBSERVABLE_REF:
+    case MobxExtendType.OBSERVABLE_SHALLOW:
+      assertOptionalFunction(candidate.getter, 'getter', candidate.type)
+      assertOptionalFunction(candidate.setter, 'setter', candidate.type)
+      return
+    case MobxExtendType.COMPUTED:
+      if (typeof candidate.getter !== 'function') {
+        throw new TypeError('MobX computed extension getter must be a function')
+      }
+      assertOptionalFunction(candidate.setter, 'setter', candidate.type)
+      return
+    case MobxExtendType.ACTION:
+      if (typeof candidate.method !== 'function') {
+        throw new TypeError('MobX action extension method must be a function')
+      }
+      if (candidate.name !== undefined && typeof candidate.name !== 'string') {
+        throw new TypeError('MobX action extension name must be a string')
+      }
+      return
+    default:
+      throw new TypeError(`Unknown MobX prototype extension type: ${String(candidate.type)}`)
+  }
+}
+
 const createMobxDescriptor = <T extends MobxConfig>(config: T): MobxExtendDescriptor => ({
   [MOBX_EXTEND_SYMBOL]: true,
   config,
@@ -252,6 +290,7 @@ const handleActionMethod = (prototype: any, propertyName: string, config: Action
  * 为类原型添加 Mobx 扩展属性
  */
 export const addMobxExtendProperty = (prototype: any, propertyName: string, config: MobxConfig) => {
+  assertMobxExtendConfig(config)
   switch (config.type) {
     case MobxExtendType.OBSERVABLE:
     case MobxExtendType.OBSERVABLE_REF:
@@ -265,7 +304,7 @@ export const addMobxExtendProperty = (prototype: any, propertyName: string, conf
       handleActionMethod(prototype, propertyName, config as ActionConfig)
       break
     default:
-      console.warn(`Unknown Mobx extend type: ${(config as any).type}`)
+      throw new TypeError(`Unknown MobX prototype extension type: ${(config as any).type}`)
   }
 }
 

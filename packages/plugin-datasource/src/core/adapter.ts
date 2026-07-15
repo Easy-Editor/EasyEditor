@@ -1,4 +1,3 @@
-import { legacyTrustedExpressionEvaluator } from '../expression-evaluator'
 import { defaultDataHandler, defaultWillFetch } from '../helpers'
 import type {
   DataSourceMap,
@@ -16,9 +15,7 @@ const adapt2Runtime = (
   extraConfig: ExtraConfig,
 ) => {
   const { list: interpretConfigList, dataHandler: interpretDataHandler } = dataSource
-  const expressionEvaluator = Object.hasOwn(extraConfig, 'expressionEvaluator')
-    ? extraConfig.expressionEvaluator
-    : legacyTrustedExpressionEvaluator
+  const expressionEvaluator = extraConfig.expressionEvaluator
   const dataHandler: (dataMap?: DataSourceMap) => void = interpretDataHandler
     ? getRuntimeJsValue(interpretDataHandler, context, expressionEvaluator)
     : undefined

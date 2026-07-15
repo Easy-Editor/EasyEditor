@@ -99,6 +99,7 @@ export class PluginRuntime {
       markExtended: () => this.#markExtendedInternal(),
       prepareExtension: pluginExtend => this.#prepareExtensionInternal(pluginExtend),
       publishContext: () => this.#publishContextInternal(),
+      resetExtended: () => this.#resetExtendedInternal(),
       setDisabled: flag => this.#setDisabledInternal(flag),
     })
     Object.defineProperty(this, 'config', {
@@ -302,6 +303,10 @@ export class PluginRuntime {
   #markExtendedInternal(): void {
     assertLifecycleMutationAllowed(this, 'pluginRuntime.markExtended')
     this.#extended = true
+  }
+
+  #resetExtendedInternal(): void {
+    this.#extended = false
   }
 
   async extend(pluginExtend: PluginExtend): Promise<void> {

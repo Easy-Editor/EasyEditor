@@ -85,7 +85,7 @@ export const createRestrictedPluginContextCapabilities = (
     methods: ['emit', 'off', 'on', 'prependListener'],
   }),
   hotkey: createFiniteCapabilityFacade<Hotkey, PluginHotkeyCapability>(sources.hotkey, {
-    methods: ['activate', 'bind', 'unbind'],
+    methods: ['acquireBinding', 'activate', 'bind', 'unbind'],
     properties: ['callBacks'],
   }),
   logger: createFiniteCapabilityFacade<Logger, PluginLoggerCapability>(sources.logger, {

@@ -111,11 +111,13 @@ export class SetterManagerClass {
     return this.remoteSetterPackages.get(packageName)
   }
 
-  dispose(): void {
+  dispose(releaseEngineRegistrations = true): void {
     // Setters has no per-entry unregister API. The owning EngineInstance clears
     // its complete setter registry immediately after the adapter is disposed.
     this.packageOperations.invalidateAll()
-    for (const packageName of this.registeredResources) this.services.registry.unload('setter', packageName)
+    if (releaseEngineRegistrations) {
+      for (const packageName of this.registeredResources) this.services.registry.unload('setter', packageName)
+    }
     this.registeredResources.clear()
     this.remoteSetterPackages.clear()
   }

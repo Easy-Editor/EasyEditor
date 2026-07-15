@@ -53,8 +53,12 @@ test('a tampered registered descriptor is rejected before an identical legacy ex
   const core = await loadCore()
   const legacy = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
   const retry = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
+  const lease = { descriptor: undefined }
   const registeredIntegrityMarker = makeIntegrityMarker(true)
   t.after(async () => {
+    if (lease.descriptor) {
+      Object.defineProperty(core.Node.prototype, 'integrityMarker', lease.descriptor)
+    }
     await legacy.destroy()
     await retry.destroy()
   })
@@ -72,6 +76,7 @@ test('a tampered registered descriptor is rejected before an identical legacy ex
   await legacy.init()
 
   const document = legacy.project.createDocument({ componentName: 'Page', id: 'root' })
+  lease.descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document.root), 'integrityMarker')
   Object.defineProperty(Object.getPrototypeOf(document.root), 'integrityMarker', {
     configurable: true,
     value: makeIntegrityMarker(false),

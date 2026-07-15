@@ -4,7 +4,7 @@
 
 ## 环境准备
 
-- [Node.js](https://nodejs.org/) 18.12.0 及以上版本。
+- [Node.js](https://nodejs.org/) 18.20.8 及以上版本。
 - [pnpm](https://pnpm.io/) 9.12.2 及以上版本。
 
 ::: info 提示
@@ -89,6 +89,7 @@ import { createEngine } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import DataSourcePlugin from '@easy-editor/plugin-datasource'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import { legacyTrustedExpressionEvaluator } from '@easy-editor/renderer-core'
 import { Group, componentMetaMap } from './materials'
 import { setterMap } from './setters'
 
@@ -108,19 +109,24 @@ await engine.plugins.registerPlugins([
       },
     },
   }),
-  DataSourcePlugin(),
+  DataSourcePlugin({ expressionEvaluator: legacyTrustedExpressionEvaluator }),
   HotkeyPlugin(),
 ])
 
 engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 engine.setters.registerSetter(setterMap)
-await engine.init({ designMode: 'design' })
+await engine.init({
+  designMode: 'design',
+  appHelper: { expressionEvaluator: legacyTrustedExpressionEvaluator },
+})
 
 export const project = engine.project
 export const designer = engine.designer
 ```
 
 一个实例拥有自己的 `project`、`materials`、`setters`、插件和事件。不要把这些对象与 `@easy-editor/core` 根入口的默认 facade 混用。
+
+渲染器与 DataSource 插件是两条独立执行边界；示例对二者显式注入同一个 trusted evaluator。受限宿主应改为 deny 或隔离 evaluator，而不是省略后期待兼容回退。
 
 ### 2. 校验并加载项目
 

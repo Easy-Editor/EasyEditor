@@ -10,10 +10,12 @@ import {
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import { defaultRootSchema } from './const'
+import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import type { RemotePackageLoadFailure, RemotePackageLoadResult } from './remote/remote-load-batch.js'
 import { engine, remoteResources } from './runtime'
+import { setterMap } from './setters'
 
 import './overrides.css'
 
@@ -70,6 +72,12 @@ const assertRequiredRemoteMaterialsLoaded = (result: RemotePackageLoadResult): v
     result.failures.map(failure => new Error(`Required remote material failed: ${formatRemoteFailure(failure)}`)),
     'Required remote materials from the project schema failed to load',
   )
+}
+
+const registerMissingLocalSetters = (): void => {
+  for (const [type, setter] of Object.entries(setterMap)) {
+    if (!engine.setters.getSetter(type)) engine.setters.registerSetter(type, setter)
+  }
 }
 
 const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMap) => {
@@ -159,7 +167,9 @@ const bootstrapDashboardEditor = async () => {
     ])
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
-    await engine.init()
+    await engine.init({
+      appHelper: { expressionEvaluator: dashboardExpressionEvaluator },
+    })
     releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
       simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
     })
@@ -167,6 +177,7 @@ const bootstrapDashboardEditor = async () => {
     const remoteResult = await remoteResources.loadAllRemoteResources()
     reportOptionalRemoteFailures('material metadata', remoteResult.materials)
     reportOptionalRemoteFailures('setter package', remoteResult.setters)
+    registerMissingLocalSetters()
 
     const projectSchema = await createInitialProjectSchema()
     engine.loadProject(projectSchema, true)

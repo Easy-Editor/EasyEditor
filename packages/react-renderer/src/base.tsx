@@ -28,7 +28,7 @@ import {
 } from '@easy-editor/renderer-core'
 import { forEach, isEmpty } from 'lodash-es'
 import { Component } from 'react'
-import { adapter } from './adapter'
+import { type RendererAdapter, createRendererAdapter } from './adapter'
 import { RendererContext } from './context'
 import { type ComponentConstruct, type ComponentHocInfo, compWrapper, leafWrapper } from './hoc'
 import type { BaseRendererComponent, BaseRendererContext } from './types'
@@ -87,8 +87,8 @@ export function getSchemaChildren(schema: NodeSchema | undefined) {
   return schema.children
 }
 
-export function baseRendererFactory(): BaseRendererComponent {
-  const { BaseRenderer: customBaseRenderer } = adapter.getRenderers()
+export function baseRendererFactory(rendererAdapter: RendererAdapter = createRendererAdapter()): BaseRendererComponent {
+  const { BaseRenderer: customBaseRenderer } = rendererAdapter.getRenderers()
 
   if (customBaseRenderer) {
     return customBaseRenderer as unknown as BaseRendererComponent

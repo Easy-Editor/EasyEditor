@@ -6,7 +6,10 @@ test('an active restricted engine blocks legacy process extension until it is de
   const core = await loadCore()
   const restricted = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
   const legacy = core.createEngine({ trustPolicy: 'legacyTrusted', hostWindow: null })
-  t.after(() => legacy.destroy())
+  t.after(async () => {
+    await restricted.destroy()
+    await legacy.destroy()
+  })
   let extended = false
   await legacy.plugins.register({
     name: 'late-extension',
@@ -40,4 +43,7 @@ test('an active restricted engine blocks legacy process extension until it is de
   await legacy.init()
   assert.equal(legacy.lifecycleState, 'ready')
   assert.equal(typeof core.Node.prototype.lateRegisteredMarker, 'function')
+
+  await legacy.destroy()
+  assert.equal(core.Node.prototype.lateRegisteredMarker, undefined)
 })

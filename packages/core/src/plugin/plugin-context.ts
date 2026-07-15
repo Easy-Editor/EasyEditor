@@ -48,6 +48,7 @@ export interface PluginEventCapability {
 }
 
 export interface PluginHotkeyCapability {
+  readonly acquireBinding: Hotkey['acquireBinding']
   readonly activate: Hotkey['activate']
   readonly bind: (...args: Parameters<Hotkey['bind']>) => PluginHotkeyCapability
   readonly callBacks: Hotkey['callBacks']

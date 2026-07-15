@@ -39,7 +39,7 @@ import {
   type PluginExtend,
   type PluginExtendClass,
   type PrototypeExtensionOperation,
-  applyPrototypeExtensionBatch,
+  acquirePrototypeExtensionBatch,
   assertProcessPrototypeExtensionsAllowed,
 } from './plugin-extend'
 import { installPluginManagerOperations } from './plugin-manager-boundary'
@@ -53,6 +53,7 @@ import {
   markPluginRuntimeExtended,
   preparePluginRuntimeExtension,
   publishPluginRuntimeContext,
+  resetPluginRuntimeExtended,
   setPluginRuntimeDisabled,
 } from './plugin-runtime-boundary'
 import { sequencify } from './sequencify'
@@ -150,6 +151,10 @@ export class Plugins {
   private destroyPromise: Promise<void> | undefined = undefined
 
   private extendPromise: Promise<void> | undefined = undefined
+
+  private prototypeExtensionOwner: object | undefined = undefined
+
+  private prototypeExtensionRelease: (() => void) | undefined = undefined
 
   private canonicalProxy: PluginManager | undefined = undefined
 
@@ -637,6 +642,16 @@ export class Plugins {
         errors.push(error)
       }
     }
+    if (this.prototypeExtensionRelease) {
+      try {
+        this.prototypeExtensionRelease()
+        this.prototypeExtensionRelease = undefined
+        this.prototypeExtensionOwner = undefined
+        this.plugins.forEach(plugin => resetPluginRuntimeExtended(plugin))
+      } catch (error) {
+        errors.push(error)
+      }
+    }
     this.initialized = false
     if (errors.length) {
       throw new AggregateError(errors, 'One or more plugins failed to destroy')
@@ -729,7 +744,12 @@ export class Plugins {
     }
     assertLifecycleMutationTicket(this, ticket, 'plugins.extend.commit')
     this.#assertManagerOperationCurrent(structuralRevision, 'plugins.extend.commit')
-    applyPrototypeExtensionBatch(operations)
+    if (operations.length > 0) {
+      const owner = this.prototypeExtensionOwner || {}
+      const release = acquirePrototypeExtensionBatch(operations, owner)
+      this.prototypeExtensionOwner = owner
+      this.prototypeExtensionRelease = release
+    }
     preparedPlugins.forEach(plugin => markPluginRuntimeExtended(plugin))
   }
 

@@ -66,7 +66,7 @@ created -> initializing -> ready -> disposing -> disposed
                          \-> failed
 ```
 
-- `init()` 和 `destroy()` 都返回 Promise。外部同类并发调用共享进行中的 Promise；`destroy()` 会等待初始化 settle 后再清理，`init()` 会等待销毁结束后再启动下一代。
+- `init()` 和 `destroy()` 都返回 Promise。任意生命周期操作进行中时，新的 `init()` / `destroy()` 会立即抛出 `LifecycleReentrancyError`；等待当前操作 settle 后再显式重试。`ready.init()` 与 `disposed.destroy()` 是 no-op。
 - `destroy()` 清理实例拥有的插件、监听器、热键、文档、物料、设置器和远程资源。
 - 销毁失败时状态进入 `failed`；再次调用 `destroy()` 会重试未完成的清理。
 - 不要直接调用 `engine.materials.dispose()`、`engine.setters.dispose()` 等子服务清理方法。引擎拥有的服务必须由 `engine.destroy()` 统一销毁。
@@ -74,7 +74,7 @@ created -> initializing -> ready -> disposing -> disposed
 
 ```ts
 export function destroyEditor(): Promise<void> {
-  // EngineInstance 会合并同一轮并发 destroy；不要永久缓存已完成的 Promise，
+  // 宿主应确保同一时刻只有一个生命周期操作；不要永久缓存已完成的 Promise，
   // 否则销毁失败后的重试或重新初始化后的清理会被旧 Promise 短路。
   return engine.destroy()
 }

@@ -1,9 +1,12 @@
 import { type BaseRendererProps, logger } from '@easy-editor/renderer-core'
+import { type RendererAdapter, createRendererAdapter } from './adapter'
 import { baseRendererFactory } from './base'
 import type { BaseRendererComponent } from './types'
 
-export function componentRendererFactory(): BaseRendererComponent {
-  const BaseRenderer = baseRendererFactory()
+export function componentRendererFactory(
+  rendererAdapter: RendererAdapter = createRendererAdapter(),
+): BaseRendererComponent {
+  const BaseRenderer = baseRendererFactory(rendererAdapter)
   return class CompRenderer extends BaseRenderer {
     static displayName = 'CompRenderer'
 

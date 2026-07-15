@@ -1,5 +1,7 @@
+import { dashboardExpressionEvaluator } from '@/editor/expression-policy'
 import { components } from '@/editor/materials'
 import { getPageInfoFromLocalStorage, getPageSchemaFromLocalStorage } from '@/lib/schema'
+import { resolveTrustPolicy, validateProjectSchema } from '@easy-editor/core/instance'
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 import { useEffect, useRef, useState } from 'react'
 
@@ -20,14 +22,19 @@ const Preview = () => {
       return
     }
 
-    setSchema(pageSchema?.componentsTree[0])
-    console.log(pageInfo, pageSchema)
+    const validatedSchema = validateProjectSchema(pageSchema, resolveTrustPolicy('legacyTrusted'))
+    setSchema(validatedSchema.componentsTree[0])
   }, [])
 
   return (
     <div className='h-full w-full'>
       {schema ? (
-        <Renderer schema={schema} components={components} viewport={{ width: 1920, height: 1080 }} />
+        <Renderer
+          schema={schema}
+          components={components}
+          expressionEvaluator={dashboardExpressionEvaluator}
+          viewport={{ width: 1920, height: 1080 }}
+        />
       ) : (
         <div className='flex h-full w-full items-center justify-center'>
           <div className='text-sm text-muted-foreground'>loading...</div>

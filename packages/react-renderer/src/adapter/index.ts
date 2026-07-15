@@ -7,12 +7,15 @@ export interface RendererModules {
   ComponentRenderer: BaseRendererComponent
 }
 
-class Adapter {
-  // @ts-ignore
-  renderers: RendererModules = {}
+export class RendererAdapter {
+  private renderers: Partial<RendererModules>
+
+  constructor(renderers: Partial<RendererModules> = {}) {
+    this.renderers = { ...renderers }
+  }
 
   setRenderers(renderers: RendererModules) {
-    this.renderers = renderers
+    this.renderers = { ...renderers }
   }
 
   setBaseRenderer(BaseRenderer: BaseRendererComponent) {
@@ -28,8 +31,10 @@ class Adapter {
   }
 
   getRenderers() {
-    return (this.renderers || {}) as unknown as Record<string, ComponentType<any>>
+    return Object.freeze({ ...this.renderers }) as Readonly<Record<string, ComponentType<any>>>
   }
 }
 
-export const adapter = new Adapter()
+/** Create one renderer module graph owned by one renderer composition. */
+export const createRendererAdapter = (renderers: Partial<RendererModules> = {}): RendererAdapter =>
+  new RendererAdapter(renderers)

@@ -40,6 +40,8 @@ export class DashboardRemoteResources implements RemoteAdapter {
   private readonly disposal: RetryableDisposal
   private readonly environment: RemoteEnvironment
   private readonly hostGlobals: OwnedGlobalBindings
+  private engine?: EngineInstance
+  private releaseEngineRegistrations = true
   private services?: DashboardRemoteServices
 
   constructor(options: DashboardRemoteResourcesOptions) {
@@ -50,16 +52,19 @@ export class DashboardRemoteResources implements RemoteAdapter {
     this.disposal = new RetryableDisposal([
       { name: 'scope', run: () => this.scope.dispose() },
       { name: 'hostGlobals', run: () => this.hostGlobals.dispose() },
-      { name: 'localLoader', run: () => this.localLoader?.dispose() },
-      { name: 'materialManager', run: () => this.materialManager?.dispose() },
-      { name: 'setterManager', run: () => this.setterManager?.dispose() },
+      { name: 'localLoader', run: () => this.localLoader?.dispose(this.releaseEngineRegistrations) },
+      { name: 'materialManager', run: () => this.materialManager?.dispose(this.releaseEngineRegistrations) },
+      { name: 'setterManager', run: () => this.setterManager?.dispose(this.releaseEngineRegistrations) },
       { name: 'materialLoader', run: () => this.materialLoader?.dispose() },
       { name: 'setterLoader', run: () => this.setterLoader?.dispose() },
       { name: 'scriptLoader', run: () => this.scriptLoader?.dispose() },
       { name: 'versionResolver', run: () => this.versionResolver?.dispose() },
       { name: 'cdnProviderManager', run: () => this.cdnProviderManager?.reset() },
-      { name: 'loadingState', run: () => this.services?.loadingState.clearAll() },
-      { name: 'registry', run: () => this.services?.registry.clearAll() },
+      {
+        name: 'loadingState',
+        run: () => this.releaseEngineRegistrations && this.services?.loadingState.clearAll(),
+      },
+      { name: 'registry', run: () => this.releaseEngineRegistrations && this.services?.registry.clearAll() },
     ])
   }
 
@@ -84,6 +89,7 @@ export class DashboardRemoteResources implements RemoteAdapter {
     this.materialManager = new MaterialManagerClass(services, this.materialLoader)
     this.setterManager = new SetterManagerClass(services, this.setterLoader)
     this.localLoader = new LocalMaterialLoaderClass(services)
+    this.engine = engine
     this.services = services
     this.bound = true
   }
@@ -107,6 +113,11 @@ export class DashboardRemoteResources implements RemoteAdapter {
 
   dispose(): Promise<void> {
     this.disposalStarted = true
+    // Initialization rollback runs while public mutation is still allowed and
+    // must unregister partial commits. Engine destruction already owns these
+    // registries; once disposal begins, the adapter only settles its own
+    // resources and lets the kernel clear engine-owned services internally.
+    this.releaseEngineRegistrations &&= !['disposing', 'disposed', 'failed'].includes(this.engine?.lifecycleState || '')
     return this.disposal.dispose()
   }
 

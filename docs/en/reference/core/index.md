@@ -59,7 +59,7 @@ export async function startEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`ConfigOptions.designMode` accepts only `'design' | 'live'`. A successful initialization leaves `lifecycleState` at `ready`. External concurrent `init()` calls join the same attempt; if disposal is in progress, initialization waits for it to finish. Calling `init()` on a ready instance first disposes the current generation and then initializes a new one.
+`ConfigOptions.designMode` accepts only `'design' | 'live'`. A successful initialization leaves `lifecycleState` at `ready`. Calling `init()` while initialization or disposal is in progress rejects immediately with `LifecycleReentrancyError`; it neither joins the Promise nor waits automatically. The host must await the original operation and retry explicitly. Calling `init()` on a `ready` instance is a resolved no-op and does not apply new options; explicitly `destroy()` first when a new generation is required.
 
 ### `engine.destroy()`
 
@@ -73,7 +73,7 @@ export function destroyEngine(engine: EngineInstance): Promise<void> {
 }
 ```
 
-`destroy()` stops new writes and disposes plugins, listeners, the Designer, Project, hotkeys, materials, setters, the remote adapter/registry, events, and internal resources. External concurrent calls join one disposal attempt. If initialization is in progress, disposal waits for it to settle before cleaning the established generation. A cleanup failure sets the state to `failed`; call `destroy()` again to retry.
+`destroy()` stops new writes and disposes plugins, listeners, the Designer, Project, hotkeys, materials, setters, the remote adapter/registry, events, and internal resources. Calling `destroy()` while initialization or disposal is in progress rejects immediately with `LifecycleReentrancyError`; it neither joins nor waits automatically. The host must await the original operation and retry explicitly. A cleanup failure sets the state to `failed`; call `destroy()` again to retry retained unfinished cleanup. Calling `destroy()` on a `disposed` instance is a resolved no-op.
 
 Do not retain a settled destroy Promise permanently, and do not dispose engine-owned child services such as materials, setters, or Project independently.
 
@@ -90,6 +90,19 @@ type EngineLifecycleState =
 ```
 
 This is a readonly state source. A host may reject requests while the engine is not ready, but cannot assign a lifecycle state.
+
+### Lifecycle state × public operation matrix
+
+| State | `init()` | `destroy()` | Other public work |
+| --- | --- | --- | --- |
+| `created` | Starts initialization | Disposes the uninitialized instance | Host setup and registration are supported; application model work should wait for `ready` |
+| `initializing` | Rejects; await the original `init()` and retry if still needed | Rejects; await the original `init()`, then destroy explicitly | Not a supported host-operation window |
+| `ready` | Resolved no-op; new options are not applied | Starts disposal | Allowed subject to trust, ownership, and transaction rules |
+| `disposing` | Rejects; await the original `destroy()`, then retry | Rejects; await the original `destroy()` | New writes and subscriptions are rejected |
+| `disposed` | Starts a new generation | Resolved no-op | Rejected until a successful `init()` |
+| `failed` | Rejects | Retries retained cleanup; success moves to `disposed` | Rejected until cleanup succeeds and the engine is initialized again |
+
+Initialization failure returns to `created` when rollback succeeds and enters `failed` when rollback is incomplete. Lifecycle methods must also not run from an active transaction or an engine-owned lifecycle/model callback.
 
 ### Lifecycle callback rule
 
@@ -236,7 +249,7 @@ These values support invariant checks and tests without granting registry mutati
 
 Same-realm plugins and host-provided `RemoteAdapter` implementations are trusted extension code; they can still use their own captured closures, imports, and globals. `legacyTrusted` provides a broader compatibility surface for trusted hosts that depend on legacy plugins or UMD resources. Neither policy provides process, iframe, Realm, or SES isolation.
 
-The current `DashboardPlugin` extends prototypes in its shared realm, so a compatible Dashboard host must select `legacyTrusted` explicitly. Put a restricted engine in a different Worker, iframe, or Realm from such code.
+The current `DashboardPlugin` extends prototypes in its shared Realm, so a compatible Dashboard host must select `legacyTrusted` explicitly. Isolate a restricted engine in another Worker, iframe, or Realm while a prototype lease is active; the Realm can be reused sequentially only after the final compatible engine destroys successfully and restores the descriptors.
 
 ### Agent phase deferred
 
@@ -256,6 +269,17 @@ A `RemoteAdapter` is a trusted host extension. Its `init()` and `dispose()` hook
 ## Compatibility status of the raw model API
 
 The package still exports Designer, Project, Document, Node, Selection, Event, and Simulator types for existing renderers and `legacyTrusted` applications. Public availability does not make every method on those objects a stable v2 write API. This reference intentionally does not promise a legacy method inventory. Keep reads inside renderer adapters and route application writes through `EngineInstance`.
+
+## Support and verification matrix
+
+| Surface | Supported contract | Current verification status |
+| --- | --- | --- |
+| Framework runtime packages and repository tooling | Node.js `>=18.20.8` | CI runs quality gates at the exact floor; Node 20 is the primary strict-engine lane |
+| `@easy-editor/easypack` | Node.js `>=20.0.0` | Verified only in the Node 20 lane |
+| Repository package manager | pnpm `>=9.12.2`; CI and lockfile use pnpm `10.25.0` | Frozen-lockfile install in CI |
+| Renderer | React renderer is delivered | Other framework adapters are extension targets, not shipped support |
+| Browser | Dashboard development smoke through `pnpm example:dashboard` | Chromium manual smoke; automated browser E2E is not yet a release gate |
+| Operating system | Packages should remain platform-neutral | Full suite on Ubuntu; generator and packed-template release smoke on macOS and Windows |
 
 ## Root facade
 

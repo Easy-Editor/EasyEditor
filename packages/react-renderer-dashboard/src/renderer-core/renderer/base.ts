@@ -1,11 +1,18 @@
 import { type NodeSchema, isRemoteComponent } from '@easy-editor/core/instance'
-import { type ComponentConstruct, baseRendererFactory, compWrapper, leafWrapper } from '@easy-editor/react-renderer'
+import {
+  type ComponentConstruct,
+  type RendererAdapter,
+  baseRendererFactory,
+  compWrapper,
+  createRendererAdapter,
+  leafWrapper,
+} from '@easy-editor/react-renderer'
 import { isSchema, isUseLoop } from '@easy-editor/renderer-core'
 import { RemoteComponentLoading } from '../components'
 import { dashboardWrapper } from '../hoc/dashboard'
 
-export const dashboardBaseRendererFactory: () => any = () => {
-  const OriginBase = baseRendererFactory()
+export const dashboardBaseRendererFactory = (rendererAdapter: RendererAdapter = createRendererAdapter()): any => {
+  const OriginBase = baseRendererFactory(rendererAdapter)
 
   return class BaseRenderer extends OriginBase {
     constructor(props: any) {

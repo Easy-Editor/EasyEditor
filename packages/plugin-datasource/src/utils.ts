@@ -6,12 +6,7 @@ import {
   isJSExpression,
   isJSFunction,
 } from '@easy-editor/core/instance'
-import {
-  type ExpressionEvaluator,
-  evaluateExpression,
-  isPolicyViolation,
-  legacyTrustedExpressionEvaluator,
-} from './expression-evaluator'
+import { type ExpressionEvaluator, evaluateExpression, isPolicyViolation } from './expression-evaluator'
 import type { IDataSourceRuntimeContext, InterpretDataSourceConfig, RuntimeOptionsConfig } from './types'
 
 function isObject(obj: unknown) {
@@ -51,7 +46,7 @@ export function transformExpression(
   if (code === '') {
     return () => ''
   }
-  const selectedEvaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
+  const selectedEvaluator = evaluatorArgs[0]
   try {
     return evaluateExpression(selectedEvaluator, {
       source: code,
@@ -86,7 +81,7 @@ export function transformFunction(
   if (code === '') {
     return () => ''
   }
-  const selectedEvaluator = evaluatorArgs.length === 0 ? legacyTrustedExpressionEvaluator : evaluatorArgs[0]
+  const selectedEvaluator = evaluatorArgs[0]
   try {
     const result = evaluateExpression<unknown>(selectedEvaluator, {
       source: code,

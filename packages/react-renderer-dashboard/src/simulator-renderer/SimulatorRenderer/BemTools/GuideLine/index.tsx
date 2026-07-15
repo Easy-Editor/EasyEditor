@@ -8,8 +8,10 @@ interface GuideLineProps {
 }
 
 export const GuideLine: React.FC<GuideLineProps> = observer(({ host }) => {
-  const { guideline } = host.designer
-  const { enabled, adsorptionLinesWithDistance = [], userGuideLines } = guideline
+  const guideline = host.isDisposed ? null : host.designer.guideline
+  const enabled = guideline?.enabled ?? false
+  const adsorptionLinesWithDistance = guideline?.adsorptionLinesWithDistance ?? []
+  const userGuideLines = guideline?.userGuideLines ?? []
 
   // 去重：横向和纵向各只保留一个距离线段
   const uniqueDistanceSegments = useMemo(() => {
@@ -49,7 +51,7 @@ export const GuideLine: React.FC<GuideLineProps> = observer(({ host }) => {
     return result
   }, [adsorptionLinesWithDistance])
 
-  if (!enabled) {
+  if (!guideline || !enabled) {
     return null
   }
 

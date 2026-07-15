@@ -187,7 +187,7 @@ export class LocalMaterialLoaderClass extends EventEmitter {
     }
   }
 
-  disconnect(devServerUrl: string): void {
+  disconnect(devServerUrl: string, releaseEngineRegistration = true): void {
     const normalizedUrl = this.normalizeUrl(devServerUrl)
     this.operations.invalidate(normalizedUrl)
     this.connectFlights.forget(normalizedUrl)
@@ -204,20 +204,22 @@ export class LocalMaterialLoaderClass extends EventEmitter {
         failures.push(error)
       }
     }
-    try {
-      runInAction(() => this.removeOwnedMaterial(normalizedUrl, connection.componentName))
-    } catch (error) {
-      failures.push(error)
+    if (releaseEngineRegistration) {
+      try {
+        runInAction(() => this.removeOwnedMaterial(normalizedUrl, connection.componentName))
+      } catch (error) {
+        failures.push(error)
+      }
     }
     this.emit('disconnected', { url: normalizedUrl, componentName: connection.componentName })
     if (failures.length) throw new AggregateError(failures, `Failed to disconnect local material: ${normalizedUrl}`)
   }
 
-  disconnectAll(): void {
+  disconnectAll(releaseEngineRegistrations = true): void {
     const failures: unknown[] = []
     for (const url of [...this.connections.keys()]) {
       try {
-        this.disconnect(url)
+        this.disconnect(url, releaseEngineRegistrations)
       } catch (error) {
         failures.push(error)
       }
@@ -244,7 +246,7 @@ export class LocalMaterialLoaderClass extends EventEmitter {
     await this.handleHMRUpdate(normalizedUrl, connection.info, true)
   }
 
-  dispose(): void {
+  dispose(releaseEngineRegistrations = true): void {
     if (this.cleanupComplete) return
     const failures: unknown[] = []
     if (!this.disposed) {
@@ -253,7 +255,7 @@ export class LocalMaterialLoaderClass extends EventEmitter {
       this.connectFlights.clear()
     }
     try {
-      this.disconnectAll()
+      this.disconnectAll(releaseEngineRegistrations)
     } catch (error) {
       failures.push(error)
     }

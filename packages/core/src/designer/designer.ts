@@ -1,4 +1,4 @@
-import { computed, observable, reaction } from 'mobx'
+import { action, computed, observable, reaction } from 'mobx'
 import { type Document, type Node, type PropsMap, insertChildren, isNodeSchema } from '../document'
 import { clearDocumentDropLocationDuringTeardown } from '../document/teardown'
 import { assertLifecycleMutationAllowed, inheritLifecycleMutationGuard } from '../lifecycle/mutation-barrier'
@@ -274,6 +274,7 @@ export class Designer {
    */
   init() {}
 
+  @action
   setProps(nextProps: Partial<DesignerProps>) {
     assertLifecycleMutationAllowed(this, 'designer.setProps')
     // `eventDelivery` is an engine-owned scheduler, not Designer configuration.

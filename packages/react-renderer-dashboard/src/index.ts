@@ -1,7 +1,7 @@
 import Renderer from './renderer'
 import { LowCodeRenderer } from './renderer-core/renderer'
 import PureRenderer from './renderer/pure'
-import { SimulatorRenderer, simulatorRenderer } from './simulator-renderer'
+import { SimulatorRenderer } from './simulator-renderer'
 
 import './css/theme.css'
 
@@ -30,12 +30,4 @@ export {
    * <SimulatorRenderer host={simulator} />
    */
   SimulatorRenderer,
-  /**
-   * simulator renderer: 用于 design 模式
-   * @example
-   * <SimulatorRenderer schema={schema} components={components} />
-   * simulatorRenderer.mount(simulator)
-   * simulator.mountContentFrame(elem)
-   */
-  simulatorRenderer,
 }

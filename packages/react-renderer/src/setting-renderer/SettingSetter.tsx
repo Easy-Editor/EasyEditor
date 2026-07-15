@@ -77,12 +77,14 @@ export const SettingSetter = observer(({ field, children }: SettingSetterProps) 
   const { setterProps = {}, setterType, initialValue = null } = getSetterInfo(field)
   const onChange = extraProps?.onChange
   const value = field.valueState === -1 ? null : field.getValue()
-  const { component: SetterComponent, props: mixedSetterProps } = setters.createSetterContent(setterType, setterProps)
+  const setterContent = setters.createSetterContent(setterType, setterProps)
 
   // 处理设置器未加载的情况
-  if (!SetterComponent) {
+  if (!setterContent?.component) {
     return <SetterPlaceholder setterType={setterType} />
   }
+
+  const { component: SetterComponent, props: mixedSetterProps } = setterContent
 
   return (
     <SetterComponent

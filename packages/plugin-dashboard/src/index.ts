@@ -9,9 +9,9 @@ import {
   type NodeSchema,
   type OffsetObserver,
   type PluginCreator,
+  type PluginExtend,
   type Simulator,
   assertLegacyTrustedPluginContext,
-  getConvertedExtraKey,
 } from '@easy-editor/core/instance'
 import { AlignType, Alignment, DistributeType } from './designer/alignment'
 import {
@@ -80,49 +80,441 @@ const dashboardRuntimeLifecycle = Symbol('@easy-editor/plugin-dashboard/runtime-
 const dashboardRuntimeActivationToken = Object.freeze({})
 
 interface DashboardRuntimeLease {
+  groupInitSchema: NodeSchema
   state: 'active' | 'disposing' | 'disposed'
 }
 
 const dashboardRuntimeLeases = new WeakMap<Designer, DashboardRuntimeLease>()
+const dashboardRuntimeSettlements = new WeakSet<Designer>()
 
-const assertDashboardRuntimeActive = (designer: Designer, helper: string) => {
-  if (dashboardRuntimeLeases.get(designer)?.state !== 'active') {
+const assertDashboardRuntimeActive = (designer: Designer, helper: string): DashboardRuntimeLease => {
+  const lease = dashboardRuntimeLeases.get(designer)
+  if (lease?.state !== 'active') {
     throw new Error(`Cannot access dashboard ${helper}; DashboardPlugin runtime is not active for this Designer`)
   }
+  return lease
 }
 
 const clearDashboardRuntime = (designer: Designer, restoreDetecting = true) => {
+  const ownsSettlement = !dashboardRuntimeSettlements.has(designer)
+  if (ownsSettlement) dashboardRuntimeSettlements.add(designer)
   const errors: unknown[] = []
   const guideline = dashboardGuidelines.get(designer)
   const marqueeSelection = dashboardMarqueeSelections.get(designer)
 
-  if (guideline) {
-    try {
-      guideline.dispose()
-      dashboardGuidelines.delete(designer)
-    } catch (error) {
-      errors.push(error)
+  try {
+    if (guideline) {
+      try {
+        guideline.dispose()
+        dashboardGuidelines.delete(designer)
+      } catch (error) {
+        errors.push(error)
+      }
     }
-  }
 
-  if (marqueeSelection) {
-    try {
-      disposeMarqueeSelectionRuntime(marqueeSelection, restoreDetecting)
-      dashboardMarqueeSelections.delete(designer)
-    } catch (error) {
-      errors.push(error)
+    if (marqueeSelection) {
+      try {
+        disposeMarqueeSelectionRuntime(marqueeSelection, restoreDetecting)
+        dashboardMarqueeSelections.delete(designer)
+      } catch (error) {
+        errors.push(error)
+      }
     }
-  }
 
-  dashboardAlignments.delete(designer)
+    dashboardAlignments.delete(designer)
 
-  if (errors.length > 0) {
-    throw new AggregateError(errors, 'Failed to clear dashboard runtime')
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Failed to clear dashboard runtime')
+    }
+  } finally {
+    if (ownsSettlement) dashboardRuntimeSettlements.delete(designer)
   }
 }
 
 interface DashboardRuntimeDesigner extends Designer {
-  [dashboardRuntimeLifecycle](activationToken: object): () => void
+  [dashboardRuntimeLifecycle](activationToken: object, groupInitSchema: NodeSchema): () => void
+}
+
+type DashboardExtensionTarget = 'Designer' | 'Document' | 'Node' | 'OffsetObserver' | 'Simulator'
+
+interface DashboardExtensionOperation {
+  properties: Record<PropertyKey, any>
+  target: DashboardExtensionTarget
+}
+
+let dashboardExtensionOperations: readonly DashboardExtensionOperation[] | undefined
+
+const createDashboardExtensionOperations = (): readonly DashboardExtensionOperation[] => {
+  const operations: DashboardExtensionOperation[] = []
+  const extend = (target: DashboardExtensionTarget, properties: Record<PropertyKey, any>): void => {
+    operations.push({ properties, target })
+  }
+  /* -------------------------------- Designer -------------------------------- */
+  extend('Designer', {
+    [dashboardRuntimeLifecycle]: {
+      value(this: Designer, activationToken: object, groupInitSchema: NodeSchema) {
+        if (activationToken !== dashboardRuntimeActivationToken) {
+          throw new Error('DashboardPlugin runtime activation requires its private lease token')
+        }
+        const engine = this.editor.get<{ plugins?: { has(pluginName: string): boolean } }>('engine')
+        if (!engine?.plugins?.has('DashboardPlugin')) {
+          throw new Error('DashboardPlugin runtime activation requires a registered DashboardPlugin')
+        }
+
+        const previousLease = dashboardRuntimeLeases.get(this)
+        if (previousLease) {
+          previousLease.state = 'disposing'
+          clearDashboardRuntime(this)
+          previousLease.state = 'disposed'
+          dashboardRuntimeLeases.delete(this)
+        } else {
+          clearDashboardRuntime(this)
+        }
+
+        const lease: DashboardRuntimeLease = { groupInitSchema, state: 'active' }
+        dashboardRuntimeLeases.set(this, lease)
+        return () => {
+          if (dashboardRuntimeLeases.get(this) !== lease || lease.state === 'disposed') return
+          lease.state = 'disposing'
+          // Prototype extensions are legacy-trusted only. Read the engine
+          // state through the raw Designer solely to choose teardown
+          // behavior; never return or retain the engine reference.
+          const lifecycleState = this.editor.get<{ lifecycleState?: string }>('engine')?.lifecycleState
+          const restoreDetecting = !['disposing', 'disposed', 'failed'].includes(lifecycleState || '')
+          clearDashboardRuntime(this, restoreDetecting)
+          lease.state = 'disposed'
+          dashboardRuntimeLeases.delete(this)
+        }
+      },
+    },
+    guideline: {
+      get() {
+        const existing = dashboardGuidelines.get(this)
+        if (existing && dashboardRuntimeSettlements.has(this)) return existing
+        assertDashboardRuntimeActive(this, 'guideline')
+        if (existing) return existing
+        const guideline = new GuideLine(this)
+        registerGuideLineOwner(guideline, () => {
+          if (dashboardGuidelines.get(this) === guideline) dashboardGuidelines.delete(this)
+        })
+        dashboardGuidelines.set(this, guideline)
+        return guideline
+      },
+    },
+    alignment: {
+      get() {
+        const existing = dashboardAlignments.get(this)
+        if (existing && dashboardRuntimeSettlements.has(this)) return existing
+        assertDashboardRuntimeActive(this, 'alignment')
+        if (existing) return existing
+        const alignment = new Alignment(this)
+        dashboardAlignments.set(this, alignment)
+        return alignment
+      },
+    },
+    marqueeSelection: {
+      get() {
+        const existing = dashboardMarqueeSelections.get(this)
+        if (existing && dashboardRuntimeSettlements.has(this)) return existing
+        assertDashboardRuntimeActive(this, 'marquee selection')
+        if (existing) return existing
+        const marqueeSelection = new MarqueeSelection(this)
+        registerMarqueeSelectionOwner(marqueeSelection, () => {
+          if (dashboardMarqueeSelections.get(this) === marqueeSelection) {
+            dashboardMarqueeSelections.delete(this)
+          }
+        })
+        dashboardMarqueeSelections.set(this, marqueeSelection)
+        return marqueeSelection
+      },
+    },
+  })
+
+  /* -------------------------------- Document -------------------------------- */
+  // TODO: group 和 ungroup 优化
+  extend('Document', {
+    group: {
+      value(this: Document, nodeIdList: Node[] | string[]) {
+        if (nodeIdList.length === 0) return
+
+        let nodeList: Node[] = []
+        if (typeof nodeIdList[0] === 'string') {
+          nodeList = (nodeIdList as string[]).map(id => this.getNode(id)!)
+        } else {
+          nodeList = nodeIdList as Node[]
+        }
+
+        // 过滤无效节点
+        nodeList = nodeList.filter(node => node && !node.isRoot)
+        if (nodeList.length === 0) return
+
+        // 获取共同父节点（使用第一个节点的父节点）
+        const targetParent = nodeList[0].parent || this.rootNode
+
+        const { groupInitSchema } = assertDashboardRuntimeActive(this.project.designer, 'group')
+        const groupNode = this.createNode(groupInitSchema)
+
+        // 计算所有节点的最小 index，确定分组的插入位置
+        let minIndex = Number.POSITIVE_INFINITY
+        for (const node of nodeList) {
+          if (node.index < minIndex) {
+            minIndex = node.index
+          }
+          this.migrateNode(node, groupNode)
+        }
+
+        // 将新分组插入到共同父节点下
+        targetParent?.insert(groupNode, minIndex)
+
+        return groupNode
+      },
+    },
+    ungroup: {
+      value(this: Document, group: Node | string) {
+        let groupNode: Node | null
+        if (typeof group === 'string') {
+          groupNode = this.getNode(group)
+        } else {
+          groupNode = group
+        }
+
+        if (!groupNode || !groupNode.isGroup || !groupNode.children) return
+
+        const parent = groupNode.parent
+        if (!parent) return
+
+        // 记录分组的原始位置
+        const groupIndex = groupNode.index
+        const nodes = [...groupNode.childrenNodes] // 复制数组避免响应式问题
+
+        // 将子节点迁移到父节点，并保持在原分组位置
+        for (let i = 0; i < nodes.length; i++) {
+          this.migrateNode(nodes[i], parent)
+        }
+
+        this.removeNode(groupNode)
+      },
+    },
+  })
+
+  /* ---------------------------------- Node ---------------------------------- */
+  extend('Node', {
+    // Dashboard
+    getDashboardContainer: {
+      value(this: Node) {
+        const domNodes = this.getDOMNode()
+        return domNodes.length > 0 ? domNodes[0] : null
+      },
+    },
+    getDashboardRect: {
+      value(this: Node) {
+        if (!this.isGroup) {
+          const rect = this.getExtraPropValue('$dashboard.rect') as any
+          return new DOMRect(rect.x ?? 0, rect.y ?? 0, rect.width ?? 0, rect.height ?? 0)
+        }
+
+        let [minX, minY, maxX, maxY] = [
+          Number.POSITIVE_INFINITY,
+          Number.POSITIVE_INFINITY,
+          Number.NEGATIVE_INFINITY,
+          Number.NEGATIVE_INFINITY,
+        ]
+
+        for (const child of this.childrenNodes) {
+          const childRect = child.getDashboardRect()
+
+          minX = Math.min(minX, childRect.x)
+          minY = Math.min(minY, childRect.y)
+          maxX = Math.max(maxX, childRect.x + childRect.width)
+          maxY = Math.max(maxY, childRect.y + childRect.height)
+        }
+
+        return new DOMRect(minX, minY, maxX - minX, maxY - minY)
+      },
+    },
+    updateDashboardRect: {
+      value(this: Node, rect: Partial<DOMRect>) {
+        if (this.isGroup) return
+
+        if (typeof rect.x === 'number') {
+          this.setExtraPropValue('$dashboard.rect.x', rect.x)
+        }
+        if (typeof rect.y === 'number') {
+          this.setExtraPropValue('$dashboard.rect.y', rect.y)
+        }
+        if (typeof rect.width === 'number') {
+          this.setExtraPropValue('$dashboard.rect.width', rect.width)
+        }
+        if (typeof rect.height === 'number') {
+          this.setExtraPropValue('$dashboard.rect.height', rect.height)
+        }
+      },
+    },
+    // Group
+    isGroup: {
+      get(this: Node) {
+        return Boolean(this.getExtraPropValue('isGroup'))
+      },
+    },
+    getCurrentGroup: {
+      value(this: Node) {
+        let parent = this.parent
+        while (parent && !parent.isGroup) {
+          parent = parent.parent
+        }
+        return parent
+      },
+    },
+    getTopGroup: {
+      value(this: Node) {
+        let parent = this.parent
+        let topGroup: Node | null = null
+        while (parent) {
+          if (parent.isGroup) {
+            topGroup = parent
+          }
+          parent = parent.parent
+        }
+        return topGroup
+      },
+    },
+    getAllGroups: {
+      value(this: Node) {
+        const groups: Node[] = []
+        let parent = this.parent
+        while (parent) {
+          if (parent.isGroup) {
+            groups.push(parent)
+          }
+          parent = parent.parent
+        }
+        return groups
+      },
+    },
+    getNodesInGroup: {
+      value(this: Node) {
+        if (!this.isGroup) return []
+
+        const nodes: Node[] = []
+        for (const node of this.childrenNodes) {
+          if (!node.isGroup) {
+            nodes.push(node)
+          }
+        }
+        return nodes
+      },
+    },
+    getAllNodesInGroup: {
+      value(this: Node) {
+        if (!this.isGroup) return []
+
+        const nodes: Node[] = []
+        for (const node of this.childrenNodes) {
+          if (node.isGroup) {
+            nodes.push(...node.getAllNodesInGroup())
+          } else {
+            nodes.push(node)
+          }
+        }
+        return nodes
+      },
+    },
+    // Level
+    moveToLevel: {
+      value(this: Node, level: number) {
+        if (level < -1 || level >= this.parent!.childrenNodes.length) return
+        if (this.index === level) return
+        if (this.isRoot) return
+
+        this.parent!.insert(this, level)
+      },
+    },
+    levelTop: {
+      value(this: Node) {
+        this.moveToLevel(0)
+      },
+    },
+    levelBottom: {
+      value(this: Node) {
+        this.moveToLevel(-1)
+      },
+    },
+    levelUp: {
+      value(this: Node) {
+        this.moveToLevel(this.index - 1)
+      },
+    },
+    levelDown: {
+      value(this: Node) {
+        this.moveToLevel(this.index + 1)
+      },
+    },
+  })
+
+  /* ----------------------------- OffsetObserver ----------------------------- */
+  extend('OffsetObserver', {
+    computeRect: {
+      value(this: OffsetObserver) {
+        // return this.node.getDashboardRect()
+        const { node, instance } = this.nodeInstance
+        const host = node.document?.simulator!
+        const rect = host.computeComponentInstanceRect(instance!)
+
+        const { viewport } = node.document.simulator!
+        const local = viewport.toLocalPoint({ clientX: rect!.x, clientY: rect!.y })
+
+        return new DOMRect(local.clientX, local.clientY, rect!.width / viewport.scale, rect!.height / viewport.scale)
+      },
+    },
+    height: {
+      get(this: OffsetObserver) {
+        return this.isRoot ? this.viewport.height : this._height
+      },
+    },
+    width: {
+      get(this: OffsetObserver) {
+        return this.isRoot ? this.viewport.width : this._width
+      },
+    },
+    top: {
+      get(this: OffsetObserver) {
+        return this.isRoot ? 0 : this._top
+      },
+    },
+    left: {
+      get(this: OffsetObserver) {
+        return this.isRoot ? 0 : this._left
+      },
+    },
+    bottom: {
+      get(this: OffsetObserver) {
+        return this.isRoot ? this.viewport.height : this._bottom
+      },
+    },
+    right: {
+      get(this: OffsetObserver) {
+        return this.isRoot ? this.viewport.width : this._right
+      },
+    },
+  })
+
+  /* -------------------------------- Simulator ------------------------------- */
+  extend('Simulator', {
+    getDashboardStyle: {
+      get(this: Simulator) {
+        return this.get('dashboardStyle') || {}
+      },
+    },
+  })
+  return operations
+}
+
+const extendDashboardPlugin = ({ extend }: PluginExtend): void => {
+  const operations = dashboardExtensionOperations || createDashboardExtensionOperations()
+  dashboardExtensionOperations = operations
+  for (const operation of operations) {
+    extend(operation.target, operation.properties)
+  }
 }
 
 const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
@@ -135,7 +527,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
   return {
     name: 'DashboardPlugin',
-    extensionFingerprint: `DashboardPlugin:v1:${JSON.stringify(groupInitSchema)}`,
+    extensionFingerprint: 'DashboardPlugin:v2',
     deps: [],
     init(ctx) {
       assertLegacyTrustedPluginContext(ctx)
@@ -144,6 +536,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
 
       const disposeDashboardRuntime = (designer as DashboardRuntimeDesigner)[dashboardRuntimeLifecycle](
         dashboardRuntimeActivationToken,
+        groupInitSchema,
       )
       try {
         ctx.onDispose(disposeDashboardRuntime)
@@ -318,378 +711,7 @@ const DashboardPlugin: PluginCreator<DashboardPluginOptions> = options => {
       })
       ctx.onDispose(disposeNodeDragEnd)
     },
-    extend({ extendClass, extend }) {
-      const { Node } = extendClass
-
-      /* -------------------------------- Designer -------------------------------- */
-      extend('Designer', {
-        [dashboardRuntimeLifecycle]: {
-          value(this: Designer, activationToken: object) {
-            if (activationToken !== dashboardRuntimeActivationToken) {
-              throw new Error('DashboardPlugin runtime activation requires its private lease token')
-            }
-            const engine = this.editor.get<{ plugins?: { has(pluginName: string): boolean } }>('engine')
-            if (!engine?.plugins?.has('DashboardPlugin')) {
-              throw new Error('DashboardPlugin runtime activation requires a registered DashboardPlugin')
-            }
-
-            const previousLease = dashboardRuntimeLeases.get(this)
-            if (previousLease) {
-              previousLease.state = 'disposing'
-              clearDashboardRuntime(this)
-              previousLease.state = 'disposed'
-              dashboardRuntimeLeases.delete(this)
-            } else {
-              clearDashboardRuntime(this)
-            }
-
-            const lease: DashboardRuntimeLease = { state: 'active' }
-            dashboardRuntimeLeases.set(this, lease)
-            return () => {
-              if (dashboardRuntimeLeases.get(this) !== lease || lease.state === 'disposed') return
-              lease.state = 'disposing'
-              // Prototype extensions are legacy-trusted only. Read the engine
-              // state through the raw Designer solely to choose teardown
-              // behavior; never return or retain the engine reference.
-              const lifecycleState = this.editor.get<{ lifecycleState?: string }>('engine')?.lifecycleState
-              const restoreDetecting = !['disposing', 'disposed', 'failed'].includes(lifecycleState || '')
-              clearDashboardRuntime(this, restoreDetecting)
-              lease.state = 'disposed'
-              dashboardRuntimeLeases.delete(this)
-            }
-          },
-        },
-        guideline: {
-          get() {
-            assertDashboardRuntimeActive(this, 'guideline')
-            const existing = dashboardGuidelines.get(this)
-            if (existing) return existing
-            const guideline = new GuideLine(this)
-            registerGuideLineOwner(guideline, () => {
-              if (dashboardGuidelines.get(this) === guideline) dashboardGuidelines.delete(this)
-            })
-            dashboardGuidelines.set(this, guideline)
-            return guideline
-          },
-        },
-        alignment: {
-          get() {
-            assertDashboardRuntimeActive(this, 'alignment')
-            const existing = dashboardAlignments.get(this)
-            if (existing) return existing
-            const alignment = new Alignment(this)
-            dashboardAlignments.set(this, alignment)
-            return alignment
-          },
-        },
-        marqueeSelection: {
-          get() {
-            assertDashboardRuntimeActive(this, 'marquee selection')
-            const existing = dashboardMarqueeSelections.get(this)
-            if (existing) return existing
-            const marqueeSelection = new MarqueeSelection(this)
-            registerMarqueeSelectionOwner(marqueeSelection, () => {
-              if (dashboardMarqueeSelections.get(this) === marqueeSelection) {
-                dashboardMarqueeSelections.delete(this)
-              }
-            })
-            dashboardMarqueeSelections.set(this, marqueeSelection)
-            return marqueeSelection
-          },
-        },
-      })
-
-      /* -------------------------------- Document -------------------------------- */
-      // TODO: group 和 ungroup 优化
-      extend('Document', {
-        group: {
-          value(this: Document, nodeIdList: Node[] | string[]) {
-            if (nodeIdList.length === 0) return
-
-            let nodeList: Node[] = []
-            if (typeof nodeIdList[0] === 'string') {
-              nodeList = (nodeIdList as string[]).map(id => this.getNode(id)!)
-            } else {
-              nodeList = nodeIdList as Node[]
-            }
-
-            // 过滤无效节点
-            nodeList = nodeList.filter(node => node && !node.isRoot)
-            if (nodeList.length === 0) return
-
-            // 获取共同父节点（使用第一个节点的父节点）
-            const targetParent = nodeList[0].parent || this.rootNode
-
-            const groupNode = this.createNode(groupInitSchema)
-
-            // 计算所有节点的最小 index，确定分组的插入位置
-            let minIndex = Number.POSITIVE_INFINITY
-            for (const node of nodeList) {
-              if (node.index < minIndex) {
-                minIndex = node.index
-              }
-              this.migrateNode(node, groupNode)
-            }
-
-            // 将新分组插入到共同父节点下
-            targetParent?.insert(groupNode, minIndex)
-
-            return groupNode
-          },
-        },
-        ungroup: {
-          value(this: Document, group: Node | string) {
-            let groupNode: Node | null
-            if (typeof group === 'string') {
-              groupNode = this.getNode(group)
-            } else {
-              groupNode = group
-            }
-
-            if (!groupNode || !groupNode.isGroup || !groupNode.children) return
-
-            const parent = groupNode.parent
-            if (!parent) return
-
-            // 记录分组的原始位置
-            const groupIndex = groupNode.index
-            const nodes = [...groupNode.childrenNodes] // 复制数组避免响应式问题
-
-            // 将子节点迁移到父节点，并保持在原分组位置
-            for (let i = 0; i < nodes.length; i++) {
-              this.migrateNode(nodes[i], parent)
-            }
-
-            this.removeNode(groupNode)
-          },
-        },
-      })
-
-      /* ---------------------------------- Node ---------------------------------- */
-      const originalInitProps = Node.prototype.initBuiltinProps
-      extend('Node', {
-        // Dashboard
-        getDashboardContainer: {
-          value(this: Node) {
-            const domNodes = this.getDOMNode()
-            return domNodes.length > 0 ? domNodes[0] : null
-          },
-        },
-        getDashboardRect: {
-          value(this: Node) {
-            if (!this.isGroup) {
-              const rect = this.getExtraPropValue('$dashboard.rect') as any
-              return new DOMRect(rect.x ?? 0, rect.y ?? 0, rect.width ?? 0, rect.height ?? 0)
-            }
-
-            let [minX, minY, maxX, maxY] = [
-              Number.POSITIVE_INFINITY,
-              Number.POSITIVE_INFINITY,
-              Number.NEGATIVE_INFINITY,
-              Number.NEGATIVE_INFINITY,
-            ]
-
-            for (const child of this.childrenNodes) {
-              const childRect = child.getDashboardRect()
-
-              minX = Math.min(minX, childRect.x)
-              minY = Math.min(minY, childRect.y)
-              maxX = Math.max(maxX, childRect.x + childRect.width)
-              maxY = Math.max(maxY, childRect.y + childRect.height)
-            }
-
-            return new DOMRect(minX, minY, maxX - minX, maxY - minY)
-          },
-        },
-        updateDashboardRect: {
-          value(this: Node, rect: Partial<DOMRect>) {
-            if (this.isGroup) return
-
-            if (typeof rect.x === 'number') {
-              this.setExtraPropValue('$dashboard.rect.x', rect.x)
-            }
-            if (typeof rect.y === 'number') {
-              this.setExtraPropValue('$dashboard.rect.y', rect.y)
-            }
-            if (typeof rect.width === 'number') {
-              this.setExtraPropValue('$dashboard.rect.width', rect.width)
-            }
-            if (typeof rect.height === 'number') {
-              this.setExtraPropValue('$dashboard.rect.height', rect.height)
-            }
-          },
-        },
-        // Group
-        isGroup: {
-          get(this: Node) {
-            return this.getExtraPropValue('isGroup')
-          },
-        },
-        getCurrentGroup: {
-          value(this: Node) {
-            let parent = this.parent
-            while (parent && !parent.isGroup) {
-              parent = parent.parent
-            }
-            return parent
-          },
-        },
-        getTopGroup: {
-          value(this: Node) {
-            let parent = this.parent
-            let topGroup: Node | null = null
-            while (parent) {
-              if (parent.isGroup) {
-                topGroup = parent
-              }
-              parent = parent.parent
-            }
-            return topGroup
-          },
-        },
-        getAllGroups: {
-          value(this: Node) {
-            const groups: Node[] = []
-            let parent = this.parent
-            while (parent) {
-              if (parent.isGroup) {
-                groups.push(parent)
-              }
-              parent = parent.parent
-            }
-            return groups
-          },
-        },
-        getNodesInGroup: {
-          value(this: Node) {
-            if (!this.isGroup) return []
-
-            const nodes: Node[] = []
-            for (const node of this.childrenNodes) {
-              if (!node.isGroup) {
-                nodes.push(node)
-              }
-            }
-            return nodes
-          },
-        },
-        getAllNodesInGroup: {
-          value(this: Node) {
-            if (!this.isGroup) return []
-
-            const nodes: Node[] = []
-            for (const node of this.childrenNodes) {
-              if (node.isGroup) {
-                nodes.push(...node.getAllNodesInGroup())
-              } else {
-                nodes.push(node)
-              }
-            }
-            return nodes
-          },
-        },
-        initBuiltinProps: {
-          value(this: Node) {
-            // 实现类似 super.initBuiltinProps 的效果
-            // 调用父类的 initBuiltinProps 方法
-            originalInitProps.call(this)
-
-            this.props.has(getConvertedExtraKey('isGroup')) || this.props.add(getConvertedExtraKey('isGroup'), false)
-          },
-        },
-        // Level
-        moveToLevel: {
-          value(this: Node, level: number) {
-            if (level < -1 || level >= this.parent!.childrenNodes.length) return
-            if (this.index === level) return
-            if (this.isRoot) return
-
-            this.parent!.insert(this, level)
-          },
-        },
-        levelTop: {
-          value(this: Node) {
-            this.moveToLevel(0)
-          },
-        },
-        levelBottom: {
-          value(this: Node) {
-            this.moveToLevel(-1)
-          },
-        },
-        levelUp: {
-          value(this: Node) {
-            this.moveToLevel(this.index - 1)
-          },
-        },
-        levelDown: {
-          value(this: Node) {
-            this.moveToLevel(this.index + 1)
-          },
-        },
-      })
-
-      /* ----------------------------- OffsetObserver ----------------------------- */
-      extend('OffsetObserver', {
-        computeRect: {
-          value(this: OffsetObserver) {
-            // return this.node.getDashboardRect()
-            const { node, instance } = this.nodeInstance
-            const host = node.document?.simulator!
-            const rect = host.computeComponentInstanceRect(instance!)
-
-            const { viewport } = node.document.simulator!
-            const local = viewport.toLocalPoint({ clientX: rect!.x, clientY: rect!.y })
-
-            return new DOMRect(
-              local.clientX,
-              local.clientY,
-              rect!.width / viewport.scale,
-              rect!.height / viewport.scale,
-            )
-          },
-        },
-        height: {
-          get(this: OffsetObserver) {
-            return this.isRoot ? this.viewport.height : this._height
-          },
-        },
-        width: {
-          get(this: OffsetObserver) {
-            return this.isRoot ? this.viewport.width : this._width
-          },
-        },
-        top: {
-          get(this: OffsetObserver) {
-            return this.isRoot ? 0 : this._top
-          },
-        },
-        left: {
-          get(this: OffsetObserver) {
-            return this.isRoot ? 0 : this._left
-          },
-        },
-        bottom: {
-          get(this: OffsetObserver) {
-            return this.isRoot ? this.viewport.height : this._bottom
-          },
-        },
-        right: {
-          get(this: OffsetObserver) {
-            return this.isRoot ? this.viewport.width : this._right
-          },
-        },
-      })
-
-      /* -------------------------------- Simulator ------------------------------- */
-      extend('Simulator', {
-        getDashboardStyle: {
-          get(this: Simulator) {
-            return this.get('dashboardStyle') || {}
-          },
-        },
-      })
-    },
+    extend: extendDashboardPlugin,
   }
 }
 

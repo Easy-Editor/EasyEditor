@@ -2,14 +2,14 @@ import type { RootSchema } from '@easy-editor/core'
 import { type RendererProps, type RendererState, isSchema, logger } from '@easy-editor/renderer-core'
 import { isEmpty } from 'lodash-es'
 import { Component, createElement } from 'react'
-import { adapter } from './adapter'
+import { type RendererAdapter, createRendererAdapter } from './adapter'
 import FaultComponent from './components/FaultComponent'
 import NotFoundComponent from './components/NotFoundComponent'
 import { RendererContext } from './context'
 import type { RendererComponent } from './types'
 
-export function rendererFactory(): RendererComponent {
-  const RENDERER_COMPS = adapter.getRenderers()
+export function rendererFactory(rendererAdapter: RendererAdapter = createRendererAdapter()): RendererComponent {
+  const RENDERER_COMPS = rendererAdapter.getRenderers()
 
   return class Renderer extends Component<RendererProps> {
     static displayName = 'Renderer'

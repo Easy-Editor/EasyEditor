@@ -1,6 +1,6 @@
 import { type DataSource, type DataSourceItem, isJSFunction } from '@easy-editor/core/instance'
 import { isEmpty } from 'lodash-es'
-import { type ExpressionEvaluator, legacyTrustedExpressionEvaluator } from '../expression-evaluator'
+import type { ExpressionEvaluator } from '../expression-evaluator'
 import type { RendererAppHelper } from '../types'
 import { parseExpression, transformArrayToMap, transformStringToFunction } from './common'
 import { logger } from './logger'
@@ -96,9 +96,7 @@ export class DataHelper {
     this.ajaxList = config?.list || []
     this.ajaxMap = transformArrayToMap(this.ajaxList, 'id')
     this.appHelper = appHelper
-    this.expressionEvaluator = Object.hasOwn(appHelper, 'expressionEvaluator')
-      ? appHelper.expressionEvaluator
-      : legacyTrustedExpressionEvaluator
+    this.expressionEvaluator = appHelper.expressionEvaluator
     this.dataSourceMap = this.generateDataSourceMap()
     this.dataHandler = config?.dataHandler
       ? parseExpression(config?.dataHandler, comp, true, this.expressionEvaluator)
@@ -163,7 +161,6 @@ export class DataHelper {
     const initConfigs = this.parser(this.ajaxList).filter((item: DataSourceItem) => {
       // according to [spec](https://lowcode-engine.cn/lowcode), isInit should be boolean true to be working
       if (item.isInit === true) {
-        this.dataSourceMap[item.id].status = DS_STATUS.LOADING
         return true
       }
       return false
@@ -255,55 +252,51 @@ export class DataHelper {
       })
   }
 
-  asyncDataHandler(asyncDataList: any[]) {
-    return new Promise((resolve, reject) => {
-      const allReq: any[] = []
-      asyncDataList.forEach(req => {
-        const { id, type } = req
-        // TODO: need refactoring to remove 'legao' related logic
-        if (!id || !type || type === 'legao') {
-          return
-        }
-        allReq.push(req)
-      })
-
-      if (allReq.length === 0) {
-        resolve({})
-      }
-      const res: any = {}
-      Promise.all(
-        allReq.map((item: any) => {
-          return new Promise(innerResolve => {
-            const { type, id, dataHandler, options } = item
-
-            const fetchHandler = (data: any, error: any) => {
-              res[id] = this.handleData(id, dataHandler, data, error)
-              this.updateDataSourceMap(id, res[id], error)
-              innerResolve({})
-            }
-
-            const doFetch = (innerType: string, innerOptions: any) => {
-              doRequest(innerType as any, innerOptions)
-                ?.then((data: any) => {
-                  fetchHandler(data, undefined)
-                })
-                .catch((err: Error) => {
-                  fetchHandler(undefined, err)
-                })
-            }
-
-            this.dataSourceMap[id].status = DS_STATUS.LOADING
-            doFetch(type, options)
-          })
-        }),
-      )
-        .then(() => {
-          resolve(res)
-        })
-        .catch(e => {
-          reject(e)
-        })
+  async asyncDataHandler(asyncDataList: any[]) {
+    const allReq = asyncDataList.filter(req => {
+      const { id, type } = req
+      // TODO: need refactoring to remove 'legao' related logic
+      return Boolean(id && type && type !== 'legao')
     })
+
+    if (allReq.length === 0) {
+      return Promise.resolve({})
+    }
+
+    // Compile every executable handler before any request starts. A policy
+    // failure therefore rejects this operation atomically without network side effects.
+    const preparedRequests = allReq.map(item => ({
+      ...item,
+      dataHandler: this.prepareDataHandler(item.dataHandler),
+    }))
+    const res: any = {}
+
+    return Promise.all(
+      preparedRequests.map(async ({ type, id, dataHandler, options }) => {
+        this.dataSourceMap[id].status = DS_STATUS.LOADING
+
+        // Preserve synchronous request setup failures as rejections while
+        // continuing to expose asynchronous request failures to data handlers.
+        const requestPromise = doRequest(type as any, options)
+        let data: any
+        let error: any
+        try {
+          data = await requestPromise
+        } catch (requestError) {
+          error = requestError
+        }
+
+        res[id] = this.handleData(id, dataHandler, data, error)
+        this.updateDataSourceMap(id, res[id], error)
+      }),
+    ).then(() => res)
+  }
+
+  private prepareDataHandler(dataHandler: any) {
+    if (isJSFunction(dataHandler)) {
+      return transformStringToFunction(dataHandler.value, this.expressionEvaluator)
+    }
+    return dataHandler
   }
 
   /**
@@ -317,10 +310,7 @@ export class DataHelper {
    * @memberof DataHelper
    */
   handleData(id: string | null, dataHandler: any, data: any, error: any) {
-    let dataHandlerFun = dataHandler
-    if (isJSFunction(dataHandler)) {
-      dataHandlerFun = transformStringToFunction(dataHandler.value, this.expressionEvaluator)
-    }
+    const dataHandlerFun = this.prepareDataHandler(dataHandler)
     if (!dataHandlerFun || typeof dataHandlerFun !== 'function') {
       return data
     }

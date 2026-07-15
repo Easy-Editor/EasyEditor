@@ -39,17 +39,21 @@ EasyEditor 的渲染器采用工厂模式设计，主要包含以下几个部分
 
 ```tsx
 import {
-  adapter,
+  type RendererAdapter,
+  createRendererAdapter,
   rendererFactory,
   componentRendererFactory,
   pageRendererFactory,
   baseRendererFactory
 } from '@easy-editor/react-renderer'
 
+// 每个渲染器组合都持有独立的适配器实例
+const rendererAdapter = createRendererAdapter()
+
 // 自定义基础渲染器工厂
-export const customBaseRendererFactory = () => {
+export const customBaseRendererFactory = (rendererAdapter: RendererAdapter) => {
   // 获取原始基础渲染器
-  const OriginBase = baseRendererFactory();
+  const OriginBase = baseRendererFactory(rendererAdapter);
 
   // 返回扩展后的基础渲染器类
   return class BaseRenderer extends OriginBase {
@@ -66,16 +70,14 @@ export const customBaseRendererFactory = () => {
 }
 
 // 注册到适配器
-adapter.setBaseRenderer(customBaseRendererFactory());
+rendererAdapter.setBaseRenderer(customBaseRendererFactory(rendererAdapter));
 
 // 注册页面渲染器和组件渲染器
-adapter.setRenderers({
-  PageRenderer: pageRendererFactory(),  // 使用默认的页面渲染器
-  ComponentRenderer: componentRendererFactory(),  // 使用默认的组件渲染器
-});
+rendererAdapter.setPageRenderer(pageRendererFactory(rendererAdapter));
+rendererAdapter.setComponentRenderer(componentRendererFactory(rendererAdapter));
 
 // 创建最终渲染器
-export const CustomRenderer = rendererFactory();
+export const CustomRenderer = rendererFactory(rendererAdapter);
 ```
 
 ### 基础渲染器、页面渲染器和组件渲染器的关系
@@ -90,9 +92,9 @@ export const CustomRenderer = rendererFactory();
 
 ```tsx
 // 页面渲染器工厂
-export function pageRendererFactory(): BaseRenderComponent {
+export function pageRendererFactory(rendererAdapter: RendererAdapter): BaseRenderComponent {
   // 获取基础渲染器
-  const BaseRenderer = baseRendererFactory()
+  const BaseRenderer = baseRendererFactory(rendererAdapter)
 
   // 扩展基础渲染器，添加页面特有逻辑
   return class PageRenderer extends BaseRenderer {
@@ -123,9 +125,9 @@ export function pageRendererFactory(): BaseRenderComponent {
 }
 
 // 组件渲染器工厂
-export function componentRendererFactory(): BaseRenderComponent {
+export function componentRendererFactory(rendererAdapter: RendererAdapter): BaseRenderComponent {
   // 获取基础渲染器
-  const BaseRenderer = baseRendererFactory()
+  const BaseRenderer = baseRendererFactory(rendererAdapter)
 
   // 扩展基础渲染器，添加组件特有逻辑
   return class CompRenderer extends BaseRenderer {
@@ -162,9 +164,9 @@ export function componentRendererFactory(): BaseRenderComponent {
 主渲染器通过 rendererFactory 创建，负责协调不同类型的渲染器：
 
 ```tsx
-export function rendererFactory(): RenderComponent {
+export function rendererFactory(rendererAdapter: RendererAdapter): RenderComponent {
   // 获取已注册的渲染器
-  const RENDERER_COMPS = adapter.getRenderers()
+  const RENDERER_COMPS = rendererAdapter.getRenderers()
 
   // 返回渲染器类
   return class Renderer extends Component<RendererProps> {
@@ -378,13 +380,22 @@ const createRendererContext = () => {
 
 ```tsx
 import { useRef } from 'react'
-import { adapter, componentRendererFactory, pageRendererFactory, rendererFactory } from '@easy-editor/react-renderer'
+import {
+  type RendererAdapter,
+  baseRendererFactory,
+  componentRendererFactory,
+  createRendererAdapter,
+  pageRendererFactory,
+  rendererFactory,
+} from '@easy-editor/react-renderer'
 import { useResizeObserver } from '../hooks/useResizeObserver'
 
+const rendererAdapter = createRendererAdapter()
+
 // 1. 自定义大屏基础渲染器
-const dashboardBaseRendererFactory = () => {
+const dashboardBaseRendererFactory = (rendererAdapter: RendererAdapter) => {
   // 获取原始基础渲染器
-  const BaseRenderer = baseRendererFactory();
+  const BaseRenderer = baseRendererFactory(rendererAdapter);
 
   return class DashboardBaseRenderer extends BaseRenderer {
     // 自定义组件高阶组件链，添加大屏特有的包装器
@@ -400,14 +411,12 @@ const dashboardBaseRendererFactory = () => {
 }
 
 // 2. 注册大屏渲染器
-adapter.setBaseRenderer(dashboardBaseRendererFactory());
-adapter.setRenderers({
-  PageRenderer: pageRendererFactory(),
-  ComponentRenderer: componentRendererFactory(),
-});
+rendererAdapter.setBaseRenderer(dashboardBaseRendererFactory(rendererAdapter));
+rendererAdapter.setPageRenderer(pageRendererFactory(rendererAdapter));
+rendererAdapter.setComponentRenderer(componentRendererFactory(rendererAdapter));
 
 // 3. 创建大屏渲染器
-const DashboardRenderer = rendererFactory();
+const DashboardRenderer = rendererFactory(rendererAdapter);
 
 // 4. 包装大屏渲染器，处理缩放等特殊逻辑
 const DashboardRendererWrapper = (props) => {

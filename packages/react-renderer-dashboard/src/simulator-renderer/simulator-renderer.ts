@@ -7,7 +7,7 @@ import {
 import type { RendererProps } from '@easy-editor/renderer-core'
 import { type MemoryHistory, createMemoryHistory } from 'history'
 import { isPlainObject } from 'lodash-es'
-import { action, computed, observable, runInAction, untracked } from 'mobx'
+import { action, computed, observable, runInAction } from 'mobx'
 import { type ReactInstance, createElement } from 'react'
 import { type Root, createRoot } from 'react-dom/client'
 import { SimulatorRendererView } from './RendererView'
@@ -121,7 +121,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       }
       this.dispose()
     }
-    if (this._host || this.#renderResources) {
+    if (this._host || this.#renderResources || this.disposeFunctions.length > 0 || this.documentInstances.length > 0) {
       this.dispose()
     }
     this._host = host
@@ -151,6 +151,30 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
       }),
     )
 
+    const createAppContext = (): NonNullable<RendererProps['appHelper']> => {
+      const appHelper = this.host.appHelper || {}
+      return {
+        ...appHelper,
+        utils: {
+          ...appHelper.utils,
+          router: {
+            navigate: (path: string, param?: object & { replace?: boolean }) => {
+              if (param?.replace) {
+                history.replace(withQueryParams(path, param))
+              } else {
+                history.push(withQueryParams(path, param))
+              }
+            },
+          },
+        },
+        constants: { ...appHelper.constants },
+        dataSourceEngine: this._dataSourceEngine,
+      }
+    }
+
+    this._dataSourceEngine = this.host.dataSourceEngine
+    this._appContext = createAppContext()
+
     this.disposeFunctions.push(
       this.host.connect(this, () => {
         // 用于添加到mobx依赖
@@ -174,10 +198,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
 
           // sync dataSourceEngine
           this._dataSourceEngine = this.host.dataSourceEngine
-          this._appContext = {
-            ...this._appContext,
-            dataSourceEngine: this._dataSourceEngine,
-          }
+          this._appContext = createAppContext()
 
           // sync device
           this._device = this.host.device
@@ -207,23 +228,6 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
         }
       }),
     )
-
-    this._appContext = {
-      utils: {
-        // ...getProjectUtils(this._libraryMap, host.get('utilsMetadata')),
-        router: {
-          navigate: (path: string, param?: object & { replace?: boolean }) => {
-            if (param?.replace) {
-              history.replace(withQueryParams(path, param))
-            } else {
-              history.push(withQueryParams(path, param))
-            }
-          },
-        },
-      },
-      constants: {},
-      dataSourceEngine: this._dataSourceEngine,
-    }
   }
 
   private buildComponents() {
@@ -524,32 +528,37 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     ++this.#renderGeneration
     this.#renderState = 'disposing'
 
+    const disposeFunctions = this.disposeFunctions.splice(0).reverse()
+    const failedDisposeFunctions: Array<() => void> = []
+    for (const dispose of disposeFunctions) {
+      try {
+        dispose()
+      } catch (error) {
+        failedDisposeFunctions.unshift(dispose)
+        errors.push(error)
+      }
+    }
+    this.disposeFunctions = [...failedDisposeFunctions, ...this.disposeFunctions]
+
     const renderResources = this.#renderResources
     if (renderResources) {
       errors.push(...this.#releaseRenderResources(renderResources))
     }
 
-    const disposeFunctions = this.disposeFunctions.splice(0).reverse()
-    for (const dispose of disposeFunctions) {
-      try {
-        dispose()
-      } catch (error) {
-        errors.push(error)
-      }
-    }
-
     const documentInstances = [...this.documentInstances].reverse()
+    const failedDocumentInstances: DocumentInstance[] = []
     for (const documentInstance of documentInstances) {
       try {
         documentInstance.dispose()
       } catch (error) {
+        failedDocumentInstances.unshift(documentInstance)
         errors.push(error)
       }
     }
 
     try {
-      untracked(() => {
-        this._documentInstances = []
+      runInAction(() => {
+        this._documentInstances = failedDocumentInstances
         this._layout = null
         this._libraryMap = {}
         this._componentsMap = {}
@@ -635,5 +644,3 @@ const getLowCodeComponentProps = (props: any) => {
   newProps.componentName = props._componentName
   return newProps
 }
-
-export const simulatorRenderer = new SimulatorRendererContainer()

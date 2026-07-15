@@ -85,8 +85,7 @@ const MyPlugin: PluginCreator<Options> = () => {
         e.preventDefault();
         logger.log('快捷键触发');
       };
-      hotkey.bind('ctrl+d', handleDuplicate);
-      ctx.onDispose(() => hotkey.unbind('ctrl+d', handleDuplicate));
+      ctx.onDispose(hotkey.acquireBinding('ctrl+d', handleDuplicate));
     }
   };
 };
@@ -98,7 +97,7 @@ const MyPlugin: PluginCreator<Options> = () => {
 - 参数:
   - `ctx`: 插件扩展上下文，提供扩展核心类的能力
 
-扩展核心类的方法，允许兼容插件扩展编辑器核心模块的功能。返回 Promise 时，引擎会等待扩展完成。原型扩展只适用于初始化前注册的 `legacyTrusted` 兼容插件；`agentRestricted` 会拒绝它。
+扩展核心类的方法，允许兼容插件扩展编辑器核心模块的功能。返回 Promise 时，引擎会等待扩展完成。原型扩展只适用于初始化前注册的 `legacyTrusted` 兼容插件；`agentRestricted` 会拒绝它。引擎按 manager 所有权租赁，并且只引用计数 fingerprint 与运行时函数/getter/setter 引用都相同的描述符；函数源码相同不会被视为闭包身份相同。扩展批次原子提交，最后一个所有者销毁后恢复原始原型；活动租约不能与同 Realm 的受限引擎并存。
 
 ```ts
 const MyPlugin: PluginCreator<Options> = () => {

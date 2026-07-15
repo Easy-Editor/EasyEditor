@@ -47,6 +47,32 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --config.engine-strict=${{ matrix.engine-strict }}
 
+      - name: Verify declared Node floor
+        if: matrix.node-version == '18.20.8'
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict')
+          const fs = require('node:fs')
+
+          const node18Manifests = [
+            'package.json',
+            'packages/core/package.json',
+            'packages/create-easy-editor/package.json',
+            'packages/plugin-dashboard/package.json',
+            'packages/plugin-datasource/package.json',
+            'packages/plugin-hotkey/package.json',
+            'packages/react-renderer-dashboard/package.json',
+            'packages/react-renderer/package.json',
+            'packages/renderer-core/package.json',
+          ]
+
+          assert.equal(process.version, 'v18.20.8')
+          for (const manifestPath of node18Manifests) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+            assert.equal(manifest.engines?.node, '>=18.20.8', manifestPath)
+          }
+          NODE
+
       - name: Verify Core kernel
         run: |
           pnpm --filter @easy-editor/core lint
@@ -118,5 +144,43 @@ jobs:
           pnpm --dir examples/dashboard build
           pnpm --dir examples/dashboard verify:ai-bundle
 
+      - name: Verify published API baselines
+        run: pnpm public-api:check
+
       - name: Build documentation
         run: pnpm --dir docs docs:build
+
+  portability:
+    name: Generator and template smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.engine-strict=true
+
+      - name: Verify generator and packaged template
+        run: |
+          pnpm --filter @easy-editor/create lint
+          pnpm --filter @easy-editor/create test
+          pnpm --filter @easy-editor/create types
+          pnpm --filter @easy-editor/create build
+          pnpm --filter @easy-editor/create test:template-pack

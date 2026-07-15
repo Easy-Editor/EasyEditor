@@ -43,7 +43,13 @@ export interface ApiHotkey {
    * @param callback 回调函数
    * @param action
    */
-  bind(combos: string[] | string, callback: HotkeyCallback, action?: string): Disposable
+  bind(combos: string[] | string, callback: HotkeyCallback, action?: string): ApiHotkey
+
+  /**
+   * Bind hotkeys and return the engine-owned release authority for exactly
+   * this registration. Unlike `bind`, the returned value is a disposer.
+   */
+  acquireBinding(combos: string[] | string, callback: HotkeyCallback, action?: string): Disposable
 }
 
 interface KeyMap {
@@ -70,6 +76,13 @@ interface KeyInfo {
 
 interface SequenceLevels {
   [key: string]: number
+}
+
+interface HotkeyBindingState {
+  callbacks: MutableHotkeyCallbacks
+  directMap: HotkeyDirectMap
+  directMapOwners: Record<string, symbol>
+  sequenceLevels: SequenceLevels
 }
 
 const MAP: KeyMap = {
@@ -403,6 +416,10 @@ export class Hotkey {
 
   private directMap: HotkeyDirectMap = {}
 
+  private directMapOwners: Record<string, symbol> = {}
+
+  private readonly bindingOwners = new WeakMap<HotkeyCallbackConfig, symbol>()
+
   private sequenceLevels: SequenceLevels = {}
 
   private resetTimer = 0
@@ -516,6 +533,7 @@ export class Hotkey {
     }
     this.#callBacks = {}
     this.directMap = {}
+    this.directMapOwners = {}
     this.sequenceLevels = {}
     this.ignoreNextKeyup = false
     this.ignoreNextKeypress = false
@@ -537,6 +555,65 @@ export class Hotkey {
     return this
   }
 
+  /**
+   * Acquire a binding together with engine-owned release authority.
+   *
+   * Plugin context teardown unwraps this disposer from the generation
+   * membrane and invokes it after plugin mutations have been sealed. The
+   * release path therefore deliberately bypasses the public lifecycle
+   * mutation guard while retaining retry semantics when cleanup fails.
+   */
+  acquireBinding(combos: string[] | string, callback: HotkeyCallback, action?: string): Disposable {
+    assertLifecycleMutationAllowed(this, 'hotkey.acquireBinding')
+    const combinations = Array.isArray(combos) ? [...combos] : [combos]
+    const owner = Symbol('hotkey.binding')
+    const previousState = this.#captureBindingState()
+    try {
+      this.bindMultiple(combinations, callback, action, owner)
+    } catch (error) {
+      try {
+        this.#restoreBindingState(previousState)
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Hotkey binding acquisition failed to roll back')
+      }
+      throw error
+    }
+    let released = false
+    return () => {
+      if (released) return
+      this.#releaseBinding(owner)
+      released = true
+    }
+  }
+
+  #captureBindingState(): HotkeyBindingState {
+    const callbacks: MutableHotkeyCallbacks = {}
+    for (const [key, bindings] of Object.entries(this.#callBacks)) {
+      callbacks[key] = bindings.map(binding => {
+        const clone: HotkeyCallbackConfig = {
+          ...binding,
+          modifiers: [...binding.modifiers],
+        }
+        const owner = this.bindingOwners.get(binding)
+        if (owner) this.bindingOwners.set(clone, owner)
+        return clone
+      })
+    }
+    return {
+      callbacks,
+      directMap: { ...this.directMap },
+      directMapOwners: { ...this.directMapOwners },
+      sequenceLevels: { ...this.sequenceLevels },
+    }
+  }
+
+  #restoreBindingState(state: HotkeyBindingState): void {
+    this.#callBacks = state.callbacks
+    this.directMap = state.directMap
+    this.directMapOwners = state.directMapOwners
+    this.sequenceLevels = state.sequenceLevels
+  }
+
   batchBind(hotkeys: HotkeyConfig[]): Hotkey {
     assertLifecycleMutationAllowed(this, 'hotkey.batchBind')
     for (const hotkey of hotkeys) {
@@ -551,16 +628,18 @@ export class Hotkey {
    * @param callback 回调函数
    * @param action
    */
-  unbind(combos: string[] | string, callback: HotkeyCallback, action?: string) {
+  unbind(combos: string[] | string, callback: HotkeyCallback, action?: string): void {
     assertLifecycleMutationAllowed(this, 'hotkey.unbind')
-    const combinations = Array.isArray(combos) ? combos : [combos]
+    this.#unbindMultiple(Array.isArray(combos) ? combos : [combos], callback, action)
+  }
 
-    combinations.forEach(combination => {
+  #unbindMultiple(combinations: readonly string[], callback: HotkeyCallback, action?: string): void {
+    for (const combination of combinations) {
       const info: KeyInfo = getKeyInfo(combination, action)
       const { key, modifiers } = info
       const callbacks = this.#callBacks[key]
       if (!callbacks) {
-        return
+        continue
       }
       const idx = callbacks.findIndex(
         info => haveSameModifiers(info.modifiers, modifiers) && info.callback === callback,
@@ -568,7 +647,40 @@ export class Hotkey {
       if (idx !== -1) {
         callbacks.splice(idx, 1)
       }
-    })
+    }
+  }
+
+  #releaseBinding(owner: symbol): void {
+    const previousState = this.#captureBindingState()
+    const ownedSequences = new Set<string>()
+    try {
+      for (const callbacks of Object.values(this.#callBacks)) {
+        for (let index = callbacks.length - 1; index >= 0; index -= 1) {
+          const binding = callbacks[index]
+          if (this.bindingOwners.get(binding) !== owner) continue
+          if (binding.seq) ownedSequences.add(binding.seq)
+          callbacks.splice(index, 1)
+        }
+      }
+      for (const [key, bindingOwner] of Object.entries(this.directMapOwners)) {
+        if (bindingOwner !== owner) continue
+        delete this.directMap[key]
+        delete this.directMapOwners[key]
+      }
+      for (const sequence of ownedSequences) {
+        const stillBound = Object.values(this.#callBacks).some(callbacks =>
+          callbacks.some(binding => binding.seq === sequence),
+        )
+        if (!stillBound) delete this.sequenceLevels[sequence]
+      }
+    } catch (error) {
+      try {
+        this.#restoreBindingState(previousState)
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], 'Hotkey binding release rollback failed')
+      }
+      throw error instanceof AggregateError ? error : new AggregateError([error], 'Hotkey binding release failed')
+    }
   }
 
   /**
@@ -738,7 +850,7 @@ export class Hotkey {
     this.resetTimer = globalThis.setTimeout(() => this.resetSequences(), 1000) as unknown as number
   }
 
-  private bindSequence(combo: string, keys: string[], callback: HotkeyCallback, action?: string): void {
+  private bindSequence(combo: string, keys: string[], callback: HotkeyCallback, action?: string, owner?: symbol): void {
     // const self: any = this;
     this.sequenceLevels[combo] = 0
     const increaseSequence = (nextAction: string) => {
@@ -755,12 +867,12 @@ export class Hotkey {
         this.ignoreNextKeyup = characterFromEvent(e)
       }
 
-      setTimeout(this.resetSequences, 10)
+      globalThis.setTimeout(() => this.resetSequences(), 10)
     }
     for (let i = 0; i < keys.length; ++i) {
       const isFinal = i + 1 === keys.length
       const wrappedCallback = isFinal ? callbackAndReset : increaseSequence(action || getKeyInfo(keys[i + 1]).action)
-      this.bindSingle(keys[i], wrappedCallback, action, combo, i)
+      this.bindSingle(keys[i], wrappedCallback, action, combo, i, owner)
     }
   }
 
@@ -770,9 +882,13 @@ export class Hotkey {
     action?: string,
     sequenceName?: string,
     level?: number,
+    owner?: symbol,
   ): void {
     // store a direct mapped reference for use with HotKey.trigger
-    this.directMap[`${combination}:${action}`] = callback
+    const directMapKey = `${combination}:${action}`
+    this.directMap[directMapKey] = callback
+    if (owner) this.directMapOwners[directMapKey] = owner
+    else delete this.directMapOwners[directMapKey]
 
     // make sure multiple spaces in a row become a single space
     combination = combination.replace(/\s+/g, ' ')
@@ -782,7 +898,7 @@ export class Hotkey {
     // if this pattern is a sequence of keys then run through this method
     // to reprocess each pattern one key at a time
     if (sequence.length > 1) {
-      this.bindSequence(combination, sequence, callback, action)
+      this.bindSequence(combination, sequence, callback, action, owner)
       return
     }
 
@@ -801,19 +917,21 @@ export class Hotkey {
     //
     // this is important because the way these are processed expects
     // the sequence ones to come first
-    this.#callBacks[info.key][sequenceName ? 'unshift' : 'push']({
+    const binding: HotkeyCallbackConfig = {
       callback,
       modifiers: info.modifiers,
       action: info.action,
       seq: sequenceName,
       level,
       combo: combination,
-    })
+    }
+    if (owner) this.bindingOwners.set(binding, owner)
+    this.#callBacks[info.key][sequenceName ? 'unshift' : 'push'](binding)
   }
 
-  private bindMultiple(combinations: string[], callback: HotkeyCallback, action?: string) {
+  private bindMultiple(combinations: string[], callback: HotkeyCallback, action?: string, owner?: symbol) {
     for (const item of combinations) {
-      this.bindSingle(item, callback, action)
+      this.bindSingle(item, callback, action, undefined, undefined, owner)
     }
   }
 }

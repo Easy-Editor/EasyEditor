@@ -41,7 +41,7 @@ export interface RendererProps {
   /** 主要用于设置渲染模块的全局上下文，里面定义的内容可以在低代码中通过 this 来访问，比如 this.utils */
   appHelper?: RendererAppHelper
 
-  /** Explicit policy boundary for executable expressions embedded in schema. */
+  /** Explicit policy boundary for executable expressions. Omission is fail-closed. */
   expressionEvaluator?: ExpressionEvaluator
 
   /**
@@ -159,7 +159,7 @@ export interface LocationLike {
 }
 
 export interface RendererAppHelper {
-  /** Explicit policy boundary for datasource handlers evaluated by renderer-core. */
+  /** Explicit policy boundary for datasource handlers. Omission is fail-closed. */
   expressionEvaluator?: ExpressionEvaluator
 
   /** 全局公共函数 */

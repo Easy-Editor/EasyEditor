@@ -54,8 +54,7 @@ const MyPlugin: PluginCreator<Options> = (options = {}) => ({
       event.preventDefault()
       ctx.event.emit('shortcut', { command: 'duplicate' })
     }
-    ctx.hotkey.bind('ctrl+d', handleDuplicate)
-    ctx.onDispose(() => ctx.hotkey.unbind('ctrl+d', handleDuplicate))
+    ctx.onDispose(ctx.hotkey.acquireBinding('ctrl+d', handleDuplicate))
   },
 
   async destroy(ctx) {
@@ -66,7 +65,7 @@ const MyPlugin: PluginCreator<Options> = (options = {}) => ({
 export default MyPlugin
 ```
 
-优先用 `ctx.onDispose()` 登记监听器、快捷键、计时器和其他资源的清理函数。即使插件没有实现 `destroy`，Context disposer 仍由引擎统一拥有。
+优先用 `ctx.onDispose()` 登记监听器、快捷键、计时器和其他资源的清理函数。快捷键应通过 `acquireBinding()` 获取可释放租约；引擎会在 Context 能力撤销后通过内部清理边界释放它，而不是让 `destroy` 再访问已撤销的 `ctx.hotkey`。即使插件没有实现 `destroy`，Context disposer 仍由引擎统一拥有。
 
 ## 注册插件
 
@@ -198,31 +197,38 @@ const LegacyPlugin: PluginCreator = () => ({
 
 1. 在引擎初始化前注册；
 2. 使用显式 `legacyTrusted`；
-3. 提供稳定 `extensionFingerprint` 以标识进程级扩展；
-4. 接受脚本移除和实例销毁无法撤销进程级原型副作用。
+3. 提供稳定 `extensionFingerprint` 以标识 Realm 级描述符；
+4. 接受多个兼容引擎存活期间共享同一描述符租约。
 
 ```ts
-import { createEngine, type Node, type Plugin } from '@easy-editor/core/instance'
+import { createEngine, type Node, type Plugin, type PluginExtend } from '@easy-editor/core/instance'
+
+function getPluginLabel(this: Node) {
+  return `${this.componentName}:${this.id}`
+}
+
+const nodeExtensions = {
+  getPluginLabel: { value: getPluginLabel },
+}
+
+const extendNode = ({ extend }: PluginExtend) => {
+  extend('Node', nodeExtensions)
+}
 
 const ExtendPlugin = (): Plugin => ({
   name: 'ExtendPlugin',
   extensionFingerprint: 'extend-plugin@1',
   init() {},
-  extend({ extend }) {
-    extend('Node', {
-      getPluginLabel: {
-        value(this: Node) {
-          return `${this.componentName}:${this.id}`
-        },
-      },
-    })
-  },
+  extend: extendNode,
 })
 
 const engine = createEngine({ trustPolicy: 'legacyTrusted' })
 await engine.plugins.register(ExtendPlugin())
 await engine.init()
+await engine.destroy() // 最后一个所有者销毁后恢复原始描述符
 ```
+
+插件管理器只会对 fingerprint **且运行时属性身份**都相同的描述符引用计数；函数源码相同不代表闭包相同，跨引擎共享的方法应显式复用同一个模块级函数/getter/setter 引用。扩展批次会先完整预检，提交失败时回滚本批次已经获得的租约和属性。最后一个所有者成功销毁后，原始描述符会被恢复或删除。活动租约期间不能在同一 Realm 创建 `agentRestricted` 引擎；完整性被外部篡改时销毁会失败并保留可重试状态。根兼容入口直接调用的非托管扩展，以及旧 UMD 自己产生的全局副作用，仍可能是永久的。
 
 原型扩展插件不能在引擎就绪后通过 `autoInit` 追加。`legacyTrusted` 也是受信兼容模式，不是沙箱；新插件应优先使用组合、事件、导出和显式宿主 API，而不是修改原型。
 

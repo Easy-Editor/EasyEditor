@@ -50,7 +50,7 @@ created -> initializing -> ready -> disposing -> disposed
                      \-> failed -----^        \-> failed
 ```
 
-- 外部并发生命周期调用会合并或串行化：同类调用共享进行中的 Promise；`destroy()` 等待初始化结束后再清理，`init()` 等待销毁结束后再启动下一代。
+- 任意生命周期操作进行中时，新的 `init()` / `destroy()` 都会立即抛出 `LifecycleReentrancyError`；调用方必须等待当前操作 settle 后显式重试。`ready.init()` 与 `disposed.destroy()` 是 no-op，不会应用新配置或开启新一代。
 - 初始化失败会逆序回滚已拥有的资源。
 - 销毁失败进入 `failed`，下一次 `destroy()` 会重试尚未成功的清理。
 - 一个实例销毁不会清理另一个实例的 Project、事件、热键、物料或远程资源。
@@ -110,6 +110,8 @@ engine.transactions.runOnDocument(
 
 - `insertNode`、`updateProps`、`removeNode`、`moveNode`
 - `replace`、`insertBefore`、`insertAfter`、`wrap`、`unwrap`
+
+本阶段的公共命令目录是有意关闭的：第三方插件不能注册新的内核命令类型。需要扩展写入时，应在宿主侧组合上述 typed commands 与事务，而不是把任意回调注入命令执行器。
 
 事务在写入前验证命令、文档身份和前置条件；提交后只产生一个历史单元。失败会恢复 Schema、节点身份、选区、历史、物料计数和延迟事件。观察者错误不会伪装成“未提交”。
 

@@ -55,7 +55,7 @@ created -> initializing -> ready -> disposing -> disposed
                      \-> failed -----^        \-> failed
 ```
 
-- External lifecycle calls join or serialize: callers of the same operation share its in-flight Promise; `destroy()` waits for initialization before disposing, while `init()` waits for disposal before starting the next generation.
+- While any lifecycle operation is in flight, a new `init()` or `destroy()` fails immediately with `LifecycleReentrancyError`; callers must wait for settlement and retry explicitly. `ready.init()` and `disposed.destroy()` are no-ops and neither applies new configuration nor starts a generation.
 - Failed initialization rolls owned resources back in reverse order.
 - Failed disposal enters `failed`; another `destroy()` retries unfinished cleanup.
 - Destroying one instance cannot clear another instance's Project, events, hotkeys, materials, or remote resources.
@@ -115,6 +115,8 @@ The canonical catalog contains:
 
 - `insertNode`, `updateProps`, `removeNode`, `moveNode`
 - `replace`, `insertBefore`, `insertAfter`, `wrap`, `unwrap`
+
+The public command catalog is intentionally closed in this phase: third-party plugins cannot register new kernel command kinds. Extend host writes by composing the typed commands above inside transactions rather than injecting arbitrary callbacks into the command executor.
 
 Transactions validate commands, document identity, and preconditions before writing. A commit creates one history unit. Failure restores Schema, node identity, selection, history, material counts, and deferred events. Observer failures are reported without pretending the commit did not happen.
 
