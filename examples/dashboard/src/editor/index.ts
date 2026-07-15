@@ -14,10 +14,13 @@ import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import type { RemotePackageLoadFailure, RemotePackageLoadResult } from './remote/remote-load-batch.js'
-import { engine, remoteResources } from './runtime'
+import { composeDashboardAgentHost, dashboardAgentRuntimeFeatureFlags, engine, remoteResources } from './runtime'
 import { setterMap } from './setters'
 
 import './overrides.css'
+
+export { composeDashboardAgentHost, dashboardAgentRuntimeFeatureFlags }
+export type { DashboardAgentHostAuthority } from './agent/host/index.mjs'
 
 let releaseSimulatorReady: (() => void) | undefined
 let disposePromise: Promise<void> | undefined

@@ -1,5 +1,11 @@
 import { type EngineInstance, type RemoteAccessRequest, createEngine } from '@easy-editor/core/instance'
 import { createDashboardUmdGlobals } from '../globals'
+import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
+import {
+  type DashboardAgentHost,
+  type DashboardAgentHostAuthority,
+  createDashboardAgentHost,
+} from './agent/host/index.mjs'
 import { DashboardRemoteResources } from './remote/dashboard-remote-resources'
 
 const engineReference: { current?: EngineInstance } = {}
@@ -27,6 +33,15 @@ export const engine: EngineInstance = createEngine({
 
 engineReference.current = engine
 remoteResources.bindEngine(engine)
+
+export const dashboardAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
+
+export const composeDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost | null =>
+  createDashboardAgentHost({
+    authority,
+    enabled: dashboardAgentRuntimeFeatureFlags.runtime,
+    engine,
+  })
 
 if (import.meta.env.VITE_E2E === '1') {
   Object.defineProperty(window, '__EASY_EDITOR_E2E__', {
