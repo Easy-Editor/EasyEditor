@@ -138,6 +138,52 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
   assert.ok(phases.includes('EXECUTE') && phases.includes('CHECKPOINT'))
 })
 
+test('real module Worker repairs a verification mismatch before completing', async () => {
+  const repairCall = {
+    ...call,
+    stepId: 'step-2',
+    callId: 'call-2',
+    expectedRevision: 'revision-2',
+  }
+  const endpoints = createEndpointFactory([
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [{ schemaVersion: 1, kind: 'tool-call', call }] },
+      {
+        expectedPhase: 'REPAIR',
+        events: [{ schemaVersion: 1, kind: 'tool-call', call: repairCall }, complete],
+      },
+    ],
+  ])
+  const host = new hostModule.FakeAgentHost({
+    invocationSteps: [
+      {
+        result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'revision-1' },
+        nextSnapshot: { schemaVersion: 1, revision: 'revision-2', projection: { stale: true } },
+      },
+      {
+        result: { schemaVersion: 1, callId: 'call-2', status: 'applied', revision: 'revision-3' },
+        nextSnapshot: { schemaVersion: 1, revision: 'revision-3', projection: { repaired: true } },
+      },
+    ],
+  })
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host,
+    persistence: new persistenceModule.MemoryAgentPersistence(),
+    clock: fixturesModule.createDeterministicClock(),
+    idFactory: fixturesModule.createDeterministicIdFactory('main-repair-'),
+  })
+
+  await runtime.submit({ text: 'Repair mismatch' })
+  await runtime.waitForIdle()
+  assert.equal(runtime.getSnapshot().phase, 'COMPLETED')
+  assert.equal(runtime.getSnapshot().activeTask.repairAttempts, 1)
+  assert.equal(host.invocations.length, 2)
+  await runtime.dispose()
+})
+
 test('real module Worker cancel prevents future calls', async () => {
   const endpoints = createEndpointFactory([[{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }]])
   const host = new hostModule.FakeAgentHost()
