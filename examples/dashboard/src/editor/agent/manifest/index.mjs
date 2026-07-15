@@ -218,6 +218,132 @@ const addIssueDiagnostic = (diagnostics, error, options = {}) => {
   diagnostics.push(createDiagnostic(code, message, options))
 }
 
+const inspectAdvancedDynamicValue = (value, state, depth = 0) => {
+  state.nodes += 1
+  if (state.nodes > state.limits.maxJsonNodes) {
+    throw new ManifestCompileIssue(
+      'configure-limit-exceeded',
+      'metadata.configure.advanced exceeds the safe node limit',
+    )
+  }
+  if (depth > state.limits.maxConfigureDepth) {
+    throw new ManifestCompileIssue(
+      'configure-limit-exceeded',
+      'metadata.configure.advanced exceeds the safe depth limit',
+    )
+  }
+  if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') return true
+  if (!value || typeof value !== 'object') return false
+  if (state.ancestors.has(value)) {
+    throw new ManifestCompileIssue('cycle-detected', 'metadata.configure.advanced contains a cycle')
+  }
+
+  state.ancestors.add(value)
+  try {
+    if (!Array.isArray(value) && !isPlainRecord(value)) return true
+
+    const ownKeys = Reflect.ownKeys(value)
+    if (ownKeys.length > state.limits.maxJsonNodes - state.nodes) {
+      throw new ManifestCompileIssue(
+        'configure-limit-exceeded',
+        'metadata.configure.advanced exceeds the safe node limit',
+      )
+    }
+    if (ownKeys.some(key => typeof key === 'symbol')) return true
+    for (const key of ownKeys.sort(compareUtf16)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+      if (!descriptor) continue
+      if (!('value' in descriptor)) {
+        throw new ManifestCompileIssue(
+          'accessor-rejected',
+          'metadata.configure.advanced must contain only data properties',
+        )
+      }
+      if (inspectAdvancedDynamicValue(descriptor.value, state, depth + 1)) return true
+    }
+    return false
+  } finally {
+    state.ancestors.delete(value)
+  }
+}
+
+const diagnoseAdvancedPresentation = ({ configure, diagnostics, limits }) => {
+  if (configure === undefined) return
+  let advanced
+  try {
+    if (!isPlainRecord(configure)) return
+    advanced = readOwnDataProperty(configure, 'advanced', 'metadata.configure')
+  } catch (error) {
+    addIssueDiagnostic(diagnostics, error, { sourcePath: 'advanced' })
+    return
+  }
+  if (advanced === undefined) return
+
+  try {
+    if (!isPlainRecord(advanced)) {
+      diagnostics.push(
+        createDiagnostic(
+          'advanced-presentation-excluded',
+          'Executable or dynamic configure advanced presentation was excluded',
+          { sourcePath: 'advanced' },
+        ),
+      )
+      return
+    }
+
+    let view
+    try {
+      view = readOwnDataProperty(advanced, 'view', 'metadata.configure.advanced')
+    } catch (error) {
+      addIssueDiagnostic(diagnostics, error, { sourcePath: 'advanced.view' })
+    }
+    if (view !== undefined) {
+      diagnostics.push(
+        createDiagnostic(
+          'advanced-presentation-excluded',
+          'Executable or dynamic configure advanced presentation was excluded',
+          { sourcePath: 'advanced.view' },
+        ),
+      )
+    }
+
+    const ownKeys = Reflect.ownKeys(advanced)
+    if (ownKeys.length > limits.maxJsonNodes) {
+      throw new ManifestCompileIssue(
+        'configure-limit-exceeded',
+        'metadata.configure.advanced exceeds the safe node limit',
+      )
+    }
+    let containsOtherDynamicPresentation = ownKeys.some(key => typeof key === 'symbol')
+    const inspectionState = { ancestors: new Set([advanced]), limits, nodes: 0 }
+    for (const key of ownKeys.filter(key => typeof key === 'string' && key !== 'view').sort(compareUtf16)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(advanced, key)
+      if (!descriptor) continue
+      if (!('value' in descriptor)) {
+        throw new ManifestCompileIssue(
+          'accessor-rejected',
+          'metadata.configure.advanced must contain only data properties',
+        )
+      }
+      if (inspectAdvancedDynamicValue(descriptor.value, inspectionState, 1)) {
+        containsOtherDynamicPresentation = true
+        break
+      }
+    }
+    if (containsOtherDynamicPresentation) {
+      diagnostics.push(
+        createDiagnostic(
+          'advanced-presentation-excluded',
+          'Executable or dynamic configure advanced presentation was excluded',
+          { sourcePath: 'advanced' },
+        ),
+      )
+    }
+  } catch (error) {
+    addIssueDiagnostic(diagnostics, error, { sourcePath: 'advanced' })
+  }
+}
+
 const normalizePathSegments = (value, label, allowedRoots) => {
   if (!Array.isArray(value)) {
     throw new ManifestCompileIssue('invalid-annotation', `${label} must be a non-empty path`)
@@ -810,6 +936,7 @@ export const compileSafeMaterialManifest = ({
   } catch (error) {
     addIssueDiagnostic(diagnostics, error)
   }
+  diagnoseAdvancedPresentation({ configure, diagnostics, limits })
   const sourceFields = collectFields({ configure, diagnostics, limits })
   const fields = compileFields({ annotations, bindings, diagnostics, fields: sourceFields, limits })
   const metadataLabels = {}

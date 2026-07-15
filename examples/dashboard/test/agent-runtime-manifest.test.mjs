@@ -159,15 +159,112 @@ test('safe configure compiler emits annotated shared fields and conservative pro
   assert.deepEqual(field(manifest, 'props.mode')?.valueSchema, { enum: ['a', 'b'] })
   assert.equal(manifest.fields.find(item => item.fieldId.startsWith('unsupported:unsafe:'))?.access, 'unsupported')
   assert.ok(manifest.diagnostics.some(item => item.code === 'callback-annotation-required'))
+  assert.deepEqual(
+    manifest.diagnostics.filter(item => item.code === 'advanced-presentation-excluded'),
+    [
+      {
+        code: 'advanced-presentation-excluded',
+        message: 'Executable or dynamic configure advanced presentation was excluded',
+        sourcePath: 'advanced.view',
+      },
+    ],
+  )
 
   const serialized = JSON.stringify(manifest)
-  assert.doesNotMatch(
-    serialized,
-    /must-not-leak|credential|ReactMaterialView|password|snippets|apiToken|advanced\.view/,
-  )
+  assert.doesNotMatch(serialized, /must-not-leak|credential|ReactMaterialView|password|snippets|apiToken/)
   assert.doesNotMatch(serialized, /function\s|=>/)
   assert.ok(Object.isFrozen(manifest))
   assert.ok(Object.isFrozen(manifest.fields))
+})
+
+test('advanced presentation inspection uses own descriptors and sanitizes hostile values', () => {
+  let getterInvocations = 0
+  const secret = 'advanced-descriptor-secret-must-not-leak'
+  const createAccessor = key => {
+    const target = {}
+    Object.defineProperty(target, key, {
+      enumerable: true,
+      get() {
+        getterInvocations += 1
+        throw new Error(secret)
+      },
+    })
+    return target
+  }
+  const compileAdvanced = advanced =>
+    compileSafeMaterialManifest({
+      materialRegistryVersion: 1,
+      metadata: { componentName: 'AdvancedFixture', configure: { advanced, props: [] } },
+    })
+
+  const nestedDynamic = compileAdvanced({
+    callbacks: { onSelectHook: function SecretAdvancedCallback() {} },
+    initialChildren: [{ componentName: 'Text' }],
+  })
+  assert.deepEqual(
+    nestedDynamic.diagnostics.filter(item => item.code === 'advanced-presentation-excluded'),
+    [
+      {
+        code: 'advanced-presentation-excluded',
+        message: 'Executable or dynamic configure advanced presentation was excluded',
+        sourcePath: 'advanced',
+      },
+    ],
+  )
+
+  const configureWithAccessor = { props: [] }
+  Object.defineProperty(configureWithAccessor, 'advanced', {
+    enumerable: true,
+    get() {
+      getterInvocations += 1
+      throw new Error(secret)
+    },
+  })
+  const advancedAccessor = compileSafeMaterialManifest({
+    materialRegistryVersion: 1,
+    metadata: { componentName: 'AdvancedAccessor', configure: configureWithAccessor },
+  })
+  assert.ok(
+    advancedAccessor.diagnostics.some(item => item.code === 'accessor-rejected' && item.sourcePath === 'advanced'),
+  )
+
+  const viewAccessor = compileAdvanced(createAccessor('view'))
+  assert.ok(
+    viewAccessor.diagnostics.some(item => item.code === 'accessor-rejected' && item.sourcePath === 'advanced.view'),
+  )
+
+  const nestedAccessor = compileAdvanced({ callbacks: createAccessor('onSelectHook') })
+  assert.ok(
+    nestedAccessor.diagnostics.some(item => item.code === 'accessor-rejected' && item.sourcePath === 'advanced'),
+  )
+
+  const descriptorTrap = compileAdvanced(
+    new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error(secret)
+        },
+        getPrototypeOf() {
+          return Object.prototype
+        },
+      },
+    ),
+  )
+  assert.ok(
+    descriptorTrap.diagnostics.some(
+      item =>
+        item.code === 'invalid-configure' &&
+        item.message === 'Configure data could not be inspected safely' &&
+        item.sourcePath === 'advanced.view',
+    ),
+  )
+
+  assert.equal(getterInvocations, 0)
+  assert.doesNotMatch(
+    JSON.stringify([nestedDynamic, advancedAccessor, viewAccessor, nestedAccessor, descriptorTrap]),
+    /advanced-descriptor-secret|SecretAdvancedCallback/,
+  )
 })
 
 test('callback-backed Root and Image fields use explicit rename and multi-target annotations', () => {

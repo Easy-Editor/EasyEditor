@@ -19,6 +19,7 @@ export interface SafeMaterialManifestLimits {
 
 export type SafeManifestDiagnosticCode =
   | 'accessor-rejected'
+  | 'advanced-presentation-excluded'
   | 'ambiguous-field-binding'
   | 'callback-annotation-required'
   | 'configure-limit-exceeded'
