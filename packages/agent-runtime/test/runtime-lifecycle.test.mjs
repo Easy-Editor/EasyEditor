@@ -190,7 +190,12 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
     invocationSteps: [
       {
         result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'revision-1' },
-        nextSnapshot: { schemaVersion: 1, revision: 'revision-1', projection: { title: 'City overview' } },
+        nextSnapshot: {
+          schemaVersion: 1,
+          revision: 'revision-1',
+          providerGenerations: { title: 1 },
+          projection: { title: 'City overview' },
+        },
       },
     ],
   })
@@ -292,11 +297,21 @@ test('real module Worker repairs a verification mismatch before completing', asy
     invocationSteps: [
       {
         result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'revision-1' },
-        nextSnapshot: { schemaVersion: 1, revision: 'revision-2', projection: { stale: true } },
+        nextSnapshot: {
+          schemaVersion: 1,
+          revision: 'revision-2',
+          providerGenerations: { stale: 1 },
+          projection: { stale: true },
+        },
       },
       {
         result: { schemaVersion: 1, callId: 'call-2', status: 'applied', revision: 'revision-3' },
-        nextSnapshot: { schemaVersion: 1, revision: 'revision-3', projection: { repaired: true } },
+        nextSnapshot: {
+          schemaVersion: 1,
+          revision: 'revision-3',
+          providerGenerations: { repaired: 1 },
+          projection: { repaired: true },
+        },
       },
     ],
   })

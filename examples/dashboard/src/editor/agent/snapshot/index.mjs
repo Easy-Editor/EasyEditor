@@ -380,6 +380,9 @@ const projectionMap = captures => {
   return providers
 }
 
+const providerGenerationMap = records =>
+  Object.fromEntries(records.map(record => [record.provider.id, record.generation]))
+
 const createCursor = (revision, records) =>
   `snapshot-${hashStableValue({
     revision,
@@ -449,6 +452,7 @@ export class DashboardSnapshotService {
       schemaVersion: 1,
       revision: capture.revision,
       cursor: capture.cursor,
+      providerGenerations: providerGenerationMap(capture.records),
       projection: capture.projection,
     }
   }
@@ -495,6 +499,9 @@ export class DashboardSnapshotService {
       changes = createProjectionChanges(previous.projection, current.projection)
       if (!validateProjectionChanges(previous.projection, changes)) return this.#full(capture)
     } catch {
+      return this.#full(capture)
+    }
+    if (capture.cursor === base.cursor || (changes.length > 0 && capture.revision === base.revision)) {
       return this.#full(capture)
     }
     this.#remember(capture)

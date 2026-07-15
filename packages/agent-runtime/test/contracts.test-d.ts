@@ -33,6 +33,14 @@ const observation: Promise<HostSnapshot | { readonly schemaVersion: 1 }> = host.
   taskId: 'task-1',
   mode: 'full',
 })
+const fullSnapshot: HostSnapshot = {
+  schemaVersion: 1,
+  revision: 'revision-1',
+  providerGenerations: { 'dashboard.core': 1 },
+  projection: { 'dashboard.core': {} },
+}
+// @ts-expect-error full snapshots require a provider generation vector
+const invalidFullSnapshot: HostSnapshot = { schemaVersion: 1, revision: 'revision-1', projection: {} }
 const deltaChange: HostSnapshotDeltaChange = { op: 'set', path: ['nodes', 'node-1', 'props'], value: {} }
 const delta: HostSnapshotDelta = {
   schemaVersion: 1,
@@ -84,6 +92,8 @@ const invalidOptions: AgentRuntimeOptions = { ...options, model }
 void snapshot
 void task
 void observation
+void fullSnapshot
+void invalidFullSnapshot
 void delta
 void invalidDeltaChange
 void invocation

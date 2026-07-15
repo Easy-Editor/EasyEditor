@@ -101,7 +101,12 @@ class TestHost {
 
   async observe(request) {
     this.observations.push(structuredClone(request))
-    return { schemaVersion: 1, revision: this.revision, projection: { stable: true } }
+    return {
+      schemaVersion: 1,
+      revision: this.revision,
+      providerGenerations: { stable: 1 },
+      projection: { stable: true },
+    }
   }
 
   async describeCapability(request) {
@@ -143,10 +148,11 @@ const blueprint = { schemaVersion: 1, kind: 'blueprint', summary: 'Update the da
 const complete = { schemaVersion: 1, kind: 'complete', summary: 'Done' }
 const toolCall = value => ({ schemaVersion: 1, kind: 'tool-call', call: value })
 
-const hostSnapshot = (revision = 'r0', cursor = 'cursor-0', value = 'before') => ({
+const hostSnapshot = (revision = 'r0', cursor = 'cursor-0', value = 'before', providerGeneration = 1) => ({
   schemaVersion: 1,
   revision,
   cursor,
+  providerGenerations: { 'dashboard.core': providerGeneration },
   projection: {
     'dashboard.core': {
       nodes: { 'node-1': { props: { title: value, values: [1, 2] } } },
@@ -262,10 +268,22 @@ test('immutable host delta application preserves ordered equivalence without ali
     schemaVersion: 1,
     revision: 'r2',
     cursor: 'cursor-2',
+    providerGenerations: { 'dashboard.core': 1 },
     projection: { 'dashboard.core': { nodes: { 'node-1': { props: { title: 'after' } } } } },
   })
   assert.ok(Object.isFrozen(second))
+  assert.ok(Object.isFrozen(second.providerGenerations))
   assert.ok(Object.isFrozen(second.projection['dashboard.core']))
+
+  const noOp = applyHostSnapshotDelta(
+    base,
+    hostDelta({ newRevision: base.revision, newCursor: 'cursor-no-op', changes: [] }),
+  )
+  assert.deepEqual(noOp.projection, base.projection)
+  assert.deepEqual(noOp.providerGenerations, base.providerGenerations)
+  assert.notEqual(noOp.projection, base.projection)
+  assert.equal(noOp.revision, base.revision)
+  assert.equal(noOp.cursor, 'cursor-no-op')
 })
 
 test('host delta application rejects fence, path, remove, overlap, prototype, and array traversal errors', () => {
@@ -273,6 +291,9 @@ test('host delta application rejects fence, path, remove, overlap, prototype, an
   const invalid = [
     hostDelta({ baseRevision: 'stale' }),
     hostDelta({ baseCursor: 'stale-cursor' }),
+    hostDelta({ providerGeneration: 2 }),
+    hostDelta({ newCursor: 'cursor-0' }),
+    hostDelta({ newRevision: 'r0' }),
     hostDelta({ providerId: 'missing' }),
     hostDelta({ providerId: '__proto__' }),
     hostDelta({ changes: [{ op: 'remove', path: ['nodes', 'missing'] }] }),
@@ -365,12 +386,15 @@ test('lost, reordered, cursor-mismatched, and malformed deltas force an immediat
     ['lost base revision', hostDelta({ baseRevision: 'r-lost' })],
     ['reordered revision', hostDelta({ baseRevision: 'r-previous', baseCursor: 'cursor-previous' })],
     ['cursor mismatch', hostDelta({ baseCursor: 'cursor-other' })],
+    ['stationary cursor', hostDelta({ newCursor: 'cursor-0' })],
+    ['stationary revision with changes', hostDelta({ newRevision: 'r0' })],
+    ['provider generation mismatch', hostDelta({ providerGeneration: 2 })],
     ['malformed remove', hostDelta({ changes: [{ op: 'remove', path: ['nodes', 'missing'] }] })],
   ]
 
   for (const [label, invalidDelta] of scenarios) {
     const base = hostSnapshot()
-    const recovered = hostSnapshot('r2', 'cursor-2', `full-${label}`)
+    const recovered = hostSnapshot('r2', 'cursor-2', `full-${label}`, label === 'provider generation mismatch' ? 2 : 1)
     const host = new FakeAgentHost({
       snapshot: base,
       observationSteps: [base, invalidDelta, recovered],
@@ -402,6 +426,58 @@ test('lost, reordered, cursor-mismatched, and malformed deltas force an immediat
     )
     fixture.model.assertFullyConsumed()
   }
+})
+
+test('a later provider generation transition falls back to one full observation', async () => {
+  const base = hostSnapshot()
+  const firstDelta = hostDelta()
+  const generationMismatch = hostDelta({
+    baseRevision: 'r1',
+    newRevision: 'r2',
+    baseCursor: 'cursor-1',
+    newCursor: 'cursor-2',
+    providerGeneration: 2,
+    changes: [{ op: 'set', path: ['nodes', 'node-1', 'props', 'title'], value: 'must-not-apply' }],
+  })
+  const recovered = hostSnapshot('r3', 'cursor-3', 'full-generation-2', 2)
+  const host = new FakeAgentHost({
+    snapshot: base,
+    observationSteps: [base, firstDelta, generationMismatch, recovered],
+    invocationSteps: [
+      { result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'r1' } },
+      { result: { schemaVersion: 1, callId: 'call-2', status: 'applied', revision: 'r3' } },
+    ],
+  })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call())] },
+      {
+        expectedPhase: 'PLAN_STEP',
+        matchRequest: request => request.snapshot.revision === 'r1',
+        events: [toolCall(call({ step: 2, callId: 2, revision: 'r1' }))],
+      },
+      {
+        expectedPhase: 'PLAN_STEP',
+        matchRequest: request =>
+          request.snapshot.revision === 'r3' &&
+          request.snapshot.providerGenerations['dashboard.core'] === 2 &&
+          request.snapshot.projection['dashboard.core'].nodes['node-1'].props.title === 'full-generation-2',
+        events: [complete],
+      },
+    ],
+    { host },
+  )
+
+  await fixture.machine.submit({ text: 'Advance provider generation' })
+  await fixture.machine.waitForIdle()
+
+  assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
+  assert.deepEqual(
+    host.observations.map(observation => observation.mode),
+    ['full', 'delta', 'delta', 'full'],
+  )
+  fixture.model.assertFullyConsumed()
 })
 
 test('a transport or protocol rejection propagates without being hidden by a full resync', async () => {
@@ -610,7 +686,7 @@ test('ScriptedModelAdapter rejects phase mismatches and unconsumed steps', async
     taskId: 'task-1',
     phase: 'PLAN_STEP',
     intent: { text: 'Mismatch' },
-    snapshot: { schemaVersion: 1, revision: 'r0', projection: {} },
+    snapshot: { schemaVersion: 1, revision: 'r0', providerGenerations: {}, projection: {} },
     repairAttempts: 0,
   }
   await assert.rejects(

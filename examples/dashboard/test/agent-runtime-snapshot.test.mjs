@@ -138,6 +138,9 @@ test('full snapshots are structured-clone JSON and omit host objects, callbacks,
   assert.match(serialized, /"safe":"value"/)
   assert.equal(typeof clone.revision, 'string')
   assert.equal(typeof clone.cursor, 'string')
+  assert.deepEqual(clone.providerGenerations, {
+    'dashboard.core': 1,
+  })
 })
 
 test('JSON sanitization omits nested and array accessors without invoking getters', () => {
@@ -256,6 +259,8 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
   const full = await service.observe({ mode: 'full' })
   const generation = registry.snapshot()[0].generation
 
+  assert.equal(full.providerGenerations['dashboard.core'], generation)
+
   state.document.schema.children[0].props.values = [7, 8, 9]
   state.document.mutationVersion += 1
   const delta = await service.observe({ mode: 'delta', cursor: full.cursor })
@@ -300,11 +305,36 @@ test('loss, reorder, structural change, and provider generation changes force fu
 
   const unregister = registry.register({ id: 'temporary', getVersion: () => '1', capture: () => ({ value: 1 }) })
   const withTemporary = await service.observe({ mode: 'full' })
+  const previousGeneration = withTemporary.providerGenerations.temporary
   unregister()
   registry.register({ id: 'temporary', getVersion: () => '1', capture: () => ({ value: 1 }) })
-  assert.equal(isFull(await service.observe({ mode: 'delta', cursor: withTemporary.cursor })), true, 'generation')
+  const generationResync = await service.observe({ mode: 'delta', cursor: withTemporary.cursor })
+  assert.equal(isFull(generationResync), true, 'generation')
+  assert.ok(generationResync.providerGenerations.temporary > previousGeneration)
 
   assert.ok(registry.snapshot().some(record => record.provider === coreProvider))
+})
+
+test('stationary observations return full while empty deltas may advance revision and cursor', async () => {
+  const { coreProvider, registry, service } = createHarness()
+  let version = 1
+  registry.register({ id: 'no-op', getVersion: () => String(version), capture: () => ({ stable: true }) })
+  const full = await service.observe({ mode: 'full' })
+
+  const stationary = await service.observe({ mode: 'delta', cursor: full.cursor })
+  assert.equal(isFull(stationary), true)
+  assert.equal(stationary.cursor, full.cursor)
+
+  version += 1
+  const noOpDelta = await service.observe({ mode: 'delta', cursor: stationary.cursor })
+  assert.equal(isFull(noOpDelta), false)
+  assert.deepEqual(noOpDelta.changes, [])
+  assert.notEqual(noOpDelta.newRevision, noOpDelta.baseRevision)
+  assert.notEqual(noOpDelta.newCursor, noOpDelta.baseCursor)
+  assert.equal(
+    noOpDelta.providerGeneration,
+    registry.snapshot().find(record => record.provider === coreProvider).generation,
+  )
 })
 
 test('optimistic fences retry tearing and discard a delayed replaced provider result', async () => {

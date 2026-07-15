@@ -107,6 +107,29 @@ test('strict envelopes reject unknown data and enforce private resource limits',
     () => protocol.parseProtocolEnvelope(makeEnvelope({ extra: true })),
     error => error.code === 'unknown-field',
   )
+
+  const full = {
+    schemaVersion: 1,
+    revision: 'revision-1',
+    cursor: 'cursor-1',
+    providerGenerations: { 'dashboard.core': 1 },
+    projection: { 'dashboard.core': { nodes: {} } },
+  }
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['host.observe'].parseResponse(full), full)
+  for (const invalidFull of [
+    { ...full, providerGenerations: {} },
+    { ...full, providerGenerations: { 'dashboard.core': -1 } },
+    {
+      ...full,
+      providerGenerations: JSON.parse('{"__proto__":1}'),
+      projection: JSON.parse('{"__proto__":{}}'),
+    },
+  ]) {
+    assert.throws(
+      () => rpc.agentBoundaryRpcContracts['host.observe'].parseResponse(invalidFull),
+      error => error.code === 'invalid-field',
+    )
+  }
   assert.throws(
     () => protocol.parseProtocolEnvelope(makeEnvelope({ protocolVersion: 2 })),
     error => error.code === 'protocol-version-mismatch',
@@ -214,6 +237,22 @@ test('Host and Persistence contracts reject unknown fields and preserve structur
     ],
   }
   assert.deepEqual(rpc.agentBoundaryRpcContracts['host.observe'].parseResponse(delta), delta)
+  const emptyNoOp = {
+    ...delta,
+    newRevision: delta.baseRevision,
+    newCursor: 'cursor-no-op',
+    changes: [],
+  }
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['host.observe'].parseResponse(emptyNoOp), emptyNoOp)
+  for (const stationary of [
+    { ...delta, newCursor: delta.baseCursor },
+    { ...delta, newRevision: delta.baseRevision },
+  ]) {
+    assert.throws(
+      () => rpc.agentBoundaryRpcContracts['host.observe'].parseResponse(stationary),
+      error => error.code === 'invalid-field',
+    )
+  }
   const invalidChanges = [
     [{ op: 'set', path: [], value: true }],
     [{ op: 'remove', path: ['nodes', '__proto__'] }],
@@ -477,7 +516,12 @@ test('rpc.abort cannot cancel a handler from a mismatched request context', asyn
 
 test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessagePorts', async () => {
   const { port1, port2 } = new MessageChannel()
-  const snapshot = { schemaVersion: 1, revision: 'revision-1', projection: { nodes: 2 } }
+  const snapshot = {
+    schemaVersion: 1,
+    revision: 'revision-1',
+    providerGenerations: { nodes: 1 },
+    projection: { nodes: 2 },
+  }
   const host = {
     observe: async () => snapshot,
     describeCapability: async request => ({

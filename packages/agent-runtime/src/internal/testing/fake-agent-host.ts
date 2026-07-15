@@ -39,7 +39,9 @@ export class FakeAgentHost implements AgentHost {
   readonly receiptQueries: ReceiptQueryRequest[] = []
 
   constructor(options: FakeAgentHostOptions = {}) {
-    this.#snapshot = clone(options.snapshot ?? { schemaVersion: 1, revision: 'revision-0', projection: {} })
+    this.#snapshot = clone(
+      options.snapshot ?? { schemaVersion: 1, revision: 'revision-0', providerGenerations: {}, projection: {} },
+    )
     this.#observationSteps = [...clone(options.observationSteps ?? [])]
     for (const capability of options.capabilities ?? []) {
       this.#capabilities.set(capability.capability, clone(capability))

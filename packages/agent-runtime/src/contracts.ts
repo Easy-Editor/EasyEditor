@@ -125,6 +125,7 @@ export interface HostSnapshot {
   readonly schemaVersion: 1
   readonly revision: string
   readonly cursor?: string
+  readonly providerGenerations: Readonly<Record<string, number>>
   readonly projection: JsonObject
 }
 

@@ -29,6 +29,30 @@ const jsonObject = (value: unknown, field: string): JsonObject => {
   return value as JsonObject
 }
 
+const isSafeProviderId = (value: string) => value.length > 0 && !unsafePathSegments.has(value)
+
+const parseProviderGenerations = (value: unknown, projection: JsonObject): Readonly<Record<string, number>> => {
+  const generations = jsonObject(value, 'HostSnapshot.providerGenerations')
+  const projectionIds = Object.keys(projection)
+  const generationIds = Object.keys(generations)
+  for (const providerId of projectionIds) {
+    if (!isSafeProviderId(providerId)) fail(`HostSnapshot.projection contains unsafe provider id ${providerId}`)
+  }
+  for (const providerId of generationIds) {
+    if (!isSafeProviderId(providerId)) {
+      fail(`HostSnapshot.providerGenerations contains unsafe provider id ${providerId}`)
+    }
+    nonNegativeInteger(generations[providerId], `HostSnapshot.providerGenerations.${providerId}`)
+  }
+  if (
+    projectionIds.length !== generationIds.length ||
+    projectionIds.some(providerId => !Object.hasOwn(generations, providerId))
+  ) {
+    fail('HostSnapshot.providerGenerations must exactly match projection provider ids')
+  }
+  return generations as Readonly<Record<string, number>>
+}
+
 const parsePath = (value: unknown, field: string): readonly [string, ...string[]] => {
   if (!Array.isArray(value) || value.length === 0) return fail(`${field} must be a non-empty array`)
   const path = value.map((segment, index) => {
@@ -79,11 +103,17 @@ export const parseHostSnapshotChanges = (value: unknown, field = 'HostSnapshotDe
 }
 
 export const parseHostSnapshot = (value: unknown): HostSnapshot => {
-  assertExactFields(value, ['schemaVersion', 'revision', 'projection'], ['cursor'], 'HostSnapshot')
+  assertExactFields(
+    value,
+    ['schemaVersion', 'revision', 'providerGenerations', 'projection'],
+    ['cursor'],
+    'HostSnapshot',
+  )
   if (value.schemaVersion !== 1) fail('HostSnapshot.schemaVersion must equal 1')
   nonEmptyString(value.revision, 'HostSnapshot.revision')
   if (value.cursor !== undefined) nonEmptyString(value.cursor, 'HostSnapshot.cursor')
-  jsonObject(value.projection, 'HostSnapshot.projection')
+  const projection = jsonObject(value.projection, 'HostSnapshot.projection')
+  parseProviderGenerations(value.providerGenerations, projection)
   return value as unknown as HostSnapshot
 }
 
@@ -111,13 +141,20 @@ export const parseHostSnapshotDelta = (value: unknown): HostSnapshotDelta => {
     fail('HostSnapshotDelta.providerId contains an unsafe key')
   }
   nonNegativeInteger(value.providerGeneration, 'HostSnapshotDelta.providerGeneration')
-  parseHostSnapshotChanges(value.changes)
+  const changes = parseHostSnapshotChanges(value.changes)
+  if (value.newCursor === value.baseCursor) {
+    fail('HostSnapshotDelta.newCursor must advance beyond baseCursor')
+  }
+  if (changes.length > 0 && value.newRevision === value.baseRevision) {
+    fail('HostSnapshotDelta.newRevision must advance when changes are non-empty')
+  }
   return value as unknown as HostSnapshotDelta
 }
 
 export type HostSnapshotDeltaApplyErrorCode =
   | 'base-revision-mismatch'
   | 'base-cursor-mismatch'
+  | 'provider-generation-mismatch'
   | 'missing-provider'
   | 'invalid-path'
   | 'missing-remove-target'
@@ -161,6 +198,12 @@ export const applyHostSnapshotDelta = (current: HostSnapshot, candidate: HostSna
       `expected base cursor ${base.cursor ?? '<none>'}, received ${delta.baseCursor}`,
     )
   }
+  if (base.providerGenerations[delta.providerId] !== delta.providerGeneration) {
+    throw new HostSnapshotDeltaApplyError(
+      'provider-generation-mismatch',
+      `expected provider generation ${base.providerGenerations[delta.providerId] ?? '<missing>'}, received ${delta.providerGeneration}`,
+    )
+  }
 
   const projection = structuredClone(base.projection) as MutableJsonObject
   if (!Object.hasOwn(projection, delta.providerId)) {
@@ -198,6 +241,7 @@ export const applyHostSnapshotDelta = (current: HostSnapshot, candidate: HostSna
     schemaVersion: 1,
     revision: delta.newRevision,
     cursor: delta.newCursor,
+    providerGenerations: structuredClone(base.providerGenerations),
     projection,
   })
 }
