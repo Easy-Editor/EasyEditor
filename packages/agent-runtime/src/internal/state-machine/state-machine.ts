@@ -432,7 +432,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     setPhase(task, 'OBSERVE')
     await observeFull(task)
 
-    if (mode === 'fresh') {
+    if (mode === 'fresh' || task.nextModelPhase === 'BLUEPRINT') {
       setPhase(task, 'BLUEPRINT')
       const blueprint = await runTurn(task, 'BLUEPRINT')
       if (blueprint.question) {
@@ -450,7 +450,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       }
     }
 
-    let phase: ModelTurnPhase = mode === 'fresh' ? 'PLAN_STEP' : task.nextModelPhase
+    let phase: ModelTurnPhase = 'PLAN_STEP'
+    if (mode !== 'fresh' && task.nextModelPhase === 'REPAIR') phase = 'REPAIR'
     while (!disposed && activeTask === task && !task.controller?.signal.aborted) {
       setPhase(task, phase)
       const outcome = await runTurn(task, phase)
