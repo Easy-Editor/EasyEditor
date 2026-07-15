@@ -438,6 +438,63 @@ test('actual Root/Image manifests compile on demand and refresh with real Materi
   assert.notEqual(refreshed.output.materialRegistryVersion, previousVersion)
 })
 
+test('direct Host validation rejects accessor-only keys without invoking getters or effects', async t => {
+  const { engine, host } = await createHarness(t)
+  const full = await host.observe(observeRequest())
+  const before = structuredClone(engine.project.currentDocument.exportRaw())
+
+  let getterCount = 0
+  const hostileCall = semanticCall({
+    arguments: { query: 'basic', limit: 5 },
+    callId: 'direct-accessor-key',
+    capability: 'material.search',
+    expectedRevision: full.revision,
+  })
+  Object.defineProperty(hostileCall, 'unexpected', {
+    enumerable: true,
+    get() {
+      getterCount += 1
+      return 'boom'
+    },
+  })
+
+  const rejected = await host.invoke(hostileCall)
+  assert.equal(rejected.status, 'rejected')
+  assert.equal(rejected.failure.code, DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest)
+  assert.equal(getterCount, 0)
+  assert.deepEqual(engine.project.currentDocument.exportRaw(), before)
+})
+
+test('direct Host screen.inspect rejects getter-backed nodeIds arrays before any effect', async t => {
+  const { engine, host } = await createHarness(t)
+  const full = await host.observe(observeRequest())
+  const before = structuredClone(engine.project.currentDocument.exportRaw())
+
+  let getterCount = 0
+  const nodeIds = []
+  Object.defineProperty(nodeIds, '0', {
+    enumerable: true,
+    get() {
+      getterCount += 1
+      return 'image-1'
+    },
+  })
+
+  const rejected = await host.invoke(
+    semanticCall({
+      arguments: { nodeIds },
+      callId: 'direct-nodeIds-getter',
+      capability: 'screen.inspect',
+      expectedRevision: full.revision,
+    }),
+  )
+
+  assert.equal(rejected.status, 'rejected')
+  assert.equal(rejected.failure.code, DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest)
+  assert.equal(getterCount, 0)
+  assert.deepEqual(engine.project.currentDocument.exportRaw(), before)
+})
+
 test('disposed Host closes its owned services and returns a typed rejection', async t => {
   const { host } = await createHarness(t)
   host.dispose()

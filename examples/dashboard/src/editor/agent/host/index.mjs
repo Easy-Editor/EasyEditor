@@ -38,6 +38,19 @@ const ownDataKeys = value => {
   })
 }
 
+const assertNoEnumerableAccessors = (value, label) => {
+  if (!isObjectLike(value)) return
+  for (const key of Object.keys(value)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !('value' in descriptor)) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        `${label}-accessor-properties-are-not-allowed`,
+      )
+    }
+  }
+}
+
 const boundaryClone = value => structuredClone(value)
 
 const isPlainRecord = value => {
@@ -54,6 +67,7 @@ const assertPlainRecord = (value, label) => {
 
 const assertExactKeys = (value, required, optional, label) => {
   assertPlainRecord(value, label)
+  assertNoEnumerableAccessors(value, label)
   const expected = [...required, ...optional].sort(compareCodeUnits)
   const actual = ownDataKeys(value).sort(compareCodeUnits)
   for (const key of required) {
@@ -207,9 +221,17 @@ const normalizeScreenArguments = value => {
       'screen.inspect.nodeIds-must-be-a-bounded-array',
     )
   }
-  const normalized = nodeIds.map((nodeId, index) =>
-    requireNonEmptyString(readOwnDataValue(nodeIds, String(index)), `screen.inspect.nodeIds[${index}]`),
-  )
+  const normalized = []
+  for (let index = 0; index < nodeIds.length; index += 1) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(nodeIds, String(index))
+    if (!descriptor || !('value' in descriptor)) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'screen.inspect.nodeIds-must-be-a-dense-data-array',
+      )
+    }
+    normalized.push(requireNonEmptyString(descriptor.value, `screen.inspect.nodeIds[${index}]`))
+  }
   if (new Set(normalized).size !== normalized.length) {
     throw new DashboardAgentHostError(
       DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
