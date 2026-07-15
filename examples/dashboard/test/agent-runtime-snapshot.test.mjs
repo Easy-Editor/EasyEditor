@@ -302,12 +302,10 @@ test('Core material summaries use the explicit resolver seam without touching pr
   let resolverInvocations = 0
 
   class ComponentMetaLike {
-    constructor(componentName, metadata) {
-      this.#componentName = componentName
+    constructor(metadata) {
       this.#metadata = metadata
     }
 
-    #componentName
     #metadata
 
     getMetadata() {
@@ -346,8 +344,8 @@ test('Core material summaries use the explicit resolver seam without touching pr
     resolveEntry: meta => meta.getMetadata(),
   })
   state.materials.entries = new Map([
-    ['root', new ComponentMetaLike('Root', rootMetadata)],
-    ['image', new ComponentMetaLike('Image', imageMetadata)],
+    ['root', new ComponentMetaLike(rootMetadata)],
+    ['image', new ComponentMetaLike(imageMetadata)],
   ])
 
   const full = await service.observe({ mode: 'full' })
@@ -357,29 +355,30 @@ test('Core material summaries use the explicit resolver seam without touching pr
 
   assert.equal(getterInvocations, 0)
   assert.equal(resolverInvocations, 2)
-  assert.deepEqual(summaries.map(material => material.componentName), ['Image', 'Root'])
   assert.deepEqual(
-    summaries,
-    [
-      sanitizeJsonValue({
-        componentName: 'Image',
-        title: 'Image',
-        description: 'Image summary',
-        group: 'Media',
-        category: 'Display',
-        tags: ['visual'],
-      }),
-      sanitizeJsonValue({
-        componentName: 'Root',
-        title: 'Root',
-        description: 'Root summary',
-        group: 'Layouts',
-        category: 'Structure',
-        tags: ['base'],
-      }),
-    ],
+    summaries.map(material => material.componentName),
+    ['Image', 'Root'],
   )
+  assert.deepEqual(summaries, [
+    sanitizeJsonValue({
+      componentName: 'Image',
+      title: 'Image',
+      description: 'Image summary',
+      group: 'Media',
+      category: 'Display',
+      tags: ['visual'],
+    }),
+    sanitizeJsonValue({
+      componentName: 'Root',
+      title: 'Root',
+      description: 'Root summary',
+      group: 'Layouts',
+      category: 'Structure',
+      tags: ['base'],
+    }),
+  ])
   assert.equal(JSON.stringify(clone), serialized)
+  assert.deepEqual(clone, JSON.parse(serialized))
   assert.doesNotMatch(serialized, /prototype getter|credential|authorization|secret|password/)
 })
 
@@ -400,9 +399,12 @@ test('Core material summaries ignore a getter-only resolveEntry seam and keep pl
   const summaries = full.projection['dashboard.core'].materials.summaries
 
   assert.equal(resolveEntryGetterInvocations, 0)
-  assert.deepEqual(summaries.map(material => material.componentName), ['Root', 'Text'])
-  assert.equal(JSON.stringify(clone), JSON.stringify(full))
+  assert.deepEqual(
+    summaries.map(material => material.componentName),
+    ['Root', 'Text'],
+  )
   assert.equal(JSON.stringify(clone), serialized)
+  assert.deepEqual(clone, JSON.parse(serialized))
   assert.doesNotMatch(serialized, /resolveEntry getter should not run|credential|authorization|secret|password/)
 })
 
@@ -461,9 +463,12 @@ test('Core material summaries omit entries whose resolveEntry throws secret-bear
   const summaries = full.projection['dashboard.core'].materials.summaries
 
   assert.equal(resolverInvocations, 2)
-  assert.deepEqual(summaries.map(material => material.componentName), ['Root'])
-  assert.equal(JSON.stringify(clone), JSON.stringify(full))
+  assert.deepEqual(
+    summaries.map(material => material.componentName),
+    ['Root'],
+  )
   assert.equal(JSON.stringify(clone), serialized)
+  assert.deepEqual(clone, JSON.parse(serialized))
   assert.doesNotMatch(serialized, /secret resolve failure|credential-7|password|authorization/)
 })
 

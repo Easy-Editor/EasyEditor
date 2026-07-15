@@ -289,16 +289,6 @@ const flattenDocument = root => {
   return Object.fromEntries(Object.entries(nodes).sort(([left], [right]) => compareCodeUnits(left, right)))
 }
 
-const emptyMaterialSummary = () =>
-  sanitizeJsonValue({
-    componentName: '',
-    title: '',
-    description: '',
-    group: '',
-    category: '',
-    tags: [],
-  })
-
 const summarizeMaterial = material => {
   try {
     const componentName = readOwnDataValue(material, 'componentName', null) ?? ''
@@ -314,7 +304,7 @@ const summarizeMaterial = material => {
       tags: Array.isArray(tags) ? tags : [],
     })
   } catch {
-    return emptyMaterialSummary()
+    return null
   }
 }
 
