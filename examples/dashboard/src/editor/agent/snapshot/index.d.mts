@@ -37,8 +37,8 @@ export interface CoreProjectionDocument {
 
 export interface CoreProjectionMaterials {
   readonly version: number
-  readonly entries: readonly Readonly<ComponentMetadata>[] | ReadonlyMap<string, Readonly<ComponentMetadata>>
-  readonly resolver?: (entry: unknown) => Readonly<ComponentMetadata>
+  readonly entries: readonly unknown[] | ReadonlyMap<string, unknown>
+  readonly resolveEntry?: (entry: unknown) => Readonly<ComponentMetadata>
 }
 
 export interface CoreProjectionAdapter {
