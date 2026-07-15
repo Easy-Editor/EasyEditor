@@ -523,7 +523,10 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
   assert.equal(delta.providerGeneration, generation)
   assert.notEqual(delta.newRevision, delta.baseRevision)
   assert.notEqual(delta.newCursor, delta.baseCursor)
-  assert.ok(delta.changes.some(change => change.path.at(-1) === 'title'))
+  assert.ok(
+    delta.changes.length > 0 &&
+      delta.changes.some(change => change.path.includes('title') || change.path.includes('rect')),
+  )
 
   arrayValues = [7, 8, 9]
   arrayVersion += 1
@@ -549,12 +552,12 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
 test('loss, reorder, structural change, and provider generation changes force full resync', async () => {
   const { coreProvider, registry, service, state } = createHarness()
   const first = await service.observe({ mode: 'full' })
-  state.document.schema.children[0].props.text = 'delta-1'
+  state.document.schema.children[0].title = 'delta-1'
   state.document.mutationVersion += 1
   const delta = await service.observe({ mode: 'delta', cursor: first.cursor })
   assert.equal(isFull(delta), false)
 
-  state.document.schema.children[0].props.text = 'delta-2'
+  state.document.schema.children[0].$dashboard.rect.x += 1
   state.document.mutationVersion += 1
   assert.equal(isFull(await service.observe({ mode: 'delta', cursor: first.cursor })), true, 'lost/reordered cursor')
 
@@ -620,7 +623,7 @@ test('optimistic fences retry tearing and discard a delayed replaced provider re
   const unregisterOld = registry.register(oldProvider)
   const withOldProvider = await service.observe({ mode: 'full' })
 
-  state.document.schema.children[0].props.text = 'moved'
+  state.document.schema.children[0].$dashboard.rect.x += 1
   state.document.mutationVersion += 1
   blockOldCapture = true
   const pending = service.observe({ mode: 'delta', cursor: withOldProvider.cursor })
@@ -723,12 +726,12 @@ test('cursor history is bounded and dispose releases snapshot state', async () =
   const expired = await service.observe({ mode: 'full' })
 
   for (let version = 2; version <= 4; version += 1) {
-    state.document.schema.children[0].props.text = `version-${version}`
+    state.document.schema.children[0].title = `version-${version}`
     state.document.mutationVersion = version
     await service.observe({ mode: 'full' })
   }
 
-  state.document.schema.children[0].props.text = 'after-expiry'
+  state.document.schema.children[0].title = 'after-expiry'
   state.document.mutationVersion += 1
   assert.equal(isFull(await service.observe({ mode: 'delta', cursor: expired.cursor })), true)
 
