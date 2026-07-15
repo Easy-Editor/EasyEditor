@@ -1,4 +1,87 @@
 {
+  "@easy-editor/agent-runtime": {
+    "all": [
+      "AgentHost",
+      "AgentPersistenceBatch",
+      "AgentPersistencePort",
+      "AgentPhase",
+      "AgentQuestion",
+      "AgentRuntime",
+      "AgentRuntimeBinding",
+      "AgentRuntimeFailure",
+      "AgentRuntimeOptions",
+      "AgentRuntimeSnapshot",
+      "AgentRuntimeStatus",
+      "AgentTaskSnapshot",
+      "AgentWorkerEndpoint",
+      "BoundAgentRuntimeBinding",
+      "CapabilitySchema",
+      "CapabilitySchemaRequest",
+      "HostSnapshot",
+      "HostSnapshotDelta",
+      "InvocationResult",
+      "InvocationStatus",
+      "JsonObject",
+      "JsonPrimitive",
+      "JsonValue",
+      "ObserveRequest",
+      "PersistenceCommitResult",
+      "PersistenceCommitStatus",
+      "PersistenceReadRequest",
+      "PersistenceReadResult",
+      "PersistenceRecord",
+      "ReceiptQueryRequest",
+      "SemanticCall",
+      "TaskRef",
+      "ToolReceipt",
+      "UserIntent",
+      "UserResponse",
+      "createAgentRuntime"
+    ],
+    "runtime": [
+      "createAgentRuntime"
+    ]
+  },
+  "@easy-editor/agent-runtime/testing": {
+    "all": [
+      "DeterministicClock",
+      "DeterministicIdFactory",
+      "FakeAgentHost",
+      "FakeAgentHostOptions",
+      "FakeInvocationStep",
+      "MemoryAgentPersistence",
+      "ScriptedModelAdapter",
+      "ScriptedModelAdapterOptions",
+      "ScriptedModelFault",
+      "ScriptedModelStep",
+      "createDeterministicClock",
+      "createDeterministicIdFactory"
+    ],
+    "runtime": [
+      "DeterministicClock",
+      "DeterministicIdFactory",
+      "FakeAgentHost",
+      "MemoryAgentPersistence",
+      "ScriptedModelAdapter",
+      "createDeterministicClock",
+      "createDeterministicIdFactory"
+    ]
+  },
+  "@easy-editor/agent-runtime/worker": {
+    "all": [
+      "AgentWorkerOptions",
+      "Clock",
+      "IdFactory",
+      "ModelAdapter",
+      "ModelEvent",
+      "ModelTurnPhase",
+      "ModelTurnRequest",
+      "startAgentWorker"
+    ],
+    "runtime": [
+      "startAgentWorker"
+    ]
+  },
   "@easy-editor/easypack": {
     "all": [
       "BuildToolsConfig",

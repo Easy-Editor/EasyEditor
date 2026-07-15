@@ -52,10 +52,14 @@ test('shared contracts remain type-only and expose the reviewed host seams', () 
   }
 })
 
-test('package stays private and has no public entry until the facade lane lands', () => {
+test('package publishes only the reviewed root, worker, and testing entries', () => {
   const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'))
   assert.equal(manifest.name, '@easy-editor/agent-runtime')
-  assert.equal(manifest.private, true)
-  assert.equal(manifest.main, undefined)
-  assert.equal(manifest.exports, undefined)
+  assert.equal(manifest.private, undefined)
+  assert.deepEqual(manifest.exports, {
+    '.': './src/index.ts',
+    './worker': './src/worker.ts',
+    './testing': './src/testing.ts',
+  })
+  assert.deepEqual(Object.keys(manifest.publishConfig.exports), ['.', './worker', './testing'])
 })

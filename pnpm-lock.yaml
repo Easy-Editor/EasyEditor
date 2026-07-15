@@ -125,6 +125,9 @@ importers:
 
   examples/dashboard:
     dependencies:
+      '@easy-editor/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@easy-editor/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -294,6 +297,8 @@ importers:
       vite:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@22.19.7)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/agent-runtime: {}
 
   packages/core:
     dependencies:

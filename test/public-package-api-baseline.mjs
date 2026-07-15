@@ -13,6 +13,9 @@ const updateBaseline = process.argv.includes('--update')
 // is covered by its command and packed-template smoke tests rather than an
 // importable API surface.
 const packageEntries = [
+  ['@easy-editor/agent-runtime', 'packages/agent-runtime/src/index.ts'],
+  ['@easy-editor/agent-runtime/testing', 'packages/agent-runtime/src/testing.ts'],
+  ['@easy-editor/agent-runtime/worker', 'packages/agent-runtime/src/worker.ts'],
   ['@easy-editor/easypack', 'packages/easypack/src/index.ts'],
   ['@easy-editor/plugin-dashboard', 'packages/plugin-dashboard/src/index.ts'],
   ['@easy-editor/plugin-datasource', 'packages/plugin-datasource/src/index.ts'],

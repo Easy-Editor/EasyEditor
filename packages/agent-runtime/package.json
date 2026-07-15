@@ -1,9 +1,15 @@
 {
   "name": "@easy-editor/agent-runtime",
   "version": "0.0.0",
-  "private": true,
   "description": "Worker-owned agent orchestration contracts for EasyEditor hosts",
   "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./worker": "./src/worker.ts",
+    "./testing": "./src/testing.ts"
+  },
   "files": [
     "dist",
     "LICENSE",
@@ -12,12 +18,38 @@
   "engines": {
     "node": ">=18.20.8"
   },
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "module": "dist/index.js",
+    "unpkg": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "require": "./dist/index.cjs"
+      },
+      "./worker": {
+        "types": "./dist/worker.d.ts",
+        "import": "./dist/worker.js",
+        "require": "./dist/worker.cjs"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "import": "./dist/testing.js",
+        "require": "./dist/testing.cjs"
+      }
+    }
+  },
   "scripts": {
     "format": "biome format --write .",
     "lint": "biome check .",
-    "build": "pnpm types",
+    "build": "npm-run-all -nl build:*",
+    "build:clean": "rimraf dist/",
+    "build:js": "rollup -c",
     "types": "tsc --project tsconfig.build.json",
-    "test": "node --test test/*.test.mjs && pnpm test-types",
+    "test": "pnpm build:js && node --test test/*.test.mjs && pnpm test-types",
     "test-types": "tsc --project tsconfig.test.json"
   }
 }

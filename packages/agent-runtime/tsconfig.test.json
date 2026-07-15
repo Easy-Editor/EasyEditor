@@ -6,5 +6,5 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["./src", "./test/contracts.test-d.ts"]
+  "include": ["./src", "./test/*.test-d.ts"]
 }

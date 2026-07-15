@@ -670,7 +670,9 @@ test('Dashboard strict build refreshes every declaration path it consumes', asyn
   const buildDependencies = manifest.scripts['build:deps']
 
   assert.equal(manifest.scripts.prebuild, 'pnpm run build:deps')
+  assert.equal(manifest.dependencies['@easy-editor/agent-runtime'], 'workspace:*')
   for (const packageName of [
+    '@easy-editor/agent-runtime',
     '@easy-editor/core',
     '@easy-editor/plugin-dashboard',
     '@easy-editor/plugin-datasource',

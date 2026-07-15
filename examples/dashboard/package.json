@@ -8,7 +8,7 @@
     "lint": "biome check .",
     "test": "node --test test/*.test.mjs",
     "dev": "vite",
-    "build:deps": "pnpm --filter @easy-editor/core --filter @easy-editor/plugin-dashboard --filter @easy-editor/plugin-datasource --filter @easy-editor/plugin-hotkey --filter @easy-editor/renderer-core --filter @easy-editor/react-renderer --filter @easy-editor/react-renderer-dashboard run types",
+    "build:deps": "pnpm --filter @easy-editor/agent-runtime --filter @easy-editor/core --filter @easy-editor/plugin-dashboard --filter @easy-editor/plugin-datasource --filter @easy-editor/plugin-hotkey --filter @easy-editor/renderer-core --filter @easy-editor/react-renderer --filter @easy-editor/react-renderer-dashboard run types",
     "prebuild": "pnpm run build:deps",
     "build": "tsc -b && vite build",
     "build:only": "vite build",
@@ -17,6 +17,7 @@
     "add:ui": "pnpm dlx shadcn@canary add"
   },
   "dependencies": {
+    "@easy-editor/agent-runtime": "workspace:*",
     "@easy-editor/core": "workspace:*",
     "@easy-editor/plugin-dashboard": "workspace:*",
     "@easy-editor/plugin-datasource": "workspace:*",
