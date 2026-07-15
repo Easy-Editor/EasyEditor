@@ -56,6 +56,13 @@ pnpm install
 pnpm example:dashboard
 ```
 
+The release-gated Dashboard lifecycle smoke uses Chromium:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues and pull requests to help improve this project.

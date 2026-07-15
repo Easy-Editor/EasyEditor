@@ -117,7 +117,7 @@ engine.transactions.runOnDocument(
 
 ## 6. Agent 阶段暂缓
 
-本阶段只冻结可实例化、可销毁、可验证、可事务化且信任边界明确的框架内核。现有 Agent 实验不属于 Stable `EngineInstance` 契约，也不应反向决定框架对象模型；Agent Runtime、传输、授权和审批协议将在框架契约稳定后单独规划。
+本阶段只冻结可实例化、可销毁、可验证、可事务化且信任边界明确的框架内核。此前 Agent 实验已从本发布线隔离，Core 不发布 `./agent` 或 `./agent-channel` 子路径；Agent Runtime、传输、授权和审批协议将在框架契约稳定后单独规划。
 
 ## 7. 远程资源与销毁
 

@@ -146,7 +146,7 @@ const health = Object.freeze({
 
 ## Tighten remote resources; defer Agent
 
-Agent Runtime, transport, authorization, and approval protocols are outside this framework migration. Complete the `@easy-editor/core/instance` ownership, lifecycle, transaction, and trust-boundary migration first; Agent contracts will be designed separately after the framework stabilizes.
+Agent Runtime, transport, authorization, and approval protocols are outside this framework migration. The current Core package provides neither an `./agent` nor an `./agent-channel` subpath. Complete the `@easy-editor/core/instance` ownership, lifecycle, transaction, and trust-boundary migration first; Agent contracts will be designed separately after the framework stabilizes.
 
 Remote access requires both trust-policy permission and a host `RemoteAdapter` allowlist. The remote registry records readonly resource envelopes; its `data` field remains an opaque capability owned by the adapter. `engine.destroy()` disposes the adapter, loading state, and registry. A `RemoteAdapter` is a trusted host extension, and its `init()` / `dispose()` hooks must not call the same engine lifecycle.
 

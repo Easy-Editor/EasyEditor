@@ -142,24 +142,12 @@ test('callback transactions reject raw Document compatibility writes that bypass
   assert.equal(root.props.type, 'map')
 })
 
-test('Agent transactions block Project.config and Project.set writes while settling', async t => {
+test('typed transactions block Project.config and Project.set writes while settling', async t => {
   const { engine } = await createReadyEngine(t)
   engine.project.load(createProjectSchema(), true)
   const document = engine.project.currentDocument
   engine.project.config = { mode: 'before' }
-  engine.project.set('customAgentState', 'before')
-  const capability = engine.agentCapabilities.issue({
-    subjectId: 'agent:project-boundary-regression',
-    documentIds: [document.id],
-    commandTypes: ['updateProps'],
-    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
-  })
-  const snapshot = capability.snapshot(document.id)
-  const plan = capability.preview({
-    documentId: document.id,
-    baseRevision: snapshot.revision,
-    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'after' } }],
-  })
+  engine.project.set('customState', 'before')
   const blocked = []
   const disposeReaction = reaction(
     () => document.root.getPropValue('title'),
@@ -168,7 +156,7 @@ test('Agent transactions block Project.config and Project.set writes while settl
         () => {
           engine.project.config = { mode: 'leaked' }
         },
-        () => engine.project.set('customAgentState', 'leaked'),
+        () => engine.project.set('customState', 'leaked'),
       ]) {
         try {
           attempt()
@@ -180,13 +168,14 @@ test('Agent transactions block Project.config and Project.set writes while settl
   )
   t.after(disposeReaction)
 
-  const receipt = capability.execute(plan.planId)
+  const result = engine.transactions.run([{ type: 'updateProps', nodeId: document.root.id, props: { title: 'after' } }])
 
-  assert.equal(receipt.status, 'committed')
+  assert.equal(result.commandCount, 1)
+  assert.equal(document.root.getPropValue('title'), 'after')
   assert.equal(blocked.length, 2)
   assert.ok(blocked.every(error => /project mutation is blocked/i.test(error.message)))
   assert.deepEqual(engine.project.config, { mode: 'before' })
-  assert.equal(engine.project.get('customAgentState'), 'before')
+  assert.equal(engine.project.get('customState'), 'before')
 })
 
 test('Project.removeDocument performs the complete Document.remove lifecycle exactly once', async t => {

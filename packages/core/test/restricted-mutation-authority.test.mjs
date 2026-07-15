@@ -173,20 +173,10 @@ test('engine model identities and authority-bearing references are runtime immut
     [engine, 'innerPlugins', 'Engine.innerPlugins'],
     [engine, 'transactions', 'Engine.transactions'],
     [engine, 'commands', 'Engine.commands'],
-    [engine, 'agentCapabilities', 'Engine.agentCapabilities'],
     [engine, 'remote', 'Engine.remote'],
     [engine.transactions, 'events', 'TransactionManager.events'],
     [engine.transactions, 'host', 'TransactionManager.host'],
     [engine.commands, 'transactions', 'CommandManager.transactions'],
-    [engine.agentCapabilities, 'host', 'AgentCapabilityManager.host'],
-    [engine.agentCapabilities, 'auditRecordBytes', 'AgentCapabilityManager.auditRecordBytes'],
-    [engine.agentCapabilities, 'auditRecords', 'AgentCapabilityManager.auditRecords'],
-    [engine.agentCapabilities, 'baselines', 'AgentCapabilityManager.baselines'],
-    [engine.agentCapabilities, 'capabilities', 'AgentCapabilityManager.capabilities'],
-    [engine.agentCapabilities, 'domainEvents', 'AgentCapabilityManager.domainEvents'],
-    [engine.agentCapabilities, 'plans', 'AgentCapabilityManager.plans'],
-    [engine.agentCapabilities, 'portSessions', 'AgentCapabilityManager.portSessions'],
-    [engine.agentCapabilities, 'terminalPlans', 'AgentCapabilityManager.terminalPlans'],
     [engine.editor, 'engineConfig', 'Editor.engineConfig'],
     [engine.editor, 'eventBus', 'Editor.eventBus'],
     [engine.remote, 'loadingState', 'Engine.remote.loadingState'],
@@ -390,7 +380,7 @@ test('simulator graph keeps its project, designer, viewport, scroller, and event
   assert.equal(engine.project.simulator, null)
 })
 
-test('document identity accessors and monotonic version clock keep old Agent plans stale', async t => {
+test('document identity accessors and monotonic version clock resist reflective rollback', async t => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
   t.after(() => engine.destroy())
@@ -399,18 +389,6 @@ test('document identity accessors and monotonic version clock keep old Agent pla
 
   const document = engine.project.currentDocument
   const originalSchema = structuredClone(document.export())
-  const capability = engine.agentCapabilities.issue({
-    subjectId: 'agent:runtime-clock',
-    documentIds: [document.id],
-    commandTypes: ['updateProps'],
-    componentProps: { Page: { title: { type: 'string', maxBytes: 4096 } } },
-  })
-  const snapshot = capability.snapshot(document.id)
-  const plan = capability.preview({
-    documentId: document.id,
-    baseRevision: snapshot.revision,
-    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'agent-write' } }],
-  })
   const baselineVersion = document.mutationVersion
 
   engine.commands.execute({ type: 'updateProps', nodeId: document.root.id, props: { title: 'temporary-write' } })
@@ -425,11 +403,6 @@ test('document identity accessors and monotonic version clock keep old Agent pla
   assertRuntimeNonShadowable(document, 'mutationVersion', baselineVersion, 'Document.mutationVersion')
   assertRuntimeNonShadowable(document, 'id', 'shadow-document-id', 'Document.id')
   assertRuntimeNonShadowable(document, 'rootNode', null, 'Document.rootNode')
-
-  const error = await captureFailure(() => capability.execute(plan.planId))
-  assert.equal(error.name, 'AgentPlanStaleError')
-  assert.equal(error.code, 'agent.plan.stale')
-  assert.equal(error.committed, false)
   assert.deepEqual(document.export(), originalSchema)
 })
 
@@ -613,7 +586,7 @@ test('legacyTrusted preserves direct model mutation compatibility', async t => {
   assert.equal(engine.project.config.nested.enabled, false)
 })
 
-test('restricted host composition, typed transactions, Agent capability, and engine undo-redo remain usable', async () => {
+test('restricted host composition, typed transactions, and engine undo-redo remain usable', async () => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
   await engine.init()
@@ -634,22 +607,6 @@ test('restricted host composition, typed transactions, Agent capability, and eng
   assert.equal(document.root.getPropValue('title'), 'before')
   engine.redo(document)
   assert.equal(document.root.getPropValue('title'), 'typed')
-
-  const capability = engine.agentCapabilities.issue({
-    subjectId: 'agent:mutation-authority',
-    documentIds: [document.id],
-    commandTypes: ['updateProps'],
-    componentProps: { Page: { title: { type: 'string', maxBytes: 16 * 1024 } } },
-  })
-  const snapshot = capability.snapshot(document.id)
-  const plan = capability.preview({
-    documentId: document.id,
-    baseRevision: snapshot.revision,
-    commands: [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'agent' } }],
-  })
-  const receipt = capability.execute(plan.planId)
-  assert.match(receipt.status, /^committed/)
-  assert.equal(document.root.getPropValue('title'), 'agent')
 
   engine.unloadProject()
   assert.equal(engine.project.documents.length, 0)

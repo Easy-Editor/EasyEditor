@@ -8,6 +8,8 @@
   "files": [
     "dist",
     "template",
+    "!template/**/node_modules",
+    "!template/**/*.tsbuildinfo",
     "README.md"
   ],
   "bin": {

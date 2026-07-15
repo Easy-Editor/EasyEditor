@@ -56,6 +56,13 @@ pnpm install
 pnpm example:dashboard
 ```
 
+Dashboard 生命周期的发布门禁使用 Chromium：
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
 ## 贡献
 
 欢迎提交 Issue 和 PR，一起完善这个项目。

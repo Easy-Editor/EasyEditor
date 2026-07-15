@@ -2,23 +2,11 @@ import path from 'node:path'
 import federation from '@originjs/vite-plugin-federation'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { type Plugin, defineConfig, loadEnv } from 'vite'
-import { createAiChatGateway } from './server/ai-chat-gateway.mjs'
-
-const aiChatGatewayPlugin = (env: Readonly<Record<string, string | undefined>>): Plugin => ({
-  name: 'easy-editor-ai-chat-gateway',
-  configureServer(server) {
-    const gateway = createAiChatGateway({ env })
-    server.middlewares.use((request, response, next) => {
-      void gateway(request, response, next)
-    })
-  },
-})
+import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
   plugins: [
-    aiChatGatewayPlugin({ ...process.env, ...loadEnv(mode, __dirname, '') }),
     react({
       babel: {
         exclude: 'node_modules/**',
@@ -64,4 +52,4 @@ export default defineConfig(({ mode }) => ({
   build: {
     target: 'esnext',
   },
-}))
+})

@@ -610,7 +610,6 @@ test('Dashboard production code does not value-import the legacy Core facade', a
 
   for (const path of files) {
     const sourcePath = relative(sourceRoot, path)
-    if (sourcePath === 'editor/agent.ts') continue
     const source = await readFile(path, 'utf8')
     const imports = source.matchAll(/import\s*{([^}]*)}\s*from\s*['"]@easy-editor\/core['"]/gs)
 
@@ -625,6 +624,36 @@ test('Dashboard production code does not value-import the legacy Core facade', a
       if (forbidden.length) violations.push(`${sourcePath}: ${forbidden.join(', ')}`)
     }
   }
+
+  assert.deepEqual(violations, [])
+})
+
+test('Dashboard framework baseline has no Agent or AI runtime entrypoints', async () => {
+  const productionFiles = [
+    ...(await walk(sourceRoot)).filter(path => ['.js', '.mjs', '.mts', '.ts', '.tsx'].includes(extname(path))),
+    join(dashboardRoot, 'server/index.mjs'),
+    join(dashboardRoot, 'vite.config.mts'),
+  ]
+  const forbiddenPatterns = [
+    ['Core Agent import', /@easy-editor\/core\/agent(?:-channel)?/],
+    ['Agent Worker entry', /agent\.worker/],
+    ['AI gateway route', /\/api\/ai\/chat/],
+  ]
+  const violations = []
+
+  for (const path of productionFiles) {
+    const source = await readFile(path, 'utf8')
+    for (const [name, pattern] of forbiddenPatterns) {
+      if (pattern.test(source)) violations.push(`${relative(dashboardRoot, path)}: ${name}`)
+    }
+  }
+
+  const manifest = JSON.parse(await readFile(join(dashboardRoot, 'package.json'), 'utf8'))
+  const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
+  for (const dependency of ['@ai-sdk/openai', '@ai-sdk/react', 'ai', 'zod']) {
+    if (dependency in dependencies) violations.push(`package.json: ${dependency}`)
+  }
+  if ('verify:ai-bundle' in manifest.scripts) violations.push('package.json: verify:ai-bundle')
 
   assert.deepEqual(violations, [])
 })
@@ -810,62 +839,4 @@ test('Dashboard persistence is versioned and hotkey cleanup uses engine-owned le
   assert.match(moveHotkey, /ctx\.onDispose\(release\)/)
   assert.doesNotMatch(moveHotkey, /hotkey\.unbind/)
   assert.doesNotMatch(moveHotkey, /destroy\(ctx\)/)
-})
-
-test('AI UI cannot observe Agent authority or raw editor state', async () => {
-  const uiFiles = ['components/ai-chat/AiChatDialog.tsx', 'components/ai-chat/use-custom-chat.ts']
-  const forbiddenUiReferences = [
-    'AgentCapability',
-    'AgentPlanPreview',
-    'approveAndExecute',
-    'createCanvasProjection',
-    'createDashboardAgentContext',
-    'executeAiCommands',
-    'planId',
-    'preview.effects',
-    'nodeIds',
-    'nodeIdsByAlias',
-    'snapshot.schema',
-    "fetch('/api/ai/chat'",
-  ]
-  const violations = []
-
-  for (const sourcePath of uiFiles) {
-    const source = await readFile(join(sourceRoot, sourcePath), 'utf8')
-    for (const reference of forbiddenUiReferences) {
-      if (source.includes(reference)) violations.push(`${sourcePath}: ${reference}`)
-    }
-  }
-
-  assert.deepEqual(violations, [])
-})
-
-test('Agent Worker owns projection and transport without value-importing the Core facade', async () => {
-  const worker = await readFile(join(sourceRoot, 'editor/agent.worker.ts'), 'utf8')
-  const host = await readFile(join(sourceRoot, 'editor/agent.ts'), 'utf8')
-
-  assert.doesNotMatch(worker, /from\s+['"]@easy-editor\/core['"]/)
-  assert.match(worker, /from\s+['"]@easy-editor\/core\/agent-channel['"]/)
-  assert.match(worker, /createCanvasProjection\(snapshot\.schema\)/)
-  assert.match(worker, /fetch\(['"]\/api\/ai\/chat['"]/)
-  assert.match(host, /new Worker\(new URL\(['"]\.\/agent\.worker\.ts['"], import\.meta\.url\)/)
-  assert.doesNotMatch(host, /snapshot\.schema|nodeIdsByAlias|fetch\(['"]\/api\/ai\/chat['"]/)
-})
-
-test('Dashboard Agent grants explicit component props and Text never forwards unknown schema props', async () => {
-  const host = await readFile(join(sourceRoot, 'editor/agent.ts'), 'utf8')
-  const text = await readFile(join(sourceRoot, 'editor/materials/basic/text/component.tsx'), 'utf8')
-
-  assert.match(host, /DASHBOARD_AGENT_COMPONENT_PROPS/)
-  assert.match(host, /componentProps:\s*DASHBOARD_AGENT_COMPONENT_PROPS/)
-  assert.match(host, /extraValues:\s*DASHBOARD_AGENT_EXTRA_VALUES/)
-  assert.match(host, /requiredOnInsert:\s*true/)
-  assert.match(host, /minimum:\s*-100_000,\s*maximum:\s*100_000/)
-  assert.match(host, /maximum:\s*16_384/)
-  assert.match(host, /exclusiveMinimum:\s*true/)
-  assert.match(host, /Image:\s*Object\.freeze\(\{\}\)/)
-  assert.doesNotMatch(host, /Image:[\s\S]*?src:/)
-  assert.match(host, /text:\s*Object\.freeze\(\{\s*maxBytes:\s*8\s*\*\s*1024,\s*type:\s*['"]string['"]/)
-  assert.doesNotMatch(text, /\.\.\.rest/)
-  assert.doesNotMatch(text, /\{\.\.\.[^}]+\}/)
 })

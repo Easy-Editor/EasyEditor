@@ -19,7 +19,7 @@ const NumberSetter = (props: NumberSetterProps) => {
           suffix && 'pr-8',
         )}
         placeholder={placeholder || ''}
-        value={value ?? initialValue}
+        value={value ?? initialValue ?? ''}
         onChange={e => onChange(+e.target.value)}
       />
       {suffix && (

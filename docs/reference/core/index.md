@@ -8,7 +8,7 @@ EasyEditor v2 的稳定框架边界是宿主拥有的 `EngineInstance`。实例�
 | --- | --- | --- |
 | **Stable** | `@easy-editor/core/instance` | 工厂创建的实例生命周期、Schema 校验、命令、事务和宿主注册 API |
 | **Compatibility（Web adapter）** | Designer、Project、Document、Node、Event 和面向 DOM 的 Simulator 类型 | 用于现有 Web 渲染器和读取集成；原始模型修改方法不是稳定的 v2 写入 API |
-| **Deferred / Internal** | Agent 实验和具体引擎实现 | Agent Runtime 不属于本轮框架收束；具体构造和可变服务注入不是公共 API |
+| **Deferred / Internal** | 未来 Agent Runtime 和具体引擎实现 | 当前框架基线不发布 Agent 子路径；具体构造和可变服务注入不是公共 API |
 
 根入口 `@easy-editor/core` 是 v1 迁移 facade，不属于 Stable 实例契约。
 
@@ -253,7 +253,7 @@ export function getEngineHealth(engine: EngineInstance) {
 
 ### Agent 阶段暂缓
 
-Agent Runtime、传输、授权和审批协议不属于本阶段的 Stable 框架契约，也不从 `EngineInstance` 表面获得稳定承诺。现有实验入口会在框架契约稳定后的 Agent 阶段单独审视。
+Agent Runtime、传输、授权和审批协议不属于本阶段的 Stable 框架契约，也不从 `EngineInstance` 表面获得稳定承诺。当前 Core 包不发布 `./agent` 或 `./agent-channel` 子路径；相关对象模型将在框架契约稳定后的 Agent 阶段重新设计。
 
 ### 远程资源
 
@@ -278,7 +278,7 @@ Agent Runtime、传输、授权和审批协议不属于本阶段的 Stable 框�
 | `@easy-editor/easypack` | Node.js `>=20.0.0` | 只在 Node 20 车道验证 |
 | 仓库包管理器 | pnpm `>=9.12.2`；CI 与 lockfile 使用 pnpm `10.25.0` | CI 使用 frozen lockfile 安装 |
 | 渲染器 | 已交付 React 渲染器 | 其他框架是扩展目标，不是已交付支持 |
-| 浏览器 | 通过 `pnpm example:dashboard` 进行 Dashboard 开发验证 | Chromium 人工 smoke；自动浏览器 E2E 尚未进入发布门禁 |
+| 浏览器 | 通过 `pnpm example:dashboard` 进行 Dashboard 开发验证 | Chromium 生命周期、刷新、持久化、预览与控制台错误 E2E 已进入发布门禁 |
 | 操作系统 | 包应保持平台无关 | Ubuntu 运行全量门禁；macOS 与 Windows 运行 generator 和 packed-template 发布 smoke |
 
 ## 根入口 facade

@@ -84,7 +84,7 @@ export interface BoundTransactionOptions {
   /** Re-run a pure invariant after MobX reactions settle but before commit. */
   readonly settledPostcondition?: TransactionPostcondition
   readonly invokeNodeCallbacks?: boolean
-  /** Agent boundaries discard executable domain-event observers. */
+  /** External boundaries can suppress executable domain-event observers. */
   readonly publishEvents?: boolean
 }
 

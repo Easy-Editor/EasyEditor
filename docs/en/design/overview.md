@@ -122,7 +122,7 @@ Transactions validate commands, document identity, and preconditions before writ
 
 ## 6. Agent phase deferred
 
-This phase freezes a framework kernel that is instantiable, disposable, verifiable, transactional, and explicit about trust boundaries. Existing Agent experiments are outside the Stable `EngineInstance` contract and must not drive the framework object model. Agent Runtime, transport, authorization, and approval protocols will be designed separately after the framework contract is stable.
+This phase freezes a framework kernel that is instantiable, disposable, verifiable, transactional, and explicit about trust boundaries. Previous Agent experiments are isolated from this release line, and Core publishes neither an `./agent` nor an `./agent-channel` subpath. Agent Runtime, transport, authorization, and approval protocols will be designed separately after the framework contract is stable.
 
 ## 7. Remote resources and disposal
 

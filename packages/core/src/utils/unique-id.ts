@@ -20,8 +20,8 @@ const createRealmEntropy = (): string => {
 /**
  * Generates a realm-unique correlation ID.
  *
- * These IDs are not bearer secrets: Agent authority is held by closures and
- * MessagePort ownership. Entropy separates realms while the monotonic suffix
+ * These IDs are not bearer secrets: runtime authority is held by closures and
+ * host-side state. Entropy separates realms while the monotonic suffix
  * guarantees uniqueness within one realm, including Node 18 without global
  * Web Crypto.
  *

@@ -1,6 +1,5 @@
 import EventEmitter from 'events'
 import { runInAction } from 'mobx'
-import { AgentCapabilityManager } from '../agent/capability-manager'
 import { CommandManager, TransactionCommittedError, TransactionManager } from '../commands'
 import { isTransactionBoundaryActive, transactionManagerConstructionAuthority } from '../commands/transaction-boundary'
 import { Config, type ConfigOptions } from '../config'
@@ -62,8 +61,6 @@ import { Editor } from './editor'
 export type EngineLifecycleState = 'created' | 'initializing' | 'ready' | 'disposing' | 'disposed' | 'failed'
 
 const engineLifecycleStates = new WeakMap<EngineInstance, EngineLifecycleState>()
-
-const engineAgentCapabilities = new WeakMap<EngineInstance, AgentCapabilityManager>()
 
 const engineInnerPlugins = new WeakMap<EngineInstance, Plugins>()
 
@@ -176,8 +173,8 @@ interface EngineInstanceConstructionOptions extends EngineInstanceOptions {
  * Host-owned EasyEditor engine contract.
  *
  * Instances are created exclusively through `createEngine()`. Concrete
- * construction, compatibility service injection, lifecycle guards, and Agent
- * hosting remain implementation details rather than framework dependencies.
+ * construction, compatibility service injection, and lifecycle guards remain
+ * implementation details rather than framework dependencies.
  */
 export interface EngineInstance {
   readonly lifecycleState: EngineLifecycleState
@@ -281,8 +278,6 @@ class EngineInstanceImpl implements EngineInstance {
 
   readonly #innerPlugins: Plugins
 
-  readonly #agentCapabilities: AgentCapabilityManager
-
   readonly #assertLifecycleMutationAllowed = (origin: string): void => {
     const state = getEngineLifecycleState(this)
     if (state === 'disposing' || state === 'disposed' || state === 'failed') {
@@ -353,7 +348,6 @@ class EngineInstanceImpl implements EngineInstance {
           } else {
             const restrictedRoots = new Set<object>([
               this,
-              this.#agentCapabilities,
               this.clipboard,
               this.commands,
               this.config,
@@ -448,8 +442,6 @@ class EngineInstanceImpl implements EngineInstance {
         transactionManagerConstructionAuthority,
       )
       this.commands = new CommandManager(this.transactions, transactionManagerConstructionAuthority)
-      this.#agentCapabilities = new AgentCapabilityManager(this)
-      engineAgentCapabilities.set(this, this.#agentCapabilities)
       engineInnerPlugins.set(this, this.#innerPlugins)
       this.#wireEditorContext()
 
@@ -544,7 +536,6 @@ class EngineInstanceImpl implements EngineInstance {
       await extendPluginManager(this.#innerPlugins)
       await initPluginManager(this.#innerPlugins)
       this.#transitionLifecycle('ready')
-      this.#agentCapabilities.activate()
       this.logger.info('Engine initialization successfully')
     } catch (error) {
       const rollbackErrors: unknown[] = []
@@ -633,7 +624,6 @@ class EngineInstanceImpl implements EngineInstance {
       }
     }
 
-    await cleanup(() => runInternalLifecycleTeardown<[string]>(this.#agentCapabilities, 'engine.lifecycle'))
     const initScope = this.#initScope
     await cleanup(() => initScope?.dispose())
     this.#initScope = undefined
@@ -656,9 +646,6 @@ class EngineInstanceImpl implements EngineInstance {
     await cleanup(() => runInternalLifecycleTeardown(this.editor))
     await cleanup(() => runInternalLifecycleTeardown(this.eventBus))
     await cleanup(() => runInternalLifecycleTeardown(this.config, { preserve: ['VERSION'] }))
-    // Plugins can run arbitrary teardown hooks; finish with a final capability
-    // and audit-subscriber sweep so no late teardown registration survives.
-    await cleanup(() => runInternalLifecycleTeardown<[string]>(this.#agentCapabilities, 'engine.lifecycle.finalize'))
 
     if (failures.length > 0) {
       this.#transitionLifecycle('failed')
@@ -872,7 +859,6 @@ class EngineInstanceImpl implements EngineInstance {
       this,
       this.clipboard,
       this.commands,
-      this.#agentCapabilities,
       this.config,
       this.designer,
       this.editor,
@@ -895,7 +881,6 @@ class EngineInstanceImpl implements EngineInstance {
 
     const ownedTeardownRoots = [
       this.clipboard,
-      this.#agentCapabilities,
       this.config,
       this.designer,
       this.editor,
@@ -951,15 +936,6 @@ export const createEngine = (options: EngineInstanceOptions = {}): EngineInstanc
 /** @internal Compatibility-only constructor used by the legacy root facade. */
 export const createLegacyEngine = (options: EngineInstanceConstructionOptions): EngineInstance =>
   new EngineInstanceImpl(options)
-
-/** @internal Exported only through the experimental Agent entry. */
-export const getEngineAgentCapabilities = (engine: EngineInstance): AgentCapabilityManager => {
-  const capabilities = engineAgentCapabilities.get(engine)
-  if (!capabilities) {
-    throw new TypeError('Agent capabilities require an EngineInstance created by @easy-editor/core/instance')
-  }
-  return capabilities
-}
 
 /** @internal Test-only access for white-box kernel regressions. */
 export const getEngineInnerPlugins = (engine: EngineInstance): Plugins => {

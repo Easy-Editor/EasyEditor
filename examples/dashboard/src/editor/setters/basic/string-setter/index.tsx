@@ -13,7 +13,7 @@ const StringSetter = (props: StringSetterProps) => {
   return (
     <div className='relative w-full'>
       <Input
-        value={value || initialValue}
+        value={value ?? initialValue ?? ''}
         placeholder={placeholder || ''}
         onChange={e => onChange(e.target.value)}
         className={cn('h-8 !text-xs px-2 py-[5px]', suffix && 'pr-8')}

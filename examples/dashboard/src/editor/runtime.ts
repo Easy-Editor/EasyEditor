@@ -27,3 +27,12 @@ export const engine: EngineInstance = createEngine({
 
 engineReference.current = engine
 remoteResources.bindEngine(engine)
+
+if (import.meta.env.VITE_E2E === '1') {
+  Object.defineProperty(window, '__EASY_EDITOR_E2E__', {
+    configurable: true,
+    value: Object.freeze({
+      getEngineState: () => engine.lifecycleState,
+    }),
+  })
+}

@@ -8,7 +8,7 @@ The stable EasyEditor v2 framework boundary is a host-owned `EngineInstance`. On
 | --- | --- | --- |
 | **Stable** | `@easy-editor/core/instance` | Factory-owned engine lifecycle, Schema validation, commands, transactions, and host registration APIs |
 | **Compatibility (Web adapter)** | Designer, Project, Document, Node, Event, and DOM-oriented Simulator types | Available for existing Web renderers and read integration; raw model mutation methods are not stable v2 write APIs |
-| **Deferred / Internal** | Agent experiments and concrete engine internals | Agent Runtime is outside this framework-convergence phase; concrete construction and mutable service injection are not public APIs |
+| **Deferred / Internal** | Future Agent Runtime and concrete engine internals | This framework baseline publishes no Agent subpath; concrete construction and mutable service injection are not public APIs |
 
 The root `@easy-editor/core` entry is a v1 migration facade, not part of the Stable instance contract.
 
@@ -253,7 +253,7 @@ The current `DashboardPlugin` extends prototypes in its shared Realm, so a compa
 
 ### Agent phase deferred
 
-Agent Runtime, transport, authorization, and approval protocols are outside this phase's Stable framework contract and receive no stability promise from `EngineInstance`. Existing experiments will be reviewed separately during the Agent phase after the framework contract is stable.
+Agent Runtime, transport, authorization, and approval protocols are outside this phase's Stable framework contract and receive no stability promise from `EngineInstance`. The current Core package publishes neither an `./agent` nor an `./agent-channel` subpath; those contracts will be redesigned separately after the framework contract is stable.
 
 ### Remote resources
 
@@ -278,7 +278,7 @@ The package still exports Designer, Project, Document, Node, Selection, Event, a
 | `@easy-editor/easypack` | Node.js `>=20.0.0` | Verified only in the Node 20 lane |
 | Repository package manager | pnpm `>=9.12.2`; CI and lockfile use pnpm `10.25.0` | Frozen-lockfile install in CI |
 | Renderer | React renderer is delivered | Other framework adapters are extension targets, not shipped support |
-| Browser | Dashboard development smoke through `pnpm example:dashboard` | Chromium manual smoke; automated browser E2E is not yet a release gate |
+| Browser | Dashboard development smoke through `pnpm example:dashboard` | Chromium lifecycle, reload, persistence, preview, and console-error E2E are release-gated |
 | Operating system | Packages should remain platform-neutral | Full suite on Ubuntu; generator and packed-template release smoke on macOS and Windows |
 
 ## Root facade

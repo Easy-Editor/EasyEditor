@@ -177,6 +177,10 @@ dist
 # turbo
 .turbo
 
+# Playwright
+playwright-report/
+test-results/
+
 # EasyEditor
 packages/*/types
 

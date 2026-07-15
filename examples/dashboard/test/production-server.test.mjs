@@ -11,7 +11,7 @@ test('production server serves static assets and falls back to the SPA document'
   await writeFile(join(distDir, 'index.html'), '<!doctype html><main>dashboard shell</main>')
   await writeFile(join(distDir, 'app.js'), 'console.log("asset")')
 
-  const server = createDashboardServer({ distDir, env: {} })
+  const server = createDashboardServer({ distDir })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => {
     await new Promise((resolve, reject) => server.close(error => (error ? reject(error) : resolve())))

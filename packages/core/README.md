@@ -8,7 +8,7 @@ The stateful framework kernel for EasyEditor: isolated engine instances, version
 | --- | --- | --- |
 | **Stable** | `@easy-editor/core/instance` | Factory-owned engine lifecycle, Schema validation, commands, transactions, and host registration APIs |
 | **Compatibility (Web adapter)** | Designer, Project, Document, Node, Event, and DOM-oriented Simulator types | Available for existing Web renderers and read integration; raw model mutation methods are not stable v2 write APIs |
-| **Deferred / Internal** | Agent experiments and concrete engine internals | Agent Runtime is outside this framework phase; concrete construction and mutable service injection are not public APIs |
+| **Deferred / Internal** | Future Agent Runtime and concrete engine internals | No Agent subpath is published in this framework baseline; concrete construction and mutable service injection are not public APIs |
 
 ## Recommended entry: explicit instance
 
@@ -47,7 +47,7 @@ The root `@easy-editor/core` entry still exports `defaultEngine`, `init`, `destr
 
 Same-realm JavaScript cannot reliably distinguish a lifecycle call made by an external host from one made through a raw engine closure retained across an `await` without an AsyncContext-like mechanism or realm/process isolation. Capturing the engine in a plugin or adapter lifecycle callback and calling its lifecycle after suspension is therefore a host-protocol violation, not an isolation guarantee.
 
-Agent Runtime design is intentionally deferred until this framework contract is stable. Existing Agent experiments are outside the stable `@easy-editor/core/instance` surface and may change during the later Agent phase.
+Agent Runtime design is intentionally deferred until this framework contract is stable. Previous experiments are isolated from this release line: `@easy-editor/core` publishes neither `./agent` nor `./agent-channel`.
 
 ## Lifecycle operation matrix
 
@@ -70,7 +70,7 @@ Initialization failure returns to `created` when rollback succeeds and enters `f
 | `@easy-editor/easypack` | Node.js `>=20.0.0` | Verified only in the Node 20 lane |
 | Repository package manager | pnpm `>=9.12.2`; CI and lockfile use pnpm `10.25.0` | Frozen-lockfile install in CI |
 | Renderer | React renderer is delivered | Other framework adapters are extension targets, not shipped support |
-| Browser | Dashboard development smoke through `pnpm example:dashboard` | Chromium manual smoke; automated browser E2E is not yet a release gate |
+| Browser | Dashboard development smoke through `pnpm example:dashboard` | Chromium lifecycle, reload, persistence, preview, and console-error E2E are release-gated |
 | Operating system | Platform-neutral packages | Full suite on Ubuntu; generator and packed-template smoke are release-gated on macOS and Windows |
 
 See the [architecture overview](https://github.com/Easy-Editor/EasyEditor/blob/main/docs/en/design/overview.md) for the ownership and trust model.

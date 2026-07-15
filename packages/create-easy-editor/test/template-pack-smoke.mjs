@@ -10,7 +10,8 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryRoot = resolve(packageRoot, '../..')
 const templateRoot = join(packageRoot, 'template/dashboard/react')
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-const packages = [
+const supportsEasypack = Number.parseInt(process.versions.node.split('.')[0], 10) >= 20
+const runtimePackages = [
   ['@easy-editor/core', 'core'],
   ['@easy-editor/plugin-dashboard', 'plugin-dashboard'],
   ['@easy-editor/plugin-datasource', 'plugin-datasource'],
@@ -18,6 +19,10 @@ const packages = [
   ['@easy-editor/renderer-core', 'renderer-core'],
   ['@easy-editor/react-renderer', 'react-renderer'],
   ['@easy-editor/react-renderer-dashboard', 'react-renderer-dashboard'],
+]
+const toolPackages = [
+  ['@easy-editor/create', 'create-easy-editor'],
+  ...(supportsEasypack ? [['@easy-editor/easypack', 'easypack']] : []),
 ]
 
 const run = (command, args, options = {}) =>
@@ -108,8 +113,10 @@ const assertConditionalExport = (manifest, subpath, outputName) => {
   })
 }
 
-const verifyTarball = async (tarball, packageName, extractionDirectory) => {
-  const entries = run('tar', ['-tzf', tarball], { capture: true }).trim().split('\n')
+const listTarballEntries = tarball => run('tar', ['-tzf', tarball], { capture: true }).trim().split('\n')
+
+const verifyRuntimeTarball = async (tarball, packageName, extractionDirectory) => {
+  const entries = listTarballEntries(tarball)
   for (const required of ['package/dist/index.js', 'package/dist/index.cjs', 'package/dist/index.d.ts']) {
     assert.ok(entries.includes(required), `${basename(tarball)} is missing ${required}`)
   }
@@ -124,97 +131,138 @@ const verifyTarball = async (tarball, packageName, extractionDirectory) => {
     return
   }
 
-  for (const required of [
-    'package/dist/instance.js',
-    'package/dist/instance.cjs',
-    'package/dist/instance.d.ts',
-    'package/dist/agent.js',
-    'package/dist/agent.cjs',
-    'package/dist/agent.d.ts',
-    'package/dist/agent-channel.js',
-    'package/dist/agent-channel.cjs',
-    'package/dist/agent-channel.d.ts',
-  ]) {
+  for (const required of ['package/dist/instance.js', 'package/dist/instance.cjs', 'package/dist/instance.d.ts']) {
     assert.ok(entries.includes(required), `${basename(tarball)} is missing ${required}`)
   }
+  assert.deepEqual(
+    entries.filter(entry => /^package\/dist\/agent(?:[-./]|$)/i.test(entry)),
+    [],
+    `${basename(tarball)} must not publish Agent runtime files`,
+  )
   const instanceBundle = `${readTarballFile(tarball, 'dist/instance.js')}\n${readTarballFile(
     tarball,
     'dist/instance.cjs',
   )}`
   assert.doesNotMatch(instanceBundle, /\bdefaultEngine\b/)
-  const agentBundle = `${readTarballFile(tarball, 'dist/agent.js')}\n${readTarballFile(tarball, 'dist/agent.cjs')}`
-  assert.doesNotMatch(agentBundle, /\bdefaultEngine\b/)
-  const agentChannelBundle = `${readTarballFile(tarball, 'dist/agent-channel.js')}\n${readTarballFile(
-    tarball,
-    'dist/agent-channel.cjs',
-  )}`
-  assert.doesNotMatch(agentChannelBundle, /\bdefaultEngine\b/)
   const manifest = JSON.parse(readTarballFile(tarball, 'package.json'))
+  assert.deepEqual(Object.keys(manifest.exports).sort(), ['.', './instance'])
   assertConditionalExport(manifest, '.', 'index')
   assertConditionalExport(manifest, './instance', 'instance')
-  assertConditionalExport(manifest, './agent', 'agent')
-  assertConditionalExport(manifest, './agent-channel', 'agent-channel')
+}
+
+const assertNoBuildGarbage = (tarball, entries) => {
+  assert.deepEqual(
+    entries.filter(
+      entry => /(?:^|\/)(?:node_modules|\.turbo|\.vite|coverage)(?:\/|$)/.test(entry) || entry.endsWith('.tsbuildinfo'),
+    ),
+    [],
+    `${basename(tarball)} contains local build garbage`,
+  )
+}
+
+const verifyCreateTarball = tarball => {
+  const entries = listTarballEntries(tarball)
+  for (const required of [
+    'package/dist/index.js',
+    'package/dist/index.cjs',
+    'package/template/dashboard/react/package.json',
+  ]) {
+    assert.ok(entries.includes(required), `${basename(tarball)} is missing ${required}`)
+  }
+  assertNoBuildGarbage(tarball, entries)
+  assert.match(readTarballFile(tarball, 'dist/index.js'), /^#!\/usr\/bin\/env node/)
+  assert.match(readTarballFile(tarball, 'dist/index.cjs'), /^#!\/usr\/bin\/env node/)
+  const manifest = JSON.parse(readTarballFile(tarball, 'package.json'))
+  assert.equal(manifest.main, 'dist/index.js')
+  assert.equal(manifest.module, 'dist/index.js')
+  assert.equal(manifest.exports, './dist/index.js')
+  assert.equal(manifest.bin['@easy-editor/create'], './dist/index.js')
+}
+
+const verifyEasypackTarball = async (tarball, extractionDirectory) => {
+  const entries = listTarballEntries(tarball)
+  for (const required of [
+    'package/dist/index.js',
+    'package/dist/index.d.ts',
+    'package/dist/bin.js',
+    'package/dist/bin.d.ts',
+  ]) {
+    assert.ok(entries.includes(required), `${basename(tarball)} is missing ${required}`)
+  }
+  assertNoBuildGarbage(tarball, entries)
+  await verifyDeclarationClosure(tarball, entries, extractionDirectory)
+  assert.match(readTarballFile(tarball, 'dist/bin.js'), /^#!\/usr\/bin\/env node/)
+  const manifest = JSON.parse(readTarballFile(tarball, 'package.json'))
+  assert.equal(manifest.main, 'dist/index.js')
+  assert.equal(manifest.types, 'dist/index.d.ts')
+  assert.deepEqual(manifest.exports, {
+    '.': {
+      types: './dist/index.d.ts',
+      import: './dist/index.js',
+    },
+  })
+  assert.equal(manifest.bin.easypack, './dist/bin.js')
 }
 
 const verifyInstalledConditionalExports = projectDirectory => {
   const esmContract = `
     const root = await import('@easy-editor/core')
     const instance = await import('@easy-editor/core/instance')
-    const agent = await import('@easy-editor/core/agent')
-    const agentChannel = await import('@easy-editor/core/agent-channel')
+    const assertUnavailable = async subpath => {
+      try {
+        await import(subpath)
+      } catch (error) {
+        if (error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') return
+        throw error
+      }
+      throw new Error(\`ESM core unexpectedly exposed \${subpath}\`)
+    }
     if (!root.defaultEngine || root.project !== root.defaultEngine.project) {
       throw new Error('ESM core root did not expose the legacy engine facade')
     }
     if (typeof instance.createEngine !== 'function' || 'defaultEngine' in instance) {
       throw new Error('ESM core/instance did not expose the isolated engine contract')
     }
-    if (typeof agent.getAgentCapabilities !== 'function' || typeof agent.AgentCapabilityError !== 'function') {
-      throw new Error('ESM core/agent did not expose the agent capability contract')
-    }
-    if ('AgentCapabilityManager' in agent) throw new Error('ESM core/agent leaked direct manager construction')
-    if ('defaultEngine' in agent) throw new Error('ESM core/agent leaked the legacy singleton')
-    if (typeof agentChannel.connectAgentPort !== 'function' || agentChannel.AgentCapabilityError !== agent.AgentCapabilityError) {
-      throw new Error('ESM core/agent-channel did not expose the shared transport contract')
-    }
     const engine = instance.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
     try {
-      const capabilities = agent.getAgentCapabilities(engine)
-      if (!capabilities || typeof capabilities.issue !== 'function') {
-        throw new Error('ESM core/agent could not resolve capabilities for a core/instance engine')
+      if (engine === root.defaultEngine || typeof engine.destroy !== 'function') {
+        throw new Error('ESM core/instance did not create an isolated engine')
       }
     } finally {
       await engine.destroy()
     }
+    await assertUnavailable('@easy-editor/core/agent')
+    await assertUnavailable('@easy-editor/core/agent-channel')
   `
   const cjsContract = `
     void (async () => {
       const root = require('@easy-editor/core')
       const instance = require('@easy-editor/core/instance')
-      const agent = require('@easy-editor/core/agent')
-      const agentChannel = require('@easy-editor/core/agent-channel')
+      const assertUnavailable = subpath => {
+        try {
+          require(subpath)
+        } catch (error) {
+          if (error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') return
+          throw error
+        }
+        throw new Error(\`CJS core unexpectedly exposed \${subpath}\`)
+      }
       if (!root.defaultEngine || root.project !== root.defaultEngine.project) {
         throw new Error('CJS core root did not expose the legacy engine facade')
       }
       if (typeof instance.createEngine !== 'function' || 'defaultEngine' in instance) {
         throw new Error('CJS core/instance did not expose the isolated engine contract')
       }
-      if (typeof agent.getAgentCapabilities !== 'function' || typeof agent.AgentCapabilityError !== 'function') {
-        throw new Error('CJS core/agent did not expose the agent capability contract')
-      }
-      if ('AgentCapabilityManager' in agent) throw new Error('CJS core/agent leaked direct manager construction')
-      if ('defaultEngine' in agent) throw new Error('CJS core/agent leaked the legacy singleton')
-      if (typeof agentChannel.connectAgentPort !== 'function' || agentChannel.AgentCapabilityError !== agent.AgentCapabilityError) {
-        throw new Error('CJS core/agent-channel did not expose the shared transport contract')
-      }
       const engine = instance.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
       try {
-        const capabilities = agent.getAgentCapabilities(engine)
-        if (!capabilities || typeof capabilities.issue !== 'function') {
-          throw new Error('CJS core/agent could not resolve capabilities for a core/instance engine')
+        if (engine === root.defaultEngine || typeof engine.destroy !== 'function') {
+          throw new Error('CJS core/instance did not create an isolated engine')
         }
       } finally {
         await engine.destroy()
       }
+      assertUnavailable('@easy-editor/core/agent')
+      assertUnavailable('@easy-editor/core/agent-channel')
     })().catch(error => {
       console.error(error)
       process.exitCode = 1
@@ -224,30 +272,74 @@ const verifyInstalledConditionalExports = projectDirectory => {
   run(process.execPath, ['--input-type=commonjs', '--eval', cjsContract], { cwd: projectDirectory })
 }
 
+const verifyInstalledTools = async (projectDirectory, tarballs) => {
+  await mkdir(projectDirectory)
+  const manifest = {
+    name: 'easy-editor-release-tool-consumer',
+    private: true,
+    type: 'module',
+    devDependencies: Object.fromEntries(
+      toolPackages.map(([packageName]) => [packageName, `file:${tarballs.get(packageName)}`]),
+    ),
+  }
+  await writeFile(join(projectDirectory, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  run(pnpm, ['install', '--frozen-lockfile=false', '--ignore-scripts', '--config.engine-strict=true'], {
+    cwd: projectDirectory,
+  })
+
+  const createHelp = run(pnpm, ['exec', 'create', '--help'], { cwd: projectDirectory, capture: true })
+  assert.match(createHelp, /Create a new Easy Editor project/)
+
+  if (!tarballs.has('@easy-editor/easypack')) return
+  const easypackContract = `
+    const easypack = await import('@easy-editor/easypack')
+    for (const exportName of ['defineConfig', 'createRollupConfig', 'createViteConfig']) {
+      if (typeof easypack[exportName] !== 'function') {
+        throw new Error(\`@easy-editor/easypack did not expose \${exportName}\`)
+      }
+    }
+  `
+  run(process.execPath, ['--input-type=module', '--eval', easypackContract], { cwd: projectDirectory })
+  const easypackHelp = run(pnpm, ['exec', 'easypack', '--help'], { cwd: projectDirectory, capture: true })
+  assert.match(easypackHelp, /Build and dev tools for EasyEditor ecosystem/)
+}
+
 const temporaryRoot = await mkdtemp(join(tmpdir(), 'easy-editor-template-pack-'))
 try {
   const packDirectory = join(temporaryRoot, 'packs')
   const extractionDirectory = join(temporaryRoot, 'extracted')
   const projectDirectory = join(temporaryRoot, 'project')
+  const toolProjectDirectory = join(temporaryRoot, 'tool-project')
   await mkdir(packDirectory)
   await mkdir(extractionDirectory)
   await cp(templateRoot, projectDirectory, { recursive: true })
 
-  const tarballs = new Map()
-  for (const [packageName, packageDirectory] of packages) {
+  const runtimeTarballs = new Map()
+  for (const [packageName, packageDirectory] of runtimePackages) {
     const tarball = await packPackage(packageDirectory, packDirectory)
-    await verifyTarball(tarball, packageName, join(extractionDirectory, packageDirectory))
-    tarballs.set(packageName, tarball)
+    await verifyRuntimeTarball(tarball, packageName, join(extractionDirectory, packageDirectory))
+    runtimeTarballs.set(packageName, tarball)
+  }
+
+  const toolTarballs = new Map()
+  for (const [packageName, packageDirectory] of toolPackages) {
+    const tarball = await packPackage(packageDirectory, packDirectory)
+    if (packageName === '@easy-editor/create') verifyCreateTarball(tarball)
+    if (packageName === '@easy-editor/easypack') {
+      await verifyEasypackTarball(tarball, join(extractionDirectory, packageDirectory))
+    }
+    toolTarballs.set(packageName, tarball)
   }
 
   const manifestPath = join(projectDirectory, 'package.json')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-  for (const [packageName, tarball] of tarballs) manifest.dependencies[packageName] = `file:${tarball}`
+  for (const [packageName, tarball] of runtimeTarballs) manifest.dependencies[packageName] = `file:${tarball}`
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
   run(pnpm, ['install', '--frozen-lockfile=false', '--config.engine-strict=true'], { cwd: projectDirectory })
   verifyInstalledConditionalExports(projectDirectory)
   run(pnpm, ['build'], { cwd: projectDirectory })
+  await verifyInstalledTools(toolProjectDirectory, toolTarballs)
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true })
 }

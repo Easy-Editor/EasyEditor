@@ -6,6 +6,11 @@
 import type { RemoteMaterialConfig } from './managers/material-manager'
 import type { RemoteSetterConfig } from './managers/setter-manager'
 
+// Browser lifecycle E2E validates the local framework composition and must not
+// depend on third-party CDN availability. Remote loading has separate unit and
+// package-boundary coverage; normal development and production keep it enabled.
+const remoteResourcesEnabled = import.meta.env.VITE_E2E !== '1'
+
 /** 远程物料配置列表 */
 export const remoteMaterialsConfig: RemoteMaterialConfig[] = [
   // basic
@@ -13,7 +18,7 @@ export const remoteMaterialsConfig: RemoteMaterialConfig[] = [
     package: '@easy-editor/materials-dashboard-text',
     version: 'latest',
     globalName: 'EasyEditorMaterialsText',
-    enabled: true,
+    enabled: remoteResourcesEnabled,
   },
   // // media
   // {
@@ -130,6 +135,6 @@ export const remoteSettersConfig: RemoteSetterConfig[] = [
     package: '@easy-editor/setters',
     version: 'latest',
     globalName: 'EasyEditorSetters',
-    enabled: true,
+    enabled: remoteResourcesEnabled,
   },
 ]

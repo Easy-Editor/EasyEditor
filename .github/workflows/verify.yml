@@ -47,6 +47,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --config.engine-strict=${{ matrix.engine-strict }}
 
+      - name: Verify repository integrity
+        run: |
+          git diff --check
+          pnpm changeset status
+
       - name: Verify declared Node floor
         if: matrix.node-version == '18.20.8'
         run: |
@@ -135,20 +140,60 @@ jobs:
           pnpm --filter @easy-editor/create test
           pnpm --filter @easy-editor/create types
           pnpm --filter @easy-editor/create build
-          pnpm --filter @easy-editor/create test:template-pack
+
+      - name: Verify packed release consumers
+        if: matrix.verify-easypack
+        run: pnpm --filter @easy-editor/create test:template-pack
 
       - name: Verify Dashboard runtime boundaries
         run: |
           pnpm --dir examples/dashboard lint
           pnpm --dir examples/dashboard test
           pnpm --dir examples/dashboard build
-          pnpm --dir examples/dashboard verify:ai-bundle
 
       - name: Verify published API baselines
         run: pnpm public-api:check
 
       - name: Build documentation
         run: pnpm --dir docs docs:build
+
+  dashboard-browser:
+    name: Dashboard browser lifecycle (Chromium)
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.engine-strict=true
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify Dashboard lifecycle in Chromium
+        run: pnpm test:e2e
+
+      - name: Upload Playwright evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
 
   portability:
     name: Generator and template smoke (${{ matrix.os }})
@@ -179,8 +224,8 @@ jobs:
 
       - name: Verify generator and packaged template
         run: |
+          pnpm build
           pnpm --filter @easy-editor/create lint
           pnpm --filter @easy-editor/create test
           pnpm --filter @easy-editor/create types
-          pnpm --filter @easy-editor/create build
           pnpm --filter @easy-editor/create test:template-pack

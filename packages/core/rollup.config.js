@@ -41,8 +41,6 @@ export const createPlugins = () => [
 export default [
   {
     input: {
-      agent: 'src/agent.ts',
-      'agent-channel': 'src/agent-channel.ts',
       index: 'src/index.ts',
       instance: 'src/instance.ts',
     },

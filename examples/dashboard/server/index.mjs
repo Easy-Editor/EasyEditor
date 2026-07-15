@@ -4,9 +4,6 @@ import { createServer } from 'node:http'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { createAiChatGateway } from './ai-chat-gateway.mjs'
-import { loadServerEnvironment } from './server-env.mjs'
-
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultDistDirectory = resolve(moduleDirectory, '..', 'dist')
 
@@ -83,25 +80,16 @@ const serveDashboard = async (request, response, distDirectory) => {
   }
 }
 
-export const createDashboardServer = ({
-  distDir = defaultDistDirectory,
-  env = process.env,
-  fetchImpl = globalThis.fetch,
-} = {}) => {
-  const gateway = createAiChatGateway({ env, fetchImpl })
-  return createServer((request, response) => {
-    void gateway(request, response, () => {
-      void serveDashboard(request, response, distDir)
-    })
+export const createDashboardServer = ({ distDir = defaultDistDirectory } = {}) =>
+  createServer((request, response) => {
+    void serveDashboard(request, response, distDir)
   })
-}
 
 const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
 if (isMain) {
-  const environment = await loadServerEnvironment({ directory: resolve(moduleDirectory, '..') })
-  const port = Number.parseInt(environment.PORT ?? '4173', 10)
-  const host = environment.HOST ?? '127.0.0.1'
-  const server = createDashboardServer({ env: environment })
+  const port = Number.parseInt(process.env.PORT ?? '4173', 10)
+  const host = process.env.HOST ?? '127.0.0.1'
+  const server = createDashboardServer()
   server.listen(port, host, () => {
     console.log(`EasyEditor Dashboard listening on http://${host}:${port}`)
   })

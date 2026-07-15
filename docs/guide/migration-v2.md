@@ -192,7 +192,7 @@ if (health.lifecycle !== 'ready') {
 
 ## 6. 收紧远程资源边界，暂缓 Agent
 
-Agent Runtime、传输、授权和审批协议不属于本轮框架迁移。先完成 `@easy-editor/core/instance` 的所有权、生命周期、事务和信任边界迁移；Agent 契约将在框架稳定后单独设计。
+Agent Runtime、传输、授权和审批协议不属于本轮框架迁移。当前 Core 包不提供 `./agent` 或 `./agent-channel`；先完成 `@easy-editor/core/instance` 的所有权、生命周期、事务和信任边界迁移，再在框架稳定后单独设计 Agent 契约。
 
 ### 远程资源
 
