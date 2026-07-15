@@ -1,7 +1,14 @@
 const OMIT = Symbol('omit')
 const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
-const SECRET_KEY = /(?:password|secret|credential|accessToken|refreshToken|apiKey|authorization)/i
-const SOURCE_KEYS = new Set(['artifactSource', 'rawSource', 'sourceCode', 'cssText'])
+const ARTIFACT_REVISION_ALLOWLIST = Object.freeze([
+  'artifactId',
+  'logicalComponentId',
+  'sourceIntegrity',
+  'sourceRevision',
+])
+const ARTIFACT_TARGET_ALLOWLIST = Object.freeze(['buildIntegrity', 'materialId', 'materialVersion'])
+const ARTIFACT_TARGET_KINDS = new Set(['local-material', 'online'])
+const DASHBOARD_RECT_KEYS = Object.freeze(['height', 'width', 'x', 'y'])
 
 export const compareCodeUnits = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 
@@ -40,10 +47,7 @@ const isPlainRecord = value => {
   return prototype === Object.prototype || prototype === null
 }
 
-const forbiddenProjectionKey = (key, path) =>
-  SECRET_KEY.test(key) || SOURCE_KEYS.has(key) || (key === 'source' && path.includes('artifactRef'))
-
-const sanitizeValue = (value, state, depth, path) => {
+const sanitizeValue = (value, state, depth) => {
   if (value === null || typeof value === 'boolean') return value
   if (typeof value === 'number') return Number.isFinite(value) ? value : OMIT
   if (typeof value === 'string') {
@@ -59,7 +63,7 @@ const sanitizeValue = (value, state, depth, path) => {
       if (length > state.maxArrayLength) return OMIT
       const result = Array.from({ length }, () => null)
       for (const [index, item] of arrayDataEntries(value)) {
-        const sanitized = sanitizeValue(item, state, depth + 1, [...path, String(index)])
+        const sanitized = sanitizeValue(item, state, depth + 1)
         result[index] = sanitized === OMIT ? null : sanitized
       }
       return result
@@ -70,8 +74,7 @@ const sanitizeValue = (value, state, depth, path) => {
     for (const [key, item] of ownEnumerableDataEntries(value).sort(([left], [right]) =>
       compareCodeUnits(left, right),
     )) {
-      if (forbiddenProjectionKey(key, path)) continue
-      const sanitized = sanitizeValue(item, state, depth + 1, [...path, key])
+      const sanitized = sanitizeValue(item, state, depth + 1)
       if (sanitized !== OMIT) result[key] = sanitized
     }
     return result
@@ -92,7 +95,6 @@ export const sanitizeJsonValue = (value, options = {}) => {
       visited: new WeakSet(),
     },
     0,
-    [],
   )
   return result === OMIT ? null : result
 }
@@ -204,6 +206,59 @@ export const createHostRevision = input =>
     ),
   })
 
+const projectStringFields = (value, keys) => {
+  if (!isPlainRecord(value)) return null
+  const result = Object.create(null)
+  for (const key of keys) {
+    const item = readOwnDataValue(value, key)
+    if (typeof item === 'string') result[key] = item
+  }
+  return result
+}
+
+const projectArtifactRevision = value => projectStringFields(value, ARTIFACT_REVISION_ALLOWLIST)
+
+const projectArtifactTarget = value => {
+  if (!isPlainRecord(value)) return null
+  const result = projectStringFields(value, ARTIFACT_TARGET_ALLOWLIST)
+  const kind = readOwnDataValue(value, 'kind')
+  if (ARTIFACT_TARGET_KINDS.has(kind)) result.kind = kind
+  return Object.keys(result).length ? result : null
+}
+
+const projectArtifactRef = value => {
+  if (!isPlainRecord(value)) return null
+  const result = projectArtifactRevision(value)
+  const target = projectArtifactTarget(readOwnDataValue(value, 'target'))
+  if (target) result.target = target
+  const rollbackTo = projectArtifactRevision(readOwnDataValue(value, 'rollbackTo'))
+  if (rollbackTo && Object.keys(rollbackTo).length) result.rollbackTo = rollbackTo
+  return Object.keys(result).length ? result : null
+}
+
+const projectDashboardState = value => {
+  if (!isPlainRecord(value)) return null
+  const rect = readOwnDataValue(value, 'rect')
+  if (!isPlainRecord(rect)) return null
+  const projectedRect = Object.create(null)
+  for (const key of DASHBOARD_RECT_KEYS) {
+    const item = readOwnDataValue(rect, key)
+    if (typeof item === 'number' && Number.isFinite(item)) projectedRect[key] = item
+  }
+  return Object.keys(projectedRect).length ? { rect: projectedRect } : null
+}
+
+const projectNodeExtra = node => {
+  const result = Object.create(null)
+  const title = readOwnDataValue(node, 'title')
+  if (typeof title === 'string') result.title = title
+  const dashboard = projectDashboardState(readOwnDataValue(node, '$dashboard'))
+  if (dashboard) result.$dashboard = dashboard
+  const artifactRef = projectArtifactRef(readOwnDataValue(node, 'artifactRef'))
+  if (artifactRef) result.artifactRef = artifactRef
+  return result
+}
+
 const flattenDocument = root => {
   const nodes = Object.create(null)
   const visit = (node, parentId = null, index = 0) => {
@@ -213,25 +268,21 @@ const flattenDocument = root => {
     if (!id) return
     const children = readOwnDataValue(node, 'children')
     const componentName = readOwnDataValue(node, 'componentName')
-    const props = readOwnDataValue(node, 'props')
-    const extra = Object.create(null)
-    for (const [key, value] of ownEnumerableDataEntries(node)) {
-      if (!['children', 'componentName', 'props'].includes(key)) extra[key] = value
-    }
+    const normalizedComponentName = typeof componentName === 'string' ? componentName : 'Unknown'
     const childrenEntries = arrayDataEntries(children)
     const childIds = childrenEntries.flatMap(([, child]) => {
       const childId = readOwnDataValue(child, 'id')
       return typeof childId === 'string' && childId ? [childId] : []
     })
-    nodes[id] = sanitizeJsonValue({
+    const projection = {
       id,
-      componentName: typeof componentName === 'string' ? componentName : 'Unknown',
+      componentName: normalizedComponentName,
       parentId,
       index,
       childIds,
-      props: props ?? {},
-      extra,
-    })
+      extra: projectNodeExtra(node),
+    }
+    nodes[id] = sanitizeJsonValue(projection)
     for (const [childIndex, child] of childrenEntries) visit(child, id, childIndex)
   }
   visit(root)
@@ -397,6 +448,7 @@ const sameCoreFence = (left, right) =>
 
 const projectionMap = captures => {
   const providers = Object.create(null)
+  // Providers own their finite capture DTOs; this utility only normalizes descriptor-safe JSON.
   for (const capture of captures) providers[capture.record.provider.id] = sanitizeJsonValue(capture.projection)
   return providers
 }
