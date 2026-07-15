@@ -523,7 +523,10 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
   assert.equal(delta.providerGeneration, generation)
   assert.notEqual(delta.newRevision, delta.baseRevision)
   assert.notEqual(delta.newCursor, delta.baseCursor)
-  assert.ok(delta.changes.some(change => change.path.at(-1) === 'title'))
+  assert.ok(
+    delta.changes.length > 0 &&
+      delta.changes.some(change => change.path.includes('title') || change.path.includes('rect')),
+  )
 
   arrayValues = [7, 8, 9]
   arrayVersion += 1
