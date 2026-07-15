@@ -149,7 +149,7 @@ The resolver is pure, side-effect free, and accepts only boolean `true`, string 
 
 ## Deterministic fixtures and performance boundaries
 
-The Golden project fixture is a 1920×1080 city operations dashboard with a fixed title, map, chart, mock/HTTP endpoints, a missing KPI material, and deterministic ids, artifact hashes, timestamps, clock, and model script.
+The Golden project fixture is frozen at `examples/dashboard/test/fixtures/agent-runtime-golden-project.json`. It is a 1920×1080 city operations dashboard with a fixed title, map, chart, mock/HTTP endpoints, a missing KPI material, and deterministic ids, artifact hashes, timestamps, clock, and model script.
 
 Performance evidence uses a fixed browser, viewport, CPU profile, and runner with at least five warmed runs:
 

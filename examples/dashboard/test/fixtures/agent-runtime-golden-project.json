@@ -1,0 +1,143 @@
+{
+  "id": "agent-runtime-golden-project",
+  "version": "1.0.0",
+  "componentsMap": [],
+  "meta": {
+    "agentRuntimeGoldenFixture": {
+      "fixtureVersion": 1,
+      "createdAt": "2026-07-15T00:00:00.000Z",
+      "modelScriptStartedAt": "2026-07-15T00:00:01.000Z",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "missingKpiMaterial": {
+        "requestedName": "CityOperationsKpi",
+        "logicalComponentId": "city-operations-kpi",
+        "trustedProxyComponentName": "GeneratedMaterialHost",
+        "status": "missing"
+      },
+      "plannedArtifact": {
+        "artifactId": "artifact-city-operations-kpi",
+        "sourceRevision": "online-r1",
+        "sourceIntegrity": "sha256:fdf20e1271c1745e25f868589f9f643125ac4820046f59d7635051898cd4c953",
+        "dependencyLockDigest": "sha256:4b11cbcc983558c49d5e00223f850725484ef83e3bb8a4dded78b146b58d1c7f"
+      }
+    }
+  },
+  "dataSource": {
+    "list": [
+      {
+        "id": "mock-city-summary",
+        "isInit": true,
+        "type": "mock",
+        "options": {
+          "uri": "mock://city/summary",
+          "method": "GET"
+        }
+      },
+      {
+        "id": "http-traffic-flow",
+        "isInit": false,
+        "type": "http",
+        "options": {
+          "uri": "https://fixtures.easy-editor.invalid/api/traffic-flow",
+          "method": "GET"
+        }
+      }
+    ]
+  },
+  "componentsTree": [
+    {
+      "id": "golden-root",
+      "docId": "golden-dashboard-page",
+      "fileName": "agent-runtime-golden-dashboard",
+      "componentName": "Root",
+      "isRoot": true,
+      "props": {
+        "backgroundColor": "#08111f",
+        "className": "agent-runtime-golden-dashboard"
+      },
+      "$dashboard": {
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        }
+      },
+      "children": [
+        {
+          "id": "golden-title",
+          "title": "Dashboard title",
+          "componentName": "Text",
+          "props": {
+            "text": "城市运行态势",
+            "style": {
+              "color": "#ffffff",
+              "fontSize": "48px",
+              "fontWeight": "bold"
+            }
+          },
+          "$dashboard": {
+            "fixtureRole": "title",
+            "rect": {
+              "x": 660,
+              "y": 32,
+              "width": 600,
+              "height": 72
+            }
+          }
+        },
+        {
+          "id": "golden-map",
+          "title": "City map",
+          "componentName": "Image",
+          "props": {
+            "src": "/fixtures/agent-runtime/city-map.svg",
+            "alt": "Deterministic city map fixture"
+          },
+          "$dashboard": {
+            "fixtureRole": "map",
+            "rect": {
+              "x": 540,
+              "y": 150,
+              "width": 840,
+              "height": 760
+            }
+          }
+        },
+        {
+          "id": "golden-chart",
+          "title": "Traffic trend",
+          "componentName": "BarChart",
+          "props": {
+            "data": [
+              {
+                "name": "08:00",
+                "value": 42
+              },
+              {
+                "name": "12:00",
+                "value": 67
+              },
+              {
+                "name": "18:00",
+                "value": 53
+              }
+            ]
+          },
+          "$dashboard": {
+            "fixtureRole": "chart",
+            "rect": {
+              "x": 1440,
+              "y": 180,
+              "width": 420,
+              "height": 300
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

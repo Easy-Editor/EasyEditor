@@ -82,6 +82,53 @@ test('Phase 0 ADR freezes reviewed public and cross-boundary anchors', async () 
   }
 })
 
+test('Golden project fixture is deterministic and keeps the KPI material missing', async () => {
+  const fixture = JSON.parse(
+    await readRepositoryFile('examples/dashboard/test/fixtures/agent-runtime-golden-project.json'),
+  )
+  const contract = fixture.meta.agentRuntimeGoldenFixture
+  const [root] = fixture.componentsTree
+  const nodeIds = root.children.map(node => node.id)
+  const roles = Object.fromEntries(root.children.map(node => [node.$dashboard.fixtureRole, node]))
+  const endpoints = Object.fromEntries(fixture.dataSource.list.map(endpoint => [endpoint.type, endpoint]))
+
+  assert.equal(fixture.id, 'agent-runtime-golden-project')
+  assert.equal(fixture.version, '1.0.0')
+  assert.deepEqual(contract.viewport, { width: 1920, height: 1080 })
+  assert.deepEqual(root.$dashboard.rect, { x: 0, y: 0, width: 1920, height: 1080 })
+  assert.deepEqual(nodeIds, ['golden-title', 'golden-map', 'golden-chart'])
+  assert.equal(new Set(['golden-root', ...nodeIds]).size, 4)
+  assert.equal(roles.title.componentName, 'Text')
+  assert.equal(roles.map.componentName, 'Image')
+  assert.equal(roles.chart.componentName, 'BarChart')
+  assert.equal(endpoints.mock.options.uri, 'mock://city/summary')
+  assert.equal(endpoints.http.options.uri, 'https://fixtures.easy-editor.invalid/api/traffic-flow')
+  assert.equal(contract.createdAt, '2026-07-15T00:00:00.000Z')
+  assert.equal(contract.modelScriptStartedAt, '2026-07-15T00:00:01.000Z')
+  assert.equal(
+    contract.plannedArtifact.sourceIntegrity,
+    'sha256:fdf20e1271c1745e25f868589f9f643125ac4820046f59d7635051898cd4c953',
+  )
+  assert.equal(
+    contract.plannedArtifact.dependencyLockDigest,
+    'sha256:4b11cbcc983558c49d5e00223f850725484ef83e3bb8a4dded78b146b58d1c7f',
+  )
+  assert.deepEqual(contract.missingKpiMaterial, {
+    requestedName: 'CityOperationsKpi',
+    logicalComponentId: 'city-operations-kpi',
+    trustedProxyComponentName: 'GeneratedMaterialHost',
+    status: 'missing',
+  })
+  assert.equal(
+    root.children.some(node => node.componentName === 'GeneratedMaterialHost'),
+    false,
+  )
+  assert.equal(
+    root.children.some(node => node.componentName === 'CityOperationsKpi'),
+    false,
+  )
+})
+
 test('Core reviewed public API remains Agent-free', async () => {
   const reviewedApi = JSON.parse(await readRepositoryFile('packages/core/test/fixtures/instance-public-api.json'))
   const forbiddenExports = [
