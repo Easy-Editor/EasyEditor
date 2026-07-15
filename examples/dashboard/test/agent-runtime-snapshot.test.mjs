@@ -211,6 +211,80 @@ test('full snapshots positively project safe node state and finite artifact refe
   })
 })
 
+test('Core hostile scalar fences and descriptor-safe summaries survive full, delta, and resync', async () => {
+  let getterInvocations = 0
+  const getter = () => {
+    getterInvocations += 1
+    return 'host-secret-source'
+  }
+
+  const normalizedRevision = createHostRevision({
+    adapterGeneration: 0,
+    documentId: 'none',
+    documentMutationVersion: -1,
+    materialRegistryVersion: -1,
+    providerVersions: { 'dashboard.core': 1 },
+  })
+  const hostileRevision = createHostRevision({
+    adapterGeneration: -5,
+    documentId: '',
+    documentMutationVersion: -9,
+    materialRegistryVersion: Number.NaN,
+    providerVersions: { 'dashboard.core': 1 },
+  })
+
+  assert.equal(hostileRevision, normalizedRevision)
+
+  const { service, state } = createHarness()
+  state.adapterGeneration = 0
+  state.document.id = ''
+  state.document.mutationVersion = -9
+  state.materials.version = -7
+
+  const hostileTags = ['public']
+  Object.defineProperty(hostileTags, '1', { configurable: true, enumerable: true, get: getter })
+  const hostileMaterial = { componentName: 'Hostile', tags: hostileTags }
+  for (const key of ['title', 'description', 'group', 'category']) {
+    Object.defineProperty(hostileMaterial, key, { enumerable: true, get: getter })
+  }
+  state.materials.entries = new Map([['Hostile', hostileMaterial]])
+
+  const full = await service.observe({ mode: 'full' })
+  const clone = structuredClone(full)
+  const core = clone.projection['dashboard.core']
+
+  assert.equal(getterInvocations, 0)
+  assert.deepEqual(core.document, { id: 'none', mutationVersion: -1, rootNodeId: 'node-000' })
+  assert.equal(core.materials.registryVersion, -1)
+  assert.deepEqual(core.materials.summaries, [
+    {
+      componentName: 'Hostile',
+      title: 'Hostile',
+      description: '',
+      group: '',
+      category: '',
+      tags: ['public'],
+    },
+  ])
+  assert.equal(clone.providerGenerations['dashboard.core'], full.providerGenerations['dashboard.core'])
+  assert.doesNotMatch(JSON.stringify(clone), /host-secret-source|getter|password|credential|authorization/)
+
+  state.document.schema.title = 'changed root'
+  state.document.mutationVersion = 0
+  const delta = await service.observe({ mode: 'delta', cursor: full.cursor })
+
+  assert.equal(isFull(delta), false)
+  assert.equal(delta.baseRevision, full.revision)
+  assert.equal(delta.baseCursor, full.cursor)
+  assert.ok(delta.changes.some(change => change.path.join('.') === 'nodes.node-000.extra.title'))
+
+  const resync = await service.observe({ mode: 'delta', cursor: 'lost-cursor' })
+  assert.equal(isFull(resync), true)
+  assert.deepEqual(resync.projection['dashboard.core'].document, core.document)
+  assert.deepEqual(resync.projection['dashboard.core'].materials.summaries, core.materials.summaries)
+  assert.equal(getterInvocations, 0)
+})
+
 test('JSON sanitization omits nested and array accessors without invoking getters', () => {
   let getterInvocations = 0
   const getter = () => {

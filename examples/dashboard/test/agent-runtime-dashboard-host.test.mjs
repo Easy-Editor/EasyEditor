@@ -273,6 +273,42 @@ test('actual MessageChannel observation owns full and delta DTOs without host le
   assert.equal(resync.projection['dashboard.core'].nodes['image-1'].extra.$dashboard.rect.x, 88)
 })
 
+test('actual Host.observe omits hostile ComponentMeta scalar and tag accessors', async t => {
+  const { engine, rpc } = await createHarness(t)
+  let getterInvocations = 0
+  const getter = () => {
+    getterInvocations += 1
+    return 'host-secret-source'
+  }
+
+  const hostileTags = ['public']
+  Object.defineProperty(hostileTags, '1', { configurable: true, enumerable: true, get: getter })
+  const hostileMetadata = { componentName: 'Hostile', tags: hostileTags }
+  for (const key of ['title', 'description', 'group', 'category']) {
+    Object.defineProperty(hostileMetadata, key, { enumerable: true, get: getter })
+  }
+
+  engine.materials.getComponentMetasMap().set('Hostile', {
+    getMetadata: () => hostileMetadata,
+  })
+
+  const full = await rpc.call('observe', observeRequest())
+  const hostile = full.projection['dashboard.core'].materials.summaries.find(
+    summary => summary.componentName === 'Hostile',
+  )
+
+  assert.equal(getterInvocations, 0)
+  assert.deepEqual(hostile, {
+    componentName: 'Hostile',
+    title: 'Hostile',
+    description: '',
+    group: '',
+    category: '',
+    tags: ['public'],
+  })
+  assert.doesNotMatch(JSON.stringify(full), /host-secret-source|getter|password|credential|authorization/)
+})
+
 test('Host validates fixed authority and exposes only available Phase-2 descriptions', async t => {
   const { rpc } = await createHarness(t)
   const schema = await rpc.call('describeCapability', {
