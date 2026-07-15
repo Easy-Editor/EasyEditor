@@ -120,23 +120,90 @@ test('provider registry rejects duplicate ids and never reuses generations', () 
   assert.ok(registry.generation >= secondGeneration)
 })
 
-test('full snapshots are structured-clone JSON and omit host objects, callbacks, credentials, and artifact source', async () => {
+test('full snapshots positively project safe node state and finite artifact references', async () => {
+  let getterInvocations = 0
+  const getter = () => {
+    getterInvocations += 1
+    return 'getter-must-not-run'
+  }
   const { service, state } = createHarness()
+  const nestedUnknown = { opaque: 'nested-private-material' }
+  Object.defineProperty(nestedUnknown, 'readThroughGetter', { enumerable: true, get: getter })
+  const unknownArray = ['safe-looking', 'getter-backed']
+  Object.defineProperty(unknownArray, '1', { configurable: true, enumerable: true, get: getter })
   state.document.schema.props = {
-    safe: 'value',
+    backgroundColor: '#232630',
+    safe: 'unknown-prop-must-not-cross',
     callback: () => 'unsafe',
     credentialRef: 'credential-1',
-    artifactRef: { artifactId: 'a', source: 'const unsafe = true', sourceRevision: '1' },
+    bearerToken: 'bearer-must-not-cross',
+    privateKey: 'private-key-must-not-cross',
+    nestedUnknown,
+    unknownArray,
     hostObject: new (class HostObject {})(),
   }
+  Object.defineProperty(state.document.schema.props, 'backgroundImage', { enumerable: true, get: getter })
+  state.document.schema.title = 'Projected root title'
+  state.document.schema.artifactRef = {
+    artifactId: 'artifact-safe-id',
+    logicalComponentId: 'component-safe-id',
+    sourceIntegrity: 'sha256-safe-source',
+    sourceRevision: 'revision-safe-id',
+    target: {
+      kind: 'local-material',
+      materialId: 'material-safe-id',
+      buildIntegrity: 'sha256-safe-build',
+      module: 'module-must-not-cross',
+    },
+    rollbackTo: {
+      artifactId: 'rollback-safe-id',
+      logicalComponentId: 'rollback-component-safe-id',
+      sourceIntegrity: 'sha256-safe-rollback',
+      sourceRevision: 'rollback-revision-safe-id',
+      code: 'rollback-code-must-not-cross',
+    },
+    code: 'artifact-code-must-not-cross',
+    source: 'artifact-source-must-not-cross',
+    signingSeed: 'artifact-signing-seed-must-not-cross',
+    unknownArray,
+  }
+  Object.defineProperty(state.document.schema.artifactRef.target, 'materialVersion', {
+    enumerable: true,
+    get: getter,
+  })
+  Object.defineProperty(state.document.schema.artifactRef, 'credentials', { enumerable: true, get: getter })
+  state.document.schema.deploymentEnvelope = nestedUnknown
 
   const full = await service.observe({ mode: 'full' })
   const clone = structuredClone(full)
   const serialized = JSON.stringify(clone)
+  const root = clone.projection['dashboard.core'].nodes['node-000']
 
+  assert.equal(getterInvocations, 0)
   assert.equal(clone.schemaVersion, 1)
-  assert.doesNotMatch(serialized, /credential-1|must-not-leak|const unsafe|configure|callback|HostObject/)
-  assert.match(serialized, /"safe":"value"/)
+  assert.equal(Object.hasOwn(root, 'props'), false)
+  assert.deepEqual(root.extra.artifactRef, {
+    artifactId: 'artifact-safe-id',
+    logicalComponentId: 'component-safe-id',
+    rollbackTo: {
+      artifactId: 'rollback-safe-id',
+      logicalComponentId: 'rollback-component-safe-id',
+      sourceIntegrity: 'sha256-safe-rollback',
+      sourceRevision: 'rollback-revision-safe-id',
+    },
+    sourceIntegrity: 'sha256-safe-source',
+    sourceRevision: 'revision-safe-id',
+    target: {
+      buildIntegrity: 'sha256-safe-build',
+      kind: 'local-material',
+      materialId: 'material-safe-id',
+    },
+  })
+  assert.equal(root.extra.title, 'Projected root title')
+  assert.doesNotMatch(
+    serialized,
+    /unknown-prop-must-not-cross|credential-1|bearer-must-not-cross|private-key-must-not-cross|nested-private-material|artifact-code-must-not-cross|artifact-source-must-not-cross|module-must-not-cross|rollback-code-must-not-cross|signing-seed-must-not-cross|must-not-leak|configure|callback|HostObject|getter-must-not-run/,
+  )
   assert.equal(typeof clone.revision, 'string')
   assert.equal(typeof clone.cursor, 'string')
   assert.deepEqual(clone.providerGenerations, {
@@ -182,7 +249,8 @@ test('Core node and material summaries omit structural accessors without invokin
   Object.defineProperty(nested, 'password', { enumerable: true, get: getter })
   const values = [1, 2, 3]
   Object.defineProperty(values, '1', { configurable: true, enumerable: true, get: getter })
-  root.props = { nested, values }
+  root.props = { backgroundColor: '#101010', nested, values }
+  Object.defineProperty(root.props, 'backgroundImage', { configurable: true, enumerable: true, get: getter })
 
   const safeChild = { id: 'safe-child' }
   Object.defineProperty(safeChild, 'componentName', { enumerable: true, get: getter })
@@ -215,7 +283,7 @@ test('Core node and material summaries omit structural accessors without invokin
   assert.equal(getterInvocations, 0)
   assert.equal(JSON.stringify(clone), JSON.stringify(jsonRoundTrip))
   assert.equal(full.projection['hostile.provider'].safe, 'provider-safe')
-  assert.deepEqual(core.nodes['node-000'].props.values, [1, null, 3])
+  assert.equal(Object.hasOwn(core.nodes['node-000'], 'props'), false)
   assert.deepEqual(core.nodes['node-000'].childIds, ['safe-child'])
   assert.equal(core.nodes['safe-child'].componentName, 'Unknown')
   assert.equal(Object.hasOwn(core.nodes['safe-child'], 'props'), false)
@@ -432,12 +500,19 @@ test('Core document and material registry accessors are omitted without invoking
 
 test('ordered deltas carry exact revision, cursor, provider generation, and atomic array patches', async () => {
   const { registry, service, state } = createHarness()
+  let arrayVersion = 1
+  let arrayValues = [1, 2, 3]
+  registry.register({
+    id: 'array.provider',
+    getVersion: () => String(arrayVersion),
+    capture: () => ({ values: arrayValues }),
+  })
   const full = await service.observe({ mode: 'full' })
-  const generation = registry.snapshot()[0].generation
+  const generation = registry.snapshot().find(record => record.provider.id === 'dashboard.core').generation
 
   assert.equal(full.providerGenerations['dashboard.core'], generation)
 
-  state.document.schema.children[0].props.values = [7, 8, 9]
+  state.document.schema.children[0].title = 'first change'
   state.document.mutationVersion += 1
   const delta = await service.observe({ mode: 'delta', cursor: full.cursor })
 
@@ -448,18 +523,27 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
   assert.equal(delta.providerGeneration, generation)
   assert.notEqual(delta.newRevision, delta.baseRevision)
   assert.notEqual(delta.newCursor, delta.baseCursor)
-  const arrayPatch = delta.changes.find(change => change.path.at(-1) === 'values')
+  assert.ok(delta.changes.some(change => change.path.at(-1) === 'title'))
+
+  arrayValues = [7, 8, 9]
+  arrayVersion += 1
+  const arrayDelta = await service.observe({ mode: 'delta', cursor: delta.newCursor })
+  assert.equal(isFull(arrayDelta), false)
+  assert.equal(arrayDelta.providerId, 'array.provider')
+  const arrayPatch = arrayDelta.changes.find(change => change.path.at(-1) === 'values')
   assert.deepEqual(arrayPatch?.value, [7, 8, 9])
   assert.ok(
-    delta.changes.every(change => change.path.length > 0 && change.path.every(segment => typeof segment === 'string')),
+    arrayDelta.changes.every(
+      change => change.path.length > 0 && change.path.every(segment => typeof segment === 'string'),
+    ),
   )
 
-  state.document.schema.children[0].props.text = 'next'
+  state.document.schema.children[0].title = 'next'
   state.document.mutationVersion += 1
-  const nextDelta = await service.observe({ mode: 'delta', cursor: delta.newCursor })
+  const nextDelta = await service.observe({ mode: 'delta', cursor: arrayDelta.newCursor })
   assert.equal(isFull(nextDelta), false)
-  assert.equal(nextDelta.baseRevision, delta.newRevision)
-  assert.equal(nextDelta.baseCursor, delta.newCursor)
+  assert.equal(nextDelta.baseRevision, arrayDelta.newRevision)
+  assert.equal(nextDelta.baseCursor, arrayDelta.newCursor)
 })
 
 test('loss, reorder, structural change, and provider generation changes force full resync', async () => {
