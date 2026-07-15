@@ -23,7 +23,7 @@ const createNode = (index, overrides = {}) => ({
   ...overrides,
 })
 
-const createAdapter = (nodeCount = 3) => {
+const createAdapter = (nodeCount = 3, options = {}) => {
   const root = createNode(0, {
     componentName: 'Root',
     children: Array.from({ length: nodeCount - 1 }, (_, index) => createNode(index + 1)),
@@ -48,6 +48,7 @@ const createAdapter = (nodeCount = 3) => {
         ],
         ['Root', { componentName: 'Root', title: 'Root' }],
       ]),
+      ...(typeof options.resolveEntry === 'function' ? { resolveEntry: options.resolveEntry } : {}),
     },
   }
   const adapter = {
@@ -59,7 +60,7 @@ const createAdapter = (nodeCount = 3) => {
 }
 
 const createHarness = (nodeCount = 3, options = {}) => {
-  const { adapter, state } = createAdapter(nodeCount)
+  const { adapter, state } = createAdapter(nodeCount, options)
   const coreProvider = createCoreProjectionProvider(adapter)
   const registry = new SnapshotProviderRegistry()
   registry.register(coreProvider)
@@ -226,6 +227,181 @@ test('Core node and material summaries omit structural accessors without invokin
     JSON.stringify(jsonRoundTrip),
     /getter-secret|must-not-appear|password|authorization|credentialRef|artifactSource/,
   )
+})
+
+test('Core material summaries use the explicit resolver seam without touching prototype getters', async () => {
+  let getterInvocations = 0
+  let resolverInvocations = 0
+
+  class ComponentMetaLike {
+    constructor(metadata) {
+      this.#metadata = metadata
+    }
+
+    #metadata
+
+    getMetadata() {
+      resolverInvocations += 1
+      return this.#metadata
+    }
+  }
+
+  for (const key of ['componentName', 'title', 'description', 'group', 'category', 'tags']) {
+    Object.defineProperty(ComponentMetaLike.prototype, key, {
+      enumerable: true,
+      get() {
+        getterInvocations += 1
+        throw new Error(`prototype getter should not run for ${key}`)
+      },
+    })
+  }
+
+  const rootMetadata = Object.freeze({
+    componentName: 'Root',
+    title: 'Root',
+    description: 'Root summary',
+    group: 'Layouts',
+    category: 'Structure',
+    tags: Object.freeze(['base']),
+  })
+  const imageMetadata = Object.freeze({
+    componentName: 'Image',
+    title: 'Image',
+    description: 'Image summary',
+    group: 'Media',
+    category: 'Display',
+    tags: Object.freeze(['visual']),
+  })
+  const { service, state } = createHarness(3, {
+    resolveEntry: meta => meta.getMetadata(),
+  })
+  state.materials.entries = new Map([
+    ['root', new ComponentMetaLike(rootMetadata)],
+    ['image', new ComponentMetaLike(imageMetadata)],
+  ])
+
+  const full = await service.observe({ mode: 'full' })
+  const clone = structuredClone(full)
+  const serialized = JSON.stringify(clone)
+  const summaries = full.projection['dashboard.core'].materials.summaries
+
+  assert.equal(getterInvocations, 0)
+  assert.equal(resolverInvocations, 2)
+  assert.deepEqual(
+    summaries.map(material => material.componentName),
+    ['Image', 'Root'],
+  )
+  assert.deepEqual(summaries, [
+    sanitizeJsonValue({
+      componentName: 'Image',
+      title: 'Image',
+      description: 'Image summary',
+      group: 'Media',
+      category: 'Display',
+      tags: ['visual'],
+    }),
+    sanitizeJsonValue({
+      componentName: 'Root',
+      title: 'Root',
+      description: 'Root summary',
+      group: 'Layouts',
+      category: 'Structure',
+      tags: ['base'],
+    }),
+  ])
+  assert.equal(JSON.stringify(clone), serialized)
+  assert.deepEqual(clone, JSON.parse(serialized))
+  assert.doesNotMatch(serialized, /prototype getter|credential|authorization|secret|password/)
+})
+
+test('Core material summaries ignore a getter-only resolveEntry seam and keep plain metadata fallback', async () => {
+  let resolveEntryGetterInvocations = 0
+  const { service, state } = createHarness()
+  Object.defineProperty(state.materials, 'resolveEntry', {
+    enumerable: true,
+    get() {
+      resolveEntryGetterInvocations += 1
+      throw new Error('resolveEntry getter should not run')
+    },
+  })
+
+  const full = await service.observe({ mode: 'full' })
+  const clone = structuredClone(full)
+  const serialized = JSON.stringify(clone)
+  const summaries = full.projection['dashboard.core'].materials.summaries
+
+  assert.equal(resolveEntryGetterInvocations, 0)
+  assert.deepEqual(
+    summaries.map(material => material.componentName),
+    ['Root', 'Text'],
+  )
+  assert.equal(JSON.stringify(clone), serialized)
+  assert.deepEqual(clone, JSON.parse(serialized))
+  assert.doesNotMatch(serialized, /resolveEntry getter should not run|credential|authorization|secret|password/)
+})
+
+test('Core material summaries omit entries whose resolveEntry throws secret-bearing errors', async () => {
+  let resolverInvocations = 0
+
+  class ComponentMetaLike {
+    constructor(metadata) {
+      this.#metadata = metadata
+    }
+
+    #metadata
+
+    getMetadata() {
+      resolverInvocations += 1
+      return this.#metadata
+    }
+  }
+
+  class ThrowingComponentMetaLike {
+    constructor(message) {
+      this.#message = message
+    }
+
+    #message
+
+    getMetadata() {
+      resolverInvocations += 1
+      throw new Error(this.#message)
+    }
+  }
+
+  const { service, state } = createHarness(3, {
+    resolveEntry: meta => meta.getMetadata(),
+  })
+  state.materials.entries = new Map([
+    [
+      'root',
+      new ComponentMetaLike(
+        Object.freeze({
+          componentName: 'Root',
+          title: 'Root',
+          description: 'Root summary',
+          group: 'Layouts',
+          category: 'Structure',
+          tags: Object.freeze(['base']),
+        }),
+      ),
+    ],
+    ['broken', new ThrowingComponentMetaLike('secret resolve failure: credential-7')],
+  ])
+
+  const full = await service.observe({ mode: 'full' })
+  const clone = structuredClone(full)
+  const serialized = JSON.stringify(clone)
+  const summaries = full.projection['dashboard.core'].materials.summaries
+
+  assert.equal(resolverInvocations, 2)
+  assert.deepEqual(
+    summaries.map(material => material.componentName),
+    ['Root'],
+  )
+  assert.equal(JSON.stringify(clone), serialized)
+  assert.deepEqual(clone, JSON.parse(serialized))
+  assert.doesNotMatch(serialized, /secret resolve failure|credential-7|password|authorization/)
 })
 
 test('Core document and material registry accessors are omitted without invoking getters', async () => {

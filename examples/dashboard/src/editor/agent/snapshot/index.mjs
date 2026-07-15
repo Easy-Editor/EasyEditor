@@ -238,6 +238,33 @@ const flattenDocument = root => {
   return Object.fromEntries(Object.entries(nodes).sort(([left], [right]) => compareCodeUnits(left, right)))
 }
 
+const summarizeMaterial = material => {
+  try {
+    const componentName = readOwnDataValue(material, 'componentName', null) ?? ''
+    if (!componentName) return null
+    const title = readOwnDataValue(material, 'title', null) ?? componentName
+    const tags = readOwnDataValue(material, 'tags')
+    return sanitizeJsonValue({
+      componentName,
+      title,
+      description: readOwnDataValue(material, 'description', null) ?? '',
+      group: readOwnDataValue(material, 'group', null) ?? '',
+      category: readOwnDataValue(material, 'category', null) ?? '',
+      tags: Array.isArray(tags) ? tags : [],
+    })
+  } catch {
+    return null
+  }
+}
+
+const resolveMaterialMetadata = (resolver, material) => {
+  try {
+    return resolver(material)
+  } catch {
+    return null
+  }
+}
+
 const structureFingerprint = projection =>
   hashStableValue({
     documentId: readOwnDataValue(readOwnDataValue(projection, 'document'), 'id', null) ?? null,
@@ -257,24 +284,18 @@ const structureFingerprint = projection =>
 
 const materialSummaries = registry => {
   const entries = readOwnDataValue(registry, 'entries')
+  const resolveEntry = readOwnDataValue(registry, 'resolveEntry')
   const values =
     entries instanceof Map
       ? [...Map.prototype.values.call(entries)]
       : arrayDataEntries(entries).map(([, value]) => value)
   return values
-    .map(material => {
-      const componentName = readOwnDataValue(material, 'componentName', null) ?? ''
-      const title = readOwnDataValue(material, 'title', null) ?? componentName
-      const tags = readOwnDataValue(material, 'tags')
-      return sanitizeJsonValue({
-        componentName,
-        title,
-        description: readOwnDataValue(material, 'description', null) ?? '',
-        group: readOwnDataValue(material, 'group', null) ?? '',
-        category: readOwnDataValue(material, 'category', null) ?? '',
-        tags: Array.isArray(tags) ? tags : [],
-      })
-    })
+    .map(material =>
+      summarizeMaterial(
+        typeof resolveEntry === 'function' ? resolveMaterialMetadata(resolveEntry, material) : material,
+      ),
+    )
+    .filter(summary => summary !== null)
     .sort((left, right) => compareCodeUnits(left.componentName, right.componentName))
 }
 
