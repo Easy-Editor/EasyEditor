@@ -144,6 +144,7 @@ const createControlledEndpoint = snapshot => {
     handlers: {
       'runtime.initialize': () => snapshot,
       'runtime.dispose': () => null,
+      'runtime.diagnostics': () => ({ healthy: true }),
     },
     clock: { now: () => ++sequence },
     idFactory: { next: kind => `${kind}-${++sequence}` },
@@ -513,6 +514,191 @@ test('stale generation publishes are ignored and facade revisions remain strictl
 
   await runtime.dispose()
   await Promise.all([first.peer.dispose(), second.peer.dispose()])
+})
+
+test('current generation rejects cross-binding snapshots without replacing the mirror or transport', async () => {
+  const controlled = createControlledEndpoint({
+    schemaVersion: 1,
+    binding,
+    status: 'ready',
+    phase: 'IDLE',
+    revision: 1,
+    tasks: [],
+  })
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: controlled.endpoint,
+    host: new hostModule.FakeAgentHost(),
+    persistence: new persistenceModule.MemoryAgentPersistence(),
+  })
+  await runtime.ready()
+
+  const task = {
+    taskId: 'task-cross-binding',
+    sessionId: binding.sessionId,
+    phase: 'PAUSED',
+    createdAt: 1,
+    updatedAt: 2,
+    repairAttempts: 0,
+  }
+  const valid = runtime.getSnapshot()
+  const invalidPublishes = [
+    {
+      label: 'RPC envelope session',
+      context: { sessionId: 'other-session', taskId: 'runtime', stepId: 'cross-binding-envelope' },
+      snapshot: { ...valid, revision: 2 },
+    },
+    {
+      label: 'snapshot project binding',
+      context: { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'cross-binding-project' },
+      snapshot: { ...valid, binding: { ...binding, projectId: 'other-project' }, revision: 3 },
+    },
+    {
+      label: 'snapshot branch binding',
+      context: { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'cross-binding-branch' },
+      snapshot: { ...valid, binding: { ...binding, branchId: 'other-branch' }, revision: 4 },
+    },
+    {
+      label: 'snapshot session binding',
+      context: { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'cross-binding-session' },
+      snapshot: { ...valid, binding: { ...binding, sessionId: 'other-session' }, revision: 5 },
+    },
+    {
+      label: 'task session',
+      context: { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'cross-binding-task' },
+      snapshot: { ...valid, revision: 6, tasks: [{ ...task, sessionId: 'other-session' }] },
+    },
+    {
+      label: 'active task session',
+      context: { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'cross-binding-active-task' },
+      snapshot: { ...valid, revision: 7, tasks: [task], activeTask: { ...task, sessionId: 'other-session' } },
+    },
+  ]
+
+  for (const invalid of invalidPublishes) {
+    const lastValid = runtime.getSnapshot()
+    await assert.rejects(
+      controlled.peer.request('runtime.publishSnapshot', invalid.snapshot, invalid.context),
+      error => error.name === 'RpcRemoteError' && error.code === 'invalid-field',
+      invalid.label,
+    )
+    assert.equal(runtime.getSnapshot(), lastValid, `${invalid.label} must not replace the last valid mirror`)
+  }
+
+  await controlled.peer.request(
+    'runtime.publishSnapshot',
+    { ...valid, phase: 'PAUSED', revision: 8, tasks: [task], activeTask: task },
+    { sessionId: binding.sessionId, taskId: 'runtime', stepId: 'valid-publish' },
+  )
+  assert.equal(runtime.getSnapshot().phase, 'PAUSED')
+  assert.deepEqual(runtime.getSnapshot().binding, binding)
+
+  await runtime.dispose()
+  await controlled.peer.dispose()
+})
+
+test('initialize rejects a snapshot outside the bound runtime before mirroring it', async () => {
+  const task = {
+    taskId: 'task-invalid-initialize',
+    sessionId: binding.sessionId,
+    phase: 'PAUSED',
+    createdAt: 1,
+    updatedAt: 2,
+    repairAttempts: 0,
+  }
+  const valid = {
+    schemaVersion: 1,
+    binding,
+    status: 'ready',
+    phase: 'IDLE',
+    revision: 9,
+    tasks: [],
+  }
+  const invalidInitializations = [
+    { ...valid, binding: { ...binding, projectId: 'other-project' } },
+    { ...valid, binding: { ...binding, branchId: 'other-branch' } },
+    { ...valid, binding: { ...binding, sessionId: 'other-session' } },
+    { ...valid, tasks: [{ ...task, sessionId: 'other-session' }] },
+    { ...valid, tasks: [task], activeTask: { ...task, sessionId: 'other-session' } },
+  ]
+
+  for (const snapshot of invalidInitializations) {
+    const controlled = createControlledEndpoint(snapshot)
+    const runtime = runtimeModule.createAgentRuntimeInternal({
+      binding,
+      worker: controlled.endpoint,
+      host: new hostModule.FakeAgentHost(),
+      persistence: new persistenceModule.MemoryAgentPersistence(),
+    })
+    const isAuthorityError = error => error.name === 'ProtocolValidationError' && error.code === 'invalid-field'
+    await assert.rejects(runtime.ready(), isAuthorityError)
+    assert.deepEqual(runtime.getSnapshot().binding, binding)
+    assert.equal(runtime.getSnapshot().status, 'failed')
+    assert.equal(runtime.getSnapshot().failure.code, 'worker-initialization-failed')
+    await assert.rejects(runtime.dispose(), isAuthorityError)
+    await controlled.peer.dispose()
+  }
+})
+
+test('restart capability and disposed failures are asynchronous Promise rejections', async () => {
+  const snapshot = {
+    schemaVersion: 1,
+    binding,
+    status: 'ready',
+    phase: 'IDLE',
+    revision: 1,
+    tasks: [],
+  }
+  const controlled = createControlledEndpoint(snapshot)
+  const factoryControlled = createControlledEndpoint(snapshot)
+  const unhandled = []
+  const onUnhandled = reason => unhandled.push(reason)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const runtime = runtimeModule.createAgentRuntimeInternal({
+      binding,
+      worker: controlled.endpoint,
+      host: new hostModule.FakeAgentHost(),
+      persistence: new persistenceModule.MemoryAgentPersistence(),
+    })
+    await runtime.ready()
+    const readySnapshot = runtime.getSnapshot()
+
+    let unavailableRestart
+    assert.doesNotThrow(() => {
+      unavailableRestart = runtime.restart()
+    })
+    assert.equal(typeof unavailableRestart?.then, 'function')
+    await delay(10)
+    await assert.rejects(unavailableRestart, /runtime restart requires a worker endpoint factory/)
+    assert.deepEqual(unhandled, [])
+    assert.equal(runtime.getSnapshot(), readySnapshot)
+    assert.equal(runtime.getSnapshot().status, 'ready')
+    assert.deepEqual(await runtime.diagnostics(), { healthy: true })
+    await runtime.dispose()
+
+    const disposedRuntime = runtimeModule.createAgentRuntimeInternal({
+      binding,
+      worker: () => factoryControlled.endpoint,
+      host: new hostModule.FakeAgentHost(),
+      persistence: new persistenceModule.MemoryAgentPersistence(),
+    })
+    await disposedRuntime.ready()
+    await disposedRuntime.dispose()
+
+    let disposedRestart
+    assert.doesNotThrow(() => {
+      disposedRestart = disposedRuntime.restart()
+    })
+    assert.equal(typeof disposedRestart?.then, 'function')
+    await delay(10)
+    await assert.rejects(disposedRestart, /agent runtime is disposed/)
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
+    await controlled.peer.dispose()
+    await factoryControlled.peer.dispose()
+  }
 })
 
 test('unexpected Worker exit automatically recovers persisted work without transport leaks', async () => {

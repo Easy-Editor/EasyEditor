@@ -7,6 +7,7 @@ import type {
   IdFactory,
   JsonObject,
 } from '../../contracts.js'
+import { ProtocolValidationError } from '../protocol/index.js'
 import { type RpcPeer, createAgentBoundaryRpcHandlers, createRpcPeer } from '../rpc/index.js'
 import { runtimeRpcContracts } from './contracts.js'
 
@@ -71,6 +72,24 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
     revision: 0,
     tasks: [],
   })
+
+  const assertSnapshotAuthority = (snapshot: AgentRuntimeSnapshot, envelopeSessionId = binding.sessionId) => {
+    const assertMatches = (actual: string, expected: string, field: string) => {
+      if (actual !== expected) {
+        throw new ProtocolValidationError('invalid-field', `${field} must match the bound runtime`)
+      }
+    }
+    assertMatches(envelopeSessionId, binding.sessionId, 'ProtocolEnvelope.sessionId')
+    assertMatches(snapshot.binding.projectId, binding.projectId, 'AgentRuntimeSnapshot.binding.projectId')
+    assertMatches(snapshot.binding.branchId, binding.branchId, 'AgentRuntimeSnapshot.binding.branchId')
+    assertMatches(snapshot.binding.sessionId, binding.sessionId, 'AgentRuntimeSnapshot.binding.sessionId')
+    snapshot.tasks.forEach((task, index) => {
+      assertMatches(task.sessionId, binding.sessionId, `AgentRuntimeSnapshot.tasks[${index}].sessionId`)
+    })
+    if (snapshot.activeTask) {
+      assertMatches(snapshot.activeTask.sessionId, binding.sessionId, 'AgentRuntimeSnapshot.activeTask.sessionId')
+    }
+  }
 
   const mirror = (snapshot: AgentRuntimeSnapshot) => {
     if (disposed && snapshot.status !== 'disposed') return
@@ -183,8 +202,9 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
         closePortOnDispose: true,
         handlers: {
           ...createAgentBoundaryRpcHandlers(options.host, options.persistence),
-          'runtime.publishSnapshot'(snapshot) {
+          async 'runtime.publishSnapshot'(snapshot, context) {
             if (!disposed && generation === transportGeneration && transport === candidate && !candidate.closed) {
+              assertSnapshotAuthority(snapshot, context.sessionId)
               mirror(snapshot)
             }
             return null
@@ -219,6 +239,7 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
       await closeTransport(candidate, 'stale worker initialization')
       throw new Error('agent runtime transport generation was superseded')
     }
+    assertSnapshotAuthority(snapshot)
     mirror(snapshot)
   }
 
@@ -286,7 +307,10 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
       return (await requirePeer()).request('runtime.diagnostics', null, context('runtime', 'diagnostics'))
     },
     restart() {
-      if (!endpointFactory) throw new Error('runtime restart requires a worker endpoint factory')
+      if (disposed) return observeRejection(Promise.reject(new Error('agent runtime is disposed')))
+      if (!endpointFactory) {
+        return observeRejection(Promise.reject(new Error('runtime restart requires a worker endpoint factory')))
+      }
       const restart = enqueueLifecycle(async () => {
         if (disposed) throw new Error('agent runtime is disposed')
         mirror({ ...current, status: 'recovering', phase: 'RECOVERING', revision: current.revision + 1 })
