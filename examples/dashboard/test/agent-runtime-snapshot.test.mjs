@@ -512,7 +512,7 @@ test('ordered deltas carry exact revision, cursor, provider generation, and atom
 
   assert.equal(full.providerGenerations['dashboard.core'], generation)
 
-  state.document.schema.children[0].props.values = [7, 8, 9]
+  state.document.schema.children[0].title = 'first change'
   state.document.mutationVersion += 1
   const delta = await service.observe({ mode: 'delta', cursor: full.cursor })
 
