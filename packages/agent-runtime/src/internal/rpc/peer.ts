@@ -170,9 +170,7 @@ const errorPayload = (requestId: string, error: unknown): RpcErrorPayload => ({
   requestId,
   error: {
     code:
-      error instanceof ProtocolValidationError || error instanceof RpcRemoteError
-        ? error.code
-        : 'rpc-handler-failed',
+      error instanceof ProtocolValidationError || error instanceof RpcRemoteError ? error.code : 'rpc-handler-failed',
     message: (error instanceof Error ? error.message : 'RPC handler failed').slice(0, 4096),
   },
 })
