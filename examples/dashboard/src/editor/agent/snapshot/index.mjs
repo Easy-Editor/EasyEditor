@@ -20,6 +20,13 @@ const readOwnDataValue = (value, key, fallback = OMIT) => {
   return descriptor && 'value' in descriptor ? descriptor.value : fallback
 }
 
+const normalizeOwnString = (value, fallback) => (typeof value === 'string' && value.length > 0 ? value : fallback)
+
+const normalizePositiveSafeInteger = (value, fallback) => (Number.isSafeInteger(value) && value > 0 ? value : fallback)
+
+const normalizeNonNegativeSafeInteger = (value, fallback) =>
+  Number.isSafeInteger(value) && value >= 0 ? value : fallback
+
 const ownEnumerableDataEntries = value => {
   if (!isObjectLike(value)) return []
   const entries = []
@@ -195,10 +202,16 @@ export const validateProjectionChanges = (base, changes) => {
 
 export const createHostRevision = input =>
   hashStableValue({
-    adapterGeneration: readOwnDataValue(input, 'adapterGeneration'),
-    documentId: readOwnDataValue(input, 'documentId'),
-    documentMutationVersion: readOwnDataValue(input, 'documentMutationVersion'),
-    materialRegistryVersion: readOwnDataValue(input, 'materialRegistryVersion'),
+    adapterGeneration: normalizePositiveSafeInteger(readOwnDataValue(input, 'adapterGeneration', null), 0),
+    documentId: normalizeOwnString(readOwnDataValue(input, 'documentId', null), 'none'),
+    documentMutationVersion: normalizeNonNegativeSafeInteger(
+      readOwnDataValue(input, 'documentMutationVersion', null),
+      -1,
+    ),
+    materialRegistryVersion: normalizeNonNegativeSafeInteger(
+      readOwnDataValue(input, 'materialRegistryVersion', null),
+      -1,
+    ),
     providerVersions: Object.fromEntries(
       ownEnumerableDataEntries(readOwnDataValue(input, 'providerVersions')).sort(([left], [right]) =>
         compareCodeUnits(left, right),
@@ -291,17 +304,22 @@ const flattenDocument = root => {
 
 const summarizeMaterial = material => {
   try {
-    const componentName = readOwnDataValue(material, 'componentName', null) ?? ''
+    const componentName = normalizeOwnString(readOwnDataValue(material, 'componentName', null), '')
     if (!componentName) return null
-    const title = readOwnDataValue(material, 'title', null) ?? componentName
-    const tags = readOwnDataValue(material, 'tags')
+    const title = normalizeOwnString(readOwnDataValue(material, 'title', null), componentName)
+    const description = normalizeOwnString(readOwnDataValue(material, 'description', null), '')
+    const group = normalizeOwnString(readOwnDataValue(material, 'group', null), '')
+    const category = normalizeOwnString(readOwnDataValue(material, 'category', null), '')
+    const tags = arrayDataEntries(readOwnDataValue(material, 'tags')).flatMap(([, tag]) =>
+      typeof tag === 'string' ? [tag] : [],
+    )
     return sanitizeJsonValue({
       componentName,
       title,
-      description: readOwnDataValue(material, 'description', null) ?? '',
-      group: readOwnDataValue(material, 'group', null) ?? '',
-      category: readOwnDataValue(material, 'category', null) ?? '',
-      tags: Array.isArray(tags) ? tags : [],
+      description,
+      group,
+      category,
+      tags,
     })
   } catch {
     return null
@@ -356,10 +374,10 @@ export const createCoreProjectionProvider = adapter => ({
     const document = adapter.readDocument()
     const materials = adapter.readMaterials()
     return {
-      adapterGeneration: adapter.readAdapterGeneration(),
-      documentId: readOwnDataValue(document, 'id', null) ?? 'none',
-      documentMutationVersion: readOwnDataValue(document, 'mutationVersion', null) ?? -1,
-      materialRegistryVersion: readOwnDataValue(materials, 'version', null) ?? -1,
+      adapterGeneration: normalizePositiveSafeInteger(adapter.readAdapterGeneration(), 0),
+      documentId: normalizeOwnString(readOwnDataValue(document, 'id', null), 'none'),
+      documentMutationVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(document, 'mutationVersion', null), -1),
+      materialRegistryVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(materials, 'version', null), -1),
     }
   },
   getVersion() {
@@ -373,14 +391,14 @@ export const createCoreProjectionProvider = adapter => ({
     return sanitizeJsonValue({
       document: document
         ? {
-            id: readOwnDataValue(document, 'id'),
-            mutationVersion: readOwnDataValue(document, 'mutationVersion'),
+            id: normalizeOwnString(readOwnDataValue(document, 'id', null), 'none'),
+            mutationVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(document, 'mutationVersion', null), -1),
             rootNodeId: typeof readOwnDataValue(schema, 'id') === 'string' ? readOwnDataValue(schema, 'id') : null,
           }
         : null,
       nodes,
       materials: {
-        registryVersion: readOwnDataValue(materials, 'version'),
+        registryVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(materials, 'version', null), -1),
         summaries: materialSummaries(materials),
       },
     })
