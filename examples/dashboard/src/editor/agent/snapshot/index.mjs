@@ -334,6 +334,14 @@ const resolveMaterialMetadata = (resolver, material) => {
   }
 }
 
+const resolveMaterialMetadata = (resolver, material) => {
+  try {
+    return resolver(material)
+  } catch {
+    return null
+  }
+}
+
 const structureFingerprint = projection =>
   hashStableValue({
     documentId: readOwnDataValue(readOwnDataValue(projection, 'document'), 'id', null) ?? null,
