@@ -20,12 +20,10 @@ const readOwnDataValue = (value, key, fallback = OMIT) => {
   return descriptor && 'value' in descriptor ? descriptor.value : fallback
 }
 
-const normalizeOwnString = (value, fallback) => (typeof value === 'string' && value.length > 0 ? value : fallback)
-
-const normalizePositiveSafeInteger = (value, fallback) => (Number.isSafeInteger(value) && value > 0 ? value : fallback)
-
-const normalizeNonNegativeSafeInteger = (value, fallback) =>
-  Number.isSafeInteger(value) && value >= 0 ? value : fallback
+const callOwnMethod = (value, key, fallback = OMIT) => {
+  const method = readOwnDataValue(value, key)
+  return typeof method === 'function' ? method.call(value) : fallback
+}
 
 const ownEnumerableDataEntries = value => {
   if (!isObjectLike(value)) return []
@@ -36,6 +34,16 @@ const ownEnumerableDataEntries = value => {
   }
   return entries
 }
+
+const normalizeStringScalar = (value, fallback) => (typeof value === 'string' ? value : fallback)
+
+const normalizeNonEmptyStringScalar = (value, fallback) => (typeof value === 'string' && value ? value : fallback)
+
+const normalizeNonNegativeSafeIntegerScalar = (value, fallback) =>
+  Number.isSafeInteger(value) && value >= 0 ? value : fallback
+
+const normalizePositiveSafeIntegerScalar = (value, fallback) =>
+  Number.isSafeInteger(value) && value > 0 ? value : fallback
 
 const arrayDataEntries = value => {
   if (!Array.isArray(value)) return []
@@ -202,14 +210,14 @@ export const validateProjectionChanges = (base, changes) => {
 
 export const createHostRevision = input =>
   hashStableValue({
-    adapterGeneration: normalizePositiveSafeInteger(readOwnDataValue(input, 'adapterGeneration', null), 0),
-    documentId: normalizeOwnString(readOwnDataValue(input, 'documentId', null), 'none'),
-    documentMutationVersion: normalizeNonNegativeSafeInteger(
-      readOwnDataValue(input, 'documentMutationVersion', null),
+    adapterGeneration: normalizePositiveSafeIntegerScalar(readOwnDataValue(input, 'adapterGeneration'), 0),
+    documentId: normalizeNonEmptyStringScalar(readOwnDataValue(input, 'documentId'), 'none'),
+    documentMutationVersion: normalizeNonNegativeSafeIntegerScalar(
+      readOwnDataValue(input, 'documentMutationVersion'),
       -1,
     ),
-    materialRegistryVersion: normalizeNonNegativeSafeInteger(
-      readOwnDataValue(input, 'materialRegistryVersion', null),
+    materialRegistryVersion: normalizeNonNegativeSafeIntegerScalar(
+      readOwnDataValue(input, 'materialRegistryVersion'),
       -1,
     ),
     providerVersions: Object.fromEntries(
@@ -218,6 +226,15 @@ export const createHostRevision = input =>
       ),
     ),
   })
+
+const projectStringArray = value => {
+  if (!Array.isArray(value)) return []
+  const result = []
+  for (const [, item] of arrayDataEntries(value)) {
+    if (typeof item === 'string') result.push(item)
+  }
+  return result
+}
 
 const projectStringFields = (value, keys) => {
   if (!isPlainRecord(value)) return null
@@ -304,22 +321,16 @@ const flattenDocument = root => {
 
 const summarizeMaterial = material => {
   try {
-    const componentName = normalizeOwnString(readOwnDataValue(material, 'componentName', null), '')
-    if (!componentName) return null
-    const title = normalizeOwnString(readOwnDataValue(material, 'title', null), componentName)
-    const description = normalizeOwnString(readOwnDataValue(material, 'description', null), '')
-    const group = normalizeOwnString(readOwnDataValue(material, 'group', null), '')
-    const category = normalizeOwnString(readOwnDataValue(material, 'category', null), '')
-    const tags = arrayDataEntries(readOwnDataValue(material, 'tags')).flatMap(([, tag]) =>
-      typeof tag === 'string' ? [tag] : [],
-    )
+    const componentName = readOwnDataValue(material, 'componentName')
+    if (typeof componentName !== 'string' || !componentName) return null
+    const tags = readOwnDataValue(material, 'tags')
     return sanitizeJsonValue({
       componentName,
-      title,
-      description,
-      group,
-      category,
-      tags,
+      title: normalizeStringScalar(readOwnDataValue(material, 'title'), componentName),
+      description: normalizeStringScalar(readOwnDataValue(material, 'description'), ''),
+      group: normalizeStringScalar(readOwnDataValue(material, 'group'), ''),
+      category: normalizeStringScalar(readOwnDataValue(material, 'category'), ''),
+      tags: projectStringArray(tags),
     })
   } catch {
     return null
@@ -371,34 +382,38 @@ const materialSummaries = registry => {
 export const createCoreProjectionProvider = adapter => ({
   id: 'dashboard.core',
   readFence() {
-    const document = adapter.readDocument()
-    const materials = adapter.readMaterials()
+    const document = callOwnMethod(adapter, 'readDocument', null)
+    const materials = callOwnMethod(adapter, 'readMaterials', null)
+    const adapterGeneration = normalizePositiveSafeIntegerScalar(
+      callOwnMethod(adapter, 'readAdapterGeneration', null),
+      0,
+    )
     return {
-      adapterGeneration: normalizePositiveSafeInteger(adapter.readAdapterGeneration(), 0),
-      documentId: normalizeOwnString(readOwnDataValue(document, 'id', null), 'none'),
-      documentMutationVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(document, 'mutationVersion', null), -1),
-      materialRegistryVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(materials, 'version', null), -1),
+      adapterGeneration,
+      documentId: normalizeNonEmptyStringScalar(readOwnDataValue(document, 'id'), 'none'),
+      documentMutationVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(document, 'mutationVersion'), -1),
+      materialRegistryVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(materials, 'version'), -1),
     }
   },
   getVersion() {
     return hashStableValue(this.readFence())
   },
   capture() {
-    const document = adapter.readDocument()
-    const materials = adapter.readMaterials()
+    const document = callOwnMethod(adapter, 'readDocument', null)
+    const materials = callOwnMethod(adapter, 'readMaterials', null)
     const schema = readOwnDataValue(document, 'schema')
     const nodes = document ? flattenDocument(schema) : {}
     return sanitizeJsonValue({
       document: document
         ? {
-            id: normalizeOwnString(readOwnDataValue(document, 'id', null), 'none'),
-            mutationVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(document, 'mutationVersion', null), -1),
+            id: normalizeNonEmptyStringScalar(readOwnDataValue(document, 'id'), 'none'),
+            mutationVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(document, 'mutationVersion'), -1),
             rootNodeId: typeof readOwnDataValue(schema, 'id') === 'string' ? readOwnDataValue(schema, 'id') : null,
           }
         : null,
       nodes,
       materials: {
-        registryVersion: normalizeNonNegativeSafeInteger(readOwnDataValue(materials, 'version', null), -1),
+        registryVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(materials, 'version'), -1),
         summaries: materialSummaries(materials),
       },
     })

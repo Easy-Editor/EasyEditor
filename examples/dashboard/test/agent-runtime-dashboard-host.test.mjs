@@ -273,47 +273,36 @@ test('actual MessageChannel observation owns full and delta DTOs without host le
   assert.equal(resync.projection['dashboard.core'].nodes['image-1'].extra.$dashboard.rect.x, 88)
 })
 
-test('actual Host.observe omits hostile ComponentMeta scalar and tag accessors', async t => {
+test('Host.observe normalizes hostile runtime ComponentMeta metadata without leaking secrets', async t => {
   const { engine, rpc } = await createHarness(t)
-  let getterInvocations = 0
-  const getter = () => {
-    getterInvocations += 1
-    return 'host-secret-source'
+  const hostileTags = ['alpha', { nested: 'tag-secret' }, 'omega']
+  const hostileMeta = {
+    componentName: 'Hostile',
+    title: { secret: 'title-secret' },
+    description: { secret: 'description-secret' },
+    group: { secret: 'group-secret' },
+    category: { secret: 'category-secret' },
+    tags: hostileTags,
   }
-
-  const hostileTags = ['public']
-  Object.defineProperty(hostileTags, '1', { configurable: true, enumerable: true, get: getter })
-  const hostileMetadata = { componentName: 'Hostile', tags: hostileTags }
-  for (const key of ['title', 'description', 'group', 'category']) {
-    Object.defineProperty(hostileMetadata, key, { enumerable: true, get: getter })
-  }
-  const hostileComponentMeta =
-    engine.materials.createComponentMeta({
-      componentName: 'Hostile',
-      title: 'Hostile',
-      description: 'Hostile',
-      group: 'Hostile',
-      category: 'Hostile',
-      tags: ['public'],
-    }) ?? engine.materials.getComponentMetasMap().get('Hostile')
-  hostileComponentMeta.getMetadata = () => hostileMetadata
-  getterInvocations = 0
+  engine.materials.createComponentMeta(hostileMeta)
 
   const full = await rpc.call('observe', observeRequest())
   const hostile = full.projection['dashboard.core'].materials.summaries.find(
     summary => summary.componentName === 'Hostile',
   )
 
-  assert.equal(getterInvocations, 0)
   assert.deepEqual(hostile, {
+    category: '',
     componentName: 'Hostile',
-    title: 'Hostile',
     description: '',
     group: '',
-    category: '',
-    tags: ['public'],
+    tags: ['alpha', 'omega'],
+    title: 'Hostile',
   })
-  assert.doesNotMatch(JSON.stringify(full), /host-secret-source|getter|password|credential|authorization/)
+  assert.doesNotMatch(
+    JSON.stringify(full),
+    /title-secret|description-secret|group-secret|category-secret|tag-secret|poisoned/,
+  )
 })
 
 test('Host validates fixed authority and exposes only available Phase-2 descriptions', async t => {

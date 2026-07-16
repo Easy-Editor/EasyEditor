@@ -92,6 +92,74 @@ test('revision and full projection are stable across provider insertion and mate
     assert.notEqual(createHostRevision(changed), revision)
   }
 
+  let getterInvocations = 0
+  const hostileRevisionInput = {}
+  for (const [key, value] of [
+    ['adapterGeneration', 'not-safe-generation'],
+    ['documentId', 'not-safe-document'],
+    ['documentMutationVersion', 'not-safe-mutation'],
+    ['materialRegistryVersion', 'not-safe-materials'],
+  ]) {
+    Object.defineProperty(hostileRevisionInput, key, {
+      enumerable: true,
+      get() {
+        getterInvocations += 1
+        return value
+      },
+    })
+  }
+  Object.defineProperty(hostileRevisionInput, 'providerVersions', {
+    enumerable: true,
+    value: {
+      alpha: '1',
+      beta: '2',
+    },
+  })
+  const normalizedRevision = createHostRevision({
+    adapterGeneration: 0,
+    documentId: 'none',
+    documentMutationVersion: -1,
+    materialRegistryVersion: -1,
+    providerVersions: { alpha: '1', beta: '2' },
+  })
+  assert.equal(createHostRevision(hostileRevisionInput), normalizedRevision)
+  assert.equal(getterInvocations, 0)
+
+  const boundaryRevisionInput = {
+    adapterGeneration: 1,
+    documentId: 'boundary-doc',
+    documentMutationVersion: 0,
+    materialRegistryVersion: 0,
+    providerVersions: { alpha: '1', beta: '2' },
+  }
+  const boundaryRevision = createHostRevision(boundaryRevisionInput)
+  assert.match(boundaryRevision, /^v1-/)
+  assert.equal(
+    createHostRevision({ ...boundaryRevisionInput, documentId: '' }),
+    createHostRevision({ ...boundaryRevisionInput, documentId: 'none' }),
+  )
+  assert.equal(
+    createHostRevision({ ...boundaryRevisionInput, adapterGeneration: 0 }),
+    createHostRevision({ ...boundaryRevisionInput, adapterGeneration: -1 }),
+  )
+  assert.equal(
+    createHostRevision({ ...boundaryRevisionInput, adapterGeneration: { secret: 'adapter-generation-secret' } }),
+    createHostRevision({ ...boundaryRevisionInput, adapterGeneration: 0 }),
+  )
+  assert.equal(
+    createHostRevision({ ...boundaryRevisionInput, documentMutationVersion: -1, materialRegistryVersion: -1 }),
+    createHostRevision({
+      ...boundaryRevisionInput,
+      documentMutationVersion: { secret: 'document-mutation-secret' },
+      materialRegistryVersion: { secret: 'material-version-secret' },
+    }),
+  )
+  assert.notEqual(boundaryRevision, createHostRevision({ ...boundaryRevisionInput, adapterGeneration: 0 }))
+  assert.notEqual(
+    boundaryRevision,
+    createHostRevision({ ...boundaryRevisionInput, documentMutationVersion: -1, materialRegistryVersion: -1 }),
+  )
+
   const first = createHarness()
   const firstFull = await first.service.observe({ mode: 'full' })
   first.state.materials.entries = new Map([...first.state.materials.entries].reverse())
@@ -173,11 +241,36 @@ test('full snapshots positively project safe node state and finite artifact refe
   })
   Object.defineProperty(state.document.schema.artifactRef, 'credentials', { enumerable: true, get: getter })
   state.document.schema.deploymentEnvelope = nestedUnknown
+  state.adapterGeneration = { secret: 'adapter-generation-secret' }
+  state.document.id = { secret: 'document-id-secret' }
+  state.document.mutationVersion = { secret: 'document-mutation-secret' }
+  state.materials.version = { secret: 'material-version-secret' }
+  const hostileMaterial = state.materials.entries.get('Text')
+  Object.defineProperty(hostileMaterial, 'title', {
+    configurable: true,
+    enumerable: true,
+    value: { secret: 'material-title-secret' },
+    writable: true,
+  })
+  Object.defineProperty(hostileMaterial, 'description', { configurable: true, enumerable: true, get: getter })
+  Object.defineProperty(hostileMaterial, 'group', {
+    configurable: true,
+    enumerable: true,
+    value: { secret: 'material-group-secret' },
+    writable: true,
+  })
+  Object.defineProperty(hostileMaterial, 'category', { configurable: true, enumerable: true, get: getter })
+  const hostileTags = ['basic', 'poisoned', 'tail']
+  Object.defineProperty(hostileTags, '1', { configurable: true, enumerable: true, get: getter })
+  hostileMaterial.tags = hostileTags
 
   const full = await service.observe({ mode: 'full' })
   const clone = structuredClone(full)
   const serialized = JSON.stringify(clone)
   const root = clone.projection['dashboard.core'].nodes['node-000']
+  const material = clone.projection['dashboard.core'].materials.summaries.find(
+    summary => summary.componentName === 'Text',
+  )
 
   assert.equal(getterInvocations, 0)
   assert.equal(clone.schemaVersion, 1)
@@ -200,99 +293,43 @@ test('full snapshots positively project safe node state and finite artifact refe
     },
   })
   assert.equal(root.extra.title, 'Projected root title')
+  assert.equal(clone.projection['dashboard.core'].document.id, 'none')
+  assert.equal(clone.projection['dashboard.core'].document.mutationVersion, -1)
+  assert.equal(clone.projection['dashboard.core'].materials.registryVersion, -1)
+  assert.equal(material.title, 'Text')
+  assert.equal(material.description, '')
+  assert.equal(material.group, '')
+  assert.equal(material.category, '')
+  assert.deepEqual(material.tags, ['basic', 'tail'])
   assert.doesNotMatch(
     serialized,
-    /unknown-prop-must-not-cross|credential-1|bearer-must-not-cross|private-key-must-not-cross|nested-private-material|artifact-code-must-not-cross|artifact-source-must-not-cross|module-must-not-cross|rollback-code-must-not-cross|signing-seed-must-not-cross|must-not-leak|configure|callback|HostObject|getter-must-not-run/,
+    /unknown-prop-must-not-cross|credential-1|bearer-must-not-cross|private-key-must-not-cross|nested-private-material|artifact-code-must-not-cross|artifact-source-must-not-cross|module-must-not-cross|rollback-code-must-not-cross|signing-seed-must-not-cross|must-not-leak|configure|callback|HostObject|getter-must-not-run|adapter-generation-secret|document-id-secret|document-mutation-secret|material-version-secret|material-title-secret|material-group-secret|poisoned/,
   )
   assert.equal(typeof clone.revision, 'string')
   assert.equal(typeof clone.cursor, 'string')
   assert.deepEqual(clone.providerGenerations, {
     'dashboard.core': 1,
   })
-})
 
-test('Core hostile scalar fences and descriptor-safe summaries survive full, delta, and resync', async () => {
-  let getterInvocations = 0
-  const getter = () => {
-    getterInvocations += 1
-    return 'host-secret-source'
-  }
-
-  const normalizedRevision = createHostRevision({
-    adapterGeneration: 0,
-    documentId: 'none',
-    documentMutationVersion: -1,
-    materialRegistryVersion: -1,
-    providerVersions: { 'dashboard.core': 1 },
-  })
-  const hostileRevision = createHostRevision({
-    adapterGeneration: -5,
-    documentId: '',
-    documentMutationVersion: -9,
-    materialRegistryVersion: Number.NaN,
-    providerVersions: { 'dashboard.core': 1 },
-  })
-
-  assert.equal(hostileRevision, normalizedRevision)
-
-  const { service, state } = createHarness()
-  state.adapterGeneration = 0
-  state.document.id = ''
-  state.document.mutationVersion = -9
-  state.materials.version = -7
-
-  const hostileTags = ['public']
-  Object.defineProperty(hostileTags, '1', { configurable: true, enumerable: true, get: getter })
-  const hostileMaterial = { componentName: 'Hostile', tags: hostileTags }
-  for (const key of ['title', 'description', 'group', 'category']) {
-    Object.defineProperty(hostileMaterial, key, { enumerable: true, get: getter })
-  }
-  state.materials.entries = new Map([['Hostile', hostileMaterial]])
-
-  const full = await service.observe({ mode: 'full' })
-  const clone = structuredClone(full)
-  const core = clone.projection['dashboard.core']
-
-  assert.equal(getterInvocations, 0)
-  assert.deepEqual(core.document, { id: 'none', mutationVersion: -1, rootNodeId: 'node-000' })
-  assert.equal(core.materials.registryVersion, -1)
-  assert.deepEqual(core.materials.summaries, [
-    {
-      componentName: 'Hostile',
-      title: 'Hostile',
-      description: '',
-      group: '',
-      category: '',
-      tags: ['public'],
-    },
-  ])
-  assert.equal(clone.providerGenerations['dashboard.core'], full.providerGenerations['dashboard.core'])
-  assert.doesNotMatch(JSON.stringify(clone), /host-secret-source|getter|password|credential|authorization/)
-
-  state.document.schema.title = 'changed root'
-  state.document.mutationVersion = 0
+  hostileMaterial.tags = ['basic', { secret: 'delta-tag-secret' }, 'tail', 'later']
+  state.materials.version = 2
   const delta = await service.observe({ mode: 'delta', cursor: full.cursor })
-
   assert.equal(isFull(delta), false)
   assert.equal(delta.baseRevision, full.revision)
   assert.equal(delta.baseCursor, full.cursor)
-  assert.ok(delta.changes.some(change => change.path.join('.') === 'nodes.node-000.extra.title'))
+  assert.equal(delta.providerId, 'dashboard.core')
+  assert.equal(delta.providerGeneration, clone.providerGenerations['dashboard.core'])
+  assert.ok(delta.changes.some(change => change.path.at(-1) === 'registryVersion'))
 
   const resync = await service.observe({ mode: 'delta', cursor: 'lost-cursor' })
   assert.equal(isFull(resync), true)
+  assert.equal(resync.projection['dashboard.core'].document.id, 'none')
+  assert.equal(resync.projection['dashboard.core'].document.mutationVersion, -1)
+  assert.equal(resync.projection['dashboard.core'].materials.registryVersion, 2)
   assert.deepEqual(
-    resync.projection['dashboard.core'].document,
-    sanitizeJsonValue({
-      id: 'none',
-      mutationVersion: 0,
-      rootNodeId: 'node-000',
-    }),
+    resync.projection['dashboard.core'].materials.summaries.find(summary => summary.componentName === 'Text').tags,
+    ['basic', 'tail', 'later'],
   )
-  assert.equal(
-    JSON.stringify(resync.projection['dashboard.core'].materials.summaries),
-    JSON.stringify(core.materials.summaries),
-  )
-  assert.equal(getterInvocations, 0)
 })
 
 test('JSON sanitization omits nested and array accessors without invoking getters', () => {
@@ -321,7 +358,7 @@ test('JSON sanitization omits nested and array accessors without invoking getter
   assert.doesNotMatch(JSON.stringify(jsonRoundTrip), /getter-secret|credential|sourceCode/)
 })
 
-test('Core node and material summaries omit structural accessors without invoking getters', async () => {
+test('Core node and material summaries retain only string tags without invoking getters', async () => {
   let getterInvocations = 0
   const getter = () => {
     getterInvocations += 1
@@ -350,7 +387,7 @@ test('Core node and material summaries omit structural accessors without invokin
   Object.defineProperty(state.materials.entries, 'values', { configurable: true, enumerable: true, get: getter })
   Object.defineProperty(textMaterial, 'title', { configurable: true, enumerable: true, get: getter })
   Object.defineProperty(textMaterial, 'description', { configurable: true, enumerable: true, get: getter })
-  const tags = ['basic', 'poisoned']
+  const tags = ['basic', 'poisoned', { nested: 'nested-poison' }, 'tail']
   Object.defineProperty(tags, '1', { configurable: true, enumerable: true, get: getter })
   textMaterial.tags = tags
 
@@ -374,7 +411,7 @@ test('Core node and material summaries omit structural accessors without invokin
   assert.equal(Object.hasOwn(core.nodes, 'getter-secret-source'), false)
   assert.equal(material.title, 'Text')
   assert.equal(material.description, '')
-  assert.deepEqual(material.tags, ['basic'])
+  assert.deepEqual(material.tags, ['basic', 'tail'])
   assert.doesNotMatch(
     JSON.stringify(jsonRoundTrip),
     /getter-secret|must-not-appear|password|authorization|credentialRef|artifactSource/,
@@ -390,7 +427,6 @@ test('Core material summaries use the explicit resolver seam without touching pr
       this.#metadata = metadata
     }
 
-    #componentName
     #metadata
 
     getMetadata() {
@@ -557,29 +593,86 @@ test('Core material summaries omit entries whose resolveEntry throws secret-bear
   assert.doesNotMatch(serialized, /secret resolve failure|credential-7|password|authorization/)
 })
 
-test('Core document and material registry accessors are normalized without invoking getters', async () => {
+test('Core headers and material summaries normalize hostile scalars across full, delta, and resync without getters', async () => {
   let getterInvocations = 0
   const getter = () => {
     getterInvocations += 1
     return 'registry-secret-source'
   }
-  const { service, state } = createHarness()
-  for (const key of ['id', 'mutationVersion', 'schema']) {
-    Object.defineProperty(state.document, key, { configurable: true, enumerable: true, get: getter })
+  const { coreProvider, service, state } = createHarness()
+  state.adapterGeneration = 'not-a-safe-integer'
+  Object.defineProperty(state.document, 'id', { configurable: true, enumerable: true, get: getter })
+  state.document.mutationVersion = 'not-a-safe-integer'
+  Object.defineProperty(state.materials, 'version', { configurable: true, enumerable: true, get: getter })
+
+  const hostileTags = ['public', 'poisoned', { nested: 'nested-secret' }, 'tail']
+  Object.defineProperty(hostileTags, '1', { configurable: true, enumerable: true, get: getter })
+
+  const hostileMaterial = {
+    componentName: 'Hostile',
+    title: { secret: 'title-secret' },
+    description: { secret: 'description-secret' },
+    group: { secret: 'group-secret' },
+    category: { secret: 'category-secret' },
+    tags: hostileTags,
   }
-  for (const key of ['version', 'entries']) {
-    Object.defineProperty(state.materials, key, { configurable: true, enumerable: true, get: getter })
-  }
+  state.materials.entries = new Map([['hostile', hostileMaterial]])
 
   const full = await service.observe({ mode: 'full' })
   const core = full.projection['dashboard.core']
 
   assert.equal(getterInvocations, 0)
-  assert.deepEqual(Object.keys(core.nodes), [])
-  assert.deepEqual(core.materials.summaries, [])
-  assert.deepEqual(core.document, sanitizeJsonValue({ id: 'none', mutationVersion: -1, rootNodeId: null }))
-  assert.deepEqual(core.materials, sanitizeJsonValue({ registryVersion: -1, summaries: [] }))
-  assert.doesNotMatch(JSON.stringify(structuredClone(full)), /registry-secret|source/)
+  assert.deepEqual(coreProvider.readFence(), {
+    adapterGeneration: 0,
+    documentId: 'none',
+    documentMutationVersion: -1,
+    materialRegistryVersion: -1,
+  })
+  assert.equal(core.document.id, 'none')
+  assert.equal(core.document.mutationVersion, -1)
+  assert.equal(core.document.rootNodeId, 'node-000')
+  assert.equal(core.materials.registryVersion, -1)
+  assert.deepEqual(core.materials.summaries, [
+    sanitizeJsonValue({
+      category: '',
+      componentName: 'Hostile',
+      description: '',
+      group: '',
+      tags: ['public', 'tail'],
+      title: 'Hostile',
+    }),
+  ])
+  assert.doesNotMatch(
+    JSON.stringify(structuredClone(full)),
+    /registry-secret|source|title-secret|description-secret|group-secret|category-secret|nested-secret|poisoned/,
+  )
+
+  state.document.mutationVersion = 2
+  const delta = await service.observe({ mode: 'delta', cursor: full.cursor })
+  assert.equal(isFull(delta), false)
+  assert.equal(delta.baseRevision, full.revision)
+  assert.equal(delta.baseCursor, full.cursor)
+  assert.equal(delta.providerId, 'dashboard.core')
+  assert.equal(delta.providerGeneration, full.providerGenerations['dashboard.core'])
+  assert.ok(delta.changes.some(change => change.path.at(-1) === 'mutationVersion'))
+  assert.doesNotMatch(
+    JSON.stringify(delta),
+    /registry-secret|source|title-secret|description-secret|group-secret|category-secret|nested-secret|poisoned/,
+  )
+
+  const resync = await service.observe({ mode: 'delta', cursor: 'lost-cursor' })
+  assert.equal(isFull(resync), true)
+  assert.deepEqual(coreProvider.readFence(), {
+    adapterGeneration: 0,
+    documentId: 'none',
+    documentMutationVersion: 2,
+    materialRegistryVersion: -1,
+  })
+  assert.equal(resync.projection['dashboard.core'].document.id, 'none')
+  assert.equal(resync.projection['dashboard.core'].document.mutationVersion, 2)
+  assert.equal(resync.projection['dashboard.core'].materials.registryVersion, -1)
+  assert.deepEqual(resync.projection['dashboard.core'].materials.summaries, core.materials.summaries)
+  assert.equal(getterInvocations, 0)
 })
 
 test('ordered deltas carry exact revision, cursor, provider generation, and atomic array patches', async () => {
