@@ -3,6 +3,7 @@ import type {
   AgentRuntimeFailure,
   CapabilitySchema,
   CapabilitySchemaRequest,
+  HostInvocationContextV1,
   HostSnapshot,
   HostSnapshotDelta,
   InvocationResult,
@@ -14,6 +15,7 @@ import type {
   PersistenceReadResult,
   PersistenceRecord,
   ReceiptQueryRequest,
+  RuntimeTaskCompensationTargetV1,
   SemanticCall,
   ToolReceipt,
 } from '../../contracts.js'
@@ -22,6 +24,8 @@ import {
   parseHostSnapshotDelta as parseSnapshotDeltaResponse,
   parseHostSnapshot as parseSnapshotResponse,
 } from '../snapshot/index.js'
+
+type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
 
 export interface RpcValueContract<Request = unknown, Response = unknown> {
   readonly parseRequest: (value: unknown) => Request
@@ -82,6 +86,15 @@ const parseFailure = (value: unknown, field = 'failure'): AgentRuntimeFailure =>
   if (typeof value.retryable !== 'boolean') fail(`${field}.retryable must be boolean`)
   if (value.details !== undefined) jsonObjectField(value.details, `${field}.details`)
   return value as unknown as AgentRuntimeFailure
+}
+
+const parseOutcomeFailure = (status: unknown, failure: unknown, field: string) => {
+  if (status === 'applied') {
+    if (failure !== undefined) fail(`${field} must be absent when status is applied`)
+    return
+  }
+  if (failure === undefined) fail(`${field} is required when status is not applied`)
+  parseFailure(failure, field)
 }
 
 const parsePersistenceRecord = (value: unknown, field: string): PersistenceRecord => {
@@ -173,6 +186,78 @@ export const parseSemanticCall = (value: unknown): SemanticCall => {
   return value as unknown as SemanticCall
 }
 
+const parseRuntimeTaskCallIndexEntry = (value: unknown, field: string): RuntimeTaskCallIndexEntryV1 => {
+  assertExactFields(value, ['callId', 'capability'], [], field)
+  stringField(value.callId, `${field}.callId`)
+  stringField(value.capability, `${field}.capability`)
+  if (value.capability === 'task.compensate') {
+    fail(`${field}.capability cannot contain task.compensate`)
+  }
+  return value as unknown as RuntimeTaskCallIndexEntryV1
+}
+
+const parseRuntimeTaskCompensationTarget = (value: unknown): RuntimeTaskCompensationTargetV1 => {
+  assertExactFields(
+    value,
+    ['schemaVersion', 'taskId', 'sessionId', 'phase', 'callIndexComplete', 'callIndex'],
+    [],
+    'RuntimeTaskCompensationTargetV1',
+  )
+  schemaVersion(value.schemaVersion, 'RuntimeTaskCompensationTargetV1.schemaVersion')
+  stringField(value.taskId, 'RuntimeTaskCompensationTargetV1.taskId')
+  stringField(value.sessionId, 'RuntimeTaskCompensationTargetV1.sessionId')
+  literalField(value.phase, ['COMPLETED', 'CANCELLED'], 'RuntimeTaskCompensationTargetV1.phase')
+  if (value.callIndexComplete !== true) {
+    fail('RuntimeTaskCompensationTargetV1.callIndexComplete must equal true')
+  }
+  arrayField(value.callIndex, 'RuntimeTaskCompensationTargetV1.callIndex')
+  const callIds = new Set<string>()
+  value.callIndex.forEach((entry, index) => {
+    const parsed = parseRuntimeTaskCallIndexEntry(entry, `RuntimeTaskCompensationTargetV1.callIndex[${index}]`)
+    if (callIds.has(parsed.callId)) fail('RuntimeTaskCompensationTargetV1.callIndex callId values must be unique')
+    callIds.add(parsed.callId)
+  })
+  return value as unknown as RuntimeTaskCompensationTargetV1
+}
+
+export const parseHostInvocationContext = (value: unknown): HostInvocationContextV1 => {
+  assertExactFields(value, ['schemaVersion'], ['compensationTarget'], 'HostInvocationContextV1')
+  schemaVersion(value.schemaVersion, 'HostInvocationContextV1.schemaVersion')
+  if (value.compensationTarget !== undefined) parseRuntimeTaskCompensationTarget(value.compensationTarget)
+  return value as unknown as HostInvocationContextV1
+}
+
+export interface HostInvokeRequestV1 {
+  readonly schemaVersion: 1
+  readonly call: SemanticCall
+  readonly context: HostInvocationContextV1
+}
+
+export const parseHostInvokeRequest = (value: unknown): HostInvokeRequestV1 => {
+  assertExactFields(value, ['schemaVersion', 'call', 'context'], [], 'HostInvokeRequestV1')
+  schemaVersion(value.schemaVersion, 'HostInvokeRequestV1.schemaVersion')
+  const call = parseSemanticCall(value.call)
+  const context = parseHostInvocationContext(value.context)
+  const target = context.compensationTarget
+  if (call.capability === 'task.compensate') {
+    assertExactFields(call.arguments, ['schemaVersion', 'targetTaskId'], [], 'task.compensate arguments')
+    schemaVersion(call.arguments.schemaVersion, 'task.compensate arguments.schemaVersion')
+    const targetTaskId = stringField(call.arguments.targetTaskId, 'task.compensate arguments.targetTaskId')
+    const compensationTarget =
+      target ?? fail('HostInvocationContextV1.compensationTarget is required for task.compensate')
+    if (compensationTarget.sessionId !== call.sessionId) {
+      fail('compensation target sessionId must match SemanticCall.sessionId')
+    }
+    if (compensationTarget.taskId !== targetTaskId) {
+      fail('compensation target taskId must match task.compensate targetTaskId')
+    }
+    if (compensationTarget.taskId === call.taskId) fail('task.compensate cannot target the current task')
+  } else if (target) {
+    fail('HostInvocationContextV1.compensationTarget is only allowed for task.compensate')
+  }
+  return value as unknown as HostInvokeRequestV1
+}
+
 export const parseInvocationResult = (value: unknown): InvocationResult => {
   assertExactFields(value, ['schemaVersion', 'callId', 'status'], ['revision', 'output', 'failure'], 'InvocationResult')
   schemaVersion(value.schemaVersion)
@@ -180,7 +265,7 @@ export const parseInvocationResult = (value: unknown): InvocationResult => {
   literalField(value.status, ['applied', 'not-applied', 'indeterminate', 'rejected'], 'InvocationResult.status')
   optionalStringField(value.revision, 'InvocationResult.revision')
   if (value.output !== undefined) assertJsonValue(value.output, 'InvocationResult.output')
-  if (value.failure !== undefined) parseFailure(value.failure, 'InvocationResult.failure')
+  parseOutcomeFailure(value.status, value.failure, 'InvocationResult.failure')
   return value as unknown as InvocationResult
 }
 
@@ -197,7 +282,7 @@ export const parseToolReceipt = (value: unknown): ToolReceipt | null => {
   assertExactFields(
     value,
     ['schemaVersion', 'projectId', 'branchId', 'callId', 'status'],
-    ['revision', 'witness'],
+    ['revision', 'witness', 'failure'],
     'ToolReceipt',
   )
   schemaVersion(value.schemaVersion)
@@ -207,6 +292,7 @@ export const parseToolReceipt = (value: unknown): ToolReceipt | null => {
   literalField(value.status, ['applied', 'not-applied', 'indeterminate', 'rejected'], 'ToolReceipt.status')
   optionalStringField(value.revision, 'ToolReceipt.revision')
   if (value.witness !== undefined) jsonObjectField(value.witness, 'ToolReceipt.witness')
+  parseOutcomeFailure(value.status, value.failure, 'ToolReceipt.failure')
   return value as unknown as ToolReceipt
 }
 
@@ -279,7 +365,7 @@ export const agentBoundaryRpcContracts = {
     parseRequest: parseCapabilitySchemaRequest,
     parseResponse: parseCapabilitySchema,
   },
-  'host.invoke': { parseRequest: parseSemanticCall, parseResponse: parseInvocationResult },
+  'host.invoke': { parseRequest: parseHostInvokeRequest, parseResponse: parseInvocationResult },
   'host.queryReceipt': { parseRequest: parseReceiptQueryRequest, parseResponse: parseToolReceipt },
   'persistence.read': {
     parseRequest: parsePersistenceReadRequest,

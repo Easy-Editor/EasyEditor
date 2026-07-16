@@ -45,6 +45,8 @@ test('shared contracts remain type-only and expose the reviewed host seams', () 
     'AgentWorkerOptions',
     'AgentRuntimeSnapshot',
     'SemanticCall',
+    'HostInvocationContextV1',
+    'RuntimeTaskCompensationTargetV1',
     'AgentPersistenceBatch',
     'JsonValue',
   ]) {

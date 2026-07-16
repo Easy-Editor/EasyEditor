@@ -69,6 +69,17 @@ const call = {
   arguments: { title: 'City overview' },
   expectedRevision: 'revision-0',
 }
+const scopedCallId = (localId = 'call-1', sessionId = 'session-1') => `call:${sessionId.length}:${sessionId}:${localId}`
+const toolCall = value => ({
+  schemaVersion: 1,
+  kind: 'tool-call',
+  call: {
+    schemaVersion: 1,
+    capability: value.capability,
+    arguments: value.arguments,
+    expectedRevision: value.expectedRevision,
+  },
+})
 
 const createEndpointFactory = scripts => {
   const workers = []
@@ -183,13 +194,13 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
   const endpoints = createEndpointFactory([
     [
       { expectedPhase: 'BLUEPRINT', events: [blueprint] },
-      { expectedPhase: 'PLAN_STEP', events: [{ schemaVersion: 1, kind: 'tool-call', call }, complete] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call), complete] },
     ],
   ])
   const host = new hostModule.FakeAgentHost({
     invocationSteps: [
       {
-        result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'revision-1' },
+        result: { schemaVersion: 1, callId: scopedCallId(), status: 'applied', revision: 'revision-1' },
         nextSnapshot: {
           schemaVersion: 1,
           revision: 'revision-1',
@@ -220,6 +231,94 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
   await runtime.dispose()
   assert.equal(runtime.getSnapshot().status, 'disposed')
   assert.ok(phases.includes('EXECUTE') && phases.includes('CHECKPOINT'))
+})
+
+test("independent sessions on one project and branch cannot recover each other's durable receipt", async () => {
+  const endpoints = createEndpointFactory([
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call), complete] },
+    ],
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      {
+        expectedPhase: 'PLAN_STEP',
+        events: [toolCall({ ...call, expectedRevision: 'revision-1' }), complete],
+      },
+    ],
+  ])
+  const receipts = new Map()
+  const invocations = []
+  let effectCount = 0
+  let revision = 0
+  const host = {
+    async observe() {
+      return {
+        schemaVersion: 1,
+        revision: `revision-${revision}`,
+        providerGenerations: { durable: revision + 1 },
+        projection: { durable: { effectCount } },
+      }
+    },
+    async describeCapability(request) {
+      return { schemaVersion: 1, capability: request.capability, revision: 'schema-1', input: {} }
+    },
+    async invoke(value) {
+      invocations.push(structuredClone(value))
+      const recovered = receipts.get(value.callId)
+      if (recovered) {
+        return { schemaVersion: 1, callId: recovered.callId, status: recovered.status, revision: recovered.revision }
+      }
+      effectCount += 1
+      revision += 1
+      const receipt = {
+        schemaVersion: 1,
+        projectId: value.projectId,
+        branchId: value.branchId,
+        callId: value.callId,
+        status: 'applied',
+        revision: `revision-${revision}`,
+      }
+      receipts.set(value.callId, receipt)
+      return { schemaVersion: 1, callId: value.callId, status: 'applied', revision: receipt.revision }
+    },
+    async queryReceipt(request) {
+      return structuredClone(receipts.get(request.callId) ?? null)
+    },
+  }
+  const persistence = new persistenceModule.MemoryAgentPersistence()
+  const projectBinding = { projectId: binding.projectId, branchId: binding.branchId }
+  const first = runtimeModule.createAgentRuntimeInternal({
+    binding: projectBinding,
+    worker: endpoints.factory,
+    host,
+    persistence,
+  })
+  await first.submit({ text: 'First independent session' })
+  await first.waitForIdle()
+  const firstSnapshot = first.getSnapshot()
+  const firstSessionId = firstSnapshot.binding.sessionId
+  await first.dispose()
+  assert.equal(firstSnapshot.phase, 'COMPLETED', JSON.stringify(firstSnapshot))
+
+  const second = runtimeModule.createAgentRuntimeInternal({
+    binding: projectBinding,
+    worker: endpoints.factory,
+    host,
+    persistence,
+  })
+  await second.submit({ text: 'Second independent session' })
+  await second.waitForIdle()
+  const secondSessionId = second.getSnapshot().binding.sessionId
+
+  assert.notEqual(firstSessionId, secondSessionId)
+  assert.equal(second.getSnapshot().phase, 'COMPLETED')
+  assert.equal(effectCount, 2)
+  assert.equal(receipts.size, 2)
+  assert.equal(new Set(invocations.map(value => value.callId)).size, 2)
+  assert.ok(invocations[0].callId.includes(firstSessionId))
+  assert.ok(invocations[1].callId.includes(secondSessionId))
+  await second.dispose()
 })
 
 test('real module Worker pauses on an allowlisted persistence failure crossing RPC', async () => {
@@ -324,17 +423,17 @@ test('real module Worker repairs a verification mismatch before completing', asy
   const endpoints = createEndpointFactory([
     [
       { expectedPhase: 'BLUEPRINT', events: [blueprint] },
-      { expectedPhase: 'PLAN_STEP', events: [{ schemaVersion: 1, kind: 'tool-call', call }] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call)] },
       {
         expectedPhase: 'REPAIR',
-        events: [{ schemaVersion: 1, kind: 'tool-call', call: repairCall }, complete],
+        events: [toolCall(repairCall), complete],
       },
     ],
   ])
   const host = new hostModule.FakeAgentHost({
     invocationSteps: [
       {
-        result: { schemaVersion: 1, callId: 'call-1', status: 'applied', revision: 'revision-1' },
+        result: { schemaVersion: 1, callId: scopedCallId(), status: 'applied', revision: 'revision-1' },
         nextSnapshot: {
           schemaVersion: 1,
           revision: 'revision-2',
@@ -343,7 +442,12 @@ test('real module Worker repairs a verification mismatch before completing', asy
         },
       },
       {
-        result: { schemaVersion: 1, callId: 'call-2', status: 'applied', revision: 'revision-3' },
+        result: {
+          schemaVersion: 1,
+          callId: scopedCallId('call-2'),
+          status: 'applied',
+          revision: 'revision-3',
+        },
         nextSnapshot: {
           schemaVersion: 1,
           revision: 'revision-3',
@@ -484,7 +588,7 @@ test('restart recovers persisted work and forces a full observation', async () =
         value: {
           taskId: task.taskId,
           sessionId: task.sessionId,
-          phase: 'PAUSED',
+          phase: 'PLAN_STEP',
           createdAt: 1,
           updatedAt: 2,
           repairAttempts: 0,
@@ -503,6 +607,51 @@ test('restart recovers persisted work and forces a full observation', async () =
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(endpoints.workers.length, 2)
   assert.equal(endpoints.faultSubscriptions, 0)
+})
+
+test('two Worker replacements preserve every task and never reuse a persistence batch id', async () => {
+  const taskScript = () => [
+    { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+    { expectedPhase: 'PLAN_STEP', events: [toolCall(call), complete] },
+  ]
+  const endpoints = createEndpointFactory([taskScript(), taskScript(), taskScript()])
+  const host = new hostModule.FakeAgentHost()
+  const persistence = new persistenceModule.MemoryAgentPersistence()
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host,
+    persistence,
+    clock: fixturesModule.createDeterministicClock(),
+    idFactory: fixturesModule.createDeterministicIdFactory('main-replacements-'),
+  })
+
+  const tasks = []
+  tasks.push(await runtime.submit({ text: 'Task before replacement' }))
+  await runtime.waitForIdle()
+  await runtime.restart()
+  tasks.push(await runtime.submit({ text: 'Task after first replacement' }))
+  await runtime.waitForIdle()
+  await runtime.restart()
+  tasks.push(await runtime.submit({ text: 'Task after second replacement' }))
+  await runtime.waitForIdle()
+
+  assert.deepEqual(
+    tasks.map(task => task.taskId),
+    ['task-1', 'task-2', 'task-3'],
+  )
+  assert.equal(runtime.getSnapshot().phase, 'COMPLETED')
+  assert.equal(new Set(host.invocations.map(value => value.callId)).size, 3)
+  assert.equal(new Set(persistence.commits.map(commit => commit.batchId)).size, persistence.commits.length)
+  const durable = await persistence.read({
+    schemaVersion: 1,
+    ...binding,
+    expectedPersistenceGeneration: persistence.commits.length,
+  })
+  assert.equal(durable.persistenceGeneration, persistence.commits.length)
+  assert.deepEqual(durable.records.map(record => record.recordId).sort(), ['task:task-1', 'task:task-2', 'task:task-3'])
+  await runtime.dispose()
+  await waitFor(() => endpoints.liveWorkers === 0, 'zero live Workers after repeated replacement test')
 })
 
 test('concurrent restarts serialize to one live transport and dispose to zero', async () => {
@@ -849,7 +998,7 @@ test('unexpected Worker exit automatically recovers persisted work without trans
         value: {
           taskId: task.taskId,
           sessionId: task.sessionId,
-          phase: 'PAUSED',
+          phase: 'PLAN_STEP',
           createdAt: 1,
           updatedAt: 2,
           repairAttempts: 0,

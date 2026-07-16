@@ -7,7 +7,15 @@ import ts from 'typescript'
 
 import { createDashboardAgentPersistencePort } from '../src/editor/agent/persistence/agent-persistence-port.mjs'
 import * as durableAgentCommit from '../src/editor/agent/persistence/durable-agent-commit.mjs'
-import { createFieldSlotAliases, createMutationProvenanceBatch } from '../src/editor/agent/persistence/provenance.mjs'
+import * as mutationAttribution from '../src/editor/agent/persistence/mutation-attribution.mjs'
+import {
+  createChildrenOrderSlotKey,
+  createFieldSlotAliases,
+  createMutationProvenanceBatch,
+  createNodeStructuralSlotKeys,
+  createNodeSubtreeSlotKey,
+} from '../src/editor/agent/persistence/provenance.mjs'
+import * as provenance from '../src/editor/agent/persistence/provenance.mjs'
 import {
   createApplyWitness,
   createReceiptIntent,
@@ -48,8 +56,36 @@ class MemoryLocalStorage {
   }
 }
 
+class GatedMemoryDashboardStorageBackend extends dashboardStorage.MemoryDashboardStorageBackend {
+  #gate = null
+
+  gateNextCommit(commitKind) {
+    let markStarted
+    let releaseCommit
+    const started = new Promise(resolve => {
+      markStarted = resolve
+    })
+    const blocked = new Promise(resolve => {
+      releaseCommit = resolve
+    })
+    this.#gate = { blocked, commitKind, markStarted }
+    return Object.freeze({ started, release: () => releaseCommit() })
+  }
+
+  async commit(batch) {
+    const gate = this.#gate
+    if (gate?.commitKind === batch.draft.commitKind) {
+      this.#gate = null
+      gate.markStarted()
+      await gate.blocked
+    }
+    return super.commit(batch)
+  }
+}
+
 const dashboardRoot = fileURLToPath(new URL('..', import.meta.url))
 const persistenceRuntimePath = resolve(dashboardRoot, 'src/editor/persistence-runtime.ts')
+const coreInstanceUrl = new URL('../../../packages/core/dist/instance.js', import.meta.url)
 
 const loadPersistenceRuntime = () => {
   const source = readFileSync(persistenceRuntimePath, 'utf8')
@@ -65,6 +101,8 @@ const loadPersistenceRuntime = () => {
   const localRequire = request => {
     if (request === '../lib/storage/index.mjs') return dashboardStorage
     if (request === './agent/persistence/durable-agent-commit.mjs') return durableAgentCommit
+    if (request === './agent/persistence/mutation-attribution.mjs') return mutationAttribution
+    if (request === './agent/persistence/provenance.mjs') return provenance
     throw new Error(`Unexpected dependency ${request} in persistence-runtime.ts`)
   }
   const evaluate = new Function('require', 'module', 'exports', transpiled)
@@ -86,6 +124,39 @@ const project = (text = 'initial') => ({
   config: { theme: 'night' },
   dataSource: { list: [{ id: 'source-1', type: 'mock' }] },
   version: '1.0.0',
+})
+
+const attributionProject = (text = 'B') => ({
+  componentsTree: [
+    {
+      componentName: 'Root',
+      docId: 'page-overview',
+      fileName: 'overview',
+      id: 'title-1',
+      isRoot: true,
+      props: { text },
+      hidden: false,
+      locked: false,
+      title: '',
+      condition: true,
+      children: [
+        {
+          componentName: 'Text',
+          id: 'other-1',
+          props: { text: 'other' },
+          hidden: false,
+          locked: false,
+          title: '',
+          condition: true,
+        },
+      ],
+    },
+  ],
+  version: '1.0.0',
+  componentsMap: [
+    { devMode: 'lowCode', componentName: 'Text' },
+    { devMode: 'lowCode', componentName: 'Root' },
+  ],
 })
 
 const activeDocument = (index = 0) => ({
@@ -387,6 +458,7 @@ test('durable Agent commit and manual save share one runtime head and conservati
   assert.equal(runtime.getSnapshot().draftGeneration, 2)
   assert.deepEqual(await runtime.recoverDurableAgentReceipt(durableAuthority), {
     classification: 'committed',
+    receiptIntent: intent,
     receipt: outcome.receipt,
   })
 
@@ -404,9 +476,75 @@ test('durable Agent commit and manual save share one runtime head and conservati
   )
   assert.deepEqual(await runtime.recoverDurableAgentReceipt(durableAuthority), {
     classification: 'committed',
+    receiptIntent: intent,
     receipt: outcome.receipt,
   })
   assert.deepEqual(refreshedGenerations, [1, 2, 3])
+
+  await runtime.dispose()
+})
+
+test('serialized durable Agent write owns one draft head while autosave and manual save wait behind it', async () => {
+  const refreshedGenerations = []
+  const { runtime } = createRuntime({
+    autosaveDelayMs: 0,
+    async refreshCompatibilitySnapshot({ draft }) {
+      refreshedGenerations.push(draft.draftGeneration)
+    },
+  })
+  await runtime.initialize(project())
+  const intent = createDurableIntent()
+  const outcome = createDurableOutcome(2)
+  let releaseWrite
+  const writeGate = new Promise(resolve => {
+    releaseWrite = resolve
+  })
+  let sessionEntered
+  const entered = new Promise(resolve => {
+    sessionEntered = resolve
+  })
+
+  const agentWrite = runtime.runDurableAgentWrite(async session => {
+    assert.equal(session.draft.draftGeneration, 1)
+    session.draft.projectSchema.componentsTree[0].props.text = 'isolated-session-copy'
+    await session.recordIntent(intent)
+    sessionEntered()
+    await writeGate
+    const result = await session.commitBatch(createDurableBatch(intent, outcome, 1))
+    await assert.rejects(session.commitBatch(createDurableBatch(intent, outcome, 1)), /can commit only once/)
+    await assert.rejects(session.recordIntent(intent), /already committed/)
+    return result
+  })
+
+  await entered
+  runtime.scheduleAutosave(() => ({ activeDocument: activeDocument(), projectSchema: project('autosave-after-agent') }))
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(runtime.getSnapshot().pendingAutosave, true)
+  let manualSettled = false
+  const manualSave = runtime
+    .save({
+      activeDocument: activeDocument(1),
+      commitKind: 'manual-save',
+      projectSchema: project('manual-after-autosave'),
+    })
+    .finally(() => {
+      manualSettled = true
+    })
+  await Promise.resolve()
+  assert.equal(manualSettled, false)
+  assert.equal(runtime.getSnapshot().draftGeneration, 1)
+
+  releaseWrite()
+  const agentResult = await agentWrite
+  const manualResult = await manualSave
+  await runtime.flush()
+
+  assert.equal(agentResult.draft.draftGeneration, 2)
+  assert.equal(manualResult.draft.draftGeneration, 4)
+  assert.equal(manualResult.draft.commitKind, 'manual-save')
+  assert.deepEqual(manualResult.draft.projectSchema, project('manual-after-autosave'))
+  assert.deepEqual((await runtime.readWorkingDraft())?.projectSchema, project('manual-after-autosave'))
+  assert.deepEqual(refreshedGenerations, [1, 2, 3, 4])
 
   await runtime.dispose()
 })
@@ -520,6 +658,305 @@ test('compatibility refresh warnings stay ordered and do not negate a durable ca
   assert.equal((await runtime.readWorkingDraft())?.draftGeneration, 3)
 
   await runtime.dispose()
+})
+
+test('a failed pending autosave blocks Agent work and retains attribution for the recovery save', async () => {
+  let rejectAutosave = true
+  const backend = new dashboardStorage.MemoryDashboardStorageBackend({
+    faultInjector(event) {
+      if (rejectAutosave && event.phase === 'before-commit' && event.batch.draft.commitKind === 'autosave') {
+        throw new Error('pending autosave failed')
+      }
+    },
+  })
+  const { runtime } = createRuntime({ autosaveDelayMs: 60_000, backend })
+  await runtime.initialize(attributionProject())
+  const slotKeys = createFieldSlotAliases({
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    nodeId: 'title-1',
+    root: 'props',
+    path: ['text'],
+  })
+  runtime.recordMutationAttribution({ source: 'human', slotKeys })
+  runtime.scheduleAutosave(() => ({
+    activeDocument: activeDocument(),
+    projectSchema: attributionProject('C'),
+  }))
+
+  let agentOperationRan = false
+  await assert.rejects(
+    runtime.runDurableAgentWrite(async () => {
+      agentOperationRan = true
+      return null
+    }),
+    /memory-storage-fault-injected/,
+  )
+  assert.equal(agentOperationRan, false)
+  assert.equal(runtime.getSnapshot().pendingAutosave, true)
+
+  rejectAutosave = false
+  await runtime.save({
+    activeDocument: activeDocument(),
+    commitKind: 'manual-save',
+    projectSchema: attributionProject('C'),
+  })
+  const recovered = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys,
+  })
+  assert.ok(recovered.records.every(record => record.token === 'human'))
+  assert.equal(runtime.getSnapshot().pendingAutosave, false)
+
+  await runtime.dispose()
+})
+
+test('a successful commit consumes only its attribution sequence and preserves a concurrent later mutation', async () => {
+  const backend = new GatedMemoryDashboardStorageBackend()
+  const { runtime } = createRuntime({ backend })
+  await runtime.initialize(attributionProject())
+  const slotKeys = createFieldSlotAliases({
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    nodeId: 'title-1',
+    root: 'props',
+    path: ['text'],
+  })
+  runtime.recordMutationAttribution({ source: 'human', slotKeys })
+  const gate = backend.gateNextCommit('manual-save')
+  const firstSave = runtime.save({
+    activeDocument: activeDocument(),
+    commitKind: 'manual-save',
+    projectSchema: attributionProject('C'),
+  })
+  await gate.started
+  runtime.recordMutationAttribution({ source: 'external', slotKeys })
+  gate.release()
+  await firstSave
+
+  const afterFirst = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys,
+  })
+  assert.ok(afterFirst.records.every(record => record.token === 'human'))
+  assert.equal(runtime.getSnapshot().pendingAutosave, true)
+
+  await runtime.save({
+    activeDocument: activeDocument(),
+    commitKind: 'manual-save',
+    projectSchema: attributionProject('D'),
+  })
+  const afterSecond = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys,
+  })
+  assert.ok(afterSecond.records.every(record => record.token === 'unknown'))
+  assert.equal(runtime.getSnapshot().pendingAutosave, false)
+
+  await runtime.dispose()
+})
+
+test('real Engine exact attribution preserves unrelated Agent provenance across changed hashes while gaps invalidate globally', async t => {
+  let humanActive = true
+  const { runtime } = createRuntime({
+    autosaveDelayMs: 60_000,
+    isHumanActivityActive: () => humanActive,
+  })
+  await runtime.initialize(attributionProject())
+
+  const titleSlots = createFieldSlotAliases({
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    nodeId: 'title-1',
+    root: 'props',
+    path: ['text'],
+  })
+  const otherSlots = createFieldSlotAliases({
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    nodeId: 'other-1',
+    root: 'props',
+    path: ['text'],
+  })
+  const seededProvenance = createMutationProvenanceBatch({
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    draftGeneration: 2,
+    slotKeys: [...titleSlots, ...otherSlots],
+    source: 'agent',
+    callId: durableAuthority.callId,
+  })
+  const seededWitness = createApplyWitness({
+    schemaVersion: 1,
+    ...durableAuthority,
+    draftGeneration: 2,
+    coreMutationVersion: 1,
+    transactionFingerprint: SHA_B,
+    affectedSlotTokens: seededProvenance.map(({ slotKey, token }) => ({ slotKey, token })),
+  })
+  const seededReceipt = createToolReceipt({
+    schemaVersion: 1,
+    ...durableAuthority,
+    status: 'applied',
+    revision: 'core:1:registry:1',
+    witness: createToolReceiptWitness(seededWitness),
+  })
+  const intent = createDurableIntent()
+  await runtime.recordDurableAgentIntent(intent)
+  await runtime.commitDurableAgentBatch({
+    ...createDurableBatch(intent, { provenance: seededProvenance, receipt: seededReceipt, witness: seededWitness }, 1),
+    projectSchema: attributionProject(),
+  })
+  const agentDraft = await runtime.readWorkingDraft()
+
+  const { DESIGNER_EVENT, createEngine } = await import(coreInstanceUrl.href)
+  const engine = createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  await engine.init()
+  engine.materials.createComponentMeta({ componentName: 'Root', title: 'Root' })
+  engine.materials.createComponentMeta({ componentName: 'Text', title: 'Text' })
+  engine.loadProject(attributionProject(), true)
+  const attribution = runtime.getMutationAttribution()
+  const capture = () => {
+    const document = engine.project.currentDocument
+    return {
+      activeDocument: {
+        documentId: document.id,
+        fileName: document.fileName,
+        index: engine.project.documents.indexOf(document),
+      },
+      projectSchema: engine.project.export(),
+    }
+  }
+  const record = value => {
+    if (!value) return
+    runtime.recordMutationAttribution(value)
+    runtime.scheduleAutosave(capture)
+  }
+  const releases = [
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, value => record(attribution.captureFieldMutation(value))),
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_CHILDREN_CHANGE, value =>
+      record(attribution.captureStructuralMutation(value, 'children')),
+    ),
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_REMOVE, value => record(attribution.captureStructuralMutation(value))),
+    engine.designer.onEvent(mutationAttribution.DASHBOARD_NODE_ADD_EVENT, value =>
+      record(attribution.captureStructuralMutation(value)),
+    ),
+    engine.designer.onEvent(mutationAttribution.DASHBOARD_NODE_REMOVE_EVENT, value =>
+      record(attribution.captureStructuralMutation(value)),
+    ),
+  ]
+  t.after(async () => {
+    releases.forEach(release => release())
+    await engine.destroy()
+    await runtime.dispose()
+  })
+
+  const document = engine.project.currentDocument
+  const setTitle = value =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', documentId: document.id, nodeId: 'title-1', props: { text: value } }],
+      { expectedMutationVersion: document.mutationVersion },
+    )
+
+  attribution.runAgentMutation('scope-only-agent', () => {
+    setTitle('agent-temporary')
+    setTitle('B')
+  })
+  assert.equal(runtime.getSnapshot().pendingAutosave, false, 'Agent Core events must not schedule editor autosave')
+
+  setTitle('C')
+  await runtime.flush()
+  const humanDraft = await runtime.readWorkingDraft()
+  assert.notEqual(humanDraft.projectHash, agentDraft.projectHash, 'the exact human save must exercise a changed hash')
+  const afterHuman = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys: [...titleSlots, ...otherSlots],
+  })
+  const humanBySlot = new Map(afterHuman.records.map(recordValue => [recordValue.slotKey, recordValue.token]))
+  assert.ok(titleSlots.every(slotKey => humanBySlot.get(slotKey) === 'human'))
+  assert.ok(
+    otherSlots.every(slotKey => humanBySlot.get(slotKey) === `agent:${durableAuthority.callId}`),
+    'changed-hash exact attribution must not retire unrelated Agent slots',
+  )
+
+  record(attribution.captureUnknownMutation())
+  await runtime.flush()
+  const afterGap = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys: otherSlots,
+  })
+  assert.ok(
+    afterGap.records.every(recordValue => recordValue.token === 'unknown'),
+    'an attribution gap must still force global fail-closed invalidation even when the project hash is unchanged',
+  )
+
+  humanActive = false
+  setTitle('external')
+  let serializedDraft
+  await runtime.runDurableAgentWrite(async session => {
+    serializedDraft = session.draft
+    return null
+  })
+  assert.equal(serializedDraft.projectSchema.componentsTree[0].props.text, 'external')
+  assert.equal(runtime.getSnapshot().pendingAutosave, false)
+  const afterExternal = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys: titleSlots,
+  })
+  assert.ok(afterExternal.records.every(recordValue => recordValue.token === 'external'))
+
+  humanActive = true
+  engine.transactions.runOnDocument(
+    document,
+    [
+      {
+        type: 'insertNode',
+        documentId: document.id,
+        parentId: 'title-1',
+        at: 1,
+        node: { componentName: 'Text', id: 'human-node', props: { text: 'inserted' }, children: [] },
+      },
+    ],
+    { expectedMutationVersion: document.mutationVersion },
+  )
+  await runtime.flush()
+  const structuralSlots = [
+    ...createNodeStructuralSlotKeys({
+      projectId: durableAuthority.projectId,
+      branchId: durableAuthority.branchId,
+      nodeId: 'human-node',
+    }),
+    createChildrenOrderSlotKey({
+      projectId: durableAuthority.projectId,
+      branchId: durableAuthority.branchId,
+      parentId: 'title-1',
+    }),
+    createNodeSubtreeSlotKey({
+      projectId: durableAuthority.projectId,
+      branchId: durableAuthority.branchId,
+      nodeId: 'title-1',
+    }),
+  ]
+  const afterInsert = await runtime.readMutationProvenance({
+    schemaVersion: 1,
+    projectId: durableAuthority.projectId,
+    branchId: durableAuthority.branchId,
+    slotKeys: structuralSlots,
+  })
+  assert.ok(afterInsert.records.every(recordValue => recordValue.token === 'human'))
 })
 
 test('preview opens synchronously but navigates only after the durable save settles', async () => {

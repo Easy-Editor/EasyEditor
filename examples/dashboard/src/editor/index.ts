@@ -8,6 +8,11 @@ import {
 } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import {
+  DASHBOARD_NODE_ADD_EVENT,
+  DASHBOARD_NODE_REMOVE_EVENT,
+  type DashboardObservedMutationAttribution,
+} from './agent/persistence/mutation-attribution.mjs'
 import { defaultRootSchema } from './const'
 import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
@@ -18,6 +23,7 @@ import {
   composeDashboardAgentHost,
   dashboardAgentRuntimeFeatureFlags,
   dashboardPersistence,
+  disposeDashboardAgentActivity,
   engine,
   remoteResources,
 } from './runtime'
@@ -46,6 +52,7 @@ export const disposeDashboardEditor = (): Promise<void> => {
   for (const release of releasePersistenceListeners.splice(0)) release()
   const disposalAttempt = (async () => {
     const failures: unknown[] = []
+    disposeDashboardAgentActivity()
     try {
       await dashboardPersistence.dispose()
     } catch (error) {
@@ -158,24 +165,51 @@ const scheduleDashboardAutosave = () => {
   dashboardPersistence.scheduleAutosave(captureDashboardPersistenceInput)
 }
 
+const recordAttributedMutation = (attribution: DashboardObservedMutationAttribution | null) => {
+  if (!attribution) return
+  dashboardPersistence.recordMutationAttribution(attribution)
+  scheduleDashboardAutosave()
+}
+
+const scheduleUnattributedDashboardAutosave = () => {
+  if (dashboardPersistence.getMutationAttribution().activeAgentCallId !== null) return
+  scheduleDashboardAutosave()
+}
+
 const installPersistenceListeners = () => {
   if (releasePersistenceListeners.length) return
-  const mutationEvents = [
-    DESIGNER_EVENT.CURRENT_DOCUMENT_CHANGE,
-    DESIGNER_EVENT.CURRENT_HISTORY_CHANGE,
-    DESIGNER_EVENT.INSERT_NODE_BEFORE,
-    DESIGNER_EVENT.INSERT_NODE_AFTER,
-    DESIGNER_EVENT.NODE_VISIBLE_CHANGE,
-    DESIGNER_EVENT.NODE_LOCK_CHANGE,
-    DESIGNER_EVENT.NODE_CHILDREN_CHANGE,
-    DESIGNER_EVENT.NODE_PROPS_CHANGE,
-    DESIGNER_EVENT.NODE_REMOVE,
+  const attribution = dashboardPersistence.getMutationAttribution()
+  releasePersistenceListeners = [
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, value => {
+      recordAttributedMutation(attribution.captureFieldMutation(value))
+    }),
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_VISIBLE_CHANGE, node => {
+      recordAttributedMutation(attribution.captureBuiltinFieldMutation(node, 'hidden'))
+    }),
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_LOCK_CHANGE, node => {
+      recordAttributedMutation(attribution.captureBuiltinFieldMutation(node, 'locked'))
+    }),
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_CHILDREN_CHANGE, value => {
+      recordAttributedMutation(attribution.captureStructuralMutation(value, 'children'))
+    }),
+    engine.designer.onEvent(DESIGNER_EVENT.NODE_REMOVE, value => {
+      recordAttributedMutation(attribution.captureStructuralMutation(value))
+    }),
+    engine.designer.onEvent(DASHBOARD_NODE_ADD_EVENT, value => {
+      recordAttributedMutation(attribution.captureStructuralMutation(value))
+    }),
+    engine.designer.onEvent(DASHBOARD_NODE_REMOVE_EVENT, value => {
+      recordAttributedMutation(attribution.captureStructuralMutation(value))
+    }),
+    engine.designer.onEvent(DESIGNER_EVENT.CURRENT_DOCUMENT_CHANGE, scheduleUnattributedDashboardAutosave),
+    engine.designer.onEvent(DESIGNER_EVENT.CURRENT_HISTORY_CHANGE, scheduleUnattributedDashboardAutosave),
+    engine.designer.onEvent(DESIGNER_EVENT.INSERT_NODE_BEFORE, scheduleUnattributedDashboardAutosave),
+    engine.designer.onEvent(DESIGNER_EVENT.INSERT_NODE_AFTER, scheduleUnattributedDashboardAutosave),
   ]
-  releasePersistenceListeners = mutationEvents.map(event => engine.designer.onEvent(event, scheduleDashboardAutosave))
   releasePersistenceListeners.push(
-    engine.project.onDocumentAdd(scheduleDashboardAutosave),
-    engine.project.onDocumentRemove(scheduleDashboardAutosave),
-    engine.project.onCurrentDocumentChange(scheduleDashboardAutosave),
+    engine.project.onDocumentAdd(() => recordAttributedMutation(attribution.captureUnknownMutation())),
+    engine.project.onDocumentRemove(() => recordAttributedMutation(attribution.captureUnknownMutation())),
+    engine.project.onCurrentDocumentChange(scheduleUnattributedDashboardAutosave),
   )
 }
 

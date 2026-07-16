@@ -4,13 +4,180 @@ import { reaction } from 'mobx'
 import { createProjectSchema } from './fixtures/project-schema.mjs'
 import { captureFailure, loadCore } from './helpers/kernel.mjs'
 
-async function createReadyEngine(t) {
+async function createReadyEngine(t, trustPolicy = 'legacyTrusted') {
   const core = await loadCore()
-  const engine = core.createEngine({ hostWindow: null, trustPolicy: 'legacyTrusted' })
+  const engine = core.createEngine({ hostWindow: null, trustPolicy })
   t.after(() => engine.destroy())
   await engine.init()
   return { core, engine }
 }
+
+test('bound transactions enforce expected mutation versions under both trust policies', async t => {
+  for (const trustPolicy of ['legacyTrusted', 'agentRestricted']) {
+    const { core, engine } = await createReadyEngine(t, trustPolicy)
+    engine.loadProject(createProjectSchema({ id: `expected-version-${trustPolicy}` }), true)
+    const document = engine.project.currentDocument
+    const root = document.root
+    const expected = document.mutationVersion
+
+    const committed = engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: root.id, props: { title: `guarded:${trustPolicy}` } }],
+      { expectedMutationVersion: expected },
+    )
+
+    assert.equal(committed.ok, true)
+    assert.equal(root.getPropValue('title'), `guarded:${trustPolicy}`)
+    assert.ok(document.mutationVersion > expected)
+    assert.equal(document.history.isUndoable(), true)
+
+    const beforeConflict = structuredClone(document.exportRaw())
+    const beforeConflictVersion = document.mutationVersion
+    const beforeConflictHistory = document.history.getState()
+    const conflict = await captureFailure(() =>
+      engine.transactions.runOnDocument(
+        document,
+        [{ type: 'updateProps', nodeId: root.id, props: { title: 'must-not-commit' } }],
+        { expectedMutationVersion: expected },
+      ),
+    )
+
+    assert.ok(conflict instanceof core.DocumentMutationVersionConflictError)
+    assert.equal(conflict.name, 'DocumentMutationVersionConflictError')
+    assert.equal(conflict.documentId, document.id)
+    assert.equal(conflict.expected, expected)
+    assert.equal(conflict.actual, beforeConflictVersion)
+    assert.deepEqual(document.exportRaw(), beforeConflict)
+    assert.equal(document.mutationVersion, beforeConflictVersion)
+    assert.equal(document.history.getState(), beforeConflictHistory)
+
+    const bypassed = engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: root.id, props: { title: `unguarded:${trustPolicy}` } }],
+      { expectedMutationVersion: undefined },
+    )
+    assert.equal(bypassed.ok, true)
+    assert.equal(root.getPropValue('title'), `unguarded:${trustPolicy}`)
+  }
+})
+
+test('invalid expected mutation versions reject before effects and do not strand transaction resources', async t => {
+  const { core, engine } = await createReadyEngine(t)
+  engine.loadProject(createProjectSchema({ id: 'invalid-expected-version' }), true)
+  const document = engine.project.currentDocument
+  const root = document.root
+  const before = structuredClone(document.exportRaw())
+  const beforeVersion = document.mutationVersion
+  const beforeHistory = document.history.getState()
+  let propEvents = 0
+  const dispose = root.onPropChange(() => {
+    propEvents += 1
+  })
+  t.after(dispose)
+
+  for (const invalid of [null, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const error = await captureFailure(() =>
+      engine.transactions.runOnDocument(
+        document,
+        [{ type: 'updateProps', nodeId: root.id, props: { title: 'must-not-commit' } }],
+        { expectedMutationVersion: invalid },
+      ),
+    )
+
+    assert.ok(error instanceof core.InvalidDocumentMutationVersionError)
+    assert.equal(error.name, 'InvalidDocumentMutationVersionError')
+    assert.equal(error.value, invalid)
+    assert.deepEqual(document.exportRaw(), before)
+    assert.equal(document.mutationVersion, beforeVersion)
+    assert.equal(document.history.getState(), beforeHistory)
+    assert.equal(propEvents, 0)
+  }
+
+  const committed = engine.transactions.runOnDocument(document, [
+    { type: 'updateProps', nodeId: root.id, props: { title: 'resources-remain-usable' } },
+  ])
+  assert.equal(committed.ok, true)
+  assert.equal(root.getPropValue('title'), 'resources-remain-usable')
+})
+
+test('expected mutation version validation follows binding and command preflight and rejects executable combinations', async t => {
+  for (const trustPolicy of ['legacyTrusted', 'agentRestricted']) {
+    const { core, engine } = await createReadyEngine(t, trustPolicy)
+    engine.loadProject(createProjectSchema({ id: `expected-version-order-${trustPolicy}` }), true)
+    const document = engine.project.currentDocument
+    const expected = document.mutationVersion
+    let conditionCalls = 0
+
+    for (const condition of ['precondition', 'postcondition', 'settledPostcondition']) {
+      for (const guardedVersion of [expected, expected + 1]) {
+        const combination = await captureFailure(() =>
+          engine.transactions.runOnDocument(
+            document,
+            [{ type: 'updateProps', nodeId: document.root.id, props: { title: 'must-not-commit' } }],
+            {
+              expectedMutationVersion: guardedVersion,
+              [condition]() {
+                conditionCalls += 1
+              },
+            },
+          ),
+        )
+        assert.ok(combination instanceof core.InvalidDocumentMutationVersionError)
+        assert.equal(combination.reason, 'cannot-combine-with-executable-condition')
+        assert.equal(conditionCalls, 0)
+        assert.equal(document.root.getPropValue('title'), 'before')
+        assert.equal(document.history.isUndoable(), false)
+      }
+    }
+
+    const preflight = await captureFailure(() =>
+      engine.transactions.runOnDocument(document, [{ type: 'updateProps', nodeId: document.root.id }], {
+        expectedMutationVersion: expected + 1,
+      }),
+    )
+    assert.ok(preflight instanceof core.CommandValidationError)
+    assert.equal(document.root.getPropValue('title'), 'before')
+    assert.equal(document.history.isUndoable(), false)
+  }
+})
+
+test('expected mutation version rejects ABA after rollback even when raw schema is restored', async t => {
+  const { core, engine } = await createReadyEngine(t)
+  engine.loadProject(createProjectSchema({ id: 'expected-version-aba' }), true)
+  const document = engine.project.currentDocument
+  const root = document.root
+  const expected = document.mutationVersion
+  const before = structuredClone(document.exportRaw())
+
+  const rollback = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: root.id, props: { title: 'temporary' } }],
+      {
+        postcondition() {
+          throw new Error('force rollback')
+        },
+      },
+    ),
+  )
+  assert.match(rollback.message, /force rollback/)
+  assert.deepEqual(document.exportRaw(), before)
+  assert.ok(document.mutationVersion > expected)
+  assert.equal(document.history.isUndoable(), false)
+
+  const conflict = await captureFailure(() =>
+    engine.transactions.runOnDocument(
+      document,
+      [{ type: 'updateProps', nodeId: root.id, props: { title: 'stale-aba-write' } }],
+      { expectedMutationVersion: expected },
+    ),
+  )
+  assert.ok(conflict instanceof core.DocumentMutationVersionConflictError)
+  assert.equal(conflict.expected, expected)
+  assert.equal(conflict.actual, document.mutationVersion)
+  assert.deepEqual(document.exportRaw(), before)
+  assert.equal(document.history.isUndoable(), false)
+})
 
 test('typed command material callbacks cannot mutate another document', async t => {
   const { engine } = await createReadyEngine(t)

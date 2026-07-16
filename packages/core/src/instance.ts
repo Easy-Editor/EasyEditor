@@ -19,7 +19,9 @@ export type { Config, ConfigOptions } from './config'
 export {
   AsyncTransactionNotSupportedError,
   CommandValidationError,
+  DocumentMutationVersionConflictError,
   EDITOR_COMMAND_TYPES,
+  InvalidDocumentMutationVersionError,
   TransactionCommittedError,
   TransactionRollbackIncompleteError,
   isEditorCommandType,

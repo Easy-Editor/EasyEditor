@@ -1,6 +1,6 @@
 export const DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION = 1
-export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/1'
-export const DASHBOARD_PHASE_2_UNAVAILABLE_REASON = 'unavailable-in-phase-2-read-only'
+export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/2'
+export const DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON = 'not-yet-available'
 
 export const DASHBOARD_CAPABILITY_ERROR_CODE = Object.freeze({
   invalidRequest: 'INVALID_CAPABILITY_REQUEST',
@@ -26,6 +26,75 @@ const strictObject = (properties = {}, required = []) => ({
 const nonEmptyString = { type: 'string', minLength: 1 }
 const nullableNonEmptyString = { type: ['string', 'null'], minLength: 1 }
 const stringArray = { type: 'array', items: nonEmptyString, uniqueItems: true }
+const jsonValue = {}
+const operationId = { type: 'string', minLength: 1, maxLength: 256 }
+
+const relativePosition = {
+  oneOf: [
+    strictObject({ place: { const: 'first' } }, ['place']),
+    strictObject({ place: { const: 'last' } }, ['place']),
+    strictObject({ place: { const: 'before' }, siblingId: nonEmptyString }, ['place', 'siblingId']),
+    strictObject({ place: { const: 'after' }, siblingId: nonEmptyString }, ['place', 'siblingId']),
+  ],
+}
+
+const screenOperation = {
+  oneOf: [
+    strictObject(
+      { opId: operationId, type: { const: 'set' }, nodeId: nonEmptyString, fieldId: nonEmptyString, value: jsonValue },
+      ['opId', 'type', 'nodeId', 'fieldId', 'value'],
+    ),
+    strictObject({ opId: operationId, type: { const: 'unset' }, nodeId: nonEmptyString, fieldId: nonEmptyString }, [
+      'opId',
+      'type',
+      'nodeId',
+      'fieldId',
+    ]),
+    strictObject(
+      {
+        opId: operationId,
+        type: { const: 'resize' },
+        nodeId: nonEmptyString,
+        rect: strictObject(
+          {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number', minimum: 0 },
+            height: { type: 'number', minimum: 0 },
+          },
+          ['x', 'y', 'width', 'height'],
+        ),
+      },
+      ['opId', 'type', 'nodeId', 'rect'],
+    ),
+    strictObject(
+      {
+        opId: operationId,
+        type: { const: 'insert' },
+        parentId: nonEmptyString,
+        componentName: nonEmptyString,
+        position: relativePosition,
+        fields: { type: 'object', maxProperties: 512, additionalProperties: jsonValue },
+      },
+      ['opId', 'type', 'parentId', 'componentName'],
+    ),
+    strictObject(
+      {
+        opId: operationId,
+        type: { const: 'move' },
+        nodeId: nonEmptyString,
+        parentId: nonEmptyString,
+        position: relativePosition,
+      },
+      ['opId', 'type', 'nodeId', 'parentId'],
+    ),
+    strictObject(
+      { opId: operationId, type: { const: 'reorder' }, nodeId: nonEmptyString, position: relativePosition },
+      ['opId', 'type', 'nodeId', 'position'],
+    ),
+    strictObject({ opId: operationId, type: { const: 'remove' }, nodeId: nonEmptyString }, ['opId', 'type', 'nodeId']),
+  ],
+}
 
 const availableDescriptors = [
   {
@@ -129,6 +198,32 @@ const availableDescriptors = [
       ['revision', 'nodes'],
     ),
   },
+  {
+    schemaVersion: 1,
+    capability: 'screen.applyChangeSet',
+    revision: 'screen.applyChangeSet/1',
+    availability: 'available',
+    input: strictObject(
+      {
+        schemaVersion: { const: 1 },
+        documentId: nonEmptyString,
+        operations: { type: 'array', minItems: 1, maxItems: 100, items: screenOperation },
+      },
+      ['schemaVersion', 'documentId', 'operations'],
+    ),
+    output: strictObject(),
+  },
+  {
+    schemaVersion: 1,
+    capability: 'task.compensate',
+    revision: 'task.compensate/1',
+    availability: 'available',
+    input: strictObject({ schemaVersion: { const: 1 }, targetTaskId: nonEmptyString }, [
+      'schemaVersion',
+      'targetTaskId',
+    ]),
+    output: strictObject(),
+  },
 ]
 
 const futureCapabilityNames = [
@@ -140,8 +235,6 @@ const futureCapabilityNames = [
   'data.preview',
   'data.upsert',
   'project.checkpoint',
-  'screen.applyChangeSet',
-  'task.compensate',
 ]
 
 const unavailableDescriptors = futureCapabilityNames.map(capability => ({
@@ -149,7 +242,7 @@ const unavailableDescriptors = futureCapabilityNames.map(capability => ({
   capability,
   revision: `${capability}/1`,
   availability: 'unavailable',
-  unavailableReason: DASHBOARD_PHASE_2_UNAVAILABLE_REASON,
+  unavailableReason: DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON,
   input: strictObject(),
   output: strictObject(),
 }))
@@ -166,7 +259,7 @@ export const DASHBOARD_CAPABILITY_NAMES = Object.freeze(
 )
 
 export const DASHBOARD_CAPABILITY_REGISTRY_HASH =
-  'sha256:1163d899479792d5d83eb6ee34bbf66d4d62cb7a655d4d5f1254c4911e9a53a9'
+  'sha256:508e0617c7acf53e6e25fea25eebe6fcec09625d2cdc30e3a501fef0d3e70417'
 
 export const DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT = deepFreeze({
   schemaVersion: DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION,

@@ -102,6 +102,22 @@ const parseCheckpoint = value => {
   })
 }
 
+const parseJournalDeletes = (value, journal) => {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return failContract('must-be-an-array', 'DurableAgentBatch.journalDeletes')
+  const recordIds = cloneJsonValue(value, 'DurableAgentBatch.journalDeletes').map((recordId, index) =>
+    requireNonEmptyString(recordId, `DurableAgentBatch.journalDeletes[${index}]`),
+  )
+  recordIds.sort(compareCodeUnits)
+  if (recordIds.some((recordId, index) => index > 0 && recordId === recordIds[index - 1])) {
+    return failContract('must-not-contain-duplicate-record-ids', 'DurableAgentBatch.journalDeletes')
+  }
+  if (recordIds.includes(journal.recordId)) {
+    return failContract('must-not-delete-the-written-journal', 'DurableAgentBatch.journalDeletes')
+  }
+  return recordIds
+}
+
 const artifactRefKey = value => [value.ownerType, value.ownerId, value.artifactId, value.sourceRevision].join('\u0000')
 
 const parseArtifactRefs = value => {
@@ -174,7 +190,7 @@ const parseDurableAgentBatch = value => {
       'journal',
       'checkpoint',
     ],
-    ['artifactRefs'],
+    ['artifactRefs', 'journalDeletes'],
     'DurableAgentBatch',
   )
   requireSchemaVersion(ownDataValue(value, 'schemaVersion', 'DurableAgentBatch'), 'DurableAgentBatch.schemaVersion')
@@ -233,6 +249,7 @@ const parseDurableAgentBatch = value => {
     return failContract(classification.reason ?? 'lineage-is-not-a-durable-outcome', 'DurableAgentBatch')
   }
 
+  const journal = parseJournal(ownDataValue(value, 'journal', 'DurableAgentBatch'))
   return freezeDto({
     ...authority,
     schemaVersion: 1,
@@ -256,7 +273,8 @@ const parseDurableAgentBatch = value => {
       ownDataValue(value, 'sessionId', 'DurableAgentBatch'),
       'DurableAgentBatch.sessionId',
     ),
-    journal: parseJournal(ownDataValue(value, 'journal', 'DurableAgentBatch')),
+    journal,
+    journalDeletes: parseJournalDeletes(optionalOwnDataValue(value, 'journalDeletes', 'DurableAgentBatch'), journal),
     checkpoint: parseCheckpoint(ownDataValue(value, 'checkpoint', 'DurableAgentBatch')),
     artifactRefs: parseArtifactRefs(optionalOwnDataValue(value, 'artifactRefs', 'DurableAgentBatch')),
   })
@@ -264,6 +282,8 @@ const parseDurableAgentBatch = value => {
 
 const durableBatchId = batch =>
   `agent-batch-v1:${encodeURIComponent(batch.projectId)}:${encodeURIComponent(batch.branchId)}:${encodeURIComponent(batch.callId)}`
+
+const provenanceInvalidatingFailureCodes = new Set(['HUMAN_ACTIVITY', 'STALE_REVISION'])
 
 const parseReceiptLineage = (value, authority) => {
   assertExactRecord(
@@ -319,6 +339,11 @@ const buildOperations = batch => {
         value: batch.journal.value,
       },
     },
+    ...batch.journalDeletes.map(recordId => ({
+      type: 'delete',
+      store: 'taskJournals',
+      key: [batch.projectId, batch.branchId, batch.sessionId, recordId],
+    })),
     {
       type: 'put',
       store: 'agentCheckpoints',
@@ -373,6 +398,8 @@ export const commitDurableAgentBatch = async value => {
     return failContract('durable-receipt-intent-mismatch', 'DurableAgentBatch.receiptIntent')
   }
 
+  const forceProvenanceInvalidation =
+    batch.outcome === 'failed' && provenanceInvalidatingFailureCodes.has(batch.receipt.failure?.code)
   const result = await requireCoordinatorMethod(
     coordinator,
     'commit',
@@ -387,6 +414,7 @@ export const commitDurableAgentBatch = async value => {
     commitKind: 'agent-batch',
     updatedAt: batch.updatedAt,
     operations: buildOperations(batch),
+    ...(forceProvenanceInvalidation ? { forceProvenanceInvalidation: true } : {}),
   })
   if (result?.status !== 'committed' || result?.draft?.draftGeneration !== batch.draftGeneration) {
     return failContract('coordinator-returned-invalid-agent-commit-result', 'DurableAgentBatch')

@@ -74,11 +74,40 @@ export class TransactionRollbackIncompleteError extends AggregateError {
   }
 }
 
+export class InvalidDocumentMutationVersionError extends Error {
+  readonly name = 'InvalidDocumentMutationVersionError'
+
+  constructor(
+    readonly value: unknown,
+    readonly reason: 'cannot-combine-with-executable-condition' | 'must-be-a-non-negative-safe-integer',
+  ) {
+    super(
+      reason === 'cannot-combine-with-executable-condition'
+        ? 'expectedMutationVersion cannot be combined with an executable transaction condition'
+        : 'expectedMutationVersion must be a non-negative safe integer or undefined',
+    )
+  }
+}
+
+export class DocumentMutationVersionConflictError extends Error {
+  readonly name = 'DocumentMutationVersionConflictError'
+
+  constructor(
+    readonly documentId: string,
+    readonly expected: number,
+    readonly actual: number,
+  ) {
+    super(`Document mutation version conflict for "${documentId}": expected ${expected}, actual ${actual}`)
+  }
+}
+
 export type TransactionPrecondition = (document: Document) => void
 
 export type TransactionPostcondition = (document: Document, result: TransactionResult) => void
 
 export interface BoundTransactionOptions {
+  /** Declarative compare-and-commit guard checked before transaction resources or History are acquired. */
+  readonly expectedMutationVersion?: number
   readonly precondition?: TransactionPrecondition
   readonly postcondition?: TransactionPostcondition
   /** Re-run a pure invariant after MobX reactions settle but before commit. */
@@ -132,8 +161,7 @@ export class TransactionManager {
     }
     const document = this.#requireBoundDocument(documentOrId)
     const options = this.#normalizeBoundOptions(preconditionOrOptions)
-    this.#assertExecutableBoundOptionsAllowed(options)
-    return this.#executeCommands(document, commands, options)
+    return this.#executeCommands(document, commands, options, true)
   }
 
   #runOnDocumentInternal(
@@ -151,6 +179,7 @@ export class TransactionManager {
     document: Document,
     commands: readonly EditorCommand[],
     options: BoundTransactionOptions = {},
+    enforcePublicOptionPolicy = false,
   ): TransactionResult {
     const transactionOptions: InternalTransactionOptions = {
       ...options,
@@ -159,6 +188,8 @@ export class TransactionManager {
       restrictDocumentMutations: true,
     }
     this.#preflight(commands, document)
+    this.#assertExpectedMutationVersion(document, transactionOptions)
+    if (enforcePublicOptionPolicy) this.#assertExecutableBoundOptionsAllowed(transactionOptions)
     return this.#withTransaction(
       document,
       () => {
@@ -506,6 +537,25 @@ export class TransactionManager {
       origin: 'transactions.runOnDocument',
       rule: `${this.#host.trustPolicy.name}.command.executable.deny`,
     })
+  }
+
+  #assertExpectedMutationVersion(document: Document, options: BoundTransactionOptions): void {
+    const expected = options.expectedMutationVersion
+    if (expected === undefined) return
+    if (!Number.isSafeInteger(expected) || expected < 0) {
+      throw new InvalidDocumentMutationVersionError(expected, 'must-be-a-non-negative-safe-integer')
+    }
+    if (
+      options.precondition !== undefined ||
+      options.postcondition !== undefined ||
+      options.settledPostcondition !== undefined
+    ) {
+      throw new InvalidDocumentMutationVersionError(expected, 'cannot-combine-with-executable-condition')
+    }
+    const actual = document.mutationVersion
+    if (actual !== expected) {
+      throw new DocumentMutationVersionConflictError(document.id, expected, actual)
+    }
   }
 
   #runSynchronousBoundary(

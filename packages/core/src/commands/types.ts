@@ -17,6 +17,8 @@ export interface UpdatePropsCommand extends DocumentScopedCommand {
   nodeId: string
   props?: PropsMap
   extras?: PropsMap
+  unsetPropPaths?: readonly string[]
+  unsetExtraPaths?: readonly string[]
 }
 
 export interface RemoveNodeCommand extends DocumentScopedCommand {

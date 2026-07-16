@@ -6,14 +6,17 @@ import type {
   AgentRuntimeOptions,
   AgentRuntimeSnapshot,
   AgentWorkerOptions,
+  HostInvocationContextV1,
   HostSnapshot,
   HostSnapshotDelta,
   HostSnapshotDeltaChange,
   JsonObject,
   ModelAdapter,
   ModelTurnRequest,
+  RuntimeTaskCompensationTargetV1,
   SemanticCall,
   TaskRef,
+  ToolReceipt,
 } from '../src/contracts.js'
 
 declare const runtime: AgentRuntime
@@ -55,7 +58,36 @@ const delta: HostSnapshotDelta = {
 
 // @ts-expect-error delta paths must be non-empty
 const invalidDeltaChange: HostSnapshotDeltaChange = { op: 'remove', path: [] }
-const invocation = host.invoke(call)
+const compensationTarget: RuntimeTaskCompensationTargetV1 = {
+  schemaVersion: 1,
+  taskId: 'target-task',
+  sessionId: 'session-1',
+  phase: 'COMPLETED',
+  callIndexComplete: true,
+  callIndex: [{ callId: 'call-0', capability: 'screen.applyChangeSet' }],
+}
+const invocationContext: HostInvocationContextV1 = { schemaVersion: 1, compensationTarget }
+const invocation = host.invoke(call, invocationContext)
+// @ts-expect-error Runtime-owned invocation context is a required, separate Host argument
+host.invoke(call)
+const receipt: ToolReceipt = {
+  schemaVersion: 1,
+  projectId: 'project-1',
+  branchId: 'branch-1',
+  callId: 'call-1',
+  status: 'not-applied',
+  failure: { code: 'NO_CHANGE', message: 'already satisfied', retryable: false },
+}
+// @ts-expect-error applied receipts cannot carry failure metadata
+const invalidAppliedReceipt: ToolReceipt = { ...receipt, status: 'applied' }
+// @ts-expect-error non-applied receipts require typed failure metadata
+const invalidFailedReceipt: ToolReceipt = {
+  schemaVersion: 1,
+  projectId: 'project-1',
+  branchId: 'branch-1',
+  callId: 'call-2',
+  status: 'not-applied',
+}
 const events = model.run(request, new AbortController().signal)
 
 const batch: AgentPersistenceBatch = {
@@ -97,6 +129,9 @@ void invalidFullSnapshot
 void delta
 void invalidDeltaChange
 void invocation
+void invocationContext
+void compensationTarget
+void receipt
 void events
 void commit
 void options

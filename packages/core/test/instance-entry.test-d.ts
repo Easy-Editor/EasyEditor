@@ -2,11 +2,14 @@
 import { createEngine as legacyCreateEngine } from '@easy-editor/core'
 import type * as instanceEntry from '@easy-editor/core/instance'
 import {
+  type BoundTransactionOptions,
   CURRENT_PROJECT_SCHEMA_VERSION,
   type Disposable,
+  DocumentMutationVersionConflictError,
   type EngineInstance,
   type EngineInstanceOptions,
   type EngineLifecycleState,
+  InvalidDocumentMutationVersionError,
   type LegacyTrustedPluginContext,
   MaterialSource,
   type PluginContext,
@@ -37,6 +40,13 @@ const options: EngineInstanceOptions = {
   trustPolicy: 'agentRestricted',
 }
 const engine: EngineInstance = createEngine(options)
+const guardedOptions: BoundTransactionOptions = { expectedMutationVersion: 0 }
+const mutationConflict = new DocumentMutationVersionConflictError('document-id', 0, 1)
+const invalidMutationVersion = new InvalidDocumentMutationVersionError(
+  Number.NaN,
+  'must-be-a-non-negative-safe-integer',
+)
+const invalidCombinedGuard = new InvalidDocumentMutationVersionError(0, 'cannot-combine-with-executable-condition')
 const pluginManager: PluginManager = engine.plugins
 declare const pluginContext: PluginContext
 pluginContext.config.get('designMode')
@@ -108,3 +118,7 @@ void remoteErrorConstructor
 void legacyPluginContext
 void legacyEngine
 void legacyCreateEngine
+void guardedOptions
+void mutationConflict
+void invalidMutationVersion
+void invalidCombinedGuard

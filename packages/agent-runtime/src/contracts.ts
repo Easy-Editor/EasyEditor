@@ -181,26 +181,62 @@ export interface SemanticCall {
   readonly expectedRevision: string
 }
 
-export type InvocationStatus = 'applied' | 'not-applied' | 'indeterminate' | 'rejected'
-
-export interface InvocationResult {
-  readonly schemaVersion: 1
+interface RuntimeTaskCallIndexEntryV1 {
   readonly callId: string
-  readonly status: InvocationStatus
-  readonly revision?: string
-  readonly output?: JsonValue
-  readonly failure?: AgentRuntimeFailure
+  readonly capability: string
 }
 
-export interface ToolReceipt {
+export interface RuntimeTaskCompensationTargetV1 {
+  readonly schemaVersion: 1
+  readonly taskId: string
+  readonly sessionId: string
+  readonly phase: 'COMPLETED' | 'CANCELLED'
+  readonly callIndexComplete: true
+  readonly callIndex: readonly RuntimeTaskCallIndexEntryV1[]
+}
+
+export interface HostInvocationContextV1 {
+  readonly schemaVersion: 1
+  readonly compensationTarget?: RuntimeTaskCompensationTargetV1
+}
+
+export type InvocationStatus = 'applied' | 'not-applied' | 'indeterminate' | 'rejected'
+
+interface InvocationResultBase {
+  readonly schemaVersion: 1
+  readonly callId: string
+  readonly revision?: string
+  readonly output?: JsonValue
+}
+
+export type InvocationResult =
+  | (InvocationResultBase & {
+      readonly status: 'applied'
+      readonly failure?: never
+    })
+  | (InvocationResultBase & {
+      readonly status: Exclude<InvocationStatus, 'applied'>
+      readonly failure: AgentRuntimeFailure
+    })
+
+interface ToolReceiptBase {
   readonly schemaVersion: 1
   readonly projectId: string
   readonly branchId: string
   readonly callId: string
-  readonly status: InvocationStatus
   readonly revision?: string
   readonly witness?: JsonObject
 }
+
+export type ToolReceipt =
+  | (ToolReceiptBase & {
+      readonly status: 'applied'
+      readonly failure?: never
+    })
+  | (ToolReceiptBase & {
+      readonly status: Exclude<InvocationStatus, 'applied'>
+      readonly failure: AgentRuntimeFailure
+    })
 
 export interface ReceiptQueryRequest {
   readonly projectId: string
@@ -211,7 +247,7 @@ export interface ReceiptQueryRequest {
 export interface AgentHost {
   observe(request: ObserveRequest): Promise<HostSnapshot | HostSnapshotDelta>
   describeCapability(request: CapabilitySchemaRequest): Promise<CapabilitySchema>
-  invoke(call: SemanticCall): Promise<InvocationResult>
+  invoke(call: SemanticCall, context: HostInvocationContextV1): Promise<InvocationResult>
   queryReceipt(request: ReceiptQueryRequest): Promise<ToolReceipt | null>
 }
 
@@ -268,7 +304,7 @@ export interface Clock {
 }
 
 export interface IdFactory {
-  next(kind: 'session' | 'task' | 'step' | 'message' | 'request' | 'batch'): string
+  next(kind: 'session' | 'task' | 'step' | 'call' | 'message' | 'request' | 'batch'): string
 }
 
 export type ModelTurnPhase = 'BLUEPRINT' | 'PLAN_STEP' | 'REPAIR'
@@ -300,7 +336,12 @@ export type ModelEvent =
   | {
       readonly schemaVersion: 1
       readonly kind: 'tool-call'
-      readonly call: SemanticCall
+      readonly call: {
+        readonly schemaVersion: 1
+        readonly capability: string
+        readonly arguments: JsonObject
+        readonly expectedRevision: string
+      }
     }
   | {
       readonly schemaVersion: 1

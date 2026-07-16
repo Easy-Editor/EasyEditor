@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   DASHBOARD_CAPABILITY_DESCRIPTORS,
-  DASHBOARD_PHASE_2_UNAVAILABLE_REASON,
+  DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON,
 } from '../src/editor/agent/capabilities/index.mjs'
 import {
   PersistenceLineageContractError,
@@ -97,6 +97,14 @@ test('receipt intent, receipt, and witnesses are strict structured-clone-safe DT
   assert.deepEqual(structuredClone(receipt), receipt)
   assert.deepEqual(parseApplyWitness(structuredClone(applyWitness)), applyWitness)
   assert.deepEqual(parseToolReceipt(structuredClone(receipt)), receipt)
+  assert.throws(
+    () =>
+      createToolReceipt({
+        ...receipt,
+        failure: { code: 'IMPOSSIBLE', message: 'applied receipts cannot fail', retryable: false },
+      }),
+    PersistenceLineageContractError,
+  )
 
   const failureWitness = createFailureWitness({
     schemaVersion: 1,
@@ -108,6 +116,16 @@ test('receipt intent, receipt, and witnesses are strict structured-clone-safe DT
   })
   assert.deepEqual(parseFailureWitness(structuredClone(failureWitness)), failureWitness)
   assert.deepEqual(structuredClone(createToolReceiptWitness(failureWitness)), createToolReceiptWitness(failureWitness))
+  assert.throws(
+    () =>
+      createToolReceipt({
+        schemaVersion: 1,
+        ...authority,
+        status: 'not-applied',
+        witness: createToolReceiptWitness(failureWitness),
+      }),
+    PersistenceLineageContractError,
+  )
 })
 
 test('lineage DTO validators reject accessors, non-JSON values, unknown fields, and malformed identities', () => {
@@ -158,6 +176,7 @@ test('ACK-loss recovery returns the original applied receipt only with exact dur
 
   assert.deepEqual(recovered, {
     classification: 'committed',
+    receiptIntent: createReceiptIntent(receiptIntentInput()),
     receipt: lineage.receipt,
   })
   assert.notEqual(recovered.receipt, lineage.receipt)
@@ -179,6 +198,33 @@ test('intent-only and value equality never synthesize committed or failed author
     reason: 'missing-durable-receipt',
   })
   assert.equal(intent.expectedPostImages[0].value, 'B')
+})
+
+test('a completely absent durable lineage is missing rather than an ambiguous intent', () => {
+  assert.deepEqual(
+    classifyReceiptRecovery({
+      ...authority,
+      receiptIntent: null,
+      receipt: null,
+      applyWitness: null,
+      failureWitness: null,
+    }),
+    { classification: 'missing' },
+  )
+})
+
+test('a terminal receipt can never recover without its immutable receipt intent', () => {
+  const lineage = createAppliedLineage()
+  assert.deepEqual(
+    classifyReceiptRecovery({
+      ...authority,
+      receiptIntent: null,
+      receipt: lineage.receipt,
+      applyWitness: lineage.applyWitness,
+      failureWitness: null,
+    }),
+    { classification: 'indeterminate', reason: 'missing-receipt-intent' },
+  )
 })
 
 test('missing, ambiguous, or mismatched immutable apply evidence is indeterminate', () => {
@@ -251,6 +297,7 @@ test('an exact FailureWitness returns the original failed receipt and any mismat
     status: 'not-applied',
     revision: 'core:19:registry:3',
     witness: createToolReceiptWitness(failureWitness),
+    failure: { code: 'VALIDATION_FAILED', message: 'validation failed', retryable: false },
   })
   const base = {
     ...authority,
@@ -262,11 +309,22 @@ test('an exact FailureWitness returns the original failed receipt and any mismat
 
   assert.deepEqual(classifyReceiptRecovery(base), {
     classification: 'failed',
+    receiptIntent: createReceiptIntent(receiptIntentInput()),
     receipt,
   })
   assert.deepEqual(
     classifyReceiptRecovery({ ...base, failureWitness: { ...failureWitness, failureCode: 'TRANSACTION_ABORTED' } }),
-    { classification: 'indeterminate', reason: 'witness-mismatch' },
+    { classification: 'indeterminate', reason: 'failure-code-mismatch' },
+  )
+  assert.deepEqual(
+    classifyReceiptRecovery({
+      ...base,
+      receipt: {
+        ...receipt,
+        failure: { ...receipt.failure, code: 'TRANSACTION_ABORTED' },
+      },
+    }),
+    { classification: 'indeterminate', reason: 'failure-code-mismatch' },
   )
   assert.deepEqual(classifyReceiptRecovery({ ...base, applyWitness: createAppliedLineage().applyWitness }), {
     classification: 'indeterminate',
@@ -274,15 +332,21 @@ test('an exact FailureWitness returns the original failed receipt and any mismat
   })
 })
 
-test('Phase 3A lineage adds no writable Agent capability', () => {
+test('Phase 3B lineage publishes only the approved semantic write capabilities', () => {
   const available = DASHBOARD_CAPABILITY_DESCRIPTORS.filter(descriptor => descriptor.availability === 'available').map(
     descriptor => descriptor.capability,
   )
-  assert.deepEqual(available, ['material.describe', 'material.search', 'screen.inspect'])
+  assert.deepEqual(available, [
+    'material.describe',
+    'material.search',
+    'screen.applyChangeSet',
+    'screen.inspect',
+    'task.compensate',
+  ])
 
-  for (const capability of ['project.checkpoint', 'screen.applyChangeSet', 'task.compensate']) {
+  for (const capability of ['artifact.createOnline', 'data.bind', 'project.checkpoint']) {
     const descriptor = DASHBOARD_CAPABILITY_DESCRIPTORS.find(candidate => candidate.capability === capability)
     assert.equal(descriptor?.availability, 'unavailable')
-    assert.equal(descriptor?.unavailableReason, DASHBOARD_PHASE_2_UNAVAILABLE_REASON)
+    assert.equal(descriptor?.unavailableReason, DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON)
   }
 })

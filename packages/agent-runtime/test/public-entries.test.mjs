@@ -37,7 +37,15 @@ test('source entries expose finite profile-specific APIs', () => {
   const testing = readEntry('src/testing.ts')
 
   assert.deepEqual(root.runtime, ['createAgentRuntime'])
-  for (const name of ['AgentRuntime', 'AgentWorkerEndpoint', 'AgentHost', 'AgentPersistencePort', 'JsonValue']) {
+  for (const name of [
+    'AgentRuntime',
+    'AgentWorkerEndpoint',
+    'AgentHost',
+    'AgentPersistencePort',
+    'HostInvocationContextV1',
+    'RuntimeTaskCompensationTargetV1',
+    'JsonValue',
+  ]) {
     assert.ok(root.all.includes(name), `root entry must export ${name}`)
   }
   for (const name of [

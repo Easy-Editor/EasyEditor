@@ -89,7 +89,7 @@ test('safe configure compiler emits annotated shared fields and conservative pro
         name: 'text',
         setter: {
           componentName: 'StringSetter',
-          props: { maxLength: 80, minLength: 1, pattern: '^[^<>]+$' },
+          props: { maxLength: 80, minLength: 1, pattern: '(a+)+$' },
         },
         title: '文本',
       },
@@ -146,7 +146,7 @@ test('safe configure compiler emits annotated shared fields and conservative pro
     required: true,
     title: '文本',
     unsetTargets: [{ path: ['props', 'text'] }],
-    valueSchema: { maxLength: 80, minLength: 1, pattern: '^[^<>]+$', type: 'string' },
+    valueSchema: { maxLength: 80, minLength: 1, type: 'string' },
     verifyPaths: [['props', 'text']],
     writeTargets: [{ path: ['props', 'text'] }],
   })
@@ -171,6 +171,7 @@ test('safe configure compiler emits annotated shared fields and conservative pro
   )
 
   const serialized = JSON.stringify(manifest)
+  assert.doesNotMatch(serialized, /\(a\+\)\+\$/)
   assert.doesNotMatch(serialized, /must-not-leak|credential|ReactMaterialView|password|snippets|apiToken/)
   assert.doesNotMatch(serialized, /function\s|=>/)
   assert.ok(Object.isFrozen(manifest))

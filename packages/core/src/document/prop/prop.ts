@@ -351,16 +351,13 @@ export class Prop {
         return this.#valueState as CompositeValue
       }
 
-      let maps: CompositeObject | undefined = undefined
+      const maps: CompositeObject = {}
       const items = this.#getItems()!
       for (let i = 0; i < items.length; i++) {
         const prop = items[i]
         if (!prop.isUnset()) {
           const v = prop.export(stage)
-          if (v !== null) {
-            maps = maps || {}
-            maps[prop.key || i] = v
-          }
+          maps[prop.key || i] = v
         }
       }
       return maps
@@ -446,8 +443,20 @@ export class Prop {
   unset() {
     this.#assertPropMutationAllowed('prop.unset')
     if (this.#valueType === 'unset') return
+    const oldValue = this.export(TRANSFORM_STAGE.SERIALIZE)
     this.owner.document.markSchemaMutation()
+    this.#dispose()
+    this.#valueState = UNSET
     this.#valueType = 'unset'
+
+    const propsInfo = {
+      key: this.key,
+      prop: this,
+      oldValue,
+      newValue: undefined,
+    }
+    this.owner.emitPropChange(propsInfo)
+    this.owner.document.designer.postEvent(DESIGNER_EVENT.NODE_PROPS_CHANGE, propsInfo)
   }
 
   isUnset() {

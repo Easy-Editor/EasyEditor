@@ -64,15 +64,31 @@ export interface FailureReceiptWitnessReference extends JsonObject {
   readonly failureCode: string
 }
 
-export interface ToolReceiptV1 {
+interface ToolReceiptBaseV1 {
   readonly schemaVersion: 1
   readonly projectId: string
   readonly branchId: string
   readonly callId: string
-  readonly status: ToolReceiptStatus
   readonly revision?: string
   readonly witness?: JsonObject
 }
+
+export interface ToolReceiptFailureV1 {
+  readonly code: string
+  readonly message: string
+  readonly retryable: boolean
+  readonly details?: JsonObject
+}
+
+export type ToolReceiptV1 =
+  | (ToolReceiptBaseV1 & {
+      readonly status: 'applied'
+      readonly failure?: never
+    })
+  | (ToolReceiptBaseV1 & {
+      readonly status: Exclude<ToolReceiptStatus, 'applied'>
+      readonly failure: ToolReceiptFailureV1
+    })
 
 export interface ReceiptRecoveryEvidence {
   readonly projectId: string
@@ -85,7 +101,12 @@ export interface ReceiptRecoveryEvidence {
 }
 
 export type ReceiptRecoveryResult =
-  | { readonly classification: 'committed' | 'failed'; readonly receipt: ToolReceiptV1 }
+  | {
+      readonly classification: 'committed' | 'failed'
+      readonly receiptIntent: ReceiptIntentV1
+      readonly receipt: ToolReceiptV1
+    }
+  | { readonly classification: 'missing' }
   | { readonly classification: 'indeterminate'; readonly reason: string }
 
 export declare const parseReceiptIntent: (value: unknown) => ReceiptIntentV1

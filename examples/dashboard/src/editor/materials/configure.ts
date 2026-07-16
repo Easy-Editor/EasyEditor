@@ -69,7 +69,11 @@ export const generalAdvancedConfigure: FieldConfig[] = [
           getValue(target) {
             return target.getExtraPropValue('condition')
           },
-          setValue(target, value: boolean) {
+          setValue(target, value: boolean | undefined) {
+            if (value === undefined) {
+              target.nodes.forEach(node => node.clearExtraPropValue('condition'))
+              return
+            }
             target.setExtraPropValue('condition', value)
           },
         },

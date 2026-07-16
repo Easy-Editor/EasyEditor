@@ -6,6 +6,7 @@
   "scripts": {
     "format": "biome format --write .",
     "lint": "biome check .",
+    "pretest": "pnpm --filter @easy-editor/core test:kernel-build",
     "test": "node --test test/*.test.mjs",
     "dev": "vite",
     "build:deps": "pnpm --filter @easy-editor/agent-runtime --filter @easy-editor/core --filter @easy-editor/plugin-dashboard --filter @easy-editor/plugin-datasource --filter @easy-editor/plugin-hotkey --filter @easy-editor/renderer-core --filter @easy-editor/react-renderer --filter @easy-editor/react-renderer-dashboard run types",

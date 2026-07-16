@@ -9,21 +9,28 @@ import type {
   AgentRuntimeStatus,
   AgentTaskSnapshot,
   Clock,
+  HostInvocationContextV1,
   HostSnapshot,
   IdFactory,
+  InvocationResult,
   JsonObject,
   ModelAdapter,
   ModelEvent,
   ModelTurnPhase,
   ModelTurnRequest,
   PersistenceCommitResult,
+  RuntimeTaskCompensationTargetV1,
   SemanticCall,
   TaskRef,
   UserIntent,
   UserResponse,
 } from '../../contracts.js'
 import { collectModelEvents } from '../model/index.js'
+import { assertExactFields, assertJsonValue } from '../protocol/index.js'
 import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
+
+type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
+type ModelToolCallProposal = Extract<ModelEvent, { readonly kind: 'tool-call' }>['call']
 
 export type WorkerStateMachineErrorCode =
   | 'disposed'
@@ -89,16 +96,52 @@ interface MutableTask {
   pendingControlPhase?: 'PAUSED' | 'CANCELLED'
   lastDurablePhase?: AgentPhase
   nextModelPhase: ModelTurnPhase
+  pendingInvocation?: PendingInvocationV1
+  pendingInvocationDurable: boolean
+  callIds: string[]
+  callIndex: RuntimeTaskCallIndexEntryV1[]
+  callIndexComplete: boolean
+  consecutiveYields: number
 }
+
+interface PendingInvocationV1 {
+  readonly schemaVersion: 1
+  readonly state: 'invoked'
+  readonly completeAfterTool: boolean
+  readonly call: SemanticCall
+}
+
+type ExecutionDisposition = 'satisfied' | 'completed' | 'repair' | 'repair-durable' | 'yielded' | 'paused'
 
 interface TurnOutcome {
   readonly complete: boolean
   readonly question?: AgentQuestion
   readonly pauseReason?: string
-  readonly toolCall?: SemanticCall
+  readonly toolCall?: ModelToolCallProposal
 }
 
 const terminalPhases = new Set<AgentPhase>(['COMPLETED', 'CANCELLED', 'FAILED'])
+const compensationTargetPhases = new Set<AgentPhase>(['COMPLETED', 'CANCELLED'])
+const MAX_RUNTIME_ID_LENGTH = 96
+const MAX_SCOPED_ID_LENGTH = 256
+const agentPhases = new Set<AgentPhase>([
+  'IDLE',
+  'OBSERVE',
+  'BLUEPRINT',
+  'WAITING_USER',
+  'PLAN_STEP',
+  'EXECUTE',
+  'YIELDED',
+  'QUERY_RECEIPT',
+  'VERIFY',
+  'REPAIR',
+  'CHECKPOINT',
+  'PAUSED',
+  'RECOVERING',
+  'COMPLETED',
+  'CANCELLED',
+  'FAILED',
+])
 
 const isAbortError = (error: unknown) =>
   error instanceof DOMException ? error.name === 'AbortError' : error instanceof Error && error.name === 'AbortError'
@@ -154,20 +197,159 @@ const taskSnapshot = (task: MutableTask): AgentTaskSnapshot =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-const parseRecoveredTask = (value: unknown): MutableTask | undefined => {
+const parseRecoveredSemanticCall = (value: unknown, taskId: string, sessionId: string): SemanticCall | undefined => {
+  if (!isRecord(value) || !isRecord(value.arguments)) return undefined
+  const stringFields = [
+    'projectId',
+    'branchId',
+    'sessionId',
+    'taskId',
+    'stepId',
+    'callId',
+    'capability',
+    'expectedRevision',
+  ]
+  if (value.schemaVersion !== 1 || stringFields.some(field => typeof value[field] !== 'string' || !value[field])) {
+    return undefined
+  }
+  if (value.taskId !== taskId || value.sessionId !== sessionId) return undefined
+  return cloneFrozen(value as unknown as SemanticCall)
+}
+
+const parseRecoveredPendingInvocation = (
+  value: unknown,
+  taskId: string,
+  sessionId: string,
+): PendingInvocationV1 | undefined => {
+  if (!isRecord(value) || value.schemaVersion !== 1 || value.state !== 'invoked') return undefined
+  if (typeof value.completeAfterTool !== 'boolean') return undefined
+  const call = parseRecoveredSemanticCall(value.call, taskId, sessionId)
+  if (!call) return undefined
+  return cloneFrozen({ schemaVersion: 1, state: 'invoked', completeAfterTool: value.completeAfterTool, call })
+}
+
+interface RecoveredCallIndex {
+  readonly entries: RuntimeTaskCallIndexEntryV1[]
+  readonly provided: boolean
+}
+
+const parseRecoveredCallIndex = (value: unknown): RecoveredCallIndex | undefined => {
+  if (value === undefined) return { entries: [], provided: false }
+  if (!Array.isArray(value)) return undefined
+  const callIds = new Set<string>()
+  const entries: RuntimeTaskCallIndexEntryV1[] = []
+  for (const entry of value) {
+    if (!isRecord(entry) || Object.keys(entry).length !== 2) return undefined
+    const { callId, capability } = entry
+    if (
+      typeof callId !== 'string' ||
+      callId.length === 0 ||
+      typeof capability !== 'string' ||
+      capability.length === 0 ||
+      callIds.has(callId)
+    ) {
+      return undefined
+    }
+    callIds.add(callId)
+    entries.push({ callId, capability })
+  }
+  return { entries, provided: true }
+}
+
+const parseRecoveredTask = (value: unknown, expectedSessionId: string): MutableTask | undefined => {
   if (!isRecord(value) || !isRecord(value.intent)) return undefined
   const { taskId, sessionId, phase, createdAt, updatedAt, repairAttempts } = value
   if (
     typeof taskId !== 'string' ||
     typeof sessionId !== 'string' ||
     typeof phase !== 'string' ||
+    !agentPhases.has(phase as AgentPhase) ||
     typeof createdAt !== 'number' ||
     typeof updatedAt !== 'number' ||
     typeof repairAttempts !== 'number' ||
-    typeof value.intent.text !== 'string'
+    typeof value.intent.text !== 'string' ||
+    sessionId !== expectedSessionId
   ) {
     return undefined
   }
+  const callIdsValue = value.callIds
+  const callIdsProvided = callIdsValue !== undefined
+  const callIds =
+    callIdsValue === undefined
+      ? []
+      : Array.isArray(callIdsValue) &&
+          callIdsValue.every(callId => typeof callId === 'string' && callId.length > 0) &&
+          new Set(callIdsValue).size === callIdsValue.length
+        ? [...callIdsValue]
+        : undefined
+  if (!callIds) return undefined
+  const recoveredCallIndex = parseRecoveredCallIndex(value.callIndex)
+  if (!recoveredCallIndex) return undefined
+  const callIndex = recoveredCallIndex.entries
+  const consecutiveYieldsValue = value.consecutiveYields
+  const consecutiveYields = consecutiveYieldsValue === undefined ? 0 : consecutiveYieldsValue
+  if (typeof consecutiveYields !== 'number' || !Number.isSafeInteger(consecutiveYields) || consecutiveYields < 0) {
+    return undefined
+  }
+  let failure: AgentRuntimeFailure | undefined
+  if (value.failure !== undefined) {
+    try {
+      assertExactFields(value.failure, ['code', 'message', 'retryable'], ['details'], 'persisted task failure')
+      if (
+        typeof value.failure.code !== 'string' ||
+        value.failure.code.length === 0 ||
+        typeof value.failure.message !== 'string' ||
+        value.failure.message.length === 0 ||
+        typeof value.failure.retryable !== 'boolean'
+      ) {
+        return undefined
+      }
+      if (value.failure.details !== undefined) {
+        assertJsonValue(value.failure.details, 'persisted task failure.details')
+        if (
+          typeof value.failure.details !== 'object' ||
+          value.failure.details === null ||
+          Array.isArray(value.failure.details)
+        ) {
+          return undefined
+        }
+      }
+      failure = cloneFrozen(value.failure as unknown as AgentRuntimeFailure)
+    } catch {
+      return undefined
+    }
+  }
+  const pendingInvocation =
+    value.pendingInvocation === undefined
+      ? undefined
+      : parseRecoveredPendingInvocation(value.pendingInvocation, taskId, sessionId)
+  if (value.pendingInvocation !== undefined && !pendingInvocation) return undefined
+  const pendingCallIdWasIndexed = !pendingInvocation || callIds.includes(pendingInvocation.call.callId)
+  const pendingCallIndexEntry = pendingInvocation
+    ? callIndex.find(entry => entry.callId === pendingInvocation.call.callId)
+    : undefined
+  if (
+    pendingInvocation &&
+    pendingCallIndexEntry &&
+    pendingCallIndexEntry.capability !== pendingInvocation.call.capability
+  ) {
+    return undefined
+  }
+  const pendingCapabilityWasIndexed = !pendingInvocation || pendingCallIndexEntry !== undefined
+  if (pendingInvocation && !pendingCallIdWasIndexed) callIds.push(pendingInvocation.call.callId)
+  if (pendingInvocation && !pendingCallIndexEntry) {
+    callIndex.push({ callId: pendingInvocation.call.callId, capability: pendingInvocation.call.capability })
+  }
+  const knownCallIds = new Set(callIds)
+  if (callIndex.some(entry => !knownCallIds.has(entry.callId))) return undefined
+  if (value.callIndexComplete !== undefined && typeof value.callIndexComplete !== 'boolean') return undefined
+  const indexesAlign =
+    callIdsProvided &&
+    recoveredCallIndex.provided &&
+    callIndex.length === callIds.length &&
+    callIndex.every((entry, index) => entry.callId === callIds[index])
+  if (value.callIndexComplete === true && !indexesAlign) return undefined
+  const callIndexComplete = value.callIndexComplete === true && indexesAlign
   return {
     taskId,
     sessionId,
@@ -179,28 +361,63 @@ const parseRecoveredTask = (value: unknown): MutableTask | undefined => {
     parentTaskId: typeof value.parentTaskId === 'string' ? value.parentTaskId : undefined,
     supersedesTaskId: typeof value.supersedesTaskId === 'string' ? value.supersedesTaskId : undefined,
     lastDurablePhase: phase as AgentPhase,
-    nextModelPhase: 'PLAN_STEP',
+    nextModelPhase: phase === 'REPAIR' ? 'REPAIR' : 'PLAN_STEP',
+    callIds,
+    callIndex,
+    callIndexComplete,
+    consecutiveYields,
+    ...(failure ? { failure } : {}),
+    pendingInvocationDurable: pendingInvocation !== undefined && pendingCallIdWasIndexed && pendingCapabilityWasIndexed,
+    ...(pendingInvocation ? { pendingInvocation } : {}),
   }
 }
 
-const selectLatestRecoveredTask = (records: readonly { readonly kind: string; readonly value: unknown }[]) => {
-  let selected: MutableTask | undefined
+const isLaterRecoveredTask = (candidate: MutableTask, selected: MutableTask) =>
+  candidate.updatedAt > selected.updatedAt ||
+  (candidate.updatedAt === selected.updatedAt && candidate.createdAt > selected.createdAt) ||
+  (candidate.updatedAt === selected.updatedAt &&
+    candidate.createdAt === selected.createdAt &&
+    candidate.taskId > selected.taskId)
+
+const recoverTasks = (
+  records: readonly { readonly recordId: string; readonly kind: string; readonly value: unknown }[],
+  sessionId: string,
+) => {
+  const recovered = new Map<string, MutableTask>()
   for (const record of records) {
     if (record.kind !== 'agent-runtime-task') continue
-    const candidate = parseRecoveredTask(record.value)
-    if (!candidate) continue
-    if (
-      !selected ||
-      candidate.updatedAt > selected.updatedAt ||
-      (candidate.updatedAt === selected.updatedAt && candidate.createdAt > selected.createdAt) ||
-      (candidate.updatedAt === selected.updatedAt &&
-        candidate.createdAt === selected.createdAt &&
-        candidate.taskId > selected.taskId)
-    ) {
-      selected = candidate
-    }
+    const candidate = parseRecoveredTask(record.value, sessionId)
+    if (!candidate || record.recordId !== `task:${candidate.taskId}`) continue
+    const prior = recovered.get(candidate.taskId)
+    if (!prior || isLaterRecoveredTask(candidate, prior)) recovered.set(candidate.taskId, candidate)
+  }
+  return [...recovered.values()]
+}
+
+const selectLatestRecoveredTask = (tasks: readonly MutableTask[]) => {
+  const nonterminal = tasks.filter(task => !terminalPhases.has(task.phase))
+  const candidates = nonterminal.length > 0 ? nonterminal : tasks
+  let selected: MutableTask | undefined
+  for (const candidate of candidates) {
+    if (!selected || isLaterRecoveredTask(candidate, selected)) selected = candidate
   }
   return selected
+}
+
+const assertUniqueSessionCallIds = (tasks: readonly MutableTask[]) => {
+  const owners = new Map<string, string>()
+  for (const task of tasks) {
+    for (const callId of task.callIds) {
+      const owner = owners.get(callId)
+      if (owner && owner !== task.taskId) {
+        throw new WorkerStateMachineError(
+          'invalid-tool-call-context',
+          `callId ${callId} is persisted by multiple tasks in session ${task.sessionId}`,
+        )
+      }
+      owners.set(callId, task.taskId)
+    }
+  }
 }
 
 const toRecordValue = (task: MutableTask, persistedPhase: AgentPhase): JsonObject => ({
@@ -210,16 +427,28 @@ const toRecordValue = (task: MutableTask, persistedPhase: AgentPhase): JsonObjec
   createdAt: task.createdAt,
   updatedAt: task.updatedAt,
   repairAttempts: task.repairAttempts,
+  consecutiveYields: task.consecutiveYields,
+  callIds: task.callIds,
+  callIndex: task.callIndex.map(entry => ({ callId: entry.callId, capability: entry.capability })),
+  callIndexComplete: task.callIndexComplete,
+  ...(task.failure ? { failure: task.failure as unknown as JsonObject } : {}),
   intent: {
     text: task.intent.text,
     ...(task.intent.metadata ? { metadata: task.intent.metadata } : {}),
   },
   ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
   ...(task.supersedesTaskId ? { supersedesTaskId: task.supersedesTaskId } : {}),
+  ...(task.pendingInvocation ? { pendingInvocation: task.pendingInvocation as unknown as JsonObject } : {}),
 })
 
 export const createWorkerStateMachine = (options: WorkerStateMachineOptions): WorkerStateMachine => {
   const sessionId = options.binding.sessionId ?? options.idFactory.next('session')
+  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > MAX_RUNTIME_ID_LENGTH) {
+    throw new WorkerStateMachineError(
+      'invalid-tool-call-context',
+      `runtime sessionId must contain 1-${MAX_RUNTIME_ID_LENGTH} characters`,
+    )
+  }
   const binding = cloneFrozen({ ...options.binding, sessionId })
   const listeners = new Set<(snapshot: AgentRuntimeSnapshot) => void>()
   const tasks = new Map<string, MutableTask>()
@@ -236,6 +465,78 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   let persistenceGeneration = 0
   let commitTail = Promise.resolve()
   let persistenceTail = Promise.resolve()
+
+  const sessionCallIds = () => {
+    const callIds = new Set<string>()
+    for (const task of tasks.values()) {
+      for (const callId of task.callIds) callIds.add(callId)
+    }
+    return callIds
+  }
+
+  const nextRuntimeId = (kind: 'task' | 'step' | 'call' | 'batch') => {
+    const value = options.idFactory.next(kind)
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_RUNTIME_ID_LENGTH) {
+      throw new WorkerStateMachineError(
+        'invalid-tool-call-context',
+        `idFactory must return a ${kind} id containing 1-${MAX_RUNTIME_ID_LENGTH} characters`,
+      )
+    }
+    return value
+  }
+
+  const scopeRuntimeId = (kind: 'call' | 'batch', scope: string, localId: string) => {
+    const value = `${kind}:${scope.length}:${scope}:${localId}`
+    if (value.length > MAX_SCOPED_ID_LENGTH) {
+      throw new WorkerStateMachineError(
+        'invalid-tool-call-context',
+        `${kind} id exceeds the ${MAX_SCOPED_ID_LENGTH}-character host boundary`,
+      )
+    }
+    return value
+  }
+
+  const nextUniqueTaskId = () => {
+    for (let attempt = 0; attempt <= tasks.size; attempt += 1) {
+      const candidate = nextRuntimeId('task')
+      if (!tasks.has(candidate)) return candidate
+    }
+    throw new WorkerStateMachineError(
+      'invalid-tool-call-context',
+      'idFactory could not allocate a session-unique taskId',
+    )
+  }
+
+  const nextUniqueCallId = () => {
+    const used = sessionCallIds()
+    for (let attempt = 0; attempt <= used.size; attempt += 1) {
+      const candidate = scopeRuntimeId('call', sessionId, nextRuntimeId('call'))
+      if (!used.has(candidate)) return candidate
+    }
+    throw new WorkerStateMachineError(
+      'invalid-tool-call-context',
+      'idFactory could not allocate a session-unique callId',
+    )
+  }
+
+  const nextBatchId = (task: MutableTask, persistedPhase: AgentPhase) => {
+    const scope = `${persistenceGeneration}:${task.taskId}:${persistedPhase}`
+    return scopeRuntimeId('batch', scope, nextRuntimeId('batch'))
+  }
+
+  const createRuntimeOwnedCall = (task: MutableTask, proposal: ModelToolCallProposal): SemanticCall =>
+    cloneFrozen({
+      schemaVersion: 1,
+      projectId: binding.projectId,
+      branchId: binding.branchId,
+      sessionId: task.sessionId,
+      taskId: task.taskId,
+      stepId: nextRuntimeId('step'),
+      callId: nextUniqueCallId(),
+      capability: proposal.capability,
+      arguments: proposal.arguments,
+      expectedRevision: proposal.expectedRevision,
+    })
 
   const emit = () => {
     revision += 1
@@ -367,7 +668,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     let complete = false
     let question: AgentQuestion | undefined
     let pauseReason: string | undefined
-    let toolCall: SemanticCall | undefined
+    let toolCall: ModelToolCallProposal | undefined
     for (const event of events) {
       switch (event.kind) {
         case 'complete':
@@ -428,40 +729,323 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     }
   }
 
-  const executeAndVerify = async (task: MutableTask, call: SemanticCall): Promise<boolean> => {
-    assertCallContext(task, call)
-    if (call.expectedRevision !== task.latestSnapshot?.revision) return false
+  const compensationTargetId = (call: SemanticCall): string | undefined => {
+    if (call.capability !== 'task.compensate') return undefined
+    const fields = Object.keys(call.arguments)
+    if (
+      fields.length !== 2 ||
+      !Object.hasOwn(call.arguments, 'schemaVersion') ||
+      !Object.hasOwn(call.arguments, 'targetTaskId') ||
+      call.arguments.schemaVersion !== 1 ||
+      typeof call.arguments.targetTaskId !== 'string' ||
+      call.arguments.targetTaskId.length === 0
+    ) {
+      return undefined
+    }
+    return call.arguments.targetTaskId
+  }
 
-    return withCommitLock(task, async () => {
-      setPhase(task, 'EXECUTE')
-      let result = await options.host.invoke(call)
-      if (task.controller?.signal.aborted || activeTask !== task) return false
+  const hostInvocationContext = (task: MutableTask, call: SemanticCall): HostInvocationContextV1 => {
+    if (call.capability !== 'task.compensate') return cloneFrozen({ schemaVersion: 1 })
+    const targetTaskId = compensationTargetId(call)
+    if (!targetTaskId) {
+      throw new WorkerStateMachineError(
+        'invalid-model-turn',
+        'task.compensate requires exact {schemaVersion: 1, targetTaskId} arguments',
+      )
+    }
+    const target = tasks.get(targetTaskId)
+    if (
+      !target ||
+      target === task ||
+      target.sessionId !== task.sessionId ||
+      !compensationTargetPhases.has(target.phase) ||
+      !target.callIndexComplete ||
+      target.callIndex.some(entry => entry.capability === 'task.compensate')
+    ) {
+      throw new WorkerStateMachineError(
+        'invalid-model-turn',
+        'task.compensate target is unknown, ineligible, foreign, current, incomplete, or nested',
+      )
+    }
+    const compensationTarget: RuntimeTaskCompensationTargetV1 = {
+      schemaVersion: 1,
+      taskId: target.taskId,
+      sessionId: target.sessionId,
+      phase: target.phase as 'COMPLETED' | 'CANCELLED',
+      callIndexComplete: true,
+      callIndex: target.callIndex.map(entry => ({ callId: entry.callId, capability: entry.capability })),
+    }
+    return cloneFrozen({ schemaVersion: 1, compensationTarget })
+  }
 
-      if (result.status === 'indeterminate') {
-        setPhase(task, 'QUERY_RECEIPT')
-        const receipt = await options.host.queryReceipt({
-          projectId: binding.projectId,
-          branchId: binding.branchId,
-          callId: call.callId,
-        })
-        if (!receipt || receipt.status !== 'applied') return false
-        result = {
-          schemaVersion: 1,
-          callId: receipt.callId,
-          status: 'applied',
-          ...(receipt.revision ? { revision: receipt.revision } : {}),
-        }
+  const failureCode = (value: { readonly failure?: AgentRuntimeFailure }) => value.failure?.code
+
+  const isResumeSafeCompensation = (call: SemanticCall, value: { readonly failure?: AgentRuntimeFailure }) =>
+    call.capability === 'task.compensate' &&
+    value.failure?.code === 'COMPENSATION_IN_PROGRESS' &&
+    value.failure.details?.resumeSafe === true
+
+  const invocationFromReceipt = (receipt: Awaited<ReturnType<AgentHost['queryReceipt']>>): InvocationResult | null => {
+    if (!receipt) return null
+    const base = {
+      schemaVersion: 1 as const,
+      callId: receipt.callId,
+      ...(receipt.revision ? { revision: receipt.revision } : {}),
+    }
+    return receipt.status === 'applied'
+      ? { ...base, status: 'applied' }
+      : { ...base, status: receipt.status, failure: receipt.failure }
+  }
+
+  const queryInvocationReceipt = async (task: MutableTask, call: SemanticCall) => {
+    setPhase(task, 'QUERY_RECEIPT')
+    const receipt = await options.host.queryReceipt({
+      projectId: binding.projectId,
+      branchId: binding.branchId,
+      callId: call.callId,
+    })
+    if (
+      receipt &&
+      (receipt.projectId !== binding.projectId ||
+        receipt.branchId !== binding.branchId ||
+        receipt.callId !== call.callId)
+    ) {
+      throw new WorkerStateMachineError(
+        'invalid-tool-call-context',
+        'tool receipt does not belong to the active runtime binding and call',
+      )
+    }
+    return receipt
+  }
+
+  const invokeWithReceiptRecovery = async (
+    task: MutableTask,
+    call: SemanticCall,
+    context: HostInvocationContextV1,
+    allowSafeResume = true,
+  ) => {
+    let result: InvocationResult
+    let invokeThrew = false
+    try {
+      result = await options.host.invoke(call, context)
+    } catch (error) {
+      invokeThrew = true
+      result = {
+        schemaVersion: 1 as const,
+        callId: call.callId,
+        status: 'indeterminate' as const,
+        failure: failureFrom('host-invoke-failed', error, true),
       }
-      if (result.status !== 'applied') return false
+    }
+    if (result.status !== 'indeterminate') return result
 
+    const receipt = await queryInvocationReceipt(task, call)
+    const recovered = invocationFromReceipt(receipt)
+    if (recovered && recovered.status !== 'indeterminate') return recovered
+    const safeToResume =
+      (invokeThrew && receipt === null) || (recovered !== null && isResumeSafeCompensation(call, recovered))
+    if (allowSafeResume && safeToResume) {
+      setPhase(task, 'EXECUTE')
+      return invokeWithReceiptRecovery(task, call, context, false)
+    }
+    return recovered ?? result
+  }
+
+  const pauseIndeterminateInvocation = async (
+    task: MutableTask,
+    result: { readonly failure?: AgentRuntimeFailure },
+  ): Promise<ExecutionDisposition> => {
+    await observeFull(task)
+    task.failure =
+      result.failure ??
+      ({
+        code: 'indeterminate-tool-result',
+        message: 'The tool outcome could not be proven from durable receipt lineage',
+        retryable: false,
+      } satisfies AgentRuntimeFailure)
+    setPhase(task, 'PAUSED')
+    await persistTask(task, 'PAUSED')
+    return 'paused'
+  }
+
+  const clearPendingAndPersist = async (task: MutableTask, phase: AgentPhase) => {
+    const pending = task.pendingInvocation
+    const pendingWasDurable = task.pendingInvocationDurable
+    task.pendingInvocation = undefined
+    task.pendingInvocationDurable = false
+    const persisted = await persistTask(task, phase)
+    if (persisted) return true
+    task.pendingInvocation = pending
+    task.pendingInvocationDurable = pendingWasDurable
+    setPhase(task, 'PAUSED')
+    return false
+  }
+
+  const clearPendingAndComplete = async (task: MutableTask): Promise<ExecutionDisposition> => {
+    const pending = task.pendingInvocation
+    const pendingWasDurable = task.pendingInvocationDurable
+    task.pendingInvocation = undefined
+    task.pendingInvocationDurable = false
+    setPhase(task, 'CHECKPOINT')
+    const persisted = await persistTask(task, 'COMPLETED')
+    if (persisted) {
+      setPhase(task, 'COMPLETED')
+      return 'completed'
+    }
+    task.pendingInvocation = pending
+    task.pendingInvocationDurable = pendingWasDurable
+    setPhase(task, 'PAUSED')
+    return 'paused'
+  }
+
+  const persistRepairTransition = async (
+    task: MutableTask,
+    options: { readonly clearPendingInvocation: boolean },
+  ): Promise<ExecutionDisposition> => {
+    const persist = async (phase: 'REPAIR' | 'PAUSED') => {
+      setPhase(task, phase)
+      if (options.clearPendingInvocation) return clearPendingAndPersist(task, phase)
+      const persisted = await persistTask(task, phase)
+      if (!persisted) setPhase(task, 'PAUSED')
+      return persisted
+    }
+
+    if (task.repairAttempts >= repairBudget) {
+      task.failure = {
+        code: 'repair-budget-exhausted',
+        message: `repair budget ${repairBudget} exhausted`,
+        retryable: true,
+      }
+      await persist('PAUSED')
+      return 'paused'
+    }
+
+    task.repairAttempts += 1
+    return (await persist('REPAIR')) ? 'repair-durable' : 'paused'
+  }
+
+  const handleInvocationResult = async (
+    task: MutableTask,
+    call: SemanticCall,
+    result: Awaited<ReturnType<AgentHost['invoke']>>,
+    completeAfterTool: boolean,
+  ): Promise<ExecutionDisposition> => {
+    if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
+    if (result.callId !== call.callId) {
+      throw new WorkerStateMachineError('invalid-tool-call-context', 'tool result callId does not match the request')
+    }
+
+    const code = failureCode(result)
+    const satisfied = result.status === 'applied' || (result.status === 'not-applied' && code === 'NO_CHANGE')
+    if (satisfied) {
+      task.failure = undefined
+      task.consecutiveYields = 0
       setPhase(task, 'VERIFY')
       const observed = await observeAfterInvoke(task)
-      return result.revision === undefined || result.revision === observed.revision
+      const verified = result.revision === undefined || result.revision === observed.revision
+      if (verified && completeAfterTool) return clearPendingAndComplete(task)
+      if (verified) {
+        if (!(await clearPendingAndPersist(task, 'VERIFY'))) return 'paused'
+        return 'satisfied'
+      }
+      return persistRepairTransition(task, { clearPendingInvocation: true })
+    }
+
+    if (result.status === 'not-applied' && (code === 'STALE_REVISION' || code === 'HUMAN_ACTIVITY')) {
+      task.consecutiveYields += 1
+      if (task.consecutiveYields > 1) {
+        task.failure = {
+          code: 'human-priority-yield-limit',
+          message: 'The Agent yielded twice without a successful intervening commit',
+          retryable: true,
+        }
+        setPhase(task, 'PAUSED')
+        await clearPendingAndPersist(task, 'PAUSED')
+        return 'paused'
+      }
+      setPhase(task, 'YIELDED')
+      await observeFull(task)
+      if (!(await clearPendingAndPersist(task, 'YIELDED'))) return 'paused'
+      return 'yielded'
+    }
+
+    if (result.status === 'indeterminate') return pauseIndeterminateInvocation(task, result)
+
+    task.failure = result.failure
+    return persistRepairTransition(task, { clearPendingInvocation: true })
+  }
+
+  const persistPendingInvocation = async (task: MutableTask, call: SemanticCall, completeAfterTool: boolean) => {
+    const priorOwner = [...tasks.values()].find(candidate => candidate.callIds.includes(call.callId))
+    if (priorOwner) {
+      throw new WorkerStateMachineError(
+        'invalid-model-turn',
+        `callId ${call.callId} has already been used by task ${priorOwner.taskId}`,
+      )
+    }
+    task.pendingInvocation = cloneFrozen({ schemaVersion: 1, state: 'invoked', completeAfterTool, call })
+    task.pendingInvocationDurable = false
+    task.callIds.push(call.callId)
+    task.callIndex.push({ callId: call.callId, capability: call.capability })
+    if (task.callIndexComplete) {
+      task.callIndexComplete =
+        task.callIndex.length === task.callIds.length &&
+        task.callIndex.every((entry, index) => entry.callId === task.callIds[index])
+    }
+    setPhase(task, 'EXECUTE')
+    const persisted = await persistTask(task, 'EXECUTE')
+    if (persisted) return true
+    setPhase(task, 'PAUSED')
+    return false
+  }
+
+  const executeAndVerify = async (
+    task: MutableTask,
+    call: SemanticCall,
+    completeAfterTool: boolean,
+  ): Promise<ExecutionDisposition> => {
+    assertCallContext(task, call)
+    if (call.expectedRevision !== task.latestSnapshot?.revision) return 'repair'
+    const context = hostInvocationContext(task, call)
+
+    return withCommitLock(task, async () => {
+      if (!(await persistPendingInvocation(task, call, completeAfterTool))) return 'paused'
+      if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
+      const result = await invokeWithReceiptRecovery(task, call, context)
+      return handleInvocationResult(task, call, result, completeAfterTool)
+    })
+  }
+
+  const recoverPendingInvocation = async (task: MutableTask): Promise<ExecutionDisposition> => {
+    const pending = task.pendingInvocation
+    if (!pending) return 'repair'
+    const call = pending.call
+    assertCallContext(task, call)
+    const context = hostInvocationContext(task, call)
+    return withCommitLock(task, async () => {
+      if (!task.pendingInvocationDurable) {
+        setPhase(task, 'EXECUTE')
+        if (!(await persistTask(task, 'EXECUTE'))) {
+          setPhase(task, 'PAUSED')
+          return 'paused'
+        }
+      }
+      if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
+      const receipt = await queryInvocationReceipt(task, call)
+      const recovered = invocationFromReceipt(receipt)
+      if (recovered && !isResumeSafeCompensation(call, recovered)) {
+        return handleInvocationResult(task, call, recovered, pending.completeAfterTool)
+      }
+      setPhase(task, 'EXECUTE')
+      const result = await invokeWithReceiptRecovery(task, call, context)
+      return handleInvocationResult(task, call, result, pending.completeAfterTool)
     })
   }
 
   const persistTaskNow = async (task: MutableTask, persistedPhase: AgentPhase) => {
-    const batchId = options.idFactory.next('batch')
+    const batchId = nextBatchId(task, persistedPhase)
+    const persistedPendingInvocation = task.pendingInvocation !== undefined
     let result: PersistenceCommitResult
     try {
       result = await options.persistence.commit({
@@ -488,6 +1072,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (result.status === 'committed') {
       persistenceGeneration = result.persistenceGeneration
       task.lastDurablePhase = persistedPhase
+      task.pendingInvocationDurable = persistedPendingInvocation
       return true
     }
     persistenceGeneration = Math.max(persistenceGeneration, result.persistenceGeneration)
@@ -541,10 +1126,39 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     setPhase(task, 'COMPLETED')
   }
 
+  const consumeDisposition = async (
+    task: MutableTask,
+    disposition: ExecutionDisposition,
+    completeAfterTool: boolean,
+  ): Promise<ModelTurnPhase | undefined> => {
+    if (disposition === 'paused') return undefined
+    if (disposition === 'completed') return undefined
+    if (disposition === 'satisfied') {
+      if (completeAfterTool) {
+        await completeTask(task)
+        return undefined
+      }
+      return 'PLAN_STEP'
+    }
+    if (disposition === 'yielded') return 'PLAN_STEP'
+    if (disposition === 'repair-durable') return 'REPAIR'
+
+    const repair = await persistRepairTransition(task, { clearPendingInvocation: false })
+    return repair === 'repair-durable' ? 'REPAIR' : undefined
+  }
+
   const drive = async (task: MutableTask, mode: 'fresh' | 'resume' | 'respond' | 'recover') => {
     if (mode === 'recover') setPhase(task, 'RECOVERING')
     setPhase(task, 'OBSERVE')
     await observeFull(task)
+
+    if (task.pendingInvocation) {
+      const pending = task.pendingInvocation
+      const disposition = await recoverPendingInvocation(task)
+      const nextPhase = await consumeDisposition(task, disposition, pending.completeAfterTool)
+      if (!nextPhase) return
+      task.nextModelPhase = nextPhase
+    }
 
     if (mode === 'fresh' || task.nextModelPhase === 'BLUEPRINT') {
       setPhase(task, 'BLUEPRINT')
@@ -591,27 +1205,11 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         return
       }
 
-      const applied = await executeAndVerify(task, outcome.toolCall)
-      if (applied) {
-        if (outcome.complete) {
-          await completeTask(task)
-          return
-        }
-        phase = 'PLAN_STEP'
-        continue
-      }
-
-      if (task.repairAttempts >= repairBudget) {
-        task.failure = {
-          code: 'repair-budget-exhausted',
-          message: `repair budget ${repairBudget} exhausted`,
-          retryable: true,
-        }
-        setPhase(task, 'PAUSED')
-        return
-      }
-      task.repairAttempts += 1
-      phase = 'REPAIR'
+      const call = createRuntimeOwnedCall(task, outcome.toolCall)
+      const disposition = await executeAndVerify(task, call, outcome.complete)
+      const nextPhase = await consumeDisposition(task, disposition, outcome.complete)
+      if (!nextPhase) return
+      phase = nextPhase
     }
   }
 
@@ -726,12 +1324,17 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       }
       const now = options.clock.now()
       const task: MutableTask = {
-        taskId: options.idFactory.next('task'),
+        taskId: nextUniqueTaskId(),
         sessionId,
         phase: 'IDLE',
         createdAt: now,
         updatedAt: now,
         repairAttempts: 0,
+        consecutiveYields: 0,
+        pendingInvocationDurable: false,
+        callIds: [],
+        callIndex: [],
+        callIndexComplete: true,
         intent: cloneFrozen(input),
         controller: new AbortController(),
         nextModelPhase: 'PLAN_STEP',
@@ -809,11 +1412,15 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         expectedPersistenceGeneration: persistenceGeneration,
       })
       persistenceGeneration = result.persistenceGeneration
-      const recovered = selectLatestRecoveredTask(result.records)
+      const recoveredTasks = recoverTasks(result.records, sessionId)
+      const mergedTasks = new Map(tasks)
+      for (const task of recoveredTasks) mergedTasks.set(task.taskId, task)
+      assertUniqueSessionCallIds([...mergedTasks.values()])
+      for (const task of recoveredTasks) tasks.set(task.taskId, task)
+      const recovered = selectLatestRecoveredTask(recoveredTasks)
       if (!recovered) return
-      tasks.set(recovered.taskId, recovered)
       activeTask = recovered
-      if (terminalPhases.has(recovered.phase)) {
+      if (terminalPhases.has(recovered.phase) || recovered.phase === 'PAUSED' || recovered.phase === 'WAITING_USER') {
         emit()
         return
       }

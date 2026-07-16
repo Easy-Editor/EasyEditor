@@ -48,6 +48,8 @@ export interface DashboardStorageDeleteOperation {
 export interface DashboardInvalidateAgentProvenanceOperation {
   readonly type: 'invalidate-agent-provenance'
   readonly store: 'mutationProvenance'
+  /** Bypass the same-project-hash optimization when trusted mutation evidence proves an ABA-capable edit. */
+  readonly force?: true
 }
 
 export type DashboardStorageOperation = DashboardStoragePutOperation | DashboardStorageDeleteOperation
@@ -156,6 +158,44 @@ export interface DashboardReceiptLineageResult extends DashboardReceiptLineageRe
   readonly provenance: readonly JsonObject[]
 }
 
+export interface DashboardCompensationRunReadRequestV1 {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly branchId: string
+  readonly sessionId: string
+  readonly outerCallId: string
+}
+
+export interface DashboardCompensationTargetClaimReadRequestV1 {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly branchId: string
+  readonly sessionId: string
+  readonly targetTaskId: string
+}
+
+export interface DashboardMutationProvenanceReadRequestV1 {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly branchId: string
+  readonly slotKeys: readonly string[]
+}
+
+export interface DashboardCompensationRunStateCommitV1 {
+  readonly schemaVersion: 1
+  readonly action: 'acquire' | 'retain' | 'release'
+  readonly projectId: string
+  readonly branchId: string
+  readonly sessionId: string
+  readonly outerCallId: string
+  readonly targetTaskId: string
+  readonly expectedDraftGeneration: number
+  readonly activeDocument: CanonicalActiveDocumentV1 | null
+  readonly projectSchema: JsonObject
+  readonly updatedAt: number
+  readonly run: JsonObject
+}
+
 export interface DashboardStorageBackend {
   get(store: DashboardStorageStoreName, key: DashboardStorageRecordKey): Promise<JsonObject | undefined>
   getAll(store: DashboardStorageStoreName): Promise<readonly JsonObject[]>
@@ -185,3 +225,9 @@ export declare const createAgentPersistenceCheckpointId: (
 ) => string
 export declare const validateReceiptIntentRecord: (value: unknown) => DashboardReceiptIntentV1
 export declare const validateReceiptLineageReadRequest: (value: unknown) => DashboardReceiptLineageReadRequest
+export declare const validateCompensationRunReadRequest: (value: unknown) => DashboardCompensationRunReadRequestV1
+export declare const validateCompensationTargetClaimReadRequest: (
+  value: unknown,
+) => DashboardCompensationTargetClaimReadRequestV1
+export declare const validateMutationProvenanceReadRequest: (value: unknown) => DashboardMutationProvenanceReadRequestV1
+export declare const validateCompensationRunStateCommit: (value: unknown) => DashboardCompensationRunStateCommitV1

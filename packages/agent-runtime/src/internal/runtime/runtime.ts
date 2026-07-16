@@ -7,6 +7,7 @@ import type {
   IdFactory,
   JsonObject,
 } from '../../contracts.js'
+import { createProductionIdFactory } from '../production-id-factory.js'
 import { ProtocolValidationError } from '../protocol/index.js'
 import { type RpcPeer, createAgentBoundaryRpcHandlers, createRpcPeer } from '../rpc/index.js'
 import { runtimeRpcContracts } from './contracts.js'
@@ -32,11 +33,6 @@ const deepFreeze = <Value>(value: Value): Value => {
 const frozenClone = <Value>(value: Value): Value => deepFreeze(structuredClone(value))
 const systemClock: Clock = { now: () => Date.now() }
 
-const createIdFactory = (): IdFactory => {
-  let sequence = 0
-  return { next: kind => `${kind}-${++sequence}` }
-}
-
 const observeRejection = <Value>(promise: Promise<Value>): Promise<Value> => {
   void promise.catch(() => {
     // Lifecycle failures remain visible to API callers through the original promise.
@@ -46,7 +42,7 @@ const observeRejection = <Value>(promise: Promise<Value>): Promise<Value> => {
 
 export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions): AgentRuntimeInternal => {
   const clock = options.clock ?? systemClock
-  const idFactory = options.idFactory ?? createIdFactory()
+  const idFactory = options.idFactory ?? createProductionIdFactory()
   const binding = frozenClone({
     ...options.binding,
     sessionId: options.binding.sessionId ?? idFactory.next('session'),

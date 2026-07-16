@@ -25,7 +25,10 @@ export default defineConfig({
   ],
   webServer: {
     command: `pnpm --dir examples/dashboard dev --host 127.0.0.1 --port ${appPort} --strictPort`,
-    env: { VITE_E2E: '1' },
+    env: {
+      VITE_DASHBOARD_AGENT_RUNTIME: '1',
+      VITE_E2E: '1',
+    },
     reuseExistingServer: false,
     stderr: 'pipe',
     stdout: 'ignore',

@@ -2,6 +2,7 @@ import type {
   AgentHost,
   CapabilitySchema,
   CapabilitySchemaRequest,
+  HostInvocationContextV1,
   HostSnapshot,
   HostSnapshotDelta,
   InvocationResult,
@@ -11,6 +12,10 @@ import type {
   ToolReceipt,
 } from '@easy-editor/agent-runtime'
 import type { EngineInstance } from '@easy-editor/core/instance'
+import type { HumanActivityLease } from '../activity/index.mjs'
+import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
+import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
+import type { ReceiptRecoveryResult } from '../persistence/receipt-ledger.mjs'
 
 export type DashboardAgentHostErrorCode =
   | 'AUTHORITY_MISMATCH'
@@ -29,11 +34,25 @@ export interface DashboardAgentHostAuthority {
 }
 
 export interface DashboardAgentHostOptions {
+  readonly activityLease?: HumanActivityLease
   readonly enabled?: boolean
   readonly engine?: EngineInstance
   readonly authority?: DashboardAgentHostAuthority
   readonly adapterGeneration?: number
+  readonly compensationService?: DashboardTaskCompensationService
+  readonly isTransactionCommittedError?: (error: unknown) => boolean
+  readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
+  readonly now?: () => number
+  readonly persistence?: DashboardAgentHostPersistence
 }
+
+export interface DashboardAgentHostPersistence extends ScreenApplyPersistencePort, TaskCompensationPersistence {
+  recoverDurableAgentReceipt(
+    request: Readonly<{ projectId: string; branchId: string; callId: string }>,
+  ): Promise<ReceiptRecoveryResult>
+}
+
+export type DashboardTaskCompensationService = TaskCompensationService
 
 export declare const DASHBOARD_AGENT_HOST_ERROR_CODE: Readonly<{
   authorityMismatch: 'AUTHORITY_MISMATCH'
@@ -60,14 +79,20 @@ export declare class DashboardAgentHostError extends Error {
 
 export declare class DashboardAgentHost implements AgentHost {
   constructor(options: {
+    readonly activityLease: HumanActivityLease
     readonly engine: EngineInstance
     readonly authority: DashboardAgentHostAuthority
     readonly adapterGeneration?: number
+    readonly compensationService?: DashboardTaskCompensationService
+    readonly isTransactionCommittedError: (error: unknown) => boolean
+    readonly isTransactionRollbackIncompleteError: (error: unknown) => boolean
+    readonly now?: () => number
+    readonly persistence: DashboardAgentHostPersistence
   })
   readonly disposed: boolean
   observe(request: ObserveRequest): Promise<HostSnapshot | HostSnapshotDelta>
   describeCapability(request: CapabilitySchemaRequest): Promise<CapabilitySchema>
-  invoke(call: SemanticCall): Promise<InvocationResult>
+  invoke(call: SemanticCall, context: HostInvocationContextV1): Promise<InvocationResult>
   queryReceipt(request: ReceiptQueryRequest): Promise<ToolReceipt | null>
   dispose(): void
 }

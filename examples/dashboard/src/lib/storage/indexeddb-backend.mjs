@@ -290,7 +290,11 @@ export class IndexedDbDashboardStorageBackend {
         for (const operation of batch.operations) {
           const objectStore = transaction.objectStore(operation.store)
           if (operation.type === 'invalidate-agent-provenance') {
-            if (batch.draft.commitKind === 'migration' || current?.projectHash !== batch.draft.projectHash) {
+            if (
+              operation.force === true ||
+              batch.draft.commitKind === 'migration' ||
+              current?.projectHash !== batch.draft.projectHash
+            ) {
               const provenance = await requestResult(objectStore.getAll())
               for (const record of provenance) {
                 if (isAgentProvenance(record, batch.projectId, batch.branchId)) {

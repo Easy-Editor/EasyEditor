@@ -71,18 +71,7 @@ export const parseModelEvent = (value: unknown): ModelEvent => {
     case 'tool-call': {
       assertExactFields(value, ['schemaVersion', 'kind', 'call'])
       assertRecord(value.call)
-      const callFields = [
-        'schemaVersion',
-        'projectId',
-        'branchId',
-        'sessionId',
-        'taskId',
-        'stepId',
-        'callId',
-        'capability',
-        'arguments',
-        'expectedRevision',
-      ] as const
+      const callFields = ['schemaVersion', 'capability', 'arguments', 'expectedRevision'] as const
       assertExactFields(value.call, callFields)
       for (const field of callFields) {
         if (field === 'schemaVersion' || field === 'arguments') continue

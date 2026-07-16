@@ -6,11 +6,18 @@ import {
   type DashboardAgentPersistenceCommitResultV1,
   type DashboardAgentPersistenceReadRequestV1,
   type DashboardAgentPersistenceReadResultV1,
+  type DashboardCompensationRunReadRequestV1,
+  type DashboardCompensationTargetClaimReadRequestV1,
+  type DashboardMutationProvenanceReadRequestV1,
+  type DashboardReceiptLineageReadRequest,
+  type DashboardReceiptLineageResult,
   type DashboardStorageBackend,
   IndexedDbDashboardStorageBackend,
   type JsonObject,
   type LegacyStorageAdapter,
+  type ProjectPersistenceCompensationRunStateResultV1,
   ProjectPersistenceCoordinator,
+  type ProjectPersistenceMutationProvenanceReadResultV1,
   type StringStorageWriter,
   createLegacyStorageAdapter,
   hashCanonicalJson,
@@ -25,6 +32,11 @@ import {
   recordDurableAgentIntent as recordCoordinatorDurableAgentIntent,
   recoverDurableAgentReceipt as recoverCoordinatorDurableAgentReceipt,
 } from './agent/persistence/durable-agent-commit.mjs'
+import {
+  type DashboardMutationAttribution,
+  createDashboardMutationAttribution,
+} from './agent/persistence/mutation-attribution.mjs'
+import { createMutationProvenanceBatch } from './agent/persistence/provenance.mjs'
 import type { ReceiptIntentV1, ReceiptRecoveryResult } from './agent/persistence/receipt-ledger.mjs'
 
 type DashboardPersistenceState = 'created' | 'initializing' | 'ready' | 'failed' | 'disposing' | 'disposed'
@@ -51,7 +63,39 @@ export interface DashboardPersistenceSaveResult {
   readonly compatibilityWarning: DashboardPersistenceWarning | null
 }
 
+export interface DashboardMutationAttributionInput {
+  readonly source: 'external' | 'human' | 'unknown'
+  readonly slotKeys: readonly string[]
+  readonly ambiguous?: true
+}
+
 export interface DashboardDurableAgentCommitResult extends DurableAgentCommitResultV1 {
+  readonly compatibilityWarning: DashboardPersistenceWarning | null
+}
+
+export interface DashboardDurableAgentWriteSession {
+  readonly draft: CanonicalWorkingDraftV1
+  recordIntent(intent: ReceiptIntentV1): Promise<ReceiptIntentV1>
+  readReceiptLineage(request: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult>
+  readMutationProvenance(
+    request: DashboardMutationProvenanceReadRequestV1,
+  ): Promise<ProjectPersistenceMutationProvenanceReadResultV1>
+  commitBatch(batch: DurableAgentBatchV1): Promise<DashboardDurableAgentCommitResult>
+}
+
+export interface DashboardCompensationRunStateInput {
+  readonly schemaVersion: 1
+  readonly action: 'acquire' | 'retain' | 'release'
+  readonly projectId: string
+  readonly branchId: string
+  readonly sessionId: string
+  readonly outerCallId: string
+  readonly targetTaskId: string
+  readonly updatedAt: number
+  readonly run: JsonObject
+}
+
+export interface DashboardCompensationRunStateResult extends ProjectPersistenceCompensationRunStateResultV1 {
   readonly compatibilityWarning: DashboardPersistenceWarning | null
 }
 
@@ -77,6 +121,7 @@ export interface DashboardPersistenceRuntimeOptions {
   readonly now?: () => number
   readonly createProjectId?: () => string
   readonly autosaveDelayMs?: number
+  readonly isHumanActivityActive?: () => boolean
   readonly onError?: (error: unknown) => void
   readonly onWarning?: (warning: DashboardPersistenceWarning) => void
   /** Narrow deterministic test seam; production uses the verified compatibility Bridge. */
@@ -84,6 +129,15 @@ export interface DashboardPersistenceRuntimeOptions {
 }
 
 type DashboardPersistenceScope = Readonly<{ projectId: string; branchId: string }>
+type PendingAttributionSnapshot = Readonly<{
+  forceProvenanceInvalidation: boolean
+  records: readonly Readonly<{
+    sequence: number
+    slotKey: string
+    source: 'external' | 'human' | 'unknown'
+  }>[]
+  unknownSequence: number
+}>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -151,6 +205,7 @@ export class DashboardPersistenceRuntime {
   readonly #onError: (error: unknown) => void
   readonly #onWarning: (warning: DashboardPersistenceWarning) => void
   readonly #refreshCompatibilitySnapshot: CompatibilitySnapshotWriter
+  readonly #isHumanActivityActive: () => boolean
 
   #state: DashboardPersistenceState = 'created'
   #accepting = false
@@ -164,6 +219,13 @@ export class DashboardPersistenceRuntime {
   #backgroundAutosaves = new Set<Promise<DashboardPersistenceSaveResult>>()
   #backgroundAutosaveError: unknown = null
   #compatibilityWarning: DashboardPersistenceWarning | null = null
+  #mutationAttribution: DashboardMutationAttribution | null = null
+  #attributionSequence = 0
+  #pendingAttribution = new Map<
+    string,
+    { readonly sequence: number; readonly source: 'external' | 'human' | 'unknown' }
+  >()
+  #pendingUnknownSequence = 0
 
   constructor(options: DashboardPersistenceRuntimeOptions) {
     if (!options?.storage) throw new TypeError('Dashboard persistence requires a local storage Bridge')
@@ -175,6 +237,10 @@ export class DashboardPersistenceRuntime {
     }
     this.#onError = options.onError ?? (() => undefined)
     this.#onWarning = options.onWarning ?? (() => undefined)
+    this.#isHumanActivityActive = options.isHumanActivityActive ?? (() => false)
+    if (typeof this.#isHumanActivityActive !== 'function') {
+      throw new TypeError('Dashboard persistence human activity predicate must be a function')
+    }
     this.#refreshCompatibilitySnapshot = options.refreshCompatibilitySnapshot ?? refreshIndexedDbCompatibilitySnapshot
     const backend =
       options.backend ?? new IndexedDbDashboardStorageBackend({ indexedDB: options.indexedDB, crypto: options.crypto })
@@ -205,6 +271,10 @@ export class DashboardPersistenceRuntime {
       draft => {
         this.#draft = draft
         this.#scope = { projectId: draft.projectId, branchId: draft.branchId }
+        this.#mutationAttribution = createDashboardMutationAttribution({
+          authority: this.#scope,
+          isHumanActivityActive: this.#isHumanActivityActive,
+        })
         if (this.#state !== 'disposing') {
           this.#accepting = true
           this.#state = 'ready'
@@ -285,10 +355,41 @@ export class DashboardPersistenceRuntime {
     }
   }
 
+  getMutationAttribution(): DashboardMutationAttribution {
+    this.#assertReady()
+    if (!this.#mutationAttribution) throw new Error('Dashboard mutation attribution is unavailable')
+    return this.#mutationAttribution
+  }
+
+  runAgentMutation<T>(callId: string, operation: () => T): T {
+    return this.getMutationAttribution().runAgentMutation(callId, operation)
+  }
+
   #cancelScheduledAutosave(): void {
     this.#scheduledAutosave = null
     if (this.#autosaveTimer) clearTimeout(this.#autosaveTimer)
     this.#autosaveTimer = null
+  }
+
+  #snapshotPendingAttribution(): PendingAttributionSnapshot {
+    return Object.freeze({
+      forceProvenanceInvalidation: this.#pendingUnknownSequence > 0,
+      records: Object.freeze(
+        [...this.#pendingAttribution.entries()].map(([slotKey, value]) =>
+          Object.freeze({ slotKey, sequence: value.sequence, source: value.source }),
+        ),
+      ),
+      unknownSequence: this.#pendingUnknownSequence,
+    })
+  }
+
+  #consumePendingAttribution(snapshot: PendingAttributionSnapshot): void {
+    for (const record of snapshot.records) {
+      if (this.#pendingAttribution.get(record.slotKey)?.sequence === record.sequence) {
+        this.#pendingAttribution.delete(record.slotKey)
+      }
+    }
+    if (this.#pendingUnknownSequence === snapshot.unknownSequence) this.#pendingUnknownSequence = 0
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -355,11 +456,22 @@ export class DashboardPersistenceRuntime {
   #commit(input: DashboardPersistenceSaveInput): Promise<DashboardPersistenceSaveResult> {
     const projectSchema = requireFullProject(input.projectSchema)
     const activeDocument = input.activeDocument ? structuredClone(input.activeDocument) : null
+    const attribution = this.#snapshotPendingAttribution()
     return this.#enqueue(async () => {
       if (!this.#scope || !this.#draft) throw new Error('Dashboard persistence was not initialized')
       const scope = this.#scope
       const expectedDraftGeneration = this.#draft.draftGeneration
+      const nextDraftGeneration = expectedDraftGeneration + 1
       const updatedAt = this.#now()
+      const provenance = attribution.records.flatMap(record =>
+        createMutationProvenanceBatch({
+          projectId: scope.projectId,
+          branchId: scope.branchId,
+          draftGeneration: nextDraftGeneration,
+          slotKeys: [record.slotKey],
+          source: record.source,
+        }),
+      )
       const result = await this.#withGenerationConflictRefresh(() =>
         this.#coordinator.commit({
           schemaVersion: 1,
@@ -373,10 +485,16 @@ export class DashboardPersistenceRuntime {
           projectSchema,
           commitKind: input.commitKind,
           updatedAt,
-          operations: [],
+          operations: provenance.map(value => ({
+            type: 'put' as const,
+            store: 'mutationProvenance' as const,
+            value: value as unknown as JsonObject,
+          })),
+          ...(attribution.forceProvenanceInvalidation ? { forceProvenanceInvalidation: true as const } : {}),
         }),
       )
       this.#draft = result.draft
+      this.#consumePendingAttribution(attribution)
       const compatibilityWarning = await this.#refreshCompatibilitySnapshotBestEffort(result.draft)
       this.#backgroundAutosaveError = null
       return Object.freeze({ draft: structuredClone(result.draft), compatibilityWarning })
@@ -419,8 +537,9 @@ export class DashboardPersistenceRuntime {
     try {
       this.#assertReady()
       this.#assertScope(batch, 'Dashboard durable Agent batch')
-      this.#cancelScheduledAutosave()
+      const pendingAutosave = this.#startScheduledAutosave()
       return this.#enqueue(async () => {
+        if (pendingAutosave) await pendingAutosave
         if (!this.#draft) throw new Error('Dashboard persistence was not initialized')
         const result = await this.#withGenerationConflictRefresh(() =>
           commitCoordinatorDurableAgentBatch({ coordinator: this.#coordinator, batch }),
@@ -429,6 +548,55 @@ export class DashboardPersistenceRuntime {
         const compatibilityWarning = await this.#refreshCompatibilitySnapshotBestEffort(result.draft)
         this.#backgroundAutosaveError = null
         return Object.freeze({ ...result, draft: structuredClone(result.draft), compatibilityWarning })
+      })
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  runDurableAgentWrite<T>(operation: (session: DashboardDurableAgentWriteSession) => Promise<T>): Promise<T> {
+    try {
+      this.#assertReady()
+      if (typeof operation !== 'function') throw new TypeError('Dashboard durable Agent write requires an operation')
+      const pendingAutosave = this.#startScheduledAutosave()
+      return this.#enqueue(async () => {
+        if (pendingAutosave) await pendingAutosave
+        if (!this.#draft) throw new Error('Dashboard persistence was not initialized')
+        let committed = false
+        const session: DashboardDurableAgentWriteSession = Object.freeze({
+          draft: structuredClone(this.#draft),
+          recordIntent: async (intent: ReceiptIntentV1) => {
+            if (committed) throw new Error('Dashboard durable Agent write already committed')
+            this.#assertScope(intent, 'Dashboard durable Agent intent')
+            return recordCoordinatorDurableAgentIntent({ coordinator: this.#coordinator, intent })
+          },
+          readReceiptLineage: async (request: DashboardReceiptLineageReadRequest) => {
+            if (committed) throw new Error('Dashboard durable Agent write already committed')
+            this.#assertScope(request, 'Dashboard durable Agent lineage read')
+            return this.#coordinator.readReceiptLineage(request)
+          },
+          readMutationProvenance: async (request: DashboardMutationProvenanceReadRequestV1) => {
+            if (committed) throw new Error('Dashboard durable Agent write already committed')
+            this.#assertScope(request, 'Dashboard mutation provenance read')
+            return this.#coordinator.readMutationProvenance(request)
+          },
+          commitBatch: async (batch: DurableAgentBatchV1) => {
+            if (committed) throw new Error('Dashboard durable Agent write can commit only once')
+            this.#assertScope(batch, 'Dashboard durable Agent batch')
+            if (!this.#draft || batch.expectedDraftGeneration !== this.#draft.draftGeneration) {
+              throw new Error('Dashboard durable Agent batch does not match the serialized draft head')
+            }
+            const result = await this.#withGenerationConflictRefresh(() =>
+              commitCoordinatorDurableAgentBatch({ coordinator: this.#coordinator, batch }),
+            )
+            committed = true
+            this.#draft = result.draft
+            const compatibilityWarning = await this.#refreshCompatibilitySnapshotBestEffort(result.draft)
+            this.#backgroundAutosaveError = null
+            return Object.freeze({ ...result, draft: structuredClone(result.draft), compatibilityWarning })
+          },
+        })
+        return operation(session)
       })
     } catch (error) {
       return Promise.reject(error)
@@ -446,6 +614,74 @@ export class DashboardPersistenceRuntime {
       this.#assertReady()
       this.#assertScope(request, 'Dashboard durable Agent recovery')
       return this.#enqueue(() => recoverCoordinatorDurableAgentReceipt({ coordinator: this.#coordinator, ...request }))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  readDurableAgentReceiptLineage(request: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard durable Agent lineage read')
+      return this.#enqueue(() => this.#coordinator.readReceiptLineage(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  readCompensationRun(request: DashboardCompensationRunReadRequestV1): Promise<JsonObject | null> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard compensation run read')
+      return this.#enqueue(() => this.#coordinator.readCompensationRun(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  readCompensationTargetClaim(request: DashboardCompensationTargetClaimReadRequestV1): Promise<JsonObject | null> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard compensation target claim read')
+      return this.#enqueue(() => this.#coordinator.readCompensationTargetClaim(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  readMutationProvenance(
+    request: DashboardMutationProvenanceReadRequestV1,
+  ): Promise<ProjectPersistenceMutationProvenanceReadResultV1> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard mutation provenance read')
+      return this.#enqueue(() => this.#coordinator.readMutationProvenance(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  commitCompensationRunState(input: DashboardCompensationRunStateInput): Promise<DashboardCompensationRunStateResult> {
+    try {
+      this.#assertReady()
+      this.#assertScope(input, 'Dashboard compensation run state')
+      const pendingAutosave = this.#startScheduledAutosave()
+      return this.#enqueue(async () => {
+        if (pendingAutosave) await pendingAutosave
+        if (!this.#draft) throw new Error('Dashboard persistence was not initialized')
+        const result = await this.#withGenerationConflictRefresh(() =>
+          this.#coordinator.commitCompensationRunState({
+            ...input,
+            expectedDraftGeneration: this.#draft?.draftGeneration ?? 0,
+            activeDocument: this.#draft?.activeDocument ?? null,
+            projectSchema: this.#draft?.projectSchema ?? {},
+          }),
+        )
+        this.#draft = result.draft
+        const compatibilityWarning = await this.#refreshCompatibilitySnapshotBestEffort(result.draft)
+        this.#backgroundAutosaveError = null
+        return Object.freeze({ ...result, draft: structuredClone(result.draft), compatibilityWarning })
+      })
     } catch (error) {
       return Promise.reject(error)
     }
@@ -475,16 +711,42 @@ export class DashboardPersistenceRuntime {
     }, this.#autosaveDelayMs)
   }
 
+  recordMutationAttribution(input: DashboardMutationAttributionInput): void {
+    this.#assertReady()
+    if (!input || (input.source !== 'human' && input.source !== 'external' && input.source !== 'unknown')) {
+      throw new TypeError('Dashboard mutation attribution source is unsupported')
+    }
+    if (!Array.isArray(input.slotKeys) || input.slotKeys.some(slotKey => typeof slotKey !== 'string' || !slotKey)) {
+      throw new TypeError('Dashboard mutation attribution slotKeys must be non-empty strings')
+    }
+    if (input.ambiguous !== undefined && input.ambiguous !== true) {
+      throw new TypeError('Dashboard mutation attribution ambiguous flag must equal true')
+    }
+    this.#attributionSequence += 1
+    const sequence = this.#attributionSequence
+    if (input.ambiguous === true || (input.source === 'unknown' && input.slotKeys.length === 0)) {
+      this.#pendingUnknownSequence = sequence
+    }
+    for (const slotKey of new Set(input.slotKeys)) {
+      const current = this.#pendingAttribution.get(slotKey)
+      const source = current && current.source !== input.source ? 'unknown' : input.source
+      this.#pendingAttribution.set(slotKey, { sequence, source })
+    }
+  }
+
   #startScheduledAutosave(): Promise<DashboardPersistenceSaveResult> | null {
     const capture = this.#scheduledAutosave
     if (!capture) return null
     this.#scheduledAutosave = null
     if (this.#autosaveTimer) clearTimeout(this.#autosaveTimer)
     this.#autosaveTimer = null
-    const task = Promise.resolve().then(() => {
+    let task: Promise<DashboardPersistenceSaveResult>
+    try {
       const input = capture()
-      return this.#commit({ ...input, commitKind: 'autosave' })
-    })
+      task = this.#commit({ ...input, commitKind: 'autosave' })
+    } catch (error) {
+      task = Promise.reject(error)
+    }
     this.#backgroundAutosaves.add(task)
     void task
       .catch(error => {
@@ -542,7 +804,11 @@ export class DashboardPersistenceRuntime {
       projectHash: this.#draft?.projectHash ?? null,
       projectSchemaVersion: typeof version === 'string' ? version : null,
       activeDocument: this.#draft?.activeDocument ? structuredClone(this.#draft.activeDocument) : null,
-      pendingAutosave: this.#scheduledAutosave !== null || this.#backgroundAutosaves.size > 0,
+      pendingAutosave:
+        this.#scheduledAutosave !== null ||
+        this.#backgroundAutosaves.size > 0 ||
+        this.#pendingAttribution.size > 0 ||
+        this.#pendingUnknownSequence > 0,
       compatibilityWarning: warning,
     })
   }

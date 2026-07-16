@@ -86,6 +86,29 @@ const receiptIntentFields = Object.freeze([
   'status',
 ])
 const receiptLineageReadFields = Object.freeze(['branchId', 'callId', 'projectId'])
+const compensationRunReadFields = Object.freeze(['branchId', 'outerCallId', 'projectId', 'schemaVersion', 'sessionId'])
+const compensationTargetClaimReadFields = Object.freeze([
+  'branchId',
+  'projectId',
+  'schemaVersion',
+  'sessionId',
+  'targetTaskId',
+])
+const mutationProvenanceReadFields = Object.freeze(['branchId', 'projectId', 'schemaVersion', 'slotKeys'])
+const compensationRunStateCommitFields = Object.freeze([
+  'action',
+  'activeDocument',
+  'branchId',
+  'expectedDraftGeneration',
+  'outerCallId',
+  'projectId',
+  'projectSchema',
+  'run',
+  'schemaVersion',
+  'sessionId',
+  'targetTaskId',
+  'updatedAt',
+])
 
 const failure = (reason, details = {}) =>
   new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.validationFailed, reason, details)
@@ -232,11 +255,19 @@ const normalizeOperation = (operation, projectId, branchId) => {
   const store = requireStorageStore(operation.store)
   if (store === 'workingDrafts') throw failure('working-draft-is-coordinator-controlled')
   if (operation.type === 'invalidate-agent-provenance') {
-    assertExactFields(operation, ['store', 'type'], 'storage-invalidate-agent-provenance-operation')
+    const fields = operation.force === undefined ? ['store', 'type'] : ['force', 'store', 'type']
+    assertExactFields(operation, fields, 'storage-invalidate-agent-provenance-operation')
     if (store !== 'mutationProvenance') {
       throw failure('storage-invalidate-agent-provenance-operation-store-is-unsupported')
     }
-    return { type: 'invalidate-agent-provenance', store }
+    if (operation.force !== undefined && operation.force !== true) {
+      throw failure('storage-invalidate-agent-provenance-operation.force-must-equal-true')
+    }
+    return {
+      type: 'invalidate-agent-provenance',
+      store,
+      ...(operation.force === true ? { force: true } : {}),
+    }
   }
   if (operation.type === 'put') {
     const expectedFields =
@@ -373,6 +404,100 @@ export const validateReceiptLineageReadRequest = value => {
     projectId: requireNonEmptyString(value.projectId, 'receipt-lineage-read.projectId'),
     branchId: requireNonEmptyString(value.branchId, 'receipt-lineage-read.branchId'),
     callId: requireNonEmptyString(value.callId, 'receipt-lineage-read.callId'),
+  })
+}
+
+export const validateCompensationRunReadRequest = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, compensationRunReadFields, 'compensation-run-read')
+  if (value.schemaVersion !== 1) throw failure('compensation-run-read-schema-version-is-unsupported')
+  return structuredClone({
+    schemaVersion: 1,
+    projectId: requireNonEmptyString(value.projectId, 'compensation-run-read.projectId'),
+    branchId: requireNonEmptyString(value.branchId, 'compensation-run-read.branchId'),
+    sessionId: requireNonEmptyString(value.sessionId, 'compensation-run-read.sessionId'),
+    outerCallId: requireNonEmptyString(value.outerCallId, 'compensation-run-read.outerCallId'),
+  })
+}
+
+export const validateCompensationTargetClaimReadRequest = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, compensationTargetClaimReadFields, 'compensation-target-claim-read')
+  if (value.schemaVersion !== 1) {
+    throw failure('compensation-target-claim-read-schema-version-is-unsupported')
+  }
+  return structuredClone({
+    schemaVersion: 1,
+    projectId: requireNonEmptyString(value.projectId, 'compensation-target-claim-read.projectId'),
+    branchId: requireNonEmptyString(value.branchId, 'compensation-target-claim-read.branchId'),
+    sessionId: requireNonEmptyString(value.sessionId, 'compensation-target-claim-read.sessionId'),
+    targetTaskId: requireNonEmptyString(value.targetTaskId, 'compensation-target-claim-read.targetTaskId'),
+  })
+}
+
+export const validateMutationProvenanceReadRequest = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, mutationProvenanceReadFields, 'mutation-provenance-read')
+  if (value.schemaVersion !== 1) throw failure('mutation-provenance-read-schema-version-is-unsupported')
+  if (!Array.isArray(value.slotKeys)) throw failure('mutation-provenance-read.slotKeys-must-be-an-array')
+  const slotKeys = value.slotKeys.map((slotKey, index) =>
+    requireNonEmptyString(slotKey, `mutation-provenance-read.slotKeys[${index}]`),
+  )
+  const unique = new Set(slotKeys)
+  if (unique.size !== slotKeys.length) throw failure('mutation-provenance-read.slotKeys-must-be-unique')
+  return structuredClone({
+    schemaVersion: 1,
+    projectId: requireNonEmptyString(value.projectId, 'mutation-provenance-read.projectId'),
+    branchId: requireNonEmptyString(value.branchId, 'mutation-provenance-read.branchId'),
+    slotKeys: [...slotKeys].sort(),
+  })
+}
+
+export const validateCompensationRunStateCommit = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, compensationRunStateCommitFields, 'compensation-run-state-commit')
+  if (value.schemaVersion !== 1) {
+    throw failure('compensation-run-state-commit-schema-version-is-unsupported')
+  }
+  if (value.action !== 'acquire' && value.action !== 'retain' && value.action !== 'release') {
+    throw failure('compensation-run-state-commit.action-is-unsupported')
+  }
+  assertPlainObject(value.projectSchema, 'compensation-run-state-commit.projectSchema')
+  assertPlainObject(value.run, 'compensation-run-state-commit.run')
+  const projectId = requireNonEmptyString(value.projectId, 'compensation-run-state-commit.projectId')
+  const branchId = requireNonEmptyString(value.branchId, 'compensation-run-state-commit.branchId')
+  const sessionId = requireNonEmptyString(value.sessionId, 'compensation-run-state-commit.sessionId')
+  const outerCallId = requireNonEmptyString(value.outerCallId, 'compensation-run-state-commit.outerCallId')
+  const targetTaskId = requireNonEmptyString(value.targetTaskId, 'compensation-run-state-commit.targetTaskId')
+  if (value.run.outerCallId !== outerCallId || value.run.sessionId !== sessionId || value.run.taskId !== targetTaskId) {
+    throw failure('compensation-run-state-commit.run-authority-mismatch')
+  }
+  if (value.action === 'retain' && value.run.status !== 'paused') {
+    throw failure('compensation-run-state-commit.retain-requires-a-paused-run')
+  }
+  if (
+    value.action === 'release' &&
+    value.run.status !== 'completed' &&
+    value.run.status !== 'completed-with-conflicts'
+  ) {
+    throw failure('compensation-run-state-commit.release-requires-a-terminal-run')
+  }
+  return structuredClone({
+    schemaVersion: 1,
+    action: value.action,
+    projectId,
+    branchId,
+    sessionId,
+    outerCallId,
+    targetTaskId,
+    expectedDraftGeneration: requireGeneration(
+      value.expectedDraftGeneration,
+      'compensation-run-state-commit.expectedDraftGeneration',
+    ),
+    activeDocument: normalizeActiveDocument(value.activeDocument),
+    projectSchema: value.projectSchema,
+    updatedAt: requireGeneration(value.updatedAt, 'compensation-run-state-commit.updatedAt'),
+    run: value.run,
   })
 }
 

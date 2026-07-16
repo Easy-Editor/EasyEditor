@@ -172,12 +172,10 @@ export class Props {
       const key = item.key as string
       if (key == null || item.isUnset()) return
       const value = item.export(stage)
-      if (value != null) {
-        if (typeof key === 'string' && isExtraKey(key)) {
-          extras[getOriginalExtraKey(key)] = value
-        } else {
-          props[key] = value
-        }
+      if (typeof key === 'string' && isExtraKey(key)) {
+        extras[getOriginalExtraKey(key)] = value
+      } else {
+        props[key] = value
       }
     })
 

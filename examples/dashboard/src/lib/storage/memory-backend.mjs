@@ -44,7 +44,12 @@ const isAgentProvenance = (record, projectId, branchId) =>
   record.token.length > 'agent:'.length
 
 const invalidateAgentProvenance = (records, batch, current) => {
-  if (batch.draft.commitKind !== 'migration' && current?.projectHash === batch.draft.projectHash) return
+  if (
+    batch.draft.commitKind !== 'migration' &&
+    current?.projectHash === batch.draft.projectHash &&
+    batch.operations.every(operation => operation.type !== 'invalidate-agent-provenance' || operation.force !== true)
+  )
+    return
   for (const [key, record] of records) {
     if (!isAgentProvenance(record, batch.projectId, batch.branchId)) continue
     records.set(key, {

@@ -2,6 +2,7 @@ import type {
   AgentHost,
   CapabilitySchema,
   CapabilitySchemaRequest,
+  HostInvocationContextV1,
   HostSnapshot,
   HostSnapshotDelta,
   InvocationResult,
@@ -36,6 +37,7 @@ export class FakeAgentHost implements AgentHost {
   readonly #receipts = new Map<string, ToolReceipt>()
   readonly observations: ObserveRequest[] = []
   readonly invocations: SemanticCall[] = []
+  readonly invocationContexts: HostInvocationContextV1[] = []
   readonly receiptQueries: ReceiptQueryRequest[] = []
 
   constructor(options: FakeAgentHostOptions = {}) {
@@ -91,8 +93,9 @@ export class FakeAgentHost implements AgentHost {
     )
   }
 
-  async invoke(call: SemanticCall): Promise<InvocationResult> {
+  async invoke(call: SemanticCall, context: HostInvocationContextV1): Promise<InvocationResult> {
     this.invocations.push(clone(call))
+    this.invocationContexts.push(clone(context))
     const step = this.#invocationSteps.shift()
     const result: InvocationResult = clone(
       step?.result ?? {

@@ -81,14 +81,16 @@ const appliedOutcome = (overrides = {}) => {
   return { provenance, receipt, witness }
 }
 
-const failedOutcome = (scope = authority) => {
+const failedOutcome = (scope = authority, overrides = {}) => {
+  const draftGeneration = overrides.draftGeneration ?? 1
+  const failureCode = overrides.failureCode ?? 'VALIDATION_FAILED'
   const witness = createFailureWitness({
     schemaVersion: 1,
     ...scope,
-    draftGeneration: 1,
+    draftGeneration,
     transactionFingerprint: SHA_B,
     receiptStatus: 'not-applied',
-    failureCode: 'VALIDATION_FAILED',
+    failureCode,
   })
   const receipt = createToolReceipt({
     schemaVersion: 1,
@@ -96,6 +98,7 @@ const failedOutcome = (scope = authority) => {
     status: 'not-applied',
     revision: 'core:4:registry:2',
     witness: createToolReceiptWitness(witness),
+    failure: { code: failureCode, message: overrides.message ?? 'validation failed', retryable: false },
   })
   return { provenance: [], receipt, witness }
 }
@@ -253,7 +256,15 @@ test('ACK-loss recovery returns the original applied receipt only through exact 
 
   assert.deepEqual(await recoverDurableAgentReceipt({ coordinator, ...authority }), {
     classification: 'committed',
+    receiptIntent: intent,
     receipt: outcome.receipt,
+  })
+})
+
+test('recovery distinguishes a missing call lineage from an intent-only unknown result', async () => {
+  const { coordinator } = createHarness()
+  assert.deepEqual(await recoverDurableAgentReceipt({ coordinator, ...authority }), {
+    classification: 'missing',
   })
 })
 
@@ -295,6 +306,7 @@ test('failure outcome commits an exact FailureWitness with no Agent provenance a
   assert.deepEqual(await backend.getAll('mutationProvenance'), [])
   assert.deepEqual(await recoverDurableAgentReceipt({ coordinator, ...failureAuthority }), {
     classification: 'failed',
+    receiptIntent: intent,
     receipt: outcome.receipt,
   })
 
@@ -312,8 +324,111 @@ test('failure outcome commits an exact FailureWitness with no Agent provenance a
   })
   assert.deepEqual(await recoverDurableAgentReceipt({ coordinator, ...failureAuthority }), {
     classification: 'failed',
+    receiptIntent: intent,
     receipt: outcome.receipt,
   })
+})
+
+test('human/stale Agent failure atomically invalidates prior Agent provenance even after same-byte ABA', async () => {
+  const { backend, coordinator } = createHarness()
+  const originalAuthority = { ...authority, callId: 'old-agent-call' }
+  const originalIntent = intentFor({ callId: originalAuthority.callId })
+  const originalOutcome = appliedOutcome({ authority: originalAuthority })
+  await recordDurableAgentIntent({ coordinator, intent: originalIntent })
+  await commitDurableAgentBatch({
+    coordinator,
+    batch: commitInput(originalIntent, originalOutcome, { callId: originalAuthority.callId }),
+  })
+
+  const failureAuthority = { ...authority, callId: 'human-activity-call' }
+  const failureIntent = intentFor({ callId: failureAuthority.callId })
+  const failureOutcome = failedOutcome(failureAuthority, {
+    draftGeneration: 2,
+    failureCode: 'HUMAN_ACTIVITY',
+    message: 'human activity won the race',
+  })
+  await recordDurableAgentIntent({ coordinator, intent: failureIntent })
+  await commitDurableAgentBatch({
+    coordinator,
+    batch: commitInput(failureIntent, failureOutcome, {
+      callId: failureAuthority.callId,
+      expectedDraftGeneration: 1,
+      // The human changed B -> C -> B, so the final canonical bytes equal the old Agent post-image.
+      projectSchema,
+      updatedAt: 101,
+      checkpoint: {
+        checkpointId: 'failed:human-activity-call',
+        value: { taskId: 'task-1', stepId: 'step-2', verified: false },
+      },
+      artifactRefs: [],
+    }),
+  })
+
+  for (const record of originalOutcome.provenance) {
+    assert.deepEqual(
+      await backend.get('mutationProvenance', [authority.projectId, authority.branchId, record.slotKey]),
+      { ...record, draftGeneration: 2, token: 'unknown' },
+    )
+  }
+  assert.equal((await recoverDurableAgentReceipt({ coordinator, ...originalAuthority })).classification, 'committed')
+  assert.equal((await recoverDurableAgentReceipt({ coordinator, ...failureAuthority })).classification, 'failed')
+})
+
+test('forced Agent failure provenance invalidation rolls back with its durable batch', async () => {
+  const failureCallId = 'human-activity-abort'
+  const { backend, coordinator } = createHarness({
+    faultInjector(event) {
+      if (event.batch.batchId.includes(encodeURIComponent(failureCallId)) && event.operationIndex === 0) {
+        throw new Error('crash after forced provenance invalidation')
+      }
+    },
+  })
+  const originalAuthority = { ...authority, callId: 'old-agent-before-abort' }
+  const originalIntent = intentFor({ callId: originalAuthority.callId })
+  const originalOutcome = appliedOutcome({ authority: originalAuthority })
+  await recordDurableAgentIntent({ coordinator, intent: originalIntent })
+  await commitDurableAgentBatch({
+    coordinator,
+    batch: commitInput(originalIntent, originalOutcome, { callId: originalAuthority.callId }),
+  })
+
+  const failureAuthority = { ...authority, callId: failureCallId }
+  const failureIntent = intentFor({ callId: failureCallId })
+  const failureOutcome = failedOutcome(failureAuthority, {
+    draftGeneration: 2,
+    failureCode: 'STALE_REVISION',
+  })
+  await recordDurableAgentIntent({ coordinator, intent: failureIntent })
+  await assert.rejects(
+    commitDurableAgentBatch({
+      coordinator,
+      batch: commitInput(failureIntent, failureOutcome, {
+        callId: failureCallId,
+        expectedDraftGeneration: 1,
+        updatedAt: 101,
+        checkpoint: { checkpointId: `failed:${failureCallId}`, value: { verified: false } },
+        artifactRefs: [],
+      }),
+    }),
+    error => error.code === 'transaction-aborted',
+  )
+
+  assert.equal(
+    (
+      await coordinator.readWorkingDraft({
+        projectId: authority.projectId,
+        branchId: authority.branchId,
+      })
+    ).draftGeneration,
+    1,
+  )
+  for (const record of originalOutcome.provenance) {
+    assert.deepEqual(
+      await backend.get('mutationProvenance', [authority.projectId, authority.branchId, record.slotKey]),
+      record,
+    )
+  }
+  assert.equal(await backend.get('toolReceipts', [authority.projectId, authority.branchId, failureCallId]), undefined)
 })
 
 test('authority, generation, witness, and exact provenance mismatches reject before any durable outcome write', async () => {

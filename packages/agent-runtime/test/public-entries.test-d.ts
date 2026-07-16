@@ -4,9 +4,11 @@ import type {
   AgentPersistencePort,
   AgentRuntime,
   AgentWorkerEndpoint,
+  HostInvocationContextV1,
   HostSnapshotDeltaChange,
   HostSnapshotRemoveChange,
   HostSnapshotSetChange,
+  RuntimeTaskCompensationTargetV1,
 } from '../src/index.js'
 import {
   DeterministicClock,
@@ -35,6 +37,15 @@ const worker: Promise<void> = startAgentWorker({ port: new MessageChannel().port
 const setChange: HostSnapshotSetChange = { op: 'set', path: ['nodes', 'node-1'], value: {} }
 const removeChange: HostSnapshotRemoveChange = { op: 'remove', path: ['nodes', 'node-2'] }
 const changes: readonly HostSnapshotDeltaChange[] = [setChange, removeChange]
+const compensationTarget: RuntimeTaskCompensationTargetV1 = {
+  schemaVersion: 1,
+  taskId: 'task-0',
+  sessionId: 'session-1',
+  phase: 'CANCELLED',
+  callIndexComplete: true,
+  callIndex: [],
+}
+const invocationContext: HostInvocationContextV1 = { schemaVersion: 1, compensationTarget }
 
 new ScriptedModelAdapter([{ expectedPhase: 'BLUEPRINT', events: [] }])
 new MemoryAgentPersistence()
@@ -52,5 +63,7 @@ void runtime
 void events
 void worker
 void changes
+void invocationContext
+void compensationTarget
 void (undefined as unknown as RootModelAdapter)
 void (undefined as unknown as RootProtocolEnvelope)

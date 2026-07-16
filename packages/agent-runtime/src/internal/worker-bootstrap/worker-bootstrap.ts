@@ -4,8 +4,8 @@ import type {
   AgentRuntimeSnapshot,
   AgentWorkerOptions,
   Clock,
-  IdFactory,
 } from '../../contracts.js'
+import { createProductionIdFactory } from '../production-id-factory.js'
 import { type RpcPeer, type RpcPeerStats, createRpcPeer } from '../rpc/index.js'
 import { runtimeRpcContracts } from '../runtime/contracts.js'
 import { type WorkerStateMachine, createWorkerStateMachine } from '../state-machine/index.js'
@@ -17,14 +17,9 @@ export interface StartedAgentWorker {
 
 const systemClock: Clock = { now: () => Date.now() }
 
-const createIdFactory = (): IdFactory => {
-  let sequence = 0
-  return { next: kind => `${kind}-${++sequence}` }
-}
-
 export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAgentWorker => {
   const clock = options.clock ?? systemClock
-  const idFactory = options.idFactory ?? createIdFactory()
+  const idFactory = options.idFactory ?? createProductionIdFactory()
   let machine: WorkerStateMachine | undefined
   let publishTail = Promise.resolve()
   let publishFailure: unknown
@@ -73,12 +68,16 @@ export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAg
         stepId: 'observe',
       }),
     describeCapability: request => peer.request('host.describeCapability', request, activeContext('describe')),
-    invoke: call =>
-      peer.request('host.invoke', call, {
-        sessionId: call.sessionId,
-        taskId: call.taskId,
-        stepId: call.stepId,
-      }),
+    invoke: (call, context) =>
+      peer.request(
+        'host.invoke',
+        { schemaVersion: 1, call, context },
+        {
+          sessionId: call.sessionId,
+          taskId: call.taskId,
+          stepId: call.stepId,
+        },
+      ),
     queryReceipt: request => peer.request('host.queryReceipt', request, activeContext(`receipt-${request.callId}`)),
   }
 

@@ -79,9 +79,200 @@ const validateNode = (
   ancestors.delete(value)
 }
 
+const MAX_UNSET_PATHS = 100
+const MAX_UNSET_PATH_LENGTH = 256
+const MAX_UNSET_PATH_DEPTH = 32
+const MAX_UNSET_PATH_SEGMENT_LENGTH = 128
+const MAX_UNSET_PATH_TOTAL_LENGTH = 8192
+const DANGEROUS_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor'])
+
+interface NormalizedPropertyPath {
+  readonly index: number
+  readonly path: string
+  readonly segments: readonly string[]
+}
+
+type PropertyPathParseResult =
+  | { readonly ok: true; readonly path: string; readonly segments: readonly string[] }
+  | { readonly ok: false; readonly code: 'unset.path.dangerous' | 'unset.path.invalid'; readonly message: string }
+
+const parsePropertyPath = (value: unknown): PropertyPathParseResult => {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_UNSET_PATH_LENGTH ||
+    value !== value.trim() ||
+    value.normalize('NFC') !== value ||
+    /[\s[\]]/u.test(value)
+  ) {
+    return {
+      ok: false,
+      code: 'unset.path.invalid',
+      message: `unset path must be a normalized dotted string no longer than ${MAX_UNSET_PATH_LENGTH} characters`,
+    }
+  }
+
+  const segments = value.split('.')
+  if (
+    segments.length > MAX_UNSET_PATH_DEPTH ||
+    segments.some(segment => segment.length === 0 || segment.length > MAX_UNSET_PATH_SEGMENT_LENGTH)
+  ) {
+    return {
+      ok: false,
+      code: 'unset.path.invalid',
+      message: `unset path must contain 1-${MAX_UNSET_PATH_DEPTH} non-empty bounded segments`,
+    }
+  }
+  if (segments.some(segment => DANGEROUS_PATH_SEGMENTS.has(segment))) {
+    return {
+      ok: false,
+      code: 'unset.path.dangerous',
+      message: 'unset path cannot contain __proto__, prototype, or constructor segments',
+    }
+  }
+
+  return { ok: true, path: segments.join('.'), segments }
+}
+
+const isPathAncestor = (ancestor: readonly string[], descendant: readonly string[]): boolean => {
+  return ancestor.length < descendant.length && ancestor.every((segment, index) => segment === descendant[index])
+}
+
+const pathsOverlap = (left: readonly string[], right: readonly string[]): boolean => {
+  if (left.length === right.length) return left.every((segment, index) => segment === right[index])
+  return isPathAncestor(left, right) || isPathAncestor(right, left)
+}
+
+/** Mirrors the existing Core dot/bracket lookup grammar for overlap comparison only. */
+const splitSetPropertyPath = (path: string): readonly string[] => {
+  const segments: string[] = []
+  let remaining = path
+
+  while (remaining.length > 0) {
+    let entry = remaining
+    let nest = ''
+    const objectIndex = remaining.indexOf('.', 1)
+    const arrayIndex = remaining.indexOf('[', 1)
+
+    if (objectIndex > 0 && ((arrayIndex > 0 && objectIndex < arrayIndex) || arrayIndex < 0)) {
+      entry = remaining.slice(0, objectIndex)
+      nest = remaining.slice(objectIndex + 1)
+    } else if (arrayIndex > 0) {
+      entry = remaining.slice(0, arrayIndex)
+      nest = remaining.slice(arrayIndex)
+    }
+    if (entry.startsWith('[')) entry = entry.slice(1, entry.length - 1)
+    segments.push(entry)
+    if (nest.length === 0) break
+    remaining = nest
+  }
+
+  return segments
+}
+
+const validateUnsetPaths = (
+  value: unknown,
+  path: string,
+  issues: CommandValidationIssue[],
+): readonly NormalizedPropertyPath[] => {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    issues.push({ code: 'unset.paths.type', message: 'unset paths must be an array', path })
+    return []
+  }
+  if (value.length > MAX_UNSET_PATHS) {
+    issues.push({
+      code: 'unset.paths.limit',
+      message: `unset paths cannot contain more than ${MAX_UNSET_PATHS} entries`,
+      path,
+    })
+    return []
+  }
+
+  const normalized: NormalizedPropertyPath[] = []
+  const firstIndexes = new Map<string, number>()
+  let totalLength = 0
+
+  for (let index = 0; index < value.length; index += 1) {
+    const itemPath = `${path}[${index}]`
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+      issues.push({
+        code: 'unset.path.missing',
+        message: 'unset paths must be a dense array of own data values',
+        path: itemPath,
+      })
+      continue
+    }
+
+    const parsed = parsePropertyPath(descriptor.value)
+    if (!parsed.ok) {
+      issues.push({ code: parsed.code, message: parsed.message, path: itemPath })
+      continue
+    }
+    totalLength += parsed.path.length
+    if (totalLength > MAX_UNSET_PATH_TOTAL_LENGTH) {
+      issues.push({
+        code: 'unset.paths.limit',
+        message: `unset path characters cannot exceed ${MAX_UNSET_PATH_TOTAL_LENGTH} in total`,
+        path,
+      })
+      return normalized
+    }
+
+    const firstIndex = firstIndexes.get(parsed.path)
+    if (firstIndex !== undefined) {
+      issues.push({
+        code: 'unset.path.duplicate',
+        message: `unset path duplicates ${path}[${firstIndex}]`,
+        path: itemPath,
+      })
+      continue
+    }
+    firstIndexes.set(parsed.path, index)
+    normalized.push({ index, path: parsed.path, segments: parsed.segments })
+  }
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < normalized.length; otherIndex += 1) {
+      const left = normalized[index]
+      const right = normalized[otherIndex]
+      if (!isPathAncestor(left.segments, right.segments) && !isPathAncestor(right.segments, left.segments)) continue
+      issues.push({
+        code: 'unset.path.overlap',
+        message: `unset paths cannot contain ancestor/descendant overlap between "${left.path}" and "${right.path}"`,
+        path: `${path}[${right.index}]`,
+      })
+    }
+  }
+
+  return normalized
+}
+
+const validateSetUnsetOverlap = (
+  setValue: unknown,
+  unsetPaths: readonly NormalizedPropertyPath[],
+  path: string,
+  issues: CommandValidationIssue[],
+): void => {
+  if (!isRecord(setValue) || unsetPaths.length === 0) return
+
+  const setPaths = Object.keys(setValue).map(key => ({ path: key, segments: splitSetPropertyPath(key) }))
+
+  for (const unsetPath of unsetPaths) {
+    const setPath = setPaths.find(candidate => pathsOverlap(candidate.segments, unsetPath.segments))
+    if (!setPath) continue
+    issues.push({
+      code: 'updateProps.set-unset.overlap',
+      message: `updateProps cannot set "${setPath.path}" and unset overlapping path "${unsetPath.path}"`,
+      path: `${path}[${unsetPath.index}]`,
+    })
+  }
+}
+
 const COMMAND_FIELDS = {
   insertNode: new Set(['type', 'documentId', 'parentId', 'node', 'at']),
-  updateProps: new Set(['type', 'documentId', 'nodeId', 'props', 'extras']),
+  updateProps: new Set(['type', 'documentId', 'nodeId', 'props', 'extras', 'unsetPropPaths', 'unsetExtraPaths']),
   removeNode: new Set(['type', 'documentId', 'nodeId']),
   moveNode: new Set(['type', 'documentId', 'nodeId', 'parentId', 'at']),
   replace: new Set(['type', 'documentId', 'nodeId', 'node']),
@@ -130,10 +321,15 @@ export function validateCommands(commands: readonly unknown[]): asserts commands
         break
       case 'updateProps':
         requireString(command.nodeId, `${path}.nodeId`, 'nodeId', issues)
-        if (command.props === undefined && command.extras === undefined) {
+        if (
+          command.props === undefined &&
+          command.extras === undefined &&
+          command.unsetPropPaths === undefined &&
+          command.unsetExtraPaths === undefined
+        ) {
           issues.push({
             code: 'updateProps.empty',
-            message: 'updateProps requires props, extras, or both',
+            message: 'updateProps requires at least one set or unset field',
             path,
           })
         }
@@ -142,6 +338,12 @@ export function validateCommands(commands: readonly unknown[]): asserts commands
         }
         if (command.extras !== undefined && !isRecord(command.extras)) {
           issues.push({ code: 'extras.type', message: 'extras must be an object', path: `${path}.extras` })
+        }
+        {
+          const unsetPropPaths = validateUnsetPaths(command.unsetPropPaths, `${path}.unsetPropPaths`, issues)
+          const unsetExtraPaths = validateUnsetPaths(command.unsetExtraPaths, `${path}.unsetExtraPaths`, issues)
+          validateSetUnsetOverlap(command.props, unsetPropPaths, `${path}.unsetPropPaths`, issues)
+          validateSetUnsetOverlap(command.extras, unsetExtraPaths, `${path}.unsetExtraPaths`, issues)
         }
         break
       case 'removeNode':

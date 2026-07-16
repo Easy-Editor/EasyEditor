@@ -7,8 +7,12 @@ import {
 import {
   validateAgentPersistenceBatch,
   validateAgentPersistenceReadRequest,
+  validateCompensationRunReadRequest,
+  validateCompensationRunStateCommit,
+  validateCompensationTargetClaimReadRequest,
   validateDurableProjectBatch,
   validateMigrationStateRecord,
+  validateMutationProvenanceReadRequest,
   validateReceiptIntentRecord,
   validateReceiptLineageReadRequest,
 } from './contracts.mjs'
@@ -28,6 +32,7 @@ const commitRequestFields = Object.freeze([
   'schemaVersion',
   'updatedAt',
 ])
+const commitRequestOptionalFields = Object.freeze(['forceProvenanceInvalidation'])
 const migrationRequestFields = Object.freeze([
   'activeDocument',
   'branchId',
@@ -60,6 +65,34 @@ const legacyMigrationTransitionFields = Object.freeze([
   'updatedAt',
 ])
 const indexedDbBootstrapFields = Object.freeze(['branchId', 'legacy', 'migration', 'projectId', 'updatedAt'])
+const compensationJournalRecordFields = Object.freeze([
+  'branchId',
+  'callId',
+  'draftGeneration',
+  'kind',
+  'projectId',
+  'recordId',
+  'schemaVersion',
+  'sessionId',
+  'value',
+])
+const compensationClaimValueFields = Object.freeze([
+  'branchId',
+  'outerCallId',
+  'projectId',
+  'schemaVersion',
+  'sessionId',
+  'status',
+  'targetTaskId',
+])
+const mutationProvenanceRecordFields = Object.freeze([
+  'branchId',
+  'draftGeneration',
+  'projectId',
+  'schemaVersion',
+  'slotKey',
+  'token',
+])
 const legacyDowngradeMethods = Object.freeze([
   'ensureIdentity',
   'inspectCompatibilityMarker',
@@ -96,6 +129,15 @@ const assertExactFields = (value, fields, label) => {
   }
 }
 
+const assertExactFieldsWithOptional = (value, requiredFields, optionalFields, label) => {
+  assertRecord(value, label)
+  const actual = Object.keys(value)
+  const allowed = new Set([...requiredFields, ...optionalFields])
+  if (requiredFields.some(field => !Object.hasOwn(value, field)) || actual.some(field => !allowed.has(field))) {
+    throw validationFailure(`${label}-fields-must-match-contract`)
+  }
+}
+
 const requireAuthority = (value, label) => {
   if (typeof value !== 'string' || value.length === 0) throw validationFailure(`${label}-must-be-a-non-empty-string`)
   return value
@@ -103,13 +145,16 @@ const requireAuthority = (value, label) => {
 
 const normalizeCommitRequest = value => {
   canonicalJsonStringify(value)
-  assertExactFields(value, commitRequestFields, 'project-persistence-commit')
+  assertExactFieldsWithOptional(value, commitRequestFields, commitRequestOptionalFields, 'project-persistence-commit')
   if (value.schemaVersion !== 1) throw validationFailure('project-persistence-commit-schema-version-is-unsupported')
   if (!Array.isArray(value.operations)) {
     throw validationFailure('project-persistence-commit.operations-must-be-an-array')
   }
   if (value.operations.some(operation => operation?.type === 'invalidate-agent-provenance')) {
     throw validationFailure('project-persistence-provenance-invalidation-is-coordinator-controlled')
+  }
+  if (value.forceProvenanceInvalidation !== undefined && value.forceProvenanceInvalidation !== true) {
+    throw validationFailure('project-persistence-commit.forceProvenanceInvalidation-must-equal-true')
   }
   return structuredClone(value)
 }
@@ -219,6 +264,29 @@ const scopeKey = scope => canonicalJsonStringify([scope.projectId, scope.branchI
 const agentPersistenceScopeKey = scope =>
   canonicalJsonStringify(['agent-persistence', scope.projectId, scope.branchId, scope.sessionId])
 
+const compensationRunRecordId = outerCallId => `compensation-run:${outerCallId}`
+const compensationTargetRecordId = targetTaskId => `compensation-target:${targetTaskId}`
+
+const compensationClaimValue = request => ({
+  schemaVersion: 1,
+  projectId: request.projectId,
+  branchId: request.branchId,
+  sessionId: request.sessionId,
+  targetTaskId: request.targetTaskId,
+  outerCallId: request.outerCallId,
+  status: 'active',
+})
+
+const validateCompensationClaimValue = (value, request) => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, compensationClaimValueFields, 'compensation-target-claim')
+  const expected = compensationClaimValue(request)
+  if (canonicalJsonStringify(value) !== canonicalJsonStringify(expected)) {
+    throw validationFailure('compensation-target-claim-authority-mismatch')
+  }
+  return structuredClone(value)
+}
+
 export const createMigrationBatchId = value => {
   const projectId = requireAuthority(value.projectId, 'project-persistence-migration.projectId')
   const branchId = requireAuthority(value.branchId, 'project-persistence-migration.branchId')
@@ -241,6 +309,9 @@ const asIntegrityMismatch = (scope, reason, cause) =>
     { projectId: scope.projectId, branchId: scope.branchId },
     { cause },
   )
+
+const hasExactMutationAttribution = operations =>
+  operations.some(operation => operation.type === 'put' && operation.store === 'mutationProvenance')
 
 const defaultCompatibilityStorage = () => {
   if (typeof globalThis.window === 'undefined') return null
@@ -418,10 +489,21 @@ export class ProjectPersistenceCoordinator {
       commitKind: request.commitKind,
       updatedAt: request.updatedAt,
     }
-    const operations =
-      request.commitKind === 'agent-batch'
-        ? request.operations
-        : [{ type: 'invalidate-agent-provenance', store: 'mutationProvenance' }, ...request.operations]
+    const forceProvenanceInvalidation = request.forceProvenanceInvalidation === true
+    const invalidateProvenance =
+      forceProvenanceInvalidation ||
+      request.commitKind === 'migration' ||
+      (request.commitKind !== 'agent-batch' && !hasExactMutationAttribution(request.operations))
+    const operations = invalidateProvenance
+      ? [
+          {
+            type: 'invalidate-agent-provenance',
+            store: 'mutationProvenance',
+            ...(forceProvenanceInvalidation ? { force: true } : {}),
+          },
+          ...request.operations,
+        ]
+      : request.operations
     const result = await this.#backend.commit({
       schemaVersion: 1,
       batchId: request.batchId,
@@ -757,6 +839,240 @@ export class ProjectPersistenceCoordinator {
       throw validationFailure('storage-backend-receipt-lineage-seam-is-required')
     }
     return this.#enqueue(scopeKey(request), () => this.#backend.readReceiptLineage(request))
+  }
+
+  async #readCompensationJournalRecordNow(request, recordId, kind) {
+    const stored = await this.#backend.get('taskJournals', [
+      request.projectId,
+      request.branchId,
+      request.sessionId,
+      recordId,
+    ])
+    if (stored === undefined) return null
+    try {
+      canonicalJsonStringify(stored)
+      assertExactFields(stored, compensationJournalRecordFields, 'compensation-journal-record')
+      if (
+        stored.schemaVersion !== 1 ||
+        stored.projectId !== request.projectId ||
+        stored.branchId !== request.branchId ||
+        stored.sessionId !== request.sessionId ||
+        stored.recordId !== recordId ||
+        stored.kind !== kind ||
+        typeof stored.callId !== 'string' ||
+        stored.callId.length === 0 ||
+        !Number.isSafeInteger(stored.draftGeneration) ||
+        stored.draftGeneration < 1
+      ) {
+        throw validationFailure('compensation-journal-record-authority-mismatch')
+      }
+      assertRecord(stored.value, 'compensation-journal-record.value')
+      return structuredClone(stored)
+    } catch (error) {
+      throw asIntegrityMismatch(request, 'stored-compensation-journal-contract-is-invalid', error)
+    }
+  }
+
+  async #readCompensationJournalNow(request, recordId, kind) {
+    const stored = await this.#readCompensationJournalRecordNow(request, recordId, kind)
+    if (stored === null) return null
+    try {
+      if (kind === 'compensation-run') {
+        if (
+          stored.value.outerCallId !== request.outerCallId ||
+          stored.value.sessionId !== request.sessionId ||
+          (request.targetTaskId !== undefined && stored.value.taskId !== request.targetTaskId)
+        ) {
+          throw validationFailure('compensation-run-authority-mismatch')
+        }
+      } else if (stored.callId !== request.outerCallId) {
+        throw validationFailure('compensation-journal-record-authority-mismatch')
+      }
+      return structuredClone(stored.value)
+    } catch (error) {
+      throw asIntegrityMismatch(request, 'stored-compensation-journal-contract-is-invalid', error)
+    }
+  }
+
+  async readCompensationRun(value) {
+    this.#assertAccepting()
+    const request = validateCompensationRunReadRequest(value)
+    return this.#enqueue(scopeKey(request), () =>
+      this.#readCompensationJournalNow(request, compensationRunRecordId(request.outerCallId), 'compensation-run'),
+    )
+  }
+
+  async readCompensationTargetClaim(value) {
+    this.#assertAccepting()
+    const request = validateCompensationTargetClaimReadRequest(value)
+    const withOuterCall = outerCallId => ({ ...request, outerCallId })
+    return this.#enqueue(scopeKey(request), async () => {
+      const recordId = compensationTargetRecordId(request.targetTaskId)
+      const stored = await this.#readCompensationJournalRecordNow(request, recordId, 'compensation-target-claim')
+      if (stored === null) return null
+      const outerCallId = requireAuthority(stored.callId, 'compensation-target-claim.callId')
+      return validateCompensationClaimValue(stored.value, withOuterCall(outerCallId))
+    })
+  }
+
+  async readMutationProvenance(value) {
+    this.#assertAccepting()
+    const request = validateMutationProvenanceReadRequest(value)
+    return this.#enqueue(scopeKey(request), async () => {
+      const records = []
+      for (const slotKey of request.slotKeys) {
+        const record = await this.#backend.get('mutationProvenance', [request.projectId, request.branchId, slotKey])
+        if (record === undefined) {
+          records.push(null)
+          continue
+        }
+        try {
+          canonicalJsonStringify(record)
+          assertExactFields(record, mutationProvenanceRecordFields, 'mutation-provenance-record')
+          if (
+            record.schemaVersion !== 1 ||
+            record.projectId !== request.projectId ||
+            record.branchId !== request.branchId ||
+            record.slotKey !== slotKey ||
+            !Number.isSafeInteger(record.draftGeneration) ||
+            record.draftGeneration < 0 ||
+            typeof record.token !== 'string' ||
+            record.token.length === 0
+          ) {
+            throw validationFailure('mutation-provenance-record-authority-mismatch')
+          }
+          records.push(structuredClone(record))
+        } catch (error) {
+          throw asIntegrityMismatch(request, 'stored-mutation-provenance-contract-is-invalid', error)
+        }
+      }
+      return Object.freeze({ ...request, records: Object.freeze(records) })
+    })
+  }
+
+  async commitCompensationRunState(value) {
+    this.#assertAccepting()
+    const request = validateCompensationRunStateCommit(value)
+    return this.#enqueue(scopeKey(request), () =>
+      this.#withSnapshotLock(request, async () => {
+        this.#assertOrdinaryCommitAuthority(request)
+        const currentDraft = await this.#readWorkingDraftNow(request)
+        if (!currentDraft) throw validationFailure('compensation-run-state-requires-working-draft')
+        if (currentDraft.draftGeneration !== request.expectedDraftGeneration) {
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+            'compensation-run-state-generation-does-not-match',
+            {
+              projectId: request.projectId,
+              branchId: request.branchId,
+              expected: request.expectedDraftGeneration,
+              actual: currentDraft.draftGeneration,
+            },
+          )
+        }
+
+        const runRecordId = compensationRunRecordId(request.outerCallId)
+        const claimRecordId = compensationTargetRecordId(request.targetTaskId)
+        const existingRun = await this.#readCompensationJournalNow(request, runRecordId, 'compensation-run')
+        const rawClaim = await this.#readCompensationJournalRecordNow(
+          request,
+          claimRecordId,
+          'compensation-target-claim',
+        )
+        let existingClaim = null
+        if (rawClaim !== null) {
+          const claimOuterCallId = requireAuthority(rawClaim.callId, 'compensation-target-claim.callId')
+          existingClaim = validateCompensationClaimValue(rawClaim.value, {
+            ...request,
+            outerCallId: claimOuterCallId,
+          })
+        }
+
+        if (request.action === 'acquire') {
+          if (existingClaim && existingClaim.outerCallId !== request.outerCallId) {
+            throw validationFailure('compensation-target-is-already-claimed-by-another-call')
+          }
+          if (existingRun || existingClaim) {
+            if (!existingRun || !existingClaim) {
+              throw asIntegrityMismatch(request, 'compensation-run-and-claim-must-exist-together')
+            }
+            return Object.freeze({
+              schemaVersion: 1,
+              status: 'resumed',
+              run: structuredClone(existingRun),
+              draft: structuredClone(currentDraft),
+            })
+          }
+        } else if (request.action === 'release') {
+          if (!existingRun || !existingClaim || existingClaim.outerCallId !== request.outerCallId) {
+            throw validationFailure('compensation-run-state-does-not-own-target-claim')
+          }
+        } else if (!existingRun) {
+          throw validationFailure('compensation-run-state-does-not-have-a-run-to-retain')
+        }
+
+        const nextDraftGeneration = request.expectedDraftGeneration + 1
+        const journalRecord = (recordId, kind, storedValue) => ({
+          schemaVersion: 1,
+          projectId: request.projectId,
+          branchId: request.branchId,
+          sessionId: request.sessionId,
+          recordId,
+          kind,
+          callId: request.outerCallId,
+          draftGeneration: nextDraftGeneration,
+          value: storedValue,
+        })
+        const operations = [
+          {
+            type: 'put',
+            store: 'taskJournals',
+            value: journalRecord(runRecordId, 'compensation-run', request.run),
+          },
+        ]
+        if (request.action === 'acquire') {
+          operations.push({
+            type: 'put',
+            store: 'taskJournals',
+            mode: 'add',
+            value: journalRecord(claimRecordId, 'compensation-target-claim', compensationClaimValue(request)),
+          })
+        } else if (request.action === 'retain' && existingClaim === null) {
+          operations.push({
+            type: 'put',
+            store: 'taskJournals',
+            mode: 'add',
+            value: journalRecord(claimRecordId, 'compensation-target-claim', compensationClaimValue(request)),
+          })
+        } else if (request.action === 'release') {
+          operations.push({
+            type: 'delete',
+            store: 'taskJournals',
+            key: [request.projectId, request.branchId, request.sessionId, claimRecordId],
+          })
+        }
+        const result = await this.#commitNow({
+          schemaVersion: 1,
+          batchId: `compensation-state-v1:${encodeURIComponent(request.projectId)}:${encodeURIComponent(
+            request.branchId,
+          )}:${encodeURIComponent(request.outerCallId)}:${request.action}:${request.expectedDraftGeneration}`,
+          projectId: request.projectId,
+          branchId: request.branchId,
+          expectedDraftGeneration: request.expectedDraftGeneration,
+          activeDocument: request.activeDocument,
+          projectSchema: request.projectSchema,
+          commitKind: 'agent-batch',
+          updatedAt: request.updatedAt,
+          operations,
+        })
+        return Object.freeze({
+          schemaVersion: 1,
+          status: 'committed',
+          run: structuredClone(request.run),
+          draft: structuredClone(result.draft),
+        })
+      }),
+    )
   }
 
   async #readWorkingDraftNow(scope) {

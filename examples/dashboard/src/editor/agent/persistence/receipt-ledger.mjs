@@ -111,7 +111,7 @@ export const parseToolReceipt = value => {
   assertExactRecord(
     value,
     ['schemaVersion', 'projectId', 'branchId', 'callId', 'status'],
-    ['revision', 'witness'],
+    ['revision', 'witness', 'failure'],
     'ToolReceipt',
   )
   const schemaVersion = requireSchemaVersion(
@@ -126,15 +126,44 @@ export const parseToolReceipt = value => {
   )
   const revisionValue = optionalOwnDataValue(value, 'revision', 'ToolReceipt')
   const witnessValue = optionalOwnDataValue(value, 'witness', 'ToolReceipt')
+  const failureValue = optionalOwnDataValue(value, 'failure', 'ToolReceipt')
   const revision =
     revisionValue === undefined ? undefined : requireNonEmptyString(revisionValue, 'ToolReceipt.revision')
   const witness = witnessValue === undefined ? undefined : cloneJsonObject(witnessValue, 'ToolReceipt.witness')
+  let failure
+  if (failureValue !== undefined) {
+    assertExactRecord(failureValue, ['code', 'message', 'retryable'], ['details'], 'ToolReceipt.failure')
+    const detailsValue = optionalOwnDataValue(failureValue, 'details', 'ToolReceipt.failure')
+    failure = freezeDto({
+      code: requireNonEmptyString(
+        ownDataValue(failureValue, 'code', 'ToolReceipt.failure'),
+        'ToolReceipt.failure.code',
+      ),
+      message: requireNonEmptyString(
+        ownDataValue(failureValue, 'message', 'ToolReceipt.failure'),
+        'ToolReceipt.failure.message',
+      ),
+      retryable: requireLiteral(
+        ownDataValue(failureValue, 'retryable', 'ToolReceipt.failure'),
+        [true, false],
+        'ToolReceipt.failure.retryable',
+      ),
+      ...(detailsValue === undefined ? {} : { details: cloneJsonObject(detailsValue, 'ToolReceipt.failure.details') }),
+    })
+  }
+  if (status === 'applied' && failure !== undefined) {
+    return failContract('must-be-absent-for-applied-receipt', 'ToolReceipt.failure')
+  }
+  if (status !== 'applied' && failure === undefined) {
+    return failContract('is-required-for-non-applied-receipt', 'ToolReceipt.failure')
+  }
   return freezeDto({
     schemaVersion,
     ...authority,
     status,
     ...(revision === undefined ? {} : { revision }),
     ...(witness === undefined ? {} : { witness }),
+    ...(failure === undefined ? {} : { failure }),
   })
 }
 
@@ -302,7 +331,11 @@ export const classifyReceiptRecovery = value => {
       parseFailureWitness,
     )
     if (receiptIntent && !authorityMatches(receiptIntent, expectedAuthority)) return indeterminate('authority-mismatch')
-    if (!receipt) return indeterminate('missing-durable-receipt')
+    if (!receipt) {
+      if (!receiptIntent && !applyWitness && !failureWitness) return freezeDto({ classification: 'missing' })
+      return indeterminate('missing-durable-receipt')
+    }
+    if (!receiptIntent) return indeterminate('missing-receipt-intent')
     if (!authorityMatches(receipt, expectedAuthority)) return indeterminate('authority-mismatch')
     if (applyWitness && failureWitness) return indeterminate('ambiguous-witnesses')
 
@@ -314,7 +347,7 @@ export const classifyReceiptRecovery = value => {
       if (!receipt.witness || !jsonDataEqual(receipt.witness, applyWitnessReference(applyWitness))) {
         return indeterminate('witness-mismatch')
       }
-      return freezeDto({ classification: 'committed', receipt })
+      return freezeDto({ classification: 'committed', receiptIntent, receipt })
     }
 
     if (FAILED_RECEIPT_STATUSES.includes(receipt.status)) {
@@ -322,10 +355,11 @@ export const classifyReceiptRecovery = value => {
       if (!failureWitness) return indeterminate('missing-failure-witness')
       if (!authorityMatches(failureWitness, expectedAuthority)) return indeterminate('authority-mismatch')
       if (receipt.status !== failureWitness.receiptStatus) return indeterminate('witness-mismatch')
+      if (receipt.failure?.code !== failureWitness.failureCode) return indeterminate('failure-code-mismatch')
       if (!receipt.witness || !jsonDataEqual(receipt.witness, failureWitnessReference(failureWitness))) {
         return indeterminate('witness-mismatch')
       }
-      return freezeDto({ classification: 'failed', receipt })
+      return freezeDto({ classification: 'failed', receiptIntent, receipt })
     }
 
     return indeterminate('receipt-is-not-a-durable-outcome')

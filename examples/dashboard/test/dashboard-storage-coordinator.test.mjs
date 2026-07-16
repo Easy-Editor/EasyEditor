@@ -38,27 +38,41 @@ test('coordinator builds, hashes, commits, and verifies the complete canonical w
   assert.deepEqual(await coordinator.readWorkingDraft({ projectId: 'project-1', branchId: 'main' }), committed.draft)
 })
 
-test('every non-Agent schema change conservatively invalidates Agent provenance while unchanged saves preserve it', async () => {
+test('exact ordinary attribution preserves unrelated Agent provenance while missing evidence invalidates globally', async () => {
   const backend = new MemoryDashboardStorageBackend()
   const coordinator = new ProjectPersistenceCoordinator({ backend })
-  const slotKey = 'project-1/main/title-1/props/text'
-  const agentProvenance = {
+  const touchedSlotKey = 'project-1/main/title-1/props/text'
+  const unrelatedSlotKey = 'project-1/main/chart-1/props/data'
+  const agentProvenance = slotKey => ({
     schemaVersion: 1,
     projectId: 'project-1',
     branchId: 'main',
     slotKey,
     draftGeneration: 1,
     token: 'agent:call-1',
-  }
+  })
+  const touchedAgentProvenance = agentProvenance(touchedSlotKey)
+  const unrelatedAgentProvenance = agentProvenance(unrelatedSlotKey)
 
   await coordinator.commit(
     request({
       batchId: 'agent-save-1',
       commitKind: 'agent-batch',
-      operations: [{ type: 'put', store: 'mutationProvenance', value: agentProvenance }],
+      operations: [touchedAgentProvenance, unrelatedAgentProvenance].map(value => ({
+        type: 'put',
+        store: 'mutationProvenance',
+        value,
+      })),
     }),
   )
-  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', slotKey]), agentProvenance)
+  assert.deepEqual(
+    await backend.get('mutationProvenance', ['project-1', 'main', touchedSlotKey]),
+    touchedAgentProvenance,
+  )
+  assert.deepEqual(
+    await backend.get('mutationProvenance', ['project-1', 'main', unrelatedSlotKey]),
+    unrelatedAgentProvenance,
+  )
 
   await coordinator.commit(
     request({
@@ -67,8 +81,16 @@ test('every non-Agent schema change conservatively invalidates Agent provenance 
       updatedAt: 43,
     }),
   )
-  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', slotKey]), agentProvenance)
+  assert.deepEqual(
+    await backend.get('mutationProvenance', ['project-1', 'main', unrelatedSlotKey]),
+    unrelatedAgentProvenance,
+  )
 
+  const humanProvenance = {
+    ...touchedAgentProvenance,
+    draftGeneration: 3,
+    token: 'human',
+  }
   await coordinator.commit(
     request({
       batchId: 'changed-autosave-3',
@@ -76,29 +98,28 @@ test('every non-Agent schema change conservatively invalidates Agent provenance 
       commitKind: 'autosave',
       projectSchema: { ...request().projectSchema, changed: true },
       updatedAt: 44,
+      operations: [{ type: 'put', store: 'mutationProvenance', value: humanProvenance }],
     }),
   )
-  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', slotKey]), {
-    ...agentProvenance,
-    draftGeneration: 3,
-    token: 'unknown',
-  })
+  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', touchedSlotKey]), humanProvenance)
+  assert.deepEqual(
+    await backend.get('mutationProvenance', ['project-1', 'main', unrelatedSlotKey]),
+    unrelatedAgentProvenance,
+  )
 
-  const trustedProvenance = {
-    ...agentProvenance,
-    draftGeneration: 4,
-    token: 'agent:call-2',
-  }
   await coordinator.commit(
     request({
-      batchId: 'changed-save-with-trusted-plan-4',
+      batchId: 'changed-save-without-attribution-4',
       expectedDraftGeneration: 3,
       projectSchema: { ...request().projectSchema, changedAgain: true },
       updatedAt: 45,
-      operations: [{ type: 'put', store: 'mutationProvenance', value: trustedProvenance }],
     }),
   )
-  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', slotKey]), trustedProvenance)
+  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', unrelatedSlotKey]), {
+    ...unrelatedAgentProvenance,
+    draftGeneration: 4,
+    token: 'unknown',
+  })
 
   const migratedSchema = { ...request().projectSchema, importedFromLegacy: true }
   const migrated = await coordinator.commitMigration({
@@ -114,9 +135,9 @@ test('every non-Agent schema change conservatively invalidates Agent provenance 
     updatedAt: 46,
   })
   assert.equal(migrated.draftGeneration, 6)
-  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', slotKey]), {
-    ...trustedProvenance,
-    draftGeneration: 6,
+  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', unrelatedSlotKey]), {
+    ...unrelatedAgentProvenance,
+    draftGeneration: 4,
     token: 'unknown',
   })
 })
@@ -137,6 +158,43 @@ test('callers cannot inject the coordinator-controlled provenance invalidation o
       error.reason === 'project-persistence-provenance-invalidation-is-coordinator-controlled',
   )
   assert.equal(await backend.get('workingDrafts', ['project-1', 'main']), undefined)
+})
+
+test('trusted ABA evidence can force coordinator-owned provenance invalidation for an unchanged hash', async () => {
+  const backend = new MemoryDashboardStorageBackend()
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  const slotKey = 'project-1/main/title-1/props/text'
+  const agentProvenance = {
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'main',
+    slotKey,
+    draftGeneration: 1,
+    token: 'agent:call-1',
+  }
+  await coordinator.commit(
+    request({
+      batchId: 'agent-before-aba',
+      commitKind: 'agent-batch',
+      operations: [{ type: 'put', store: 'mutationProvenance', value: agentProvenance }],
+    }),
+  )
+
+  await coordinator.commit(
+    request({
+      batchId: 'agent-failure-after-aba',
+      expectedDraftGeneration: 1,
+      commitKind: 'agent-batch',
+      forceProvenanceInvalidation: true,
+      updatedAt: 43,
+    }),
+  )
+
+  assert.deepEqual(await backend.get('mutationProvenance', ['project-1', 'main', slotKey]), {
+    ...agentProvenance,
+    draftGeneration: 2,
+    token: 'unknown',
+  })
 })
 
 test('migration commit validates the caller hash and uses a stable coordinator batch identity', async () => {

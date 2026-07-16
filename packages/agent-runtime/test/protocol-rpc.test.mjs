@@ -49,6 +49,19 @@ after(async () => {
 
 const baseContext = { sessionId: 'session-1', taskId: 'task-1', stepId: 'step-1' }
 
+const semanticCall = {
+  schemaVersion: 1,
+  projectId: 'project-1',
+  branchId: 'branch-1',
+  sessionId: 'session-1',
+  taskId: 'task-1',
+  stepId: 'step-1',
+  callId: 'call-1',
+  capability: 'task.compensate',
+  arguments: { schemaVersion: 1, targetTaskId: 'target-task' },
+  expectedRevision: 'revision-1',
+}
+
 const makeEnvelope = (overrides = {}) => ({
   protocolVersion: 1,
   ...baseContext,
@@ -75,6 +88,180 @@ const createClock = () => {
 }
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+test('invocation and receipt contracts bind failure presence to the terminal status', () => {
+  const failure = { code: 'NO_CHANGE', message: 'already satisfied', retryable: false }
+  assert.deepEqual(rpc.parseInvocationResult({ schemaVersion: 1, callId: 'call-1', status: 'not-applied', failure }), {
+    schemaVersion: 1,
+    callId: 'call-1',
+    status: 'not-applied',
+    failure,
+  })
+  assert.throws(
+    () => rpc.parseInvocationResult({ schemaVersion: 1, callId: 'call-1', status: 'applied', failure }),
+    protocol.ProtocolValidationError,
+  )
+  assert.throws(
+    () => rpc.parseInvocationResult({ schemaVersion: 1, callId: 'call-1', status: 'not-applied' }),
+    protocol.ProtocolValidationError,
+  )
+  assert.throws(
+    () =>
+      rpc.parseToolReceipt({
+        schemaVersion: 1,
+        projectId: 'project-1',
+        branchId: 'branch-1',
+        callId: 'call-1',
+        status: 'applied',
+        failure,
+      }),
+    protocol.ProtocolValidationError,
+  )
+})
+
+test('Host invoke RPC keeps Runtime-owned context separate and rejects forged structural fields', () => {
+  const request = {
+    schemaVersion: 1,
+    call: semanticCall,
+    context: {
+      schemaVersion: 1,
+      compensationTarget: {
+        schemaVersion: 1,
+        taskId: 'target-task',
+        sessionId: 'session-1',
+        phase: 'COMPLETED',
+        callIndexComplete: true,
+        callIndex: [{ callId: 'target-call-1', capability: 'screen.applyChangeSet' }],
+      },
+    },
+  }
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['host.invoke'].parseRequest(request), request)
+
+  for (const invalid of [
+    { call: request.call, context: request.context },
+    { ...request, schemaVersion: 2 },
+    { ...request, forged: true },
+    { ...request, call: { ...semanticCall, context: request.context } },
+    { ...request, context: { schemaVersion: 1 } },
+    {
+      ...request,
+      call: { ...semanticCall, capability: 'screen.applyChangeSet', arguments: { schemaVersion: 1, operations: [] } },
+    },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: { ...request.context.compensationTarget, sessionId: 'session-foreign' },
+      },
+    },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: { ...request.context.compensationTarget, taskId: 'different-target' },
+      },
+    },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: { ...request.context.compensationTarget, taskId: semanticCall.taskId },
+      },
+      call: {
+        ...semanticCall,
+        arguments: { schemaVersion: 1, targetTaskId: semanticCall.taskId },
+      },
+    },
+    { ...request, context: { ...request.context, targetTaskId: 'model-controlled' } },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: {
+          schemaVersion: 1,
+          taskId: 'target-task',
+          sessionId: 'session-1',
+          phase: 'COMPLETED',
+          callIndex: [{ callId: 'target-call-1', capability: 'screen.applyChangeSet' }],
+        },
+      },
+    },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: { ...request.context.compensationTarget, callIndexComplete: false },
+      },
+    },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: { ...request.context.compensationTarget, forged: true },
+      },
+    },
+    {
+      ...request,
+      context: {
+        ...request.context,
+        compensationTarget: {
+          ...request.context.compensationTarget,
+          callIndex: [
+            { callId: 'target-call-1', capability: 'screen.applyChangeSet' },
+            { callId: 'target-call-1', capability: 'data.upsert' },
+          ],
+        },
+      },
+    },
+  ]) {
+    assert.throws(
+      () => rpc.agentBoundaryRpcContracts['host.invoke'].parseRequest(invalid),
+      error => ['invalid-field', 'unknown-field'].includes(error.code),
+    )
+  }
+})
+
+test('Host invoke RPC rejects accessor and non-enumerable fields without evaluating them', () => {
+  let accessorReads = 0
+  const accessorArguments = { schemaVersion: 1 }
+  Object.defineProperty(accessorArguments, 'targetTaskId', {
+    enumerable: true,
+    get() {
+      accessorReads += 1
+      return 'target-task'
+    },
+  })
+  const accessorRequest = {
+    schemaVersion: 1,
+    call: { ...semanticCall, arguments: accessorArguments },
+    context: {
+      schemaVersion: 1,
+      compensationTarget: {
+        schemaVersion: 1,
+        taskId: 'target-task',
+        sessionId: 'session-1',
+        phase: 'COMPLETED',
+        callIndexComplete: true,
+        callIndex: [{ callId: 'target-call-1', capability: 'screen.applyChangeSet' }],
+      },
+    },
+  }
+  assert.throws(
+    () => rpc.agentBoundaryRpcContracts['host.invoke'].parseRequest(accessorRequest),
+    protocol.ProtocolValidationError,
+  )
+  assert.equal(accessorReads, 0)
+
+  const hiddenFieldRequest = structuredClone({
+    ...accessorRequest,
+    call: semanticCall,
+  })
+  Object.defineProperty(hiddenFieldRequest.context, 'hidden', { enumerable: false, value: true })
+  assert.throws(
+    () => rpc.agentBoundaryRpcContracts['host.invoke'].parseRequest(hiddenFieldRequest),
+    error => error instanceof protocol.ProtocolValidationError && error.code === 'unknown-field',
+  )
+})
 
 const createEchoContracts = () => ({
   echo: {
@@ -566,6 +753,7 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
     providerGenerations: { nodes: 1 },
     projection: { nodes: 2 },
   }
+  const invocations = []
   const host = {
     observe: async () => snapshot,
     describeCapability: async request => ({
@@ -574,8 +762,16 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
       revision: 'capability-1',
       input: {},
     }),
-    invoke: async call => ({ schemaVersion: 1, callId: call.callId, status: 'applied', revision: 'revision-2' }),
-    queryReceipt: async request => ({ ...request, schemaVersion: 1, status: 'applied' }),
+    invoke: async (call, context) => {
+      invocations.push({ call, context })
+      return { schemaVersion: 1, callId: call.callId, status: 'applied', revision: 'revision-2' }
+    },
+    queryReceipt: async request => ({
+      ...request,
+      schemaVersion: 1,
+      status: 'not-applied',
+      failure: { code: 'NO_CHANGE', message: 'already satisfied', retryable: false },
+    }),
   }
   const persistence = {
     read: async request => ({
@@ -623,6 +819,25 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
   )
   assert.deepEqual(observed, snapshot)
 
+  const invocationContext = {
+    schemaVersion: 1,
+    compensationTarget: {
+      schemaVersion: 1,
+      taskId: 'target-task',
+      sessionId: 'session-1',
+      phase: 'COMPLETED',
+      callIndexComplete: true,
+      callIndex: [{ callId: 'target-call-1', capability: 'screen.applyChangeSet' }],
+    },
+  }
+  const invoked = await client.request(
+    'host.invoke',
+    { schemaVersion: 1, call: semanticCall, context: invocationContext },
+    baseContext,
+  )
+  assert.equal(invoked.status, 'applied')
+  assert.deepEqual(invocations, [{ call: semanticCall, context: invocationContext }])
+
   const committed = await client.request(
     'persistence.commit',
     {
@@ -642,6 +857,12 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
     status: 'committed',
     persistenceGeneration: 5,
   })
+  const receipt = await client.request(
+    'host.queryReceipt',
+    { projectId: 'project-1', branchId: 'branch-1', callId: 'call-1' },
+    baseContext,
+  )
+  assert.equal(receipt.failure.code, 'NO_CHANGE')
   await Promise.all([client.dispose(), server.dispose()])
 })
 

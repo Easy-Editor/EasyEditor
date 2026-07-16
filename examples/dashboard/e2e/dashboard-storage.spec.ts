@@ -447,6 +447,7 @@ test('Memory and real IndexedDB share the durable Agent contract across an abrup
         status: 'not-applied',
         revision: 'core:1:registry:1',
         witness: receiptHelpers.createToolReceiptWitness(witness),
+        failure: { code: 'VALIDATION_FAILED', message: 'validation failed', retryable: false },
       })
       await durable.recordDurableAgentIntent({ coordinator, intent })
       const committed = await durable.commitDurableAgentBatch({

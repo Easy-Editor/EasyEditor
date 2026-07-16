@@ -82,9 +82,16 @@ export function assertExactFields(
   }
 
   const allowed = new Set([...required, ...optional])
-  for (const key of Object.keys(value)) {
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') {
+      throw new ProtocolValidationError('unknown-field', `${label} contains a symbol field`)
+    }
     if (!allowed.has(key)) {
       throw new ProtocolValidationError('unknown-field', `${label} contains unknown field ${key}`)
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw new ProtocolValidationError('invalid-field', `${label}.${key} must be an enumerable data property`)
     }
   }
   for (const key of required) {
@@ -131,7 +138,20 @@ function assertJsonValueInternal(
         throw new ProtocolValidationError('array-too-large', `${path} exceeds the array length limit`)
       }
       for (let index = 0; index < value.length; index += 1) {
-        assertJsonValueInternal(value[index], depth + 1, ancestors, `${path}[${index}]`)
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+        if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+          throw new ProtocolValidationError(
+            'invalid-json-value',
+            `${path}[${index}] must be an enumerable data property`,
+          )
+        }
+        assertJsonValueInternal(descriptor.value, depth + 1, ancestors, `${path}[${index}]`)
+      }
+      const expectedKeys = new Set(['length', ...Array.from({ length: value.length }, (_, index) => String(index))])
+      for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== 'string' || !expectedKeys.has(key)) {
+          throw new ProtocolValidationError('invalid-json-value', `${path} contains a non-JSON array field`)
+        }
       }
       return
     }
@@ -139,11 +159,18 @@ function assertJsonValueInternal(
     if (!isRecord(value)) {
       throw new ProtocolValidationError('invalid-json-value', `${path} must contain plain objects only`)
     }
-    for (const [key, entry] of Object.entries(value)) {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') {
+        throw new ProtocolValidationError('invalid-json-value', `${path} contains a symbol field`)
+      }
       if (encodedLength(key) > MAX_PROTOCOL_STRING_BYTES) {
         throw new ProtocolValidationError('string-too-large', `${path} contains an oversized key`)
       }
-      assertJsonValueInternal(entry, depth + 1, ancestors, `${path}.${key}`)
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+        throw new ProtocolValidationError('invalid-json-value', `${path}.${key} must be an enumerable data property`)
+      }
+      assertJsonValueInternal(descriptor.value, depth + 1, ancestors, `${path}.${key}`)
     }
   } finally {
     ancestors.delete(value)

@@ -7,8 +7,12 @@ import type {
   DashboardAgentPersistenceCommitResultV1,
   DashboardAgentPersistenceReadRequestV1,
   DashboardAgentPersistenceReadResultV1,
+  DashboardCompensationRunReadRequestV1,
+  DashboardCompensationRunStateCommitV1,
+  DashboardCompensationTargetClaimReadRequestV1,
   DashboardDraftCommitKind,
   DashboardMigrationSource,
+  DashboardMutationProvenanceReadRequestV1,
   DashboardReceiptIntentV1,
   DashboardReceiptLineageReadRequest,
   DashboardReceiptLineageResult,
@@ -34,10 +38,23 @@ export interface ProjectPersistenceCommitV1 extends ProjectPersistenceScope {
   readonly commitKind: DashboardDraftCommitKind
   readonly updatedAt: number
   readonly operations: readonly DashboardStorageOperation[]
+  /** Trusted ABA evidence requests atomic invalidation even when the final project hash is unchanged. */
+  readonly forceProvenanceInvalidation?: true
 }
 
 export interface ProjectPersistenceCommitResultV1 extends DurableProjectCommitResultV1 {
   readonly draft: CanonicalWorkingDraftV1
+}
+
+export interface ProjectPersistenceCompensationRunStateResultV1 {
+  readonly schemaVersion: 1
+  readonly status: 'committed' | 'resumed'
+  readonly run: JsonObject
+  readonly draft: CanonicalWorkingDraftV1
+}
+
+export interface ProjectPersistenceMutationProvenanceReadResultV1 extends DashboardMutationProvenanceReadRequestV1 {
+  readonly records: readonly (JsonObject | null)[]
 }
 
 export interface ProjectPersistenceMigrationCommit extends ProjectPersistenceScope {
@@ -121,6 +138,14 @@ export declare class ProjectPersistenceCoordinator {
   commitAgentPersistence(value: DashboardAgentPersistenceBatchV1): Promise<DashboardAgentPersistenceCommitResultV1>
   recordReceiptIntent(value: DashboardReceiptIntentV1): Promise<DashboardReceiptIntentV1>
   readReceiptLineage(value: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult>
+  readCompensationRun(value: DashboardCompensationRunReadRequestV1): Promise<JsonObject | null>
+  readCompensationTargetClaim(value: DashboardCompensationTargetClaimReadRequestV1): Promise<JsonObject | null>
+  readMutationProvenance(
+    value: DashboardMutationProvenanceReadRequestV1,
+  ): Promise<ProjectPersistenceMutationProvenanceReadResultV1>
+  commitCompensationRunState(
+    value: DashboardCompensationRunStateCommitV1,
+  ): Promise<ProjectPersistenceCompensationRunStateResultV1>
   readWorkingDraft(scope: ProjectPersistenceScope): Promise<CanonicalWorkingDraftV1 | null>
   downgradeToLegacy(value: ProjectPersistenceDowngradeRequest): Promise<Readonly<DashboardStorageDowngradeResultV1>>
   flush(scope?: ProjectPersistenceScope): Promise<void>

@@ -1,4 +1,10 @@
+import { hashCanonicalJson } from '../../../lib/storage/index.mjs'
 import { DashboardCapabilityRegistryError, dashboardCapabilityRegistry } from '../capabilities/index.mjs'
+import {
+  createDashboardScreenApplyChangeSetHandler,
+  verifyScreenReceiptIntentRecovery,
+} from '../capabilities/screen/index.mjs'
+import { createDashboardTaskCompensationService } from '../compensation/index.mjs'
 import { DASHBOARD_MATERIAL_READINESS_REQUIREMENTS, createSafeMaterialManifestCache } from '../manifest/index.mjs'
 import {
   SnapshotProviderRegistry,
@@ -38,19 +44,6 @@ const ownDataKeys = value => {
   })
 }
 
-const assertNoEnumerableAccessors = (value, label) => {
-  if (!isObjectLike(value)) return
-  for (const key of Object.keys(value)) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
-    if (!descriptor || !('value' in descriptor)) {
-      throw new DashboardAgentHostError(
-        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
-        `${label}-accessor-properties-are-not-allowed`,
-      )
-    }
-  }
-}
-
 const boundaryClone = value => structuredClone(value)
 
 const isPlainRecord = value => {
@@ -67,9 +60,25 @@ const assertPlainRecord = (value, label) => {
 
 const assertExactKeys = (value, required, optional, label) => {
   assertPlainRecord(value, label)
-  assertNoEnumerableAccessors(value, label)
   const expected = [...required, ...optional].sort(compareCodeUnits)
-  const actual = ownDataKeys(value).sort(compareCodeUnits)
+  const actual = []
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        `${label}-symbol-properties-are-not-allowed`,
+      )
+    }
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !('value' in descriptor) || descriptor.enumerable !== true) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        `${label}-properties-must-be-enumerable-data-properties`,
+      )
+    }
+    actual.push(key)
+  }
+  actual.sort(compareCodeUnits)
   for (const key of required) {
     if (!actual.includes(key)) {
       throw new DashboardAgentHostError(DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest, `${label}-missing-${key}`)
@@ -81,6 +90,12 @@ const assertExactKeys = (value, required, optional, label) => {
       `${label}-fields-must-match-contract`,
     )
   }
+}
+
+const freezeDto = value => {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  for (const key of Object.keys(value)) freezeDto(readOwnDataValue(value, key))
+  return Object.freeze(value)
 }
 
 const requireNonEmptyString = (value, label) => {
@@ -103,6 +118,152 @@ const normalizeAuthority = authority => {
       ]),
     ),
   )
+}
+
+const normalizeCompensationTarget = (value, call) => {
+  assertExactKeys(
+    value,
+    ['callIndex', 'callIndexComplete', 'phase', 'schemaVersion', 'sessionId', 'taskId'],
+    [],
+    'invoke-context.compensationTarget',
+  )
+  if (readOwnDataValue(value, 'schemaVersion') !== 1) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'compensation-target-schema-version-is-unsupported',
+    )
+  }
+  const taskId = requireNonEmptyString(readOwnDataValue(value, 'taskId'), 'invoke-context.compensationTarget.taskId')
+  const sessionId = requireNonEmptyString(
+    readOwnDataValue(value, 'sessionId'),
+    'invoke-context.compensationTarget.sessionId',
+  )
+  const phase = readOwnDataValue(value, 'phase')
+  if (phase !== 'COMPLETED' && phase !== 'CANCELLED') {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'compensation-target-phase-is-not-terminal-and-eligible',
+    )
+  }
+  if (readOwnDataValue(value, 'callIndexComplete') !== true) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'compensation-target-call-index-is-incomplete',
+    )
+  }
+  if (sessionId !== readOwnDataValue(call, 'sessionId')) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.authorityMismatch,
+      'compensation-target-session-does-not-match-call',
+      { field: 'sessionId' },
+    )
+  }
+  if (taskId === readOwnDataValue(call, 'taskId')) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'compensation-target-cannot-be-the-current-task',
+    )
+  }
+
+  const callIndex = readOwnDataValue(value, 'callIndex')
+  if (
+    !Array.isArray(callIndex) ||
+    Reflect.ownKeys(callIndex).some(key => key !== 'length' && !/^\d+$/u.test(String(key)))
+  ) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'compensation-target-call-index-must-be-a-dense-array',
+    )
+  }
+  const normalizedIndex = []
+  const seenCallIds = new Set()
+  for (let index = 0; index < callIndex.length; index += 1) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(callIndex, String(index))
+    if (!descriptor || !('value' in descriptor) || descriptor.enumerable !== true) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'compensation-target-call-index-must-be-a-dense-data-array',
+      )
+    }
+    const entry = descriptor.value
+    assertExactKeys(entry, ['callId', 'capability'], [], `invoke-context.compensationTarget.callIndex[${index}]`)
+    const callId = requireNonEmptyString(
+      readOwnDataValue(entry, 'callId'),
+      `invoke-context.compensationTarget.callIndex[${index}].callId`,
+    )
+    const capability = requireNonEmptyString(
+      readOwnDataValue(entry, 'capability'),
+      `invoke-context.compensationTarget.callIndex[${index}].capability`,
+    )
+    if (seenCallIds.has(callId)) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'compensation-target-call-index-has-duplicate-call-id',
+      )
+    }
+    if (capability === 'task.compensate') {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'compensation-target-cannot-contain-nested-compensation',
+      )
+    }
+    seenCallIds.add(callId)
+    normalizedIndex.push({ callId, capability })
+  }
+
+  return freezeDto({ schemaVersion: 1, taskId, sessionId, phase, callIndexComplete: true, callIndex: normalizedIndex })
+}
+
+const normalizeInvokeContext = (value, call) => {
+  assertExactKeys(value, ['schemaVersion'], ['compensationTarget'], 'invoke-context')
+  if (readOwnDataValue(value, 'schemaVersion') !== 1) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'invoke-context-schema-version-is-unsupported',
+    )
+  }
+  const capability = readOwnDataValue(call, 'capability')
+  const targetValue = readOwnDataValue(value, 'compensationTarget', undefined)
+  if (capability !== 'task.compensate') {
+    if (targetValue !== undefined) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'compensation-target-is-forbidden-for-this-capability',
+      )
+    }
+    return freezeDto({ schemaVersion: 1 })
+  }
+  if (targetValue === undefined) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'task-compensate-requires-a-runtime-owned-target',
+    )
+  }
+  assertExactKeys(
+    readOwnDataValue(call, 'arguments'),
+    ['schemaVersion', 'targetTaskId'],
+    [],
+    'task.compensate.arguments',
+  )
+  if (readOwnDataValue(call.arguments, 'schemaVersion') !== 1) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'task-compensate-arguments-schema-version-is-unsupported',
+    )
+  }
+  const targetTaskId = requireNonEmptyString(
+    readOwnDataValue(call.arguments, 'targetTaskId'),
+    'task.compensate.arguments.targetTaskId',
+  )
+  const compensationTarget = normalizeCompensationTarget(targetValue, call)
+  if (compensationTarget.taskId !== targetTaskId) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.authorityMismatch,
+      'compensation-target-id-does-not-match-call-arguments',
+      { field: 'taskId' },
+    )
+  }
+  return freezeDto({ schemaVersion: 1, compensationTarget })
 }
 
 const assertAuthority = (expected, request, fields) => {
@@ -137,6 +298,76 @@ const toFailureDetails = (error, capability) => ({
   ...(capability ? { capability } : {}),
   reason: toFailureReason(error),
 })
+
+const invocationFromReceipt = receipt => ({
+  schemaVersion: 1,
+  callId: readOwnDataValue(receipt, 'callId'),
+  status: readOwnDataValue(receipt, 'status'),
+  ...(readOwnDataValue(receipt, 'revision', undefined) === undefined
+    ? {}
+    : { revision: readOwnDataValue(receipt, 'revision') }),
+  ...(readOwnDataValue(receipt, 'status') === 'applied' ? {} : { failure: readOwnDataValue(receipt, 'failure') }),
+})
+
+const indeterminateReceipt = (authority, reason) => ({
+  schemaVersion: 1,
+  ...authority,
+  status: 'indeterminate',
+  failure: { code: 'INDETERMINATE_RECEIPT', message: reason, retryable: false, details: { reason } },
+})
+
+const normalizeToolReceipt = (receipt, authority, label) => {
+  assertExactKeys(
+    receipt,
+    ['schemaVersion', 'projectId', 'branchId', 'callId', 'status'],
+    ['revision', 'witness', 'failure'],
+    label,
+  )
+  if (readOwnDataValue(receipt, 'schemaVersion') !== 1) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      `${label}-schema-version-is-unsupported`,
+    )
+  }
+  assertAuthority(authority, receipt, ['projectId', 'branchId'])
+  if (readOwnDataValue(receipt, 'callId') !== authority.callId) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.authorityMismatch,
+      `${label}-callId-does-not-match-authority`,
+      { field: 'callId' },
+    )
+  }
+  const revision = readOwnDataValue(receipt, 'revision', undefined)
+  if (revision !== undefined) requireNonEmptyString(revision, `${label}.revision`)
+  const witness = readOwnDataValue(receipt, 'witness', undefined)
+  if (witness !== undefined) assertPlainRecord(witness, `${label}.witness`)
+  const status = readOwnDataValue(receipt, 'status')
+  if (!['applied', 'not-applied', 'indeterminate', 'rejected'].includes(status)) {
+    throw new DashboardAgentHostError(DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest, `${label}-status-is-invalid`)
+  }
+  const receiptFailure = readOwnDataValue(receipt, 'failure', undefined)
+  if (status === 'applied') {
+    if (receiptFailure !== undefined) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        `${label}-applied-status-forbids-failure`,
+      )
+    }
+    return receipt
+  }
+  assertExactKeys(receiptFailure, ['code', 'message', 'retryable'], ['details'], `${label}.failure`)
+  requireNonEmptyString(readOwnDataValue(receiptFailure, 'code'), `${label}.failure.code`)
+  requireNonEmptyString(readOwnDataValue(receiptFailure, 'message'), `${label}.failure.message`)
+  if (typeof readOwnDataValue(receiptFailure, 'retryable') !== 'boolean') {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      `${label}.failure.retryable-must-be-a-boolean`,
+    )
+  }
+  const details = readOwnDataValue(receiptFailure, 'details', undefined)
+  if (details !== undefined) assertPlainRecord(details, `${label}.failure.details`)
+  return receipt
+}
 
 export class DashboardAgentHostError extends Error {
   constructor(code, reason, details = {}) {
@@ -394,18 +625,54 @@ const createCoreAdapter = (engine, adapterGeneration) => ({
 })
 
 export class DashboardAgentHost {
+  #activityLease
   #authority
+  #compensationService
   #disposed = false
   #manifestCache
+  #persistence
+  #screenApplyChangeSet
   #snapshotService
   #unregisterCoreProvider
 
-  constructor({ adapterGeneration = 1, authority, engine }) {
+  constructor({
+    activityLease,
+    adapterGeneration = 1,
+    authority,
+    compensationService,
+    engine,
+    isTransactionCommittedError,
+    isTransactionRollbackIncompleteError,
+    now = Date.now,
+    persistence,
+  }) {
     if (!Number.isSafeInteger(adapterGeneration) || adapterGeneration < 1) {
       throw new TypeError('adapterGeneration must be a positive safe integer')
     }
     if (!engine || !engine.project || !engine.materials) throw new TypeError('engine is required')
+    if (
+      typeof persistence?.recoverDurableAgentReceipt !== 'function' ||
+      typeof persistence?.runDurableAgentWrite !== 'function'
+    ) {
+      throw new TypeError('persistence must expose recoverDurableAgentReceipt and runDurableAgentWrite')
+    }
+    if (
+      typeof activityLease?.waitUntilIdle !== 'function' ||
+      typeof activityLease?.isActive !== 'function' ||
+      !Number.isSafeInteger(activityLease?.generation)
+    ) {
+      throw new TypeError('activityLease must expose waitUntilIdle, isActive, and a generation')
+    }
+    if (typeof now !== 'function') throw new TypeError('now must be a function')
+    if (
+      typeof isTransactionCommittedError !== 'function' ||
+      typeof isTransactionRollbackIncompleteError !== 'function'
+    ) {
+      throw new TypeError('screen writes require both Core transaction error predicates')
+    }
+    this.#activityLease = activityLease
     this.#authority = normalizeAuthority(authority)
+    this.#persistence = persistence
     const coreProvider = createCoreProjectionProvider(createCoreAdapter(engine, adapterGeneration))
     const registry = new SnapshotProviderRegistry()
     this.#unregisterCoreProvider = registry.register(coreProvider)
@@ -418,6 +685,38 @@ export class DashboardAgentHost {
         return entry.meta.getMetadata()
       },
     })
+    this.#screenApplyChangeSet = createDashboardScreenApplyChangeSetHandler({
+      authority: this.#authority,
+      activityLease: this.#activityLease,
+      engine,
+      persistence: this.#persistence,
+      captureFullSnapshot: () => this.#captureFull(),
+      manifestCache: this.#manifestCache,
+      hashCanonicalJson,
+      now,
+      isTransactionCommittedError,
+      isTransactionRollbackIncompleteError,
+    })
+    this.#compensationService =
+      compensationService ??
+      createDashboardTaskCompensationService({
+        authority: this.#authority,
+        activityLease: this.#activityLease,
+        engine,
+        persistence: this.#persistence,
+        captureFullSnapshot: () => this.#captureFull(),
+        manifestCache: this.#manifestCache,
+        hashCanonicalJson,
+        now,
+        isTransactionCommittedError,
+        isTransactionRollbackIncompleteError,
+      })
+    if (
+      typeof this.#compensationService?.compensate !== 'function' ||
+      typeof this.#compensationService?.query !== 'function'
+    ) {
+      throw new TypeError('compensationService must expose compensate and query')
+    }
   }
 
   #assertActive() {
@@ -486,14 +785,14 @@ export class DashboardAgentHost {
       status: 'rejected',
       failure: {
         code: toFailureCode(error),
-        message: 'Dashboard read-only capability call was rejected',
+        message: 'Dashboard capability call was rejected',
         retryable: false,
         details: toFailureDetails(error, capability),
       },
     })
   }
 
-  async invoke(call) {
+  async invoke(call, context) {
     try {
       this.#assertActive()
       assertExactKeys(
@@ -523,10 +822,30 @@ export class DashboardAgentHost {
         )
       }
       assertAuthority(this.#authority, call, AUTHORITY_FIELDS)
+      const invocationContext = normalizeInvokeContext(context, call)
       const capability = readOwnDataValue(call, 'capability')
       dashboardCapabilityRegistry.assertAvailable(capability)
       const args = readOwnDataValue(call, 'arguments')
       assertPlainRecord(args, 'semantic-call.arguments')
+      if (capability === 'screen.applyChangeSet') {
+        return boundaryClone(await this.#screenApplyChangeSet(call))
+      }
+      if (capability === 'task.compensate') {
+        const receipt = await this.#compensationService.compensate({
+          schemaVersion: 1,
+          outerCallId: readOwnDataValue(call, 'callId'),
+          target: invocationContext.compensationTarget,
+        })
+        return boundaryClone(
+          invocationFromReceipt(
+            normalizeToolReceipt(
+              receipt,
+              { projectId: this.#authority.projectId, branchId: this.#authority.branchId, callId: call.callId },
+              'task-compensation-receipt',
+            ),
+          ),
+        )
+      }
       const snapshot = await this.#captureFull()
       if (readOwnDataValue(call, 'expectedRevision') !== snapshot.revision) {
         throw new DashboardAgentHostError(
@@ -542,7 +861,7 @@ export class DashboardAgentHost {
       else {
         throw new DashboardAgentHostError(
           DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
-          'capability-has-no-read-only-handler',
+          'capability-has-no-host-handler',
         )
       }
       return boundaryClone({
@@ -563,7 +882,58 @@ export class DashboardAgentHost {
     assertExactKeys(request, ['branchId', 'callId', 'projectId'], [], 'receipt-query')
     requireNonEmptyString(readOwnDataValue(request, 'callId'), 'receipt-query.callId')
     assertAuthority(this.#authority, request, ['projectId', 'branchId'])
-    return null
+    const authority = {
+      projectId: readOwnDataValue(request, 'projectId'),
+      branchId: readOwnDataValue(request, 'branchId'),
+      callId: readOwnDataValue(request, 'callId'),
+    }
+    const compensationReceipt = await this.#compensationService.query({
+      schemaVersion: 1,
+      outerCallId: authority.callId,
+    })
+    if (compensationReceipt !== null) {
+      return boundaryClone(normalizeToolReceipt(compensationReceipt, authority, 'task-compensation-recovery'))
+    }
+    const recovery = await this.#persistence.recoverDurableAgentReceipt(authority)
+    assertPlainRecord(recovery, 'receipt-recovery')
+    const classification = readOwnDataValue(recovery, 'classification')
+    if (classification === 'missing') {
+      assertExactKeys(recovery, ['classification'], [], 'receipt-recovery')
+      return null
+    }
+    if (classification === 'indeterminate') {
+      assertExactKeys(recovery, ['classification', 'reason'], [], 'receipt-recovery')
+      requireNonEmptyString(readOwnDataValue(recovery, 'reason'), 'receipt-recovery.reason')
+      const reason = readOwnDataValue(recovery, 'reason')
+      return boundaryClone(indeterminateReceipt(authority, reason))
+    }
+    if (classification !== 'committed' && classification !== 'failed') {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'receipt-recovery-classification-is-invalid',
+      )
+    }
+    assertExactKeys(recovery, ['classification', 'receipt', 'receiptIntent'], [], 'receipt-recovery')
+    const receipt = normalizeToolReceipt(readOwnDataValue(recovery, 'receipt'), authority, 'receipt-recovery.receipt')
+    const verification = await verifyScreenReceiptIntentRecovery({
+      receiptIntent: readOwnDataValue(recovery, 'receiptIntent'),
+      receipt,
+      hashCanonicalJson,
+    })
+    if (verification.classification === 'indeterminate') {
+      return boundaryClone(indeterminateReceipt(authority, verification.reason))
+    }
+    const status = readOwnDataValue(receipt, 'status')
+    if (
+      (classification === 'committed' && status !== 'applied') ||
+      (classification === 'failed' && status !== 'not-applied' && status !== 'rejected')
+    ) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'receipt-recovery-status-does-not-match-classification',
+      )
+    }
+    return boundaryClone(receipt)
   }
 
   dispose() {
@@ -582,8 +952,14 @@ export class DashboardAgentHost {
 export const createDashboardAgentHost = (options = {}) => {
   if (readOwnDataValue(options, 'enabled', false) !== true) return null
   return new DashboardAgentHost({
+    activityLease: readOwnDataValue(options, 'activityLease', undefined),
     adapterGeneration: readOwnDataValue(options, 'adapterGeneration', 1),
     authority: readOwnDataValue(options, 'authority'),
+    compensationService: readOwnDataValue(options, 'compensationService', undefined),
     engine: readOwnDataValue(options, 'engine'),
+    isTransactionCommittedError: readOwnDataValue(options, 'isTransactionCommittedError', undefined),
+    isTransactionRollbackIncompleteError: readOwnDataValue(options, 'isTransactionRollbackIncompleteError', undefined),
+    now: readOwnDataValue(options, 'now', Date.now),
+    persistence: readOwnDataValue(options, 'persistence', undefined),
   })
 }

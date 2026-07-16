@@ -1,5 +1,12 @@
-import { type EngineInstance, type RemoteAccessRequest, createEngine } from '@easy-editor/core/instance'
+import {
+  type EngineInstance,
+  type RemoteAccessRequest,
+  TransactionCommittedError,
+  TransactionRollbackIncompleteError,
+  createEngine,
+} from '@easy-editor/core/instance'
 import { createDashboardUmdGlobals } from '../globals'
+import { createHumanActivityLease, installHumanActivityTracking } from './agent/activity/index.mjs'
 import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
 import {
   type DashboardAgentHost,
@@ -40,10 +47,22 @@ export const engine: EngineInstance = createEngine({
 engineReference.current = engine
 remoteResources.bindEngine(engine)
 
+export const dashboardAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
+
+const dashboardHumanActivityLease = createHumanActivityLease()
+let releaseDashboardHumanActivityTracking: (() => void) | null =
+  dashboardAgentRuntimeFeatureFlags.runtime === true
+    ? installHumanActivityTracking({
+        lease: dashboardHumanActivityLease,
+        target: window,
+      })
+    : null
+
 export const dashboardPersistence = createDashboardPersistenceRuntime({
   storage: window.localStorage,
   indexedDB: window.indexedDB,
   crypto: window.crypto,
+  isHumanActivityActive: () => dashboardHumanActivityLease.isActive(),
   onError: error => {
     console.error('[EasyEditor] Dashboard autosave failed:', error)
   },
@@ -77,14 +96,24 @@ export const persistDashboardProject = (
 ): Promise<DashboardPersistenceSaveResult> =>
   dashboardPersistence.save({ ...captureDashboardPersistenceInput(), commitKind })
 
-export const dashboardAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
+export const disposeDashboardAgentActivity = () => {
+  releaseDashboardHumanActivityTracking?.()
+  releaseDashboardHumanActivityTracking = null
+  dashboardHumanActivityLease.dispose()
+}
 
 export const composeDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost | null =>
   createDashboardAgentHost({
+    activityLease: dashboardHumanActivityLease,
     authority,
     enabled: dashboardAgentRuntimeFeatureFlags.runtime,
     engine,
+    isTransactionCommittedError: error => error instanceof TransactionCommittedError,
+    isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
+    persistence: dashboardPersistence,
   })
+
+if (import.meta.hot) import.meta.hot.dispose(disposeDashboardAgentActivity)
 
 if (import.meta.env.VITE_E2E === '1') {
   Object.defineProperty(window, '__EASY_EDITOR_E2E__', {

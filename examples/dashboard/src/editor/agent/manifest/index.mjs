@@ -558,10 +558,8 @@ const compileSetterSchema = (setterInfo, extraPropsInfo, limits, diagnostics, fi
   if (schema.type === 'string') {
     const minLength = readConstraint(props, 'minLength')
     const maxLength = readConstraint(props, 'maxLength')
-    const pattern = readConstraint(props, 'pattern')
     if (Number.isSafeInteger(minLength) && minLength >= 0) schema.minLength = minLength
     if (Number.isSafeInteger(maxLength) && maxLength >= 0) schema.maxLength = maxLength
-    if (typeof pattern === 'string' && pattern.length <= limits.maxStringLength) schema.pattern = pattern
   }
 
   const defaultValue = extraPropsInfo.defaultValue ?? setterInfo.defaultValue

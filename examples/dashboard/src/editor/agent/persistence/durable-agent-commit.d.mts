@@ -58,6 +58,8 @@ export interface DurableAgentBatchV1 {
   readonly provenance: readonly MutationProvenanceV1[]
   readonly sessionId: string
   readonly journal: DurableAgentJournalInputV1
+  /** Exact task-journal record IDs deleted in the same transaction. */
+  readonly journalDeletes?: readonly string[]
   readonly checkpoint: DurableAgentCheckpointInputV1
   readonly artifactRefs?: readonly DurableAgentArtifactRefInputV1[]
 }

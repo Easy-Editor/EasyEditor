@@ -36,7 +36,7 @@ export const createAgentBoundaryRpcHandlers = (
 ): RpcHandlers<typeof agentBoundaryRpcContracts> => ({
   'host.observe': request => host.observe(request),
   'host.describeCapability': request => host.describeCapability(request),
-  'host.invoke': request => host.invoke(request),
+  'host.invoke': request => host.invoke(request.call, request.context),
   'host.queryReceipt': request => host.queryReceipt(request),
   'persistence.read': request => persistenceOperation(() => persistence.read(request)),
   'persistence.commit': request => persistenceOperation(() => persistence.commit(request)),

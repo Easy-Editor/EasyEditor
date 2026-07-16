@@ -89,6 +89,8 @@ export const applyCommand = (
         throw new Error(`Cannot update locked node "${node.id}"`)
       }
       node.mergeProps(command.props ?? {}, command.extras)
+      command.unsetPropPaths?.forEach(path => node.clearPropValue(path))
+      command.unsetExtraPaths?.forEach(path => node.clearExtraPropValue(path))
       return { affectedNodeIds: [node.id], command }
     }
     case 'removeNode': {

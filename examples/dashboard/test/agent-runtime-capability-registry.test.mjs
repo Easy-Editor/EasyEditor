@@ -10,7 +10,7 @@ import {
   DASHBOARD_CAPABILITY_REGISTRY_HASH,
   DASHBOARD_CAPABILITY_REGISTRY_REVISION,
   DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT,
-  DASHBOARD_PHASE_2_UNAVAILABLE_REASON,
+  DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON,
   DashboardCapabilityRegistryError,
   assertDashboardCapabilityAvailable,
   dashboardCapabilityRegistry,
@@ -69,7 +69,7 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
     DASHBOARD_CAPABILITY_DESCRIPTORS.map(descriptor => descriptor.capability),
     expectedCapabilityNames,
   )
-  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/1')
+  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/2')
   assert.equal(DASHBOARD_CAPABILITY_REGISTRY_HASH, registryHash(DASHBOARD_CAPABILITY_DESCRIPTORS))
   assert.match(DASHBOARD_CAPABILITY_REGISTRY_HASH, /^sha256:[a-f0-9]{64}$/)
   assert.equal(Object.isFrozen(DASHBOARD_CAPABILITY_DESCRIPTORS), true)
@@ -86,11 +86,17 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
   assert.equal(listDashboardCapabilities(), DASHBOARD_CAPABILITY_DESCRIPTORS)
 })
 
-test('Phase 2 makes only the approved read-only capabilities available', () => {
+test('Phase 3B publishes reads, semantic Screen writes, and task compensation only', () => {
   const available = DASHBOARD_CAPABILITY_DESCRIPTORS.filter(descriptor => descriptor.availability === 'available').map(
     descriptor => descriptor.capability,
   )
-  assert.deepEqual(available, ['material.describe', 'material.search', 'screen.inspect'])
+  assert.deepEqual(available, [
+    'material.describe',
+    'material.search',
+    'screen.applyChangeSet',
+    'screen.inspect',
+    'task.compensate',
+  ])
 
   for (const descriptor of DASHBOARD_CAPABILITY_DESCRIPTORS) {
     if (descriptor.availability === 'available') {
@@ -99,14 +105,14 @@ test('Phase 2 makes only the approved read-only capabilities available', () => {
       continue
     }
 
-    assert.equal(descriptor.unavailableReason, DASHBOARD_PHASE_2_UNAVAILABLE_REASON)
+    assert.equal(descriptor.unavailableReason, DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON)
     assert.throws(
       () => assertDashboardCapabilityAvailable(descriptor.capability),
       error =>
         error instanceof DashboardCapabilityRegistryError &&
         error.code === DASHBOARD_CAPABILITY_ERROR_CODE.unavailable &&
         error.capability === descriptor.capability &&
-        error.reason === DASHBOARD_PHASE_2_UNAVAILABLE_REASON,
+        error.reason === DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON,
     )
   }
 })
@@ -134,6 +140,22 @@ test('describeCapability returns exact revisioned JSON schemas without availabil
   const materialDescribe = await describeDashboardCapability(describeRequest('material.describe'))
   assert.deepEqual(materialDescribe.input.required, ['componentName'])
   assert.deepEqual(Object.keys(materialDescribe.input.properties), ['componentName'])
+
+  const screenWrite = await describeDashboardCapability(describeRequest('screen.applyChangeSet'))
+  assert.equal(screenWrite.revision, 'screen.applyChangeSet/1')
+  assert.deepEqual(screenWrite.input.required, ['schemaVersion', 'documentId', 'operations'])
+  assert.equal(screenWrite.input.properties.operations.minItems, 1)
+  assert.equal(screenWrite.input.properties.operations.maxItems, 100)
+  assert.equal(screenWrite.input.properties.operations.items.oneOf.length, 7)
+  assert.deepEqual(
+    screenWrite.input.properties.operations.items.oneOf.map(operation => operation.properties.type.const),
+    ['set', 'unset', 'resize', 'insert', 'move', 'reorder', 'remove'],
+  )
+
+  const compensate = await describeDashboardCapability(describeRequest('task.compensate'))
+  assert.equal(compensate.revision, 'task.compensate/1')
+  assert.deepEqual(compensate.input.required, ['schemaVersion', 'targetTaskId'])
+  assert.equal(compensate.input.additionalProperties, false)
 })
 
 test('unknown names and malformed describe requests reject with typed stable errors', async () => {
@@ -173,9 +195,9 @@ test('unknown names and malformed describe requests reject with typed stable err
   }
 })
 
-test('catalog DTOs and implementation keep host authority out of the registry boundary', async () => {
+test('catalog DTOs keep callbacks, credentials, engines, and secrets out of the registry boundary', async () => {
   const serializedCatalog = JSON.stringify(DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT)
-  for (const forbidden of ['callback', 'command', 'credential', 'document', 'engine', 'secret']) {
+  for (const forbidden of ['callback', 'command', 'credential', 'engine', 'secret']) {
     assert.doesNotMatch(serializedCatalog, new RegExp(forbidden, 'i'))
   }
 
