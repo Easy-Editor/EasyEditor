@@ -39,6 +39,9 @@ const { ScriptedModelAdapter, ScriptedModelError } = await import(
   pathToFileURL(join(compiledRoot, 'internal/testing/scripted-model.js'))
 )
 const { FakeAgentHost } = await import(pathToFileURL(join(compiledRoot, 'internal/testing/fake-agent-host.js')))
+const { MemoryAgentPersistence } = await import(
+  pathToFileURL(join(compiledRoot, 'internal/testing/memory-agent-persistence.js'))
+)
 const { HostSnapshotDeltaApplyError, applyHostSnapshotDelta } = await import(
   pathToFileURL(join(compiledRoot, 'internal/snapshot/index.js'))
 )
@@ -72,7 +75,7 @@ class TestPersistence {
       projectId: request.projectId,
       branchId: request.branchId,
       sessionId: request.sessionId,
-      draftGeneration: this.generation,
+      persistenceGeneration: this.generation,
       records: structuredClone(this.records),
     }
   }
@@ -80,14 +83,16 @@ class TestPersistence {
   async commit(batch) {
     const clone = structuredClone(batch)
     this.commits.push(clone)
-    assert.equal(batch.expectedDraftGeneration, this.generation)
+    assert.equal(batch.expectedPersistenceGeneration, this.generation)
     this.generation += 1
-    this.records = clone.records
+    const records = new Map(this.records.map(record => [record.recordId, record]))
+    for (const record of clone.records) records.set(record.recordId, record)
+    this.records = [...records.values()]
     return {
       schemaVersion: 1,
       batchId: batch.batchId,
       status: 'committed',
-      draftGeneration: this.generation,
+      persistenceGeneration: this.generation,
     }
   }
 }
@@ -233,6 +238,431 @@ test('runs the deterministic happy path and commits a serializable checkpoint', 
   )
   assertOrdered(fixture.phases, ['OBSERVE', 'BLUEPRINT', 'PLAN_STEP', 'EXECUTE', 'VERIFY', 'CHECKPOINT', 'COMPLETED'])
   fixture.model.assertFullyConsumed()
+})
+
+for (const code of ['quota-exceeded', 'transaction-aborted']) {
+  test(`pauses with an unsaved retryable failure when persistence throws ${code}`, async () => {
+    const persistence = new TestPersistence()
+    persistence.commit = async () => {
+      const error = new Error(`injected ${code}`)
+      error.code = code
+      throw error
+    }
+    const fixture = createMachine(
+      [
+        { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+        { expectedPhase: 'PLAN_STEP', events: [complete] },
+      ],
+      { persistence },
+    )
+
+    await fixture.machine.submit({ text: `Pause after ${code}` })
+    await fixture.machine.waitForIdle()
+
+    const snapshot = fixture.machine.getSnapshot()
+    assert.equal(snapshot.status, 'ready')
+    assert.equal(snapshot.phase, 'PAUSED')
+    assert.deepEqual(snapshot.activeTask.failure, {
+      code,
+      message: `injected ${code}`,
+      retryable: true,
+    })
+    assertOrdered(fixture.phases, ['CHECKPOINT', 'PAUSED'])
+    fixture.model.assertFullyConsumed()
+  })
+}
+
+test('generation-conflict refreshes the persistence clock before an explicit resume', async () => {
+  const commits = []
+  const persistence = {
+    generation: 1,
+    async read(request) {
+      return {
+        schemaVersion: 1,
+        projectId: request.projectId,
+        branchId: request.branchId,
+        sessionId: request.sessionId,
+        persistenceGeneration: this.generation,
+        records: [],
+      }
+    },
+    async commit(batch) {
+      commits.push(structuredClone(batch))
+      if (batch.expectedPersistenceGeneration !== this.generation) {
+        return {
+          schemaVersion: 1,
+          batchId: batch.batchId,
+          status: 'generation-conflict',
+          persistenceGeneration: this.generation,
+        }
+      }
+      this.generation += 1
+      return {
+        schemaVersion: 1,
+        batchId: batch.batchId,
+        status: 'committed',
+        persistenceGeneration: this.generation,
+      }
+    },
+  }
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+    { persistence },
+  )
+
+  const task = await fixture.machine.submit({ text: 'Recover the persistence clock' })
+  await fixture.machine.waitForIdle()
+  assert.equal(fixture.machine.getSnapshot().phase, 'PAUSED')
+  assert.equal(fixture.machine.getSnapshot().activeTask.failure.code, 'generation-conflict')
+
+  await fixture.machine.resume(task.taskId)
+  await fixture.machine.waitForIdle()
+  assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
+  assert.deepEqual(
+    commits.map(batch => batch.expectedPersistenceGeneration),
+    [0, 1],
+  )
+  fixture.model.assertFullyConsumed()
+})
+
+test('cancel during a pending checkpoint appends a durable cancellation that survives restart', async () => {
+  let releaseCommit
+  let checkpointStarted
+  const durable = new MemoryAgentPersistence()
+  const started = new Promise(resolve => {
+    checkpointStarted = resolve
+  })
+  let gateCompletion = true
+  const persistence = {
+    read: request => durable.read(request),
+    async commit(batch) {
+      const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+      if (phase === 'COMPLETED' && gateCompletion) {
+        gateCompletion = false
+        checkpointStarted()
+        await new Promise(resolve => {
+          releaseCommit = resolve
+        })
+      }
+      return durable.commit(batch)
+    },
+  }
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+    { persistence },
+  )
+
+  const task = await fixture.machine.submit({ text: 'Cancel while checkpointing' })
+  await waitForPhase(fixture.machine, 'CHECKPOINT')
+  await started
+  const cancellation = fixture.machine.cancel(task.taskId)
+  releaseCommit()
+  await cancellation
+
+  assert.equal(fixture.machine.getSnapshot().phase, 'CANCELLED')
+  assert.equal(fixture.machine.getSnapshot().activeTask.phase, 'CANCELLED')
+  assert.deepEqual(
+    (
+      await durable.read({
+        schemaVersion: 1,
+        projectId: binding.projectId,
+        branchId: binding.branchId,
+        sessionId: task.sessionId,
+        expectedPersistenceGeneration: 2,
+      })
+    ).records.map(record => [record.recordId, record.value.phase]),
+    [[`task:${task.taskId}`, 'CANCELLED']],
+  )
+
+  const recovered = createMachine([], { persistence: durable })
+  await recovered.machine.recover()
+  assert.equal(recovered.machine.getSnapshot().phase, 'CANCELLED')
+  assert.equal(recovered.machine.getSnapshot().activeTask.taskId, task.taskId)
+  fixture.model.assertFullyConsumed()
+})
+
+test('a failed durable cancellation remains pending and a second cancel retries it', async () => {
+  let releaseCheckpoint
+  let checkpointStarted
+  let cancelConflicts = 1
+  const persistence = new TestPersistence()
+  const originalCommit = persistence.commit.bind(persistence)
+  persistence.commit = async batch => {
+    const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+    if (phase === 'COMPLETED') {
+      checkpointStarted?.()
+      await new Promise(resolve => {
+        releaseCheckpoint = resolve
+      })
+    }
+    if (phase === 'CANCELLED' && cancelConflicts > 0) {
+      cancelConflicts -= 1
+      persistence.generation += 1
+      return {
+        schemaVersion: 1,
+        batchId: batch.batchId,
+        status: 'generation-conflict',
+        persistenceGeneration: persistence.generation,
+      }
+    }
+    return originalCommit(batch)
+  }
+  const started = new Promise(resolve => {
+    checkpointStarted = resolve
+  })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+    { persistence },
+  )
+
+  const task = await fixture.machine.submit({ text: 'Retry durable cancel' })
+  await started
+  const firstCancellation = fixture.machine.cancel(task.taskId)
+  releaseCheckpoint()
+  await assert.rejects(
+    firstCancellation,
+    error => error instanceof WorkerStateMachineError && error.code === 'persistence-failed',
+  )
+  assert.equal(persistence.records.find(record => record.recordId === `task:${task.taskId}`)?.value.phase, 'COMPLETED')
+
+  await fixture.machine.cancel(task.taskId)
+  assert.equal(persistence.records.find(record => record.recordId === `task:${task.taskId}`)?.value.phase, 'CANCELLED')
+  assert.equal(fixture.machine.getSnapshot().activeTask.failure, undefined)
+
+  const recovered = createMachine([], { persistence })
+  await recovered.machine.recover()
+  assert.equal(recovered.machine.getSnapshot().phase, 'CANCELLED')
+})
+
+test('a failed durable pause remains pending and a second pause retries it', async () => {
+  let pauseConflicts = 1
+  const persistence = new TestPersistence()
+  const originalCommit = persistence.commit.bind(persistence)
+  persistence.commit = async batch => {
+    const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+    if (phase === 'PAUSED' && pauseConflicts > 0) {
+      pauseConflicts -= 1
+      persistence.generation += 1
+      return {
+        schemaVersion: 1,
+        batchId: batch.batchId,
+        status: 'generation-conflict',
+        persistenceGeneration: persistence.generation,
+      }
+    }
+    return originalCommit(batch)
+  }
+  const fixture = createMachine([{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }], { persistence })
+  const task = await fixture.machine.submit({ text: 'Retry durable pause' })
+  await waitForPhase(fixture.machine, 'BLUEPRINT')
+
+  await assert.rejects(
+    fixture.machine.pause(task.taskId),
+    error => error instanceof WorkerStateMachineError && error.code === 'persistence-failed',
+  )
+  assert.equal(fixture.machine.getSnapshot().activeTask.failure.code, 'generation-conflict')
+
+  await fixture.machine.pause(task.taskId)
+  assert.equal(persistence.records.find(record => record.recordId === `task:${task.taskId}`)?.value.phase, 'PAUSED')
+  assert.equal(fixture.machine.getSnapshot().activeTask.failure, undefined)
+})
+
+test('a failed disposal can retry pending durable control state without reporting a false success', async () => {
+  let cancelConflicts = 2
+  const persistence = new TestPersistence()
+  const originalCommit = persistence.commit.bind(persistence)
+  persistence.commit = async batch => {
+    const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+    if (phase === 'CANCELLED' && cancelConflicts > 0) {
+      cancelConflicts -= 1
+      persistence.generation += 1
+      return {
+        schemaVersion: 1,
+        batchId: batch.batchId,
+        status: 'generation-conflict',
+        persistenceGeneration: persistence.generation,
+      }
+    }
+    return originalCommit(batch)
+  }
+  const fixture = createMachine([{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }], { persistence })
+  const task = await fixture.machine.submit({ text: 'Retry disposal durability' })
+  await waitForPhase(fixture.machine, 'BLUEPRINT')
+
+  await assert.rejects(
+    fixture.machine.cancel(task.taskId),
+    error => error instanceof WorkerStateMachineError && error.code === 'persistence-failed',
+  )
+  await assert.rejects(
+    fixture.machine.dispose(),
+    error => error instanceof WorkerStateMachineError && error.code === 'persistence-failed',
+  )
+  assert.equal(
+    persistence.records.find(record => record.recordId === `task:${task.taskId}`),
+    undefined,
+  )
+
+  await fixture.machine.dispose()
+  await fixture.machine.dispose()
+  assert.equal(persistence.records.find(record => record.recordId === `task:${task.taskId}`)?.value.phase, 'CANCELLED')
+  assert.equal(fixture.machine.getSnapshot().status, 'disposed')
+})
+
+test('a new task drains a failed explicit cancellation without claiming supersession', async () => {
+  let cancelConflicts = 1
+  const persistence = new TestPersistence()
+  const originalCommit = persistence.commit.bind(persistence)
+  persistence.commit = async batch => {
+    const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+    if (phase === 'CANCELLED' && cancelConflicts > 0) {
+      cancelConflicts -= 1
+      persistence.generation += 1
+      return {
+        schemaVersion: 1,
+        batchId: batch.batchId,
+        status: 'generation-conflict',
+        persistenceGeneration: persistence.generation,
+      }
+    }
+    return originalCommit(batch)
+  }
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' },
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+    { persistence },
+  )
+  const first = await fixture.machine.submit({ text: 'Cancel explicitly' })
+  await waitForPhase(fixture.machine, 'BLUEPRINT')
+  await assert.rejects(
+    fixture.machine.cancel(first.taskId),
+    error => error instanceof WorkerStateMachineError && error.code === 'persistence-failed',
+  )
+
+  const second = await fixture.machine.submit({ text: 'Start an unrelated task' })
+  await fixture.machine.waitForIdle()
+  assert.equal(second.parentTaskId, first.taskId)
+  assert.equal(second.supersedesTaskId, undefined)
+  assert.deepEqual(
+    persistence.records.map(record => [record.recordId, record.value.phase]),
+    [
+      [`task:${first.taskId}`, 'CANCELLED'],
+      [`task:${second.taskId}`, 'COMPLETED'],
+    ],
+  )
+})
+
+test('a failed supersession cancellation must become durable before retry creates the next task', async () => {
+  let releaseCheckpoint
+  let checkpointStarted
+  let cancelConflicts = 1
+  const persistence = new TestPersistence()
+  const originalCommit = persistence.commit.bind(persistence)
+  persistence.commit = async batch => {
+    const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+    if (phase === 'COMPLETED' && releaseCheckpoint === undefined) {
+      checkpointStarted?.()
+      await new Promise(resolve => {
+        releaseCheckpoint = resolve
+      })
+    }
+    if (phase === 'CANCELLED' && cancelConflicts > 0) {
+      cancelConflicts -= 1
+      persistence.generation += 1
+      return {
+        schemaVersion: 1,
+        batchId: batch.batchId,
+        status: 'generation-conflict',
+        persistenceGeneration: persistence.generation,
+      }
+    }
+    return originalCommit(batch)
+  }
+  const started = new Promise(resolve => {
+    checkpointStarted = resolve
+  })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+    { persistence },
+  )
+
+  const first = await fixture.machine.submit({ text: 'First task' })
+  await started
+  const failedSupersession = fixture.machine.submit({ text: 'Refine it' })
+  releaseCheckpoint()
+  await assert.rejects(
+    failedSupersession,
+    error => error instanceof WorkerStateMachineError && error.code === 'persistence-failed',
+  )
+
+  const second = await fixture.machine.submit({ text: 'Refine it' })
+  await fixture.machine.waitForIdle()
+  assert.equal(second.supersedesTaskId, first.taskId)
+  assert.deepEqual(
+    persistence.records.map(record => [record.recordId, record.value.phase]),
+    [
+      [`task:${first.taskId}`, 'CANCELLED'],
+      [`task:${second.taskId}`, 'COMPLETED'],
+    ],
+  )
+})
+
+test('waitForIdle and dispose drain a gated durable cancellation', async () => {
+  let releaseCancellation
+  let cancellationStarted
+  const persistence = new TestPersistence()
+  const originalCommit = persistence.commit.bind(persistence)
+  const started = new Promise(resolve => {
+    cancellationStarted = resolve
+  })
+  persistence.commit = async batch => {
+    const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+    if (phase === 'CANCELLED') {
+      cancellationStarted()
+      await new Promise(resolve => {
+        releaseCancellation = resolve
+      })
+    }
+    return originalCommit(batch)
+  }
+  const fixture = createMachine([{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }], { persistence })
+  const task = await fixture.machine.submit({ text: 'Drain cancellation' })
+  await waitForPhase(fixture.machine, 'BLUEPRINT')
+
+  const cancellation = fixture.machine.cancel(task.taskId)
+  await started
+  let idleResolved = false
+  let disposeResolved = false
+  const idle = fixture.machine.waitForIdle().then(() => {
+    idleResolved = true
+  })
+  const disposal = fixture.machine.dispose().then(() => {
+    disposeResolved = true
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(idleResolved, false)
+  assert.equal(disposeResolved, false)
+
+  releaseCancellation()
+  await Promise.all([cancellation, idle, disposal])
+  assert.equal(persistence.records.find(record => record.recordId === `task:${task.taskId}`)?.value.phase, 'CANCELLED')
 })
 
 test('immutable host delta application preserves ordered equivalence without aliases', () => {
@@ -640,6 +1070,18 @@ test('cancel stops future work and active submit records ancestry and supersessi
       ['task-2', 'COMPLETED'],
     ],
   )
+  assert.deepEqual(
+    fixture.persistence.records.map(record => [record.recordId, record.value.phase]),
+    [
+      ['task:task-1', 'CANCELLED'],
+      ['task:task-2', 'COMPLETED'],
+    ],
+  )
+
+  const recovered = createMachine([], { persistence: fixture.persistence })
+  await recovered.machine.recover()
+  assert.equal(recovered.machine.getSnapshot().phase, 'COMPLETED')
+  assert.equal(recovered.machine.getSnapshot().activeTask.taskId, second.taskId)
   fixture.model.assertFullyConsumed()
 })
 
@@ -654,6 +1096,48 @@ test('cancel aborts a pending model turn without executing tools', async () => {
   assert.equal(fixture.machine.getSnapshot().phase, 'CANCELLED')
   assert.equal(fixture.host.invocations.length, 0)
   fixture.model.assertFullyConsumed()
+})
+
+test('recover selects the newest durable task independently of backend record ordering', async () => {
+  const persistence = new TestPersistence()
+  persistence.generation = 4
+  persistence.records = [
+    {
+      recordId: 'task:task-newer',
+      kind: 'agent-runtime-task',
+      value: {
+        taskId: 'task-newer',
+        sessionId: 'session-1',
+        phase: 'COMPLETED',
+        createdAt: 20,
+        updatedAt: 30,
+        repairAttempts: 0,
+        intent: { text: 'newer durable task' },
+      },
+    },
+    {
+      recordId: 'task:task-older',
+      kind: 'agent-runtime-task',
+      value: {
+        taskId: 'task-older',
+        sessionId: 'session-1',
+        phase: 'COMPLETED',
+        createdAt: 10,
+        updatedAt: 15,
+        repairAttempts: 0,
+        intent: { text: 'older durable task' },
+      },
+    },
+  ]
+  const fixture = createMachine([], { persistence })
+
+  await fixture.machine.recover()
+
+  assert.equal(fixture.machine.getSnapshot().activeTask.taskId, 'task-newer')
+  assert.deepEqual(
+    fixture.machine.getSnapshot().tasks.map(task => task.taskId),
+    ['task-newer'],
+  )
 })
 
 test('strict model validation fails malformed events before invoking the host', async () => {

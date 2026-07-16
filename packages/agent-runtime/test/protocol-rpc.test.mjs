@@ -283,12 +283,56 @@ test('Host and Persistence contracts reject unknown fields and preserve structur
     branchId: 'branch-1',
     sessionId: 'session-1',
     batchId: 'batch-1',
-    expectedDraftGeneration: 0,
+    expectedPersistenceGeneration: 0,
     records: [{ recordId: 'record-1', kind: 'journal', value: { stable: true } }],
   }
   const cloned = structuredClone(batch)
   assert.deepEqual(rpc.agentBoundaryRpcContracts['persistence.commit'].parseRequest(cloned), batch)
   assert.notEqual(cloned, batch)
+
+  const readRequest = {
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'branch-1',
+    sessionId: 'session-1',
+    expectedPersistenceGeneration: 2,
+  }
+  const readResult = {
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'branch-1',
+    sessionId: 'session-1',
+    persistenceGeneration: 2,
+    records: [],
+  }
+  const commitResult = {
+    schemaVersion: 1,
+    batchId: 'batch-1',
+    status: 'committed',
+    persistenceGeneration: 3,
+  }
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['persistence.read'].parseRequest(readRequest), readRequest)
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['persistence.read'].parseResponse(readResult), readResult)
+  assert.deepEqual(rpc.agentBoundaryRpcContracts['persistence.commit'].parseResponse(commitResult), commitResult)
+
+  const { expectedPersistenceGeneration: _readGeneration, ...legacyReadRequest } = readRequest
+  const { persistenceGeneration: _readResultGeneration, ...legacyReadResult } = readResult
+  const { expectedPersistenceGeneration: _batchGeneration, ...legacyBatch } = batch
+  const { persistenceGeneration: _commitGeneration, ...legacyCommitResult } = commitResult
+  for (const [parse, legacy] of [
+    [
+      rpc.agentBoundaryRpcContracts['persistence.read'].parseRequest,
+      { ...legacyReadRequest, expectedDraftGeneration: 2 },
+    ],
+    [rpc.agentBoundaryRpcContracts['persistence.read'].parseResponse, { ...legacyReadResult, draftGeneration: 2 }],
+    [rpc.agentBoundaryRpcContracts['persistence.commit'].parseRequest, { ...legacyBatch, expectedDraftGeneration: 0 }],
+    [rpc.agentBoundaryRpcContracts['persistence.commit'].parseResponse, { ...legacyCommitResult, draftGeneration: 3 }],
+  ]) {
+    assert.throws(
+      () => parse(legacy),
+      error => ['invalid-field', 'unknown-field'].includes(error.code),
+    )
+  }
 })
 
 test('RPC peers deduplicate requests and responses without running a handler twice', async () => {
@@ -539,14 +583,14 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
       projectId: request.projectId,
       branchId: request.branchId,
       sessionId: request.sessionId,
-      draftGeneration: request.expectedDraftGeneration,
+      persistenceGeneration: request.expectedPersistenceGeneration,
       records: [],
     }),
     commit: async batch => ({
       schemaVersion: 1,
       batchId: batch.batchId,
       status: 'committed',
-      draftGeneration: batch.expectedDraftGeneration + 1,
+      persistenceGeneration: batch.expectedPersistenceGeneration + 1,
     }),
   }
   const client = rpc.createRpcPeer({
@@ -587,7 +631,7 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
       branchId: 'branch-1',
       sessionId: 'session-1',
       batchId: 'batch-1',
-      expectedDraftGeneration: 4,
+      expectedPersistenceGeneration: 4,
       records: [],
     },
     baseContext,
@@ -596,7 +640,70 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
     schemaVersion: 1,
     batchId: 'batch-1',
     status: 'committed',
-    draftGeneration: 5,
+    persistenceGeneration: 5,
   })
+  await Promise.all([client.dispose(), server.dispose()])
+})
+
+test('Persistence handlers preserve only allowlisted storage error codes across real MessagePorts', async () => {
+  const { port1, port2 } = new MessageChannel()
+  const host = {
+    observe: async () => ({ schemaVersion: 1, revision: 'r1', providerGenerations: {}, projection: {} }),
+    describeCapability: async request => ({
+      schemaVersion: 1,
+      capability: request.capability,
+      revision: 'capability-1',
+      input: {},
+    }),
+    invoke: async call => ({ schemaVersion: 1, callId: call.callId, status: 'not-applied' }),
+    queryReceipt: async () => null,
+  }
+  const persistence = {
+    read: async request => ({
+      schemaVersion: 1,
+      projectId: request.projectId,
+      branchId: request.branchId,
+      sessionId: request.sessionId,
+      persistenceGeneration: 0,
+      records: [],
+    }),
+    commit: async batch => {
+      const error = new Error('must not cross the RPC boundary verbatim')
+      error.code = batch.batchId === 'allowlisted' ? 'quota-exceeded' : 'private-backend-secret-code'
+      throw error
+    },
+  }
+  const client = rpc.createRpcPeer({
+    port: port1,
+    contracts: rpc.agentBoundaryRpcContracts,
+    clock: createClock(),
+    idFactory: createIdFactory('safe-error-client'),
+    closePortOnDispose: true,
+  })
+  const server = rpc.createRpcPeer({
+    port: port2,
+    contracts: rpc.agentBoundaryRpcContracts,
+    handlers: rpc.createAgentBoundaryRpcHandlers(host, persistence),
+    clock: createClock(),
+    idFactory: createIdFactory('safe-error-server'),
+    closePortOnDispose: true,
+  })
+  const request = batchId =>
+    client.request(
+      'persistence.commit',
+      {
+        schemaVersion: 1,
+        projectId: 'project-1',
+        branchId: 'branch-1',
+        sessionId: 'session-1',
+        batchId,
+        expectedPersistenceGeneration: 0,
+        records: [],
+      },
+      baseContext,
+    )
+
+  await assert.rejects(request('allowlisted'), error => error.code === 'quota-exceeded')
+  await assert.rejects(request('private'), error => error.code === 'rpc-handler-failed')
   await Promise.all([client.dispose(), server.dispose()])
 })

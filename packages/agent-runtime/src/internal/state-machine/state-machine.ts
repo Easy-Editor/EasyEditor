@@ -16,6 +16,7 @@ import type {
   ModelEvent,
   ModelTurnPhase,
   ModelTurnRequest,
+  PersistenceCommitResult,
   SemanticCall,
   TaskRef,
   UserIntent,
@@ -30,6 +31,7 @@ export type WorkerStateMachineErrorCode =
   | 'missing-task'
   | 'invalid-model-turn'
   | 'invalid-tool-call-context'
+  | 'persistence-failed'
 
 export class WorkerStateMachineError extends Error {
   readonly code: WorkerStateMachineErrorCode
@@ -81,6 +83,11 @@ interface MutableTask {
   latestSnapshot?: HostSnapshot
   controller?: AbortController
   run?: Promise<void>
+  controlPersistence?: Promise<void>
+  controlPersistenceFailure?: AgentRuntimeFailure
+  pendingCancellationKind?: 'explicit' | 'supersede'
+  pendingControlPhase?: 'PAUSED' | 'CANCELLED'
+  lastDurablePhase?: AgentPhase
   nextModelPhase: ModelTurnPhase
 }
 
@@ -101,6 +108,21 @@ const failureFrom = (code: string, error: unknown, retryable = false): AgentRunt
   message: error instanceof Error ? error.message : String(error),
   retryable,
 })
+
+const retryablePersistenceErrorCodes = new Set([
+  'generation-conflict',
+  'storage-unavailable',
+  'database-blocked',
+  'quota-exceeded',
+  'transaction-aborted',
+])
+
+const retryablePersistenceFailureFrom = (error: unknown): AgentRuntimeFailure | undefined => {
+  if (!isRecord(error) || typeof error.code !== 'string' || !retryablePersistenceErrorCodes.has(error.code)) {
+    return undefined
+  }
+  return failureFrom(error.code, error, true)
+}
 
 const deepFreeze = <Value>(value: Value): Value => {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value
@@ -156,8 +178,29 @@ const parseRecoveredTask = (value: unknown): MutableTask | undefined => {
     intent: value.intent as unknown as UserIntent,
     parentTaskId: typeof value.parentTaskId === 'string' ? value.parentTaskId : undefined,
     supersedesTaskId: typeof value.supersedesTaskId === 'string' ? value.supersedesTaskId : undefined,
+    lastDurablePhase: phase as AgentPhase,
     nextModelPhase: 'PLAN_STEP',
   }
+}
+
+const selectLatestRecoveredTask = (records: readonly { readonly kind: string; readonly value: unknown }[]) => {
+  let selected: MutableTask | undefined
+  for (const record of records) {
+    if (record.kind !== 'agent-runtime-task') continue
+    const candidate = parseRecoveredTask(record.value)
+    if (!candidate) continue
+    if (
+      !selected ||
+      candidate.updatedAt > selected.updatedAt ||
+      (candidate.updatedAt === selected.updatedAt && candidate.createdAt > selected.createdAt) ||
+      (candidate.updatedAt === selected.updatedAt &&
+        candidate.createdAt === selected.createdAt &&
+        candidate.taskId > selected.taskId)
+    ) {
+      selected = candidate
+    }
+  }
+  return selected
 }
 
 const toRecordValue = (task: MutableTask, persistedPhase: AgentPhase): JsonObject => ({
@@ -185,11 +228,14 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   let activeTask: MutableTask | undefined
   let currentSnapshot: AgentRuntimeSnapshot
   let disposed = false
+  let disposeComplete = false
+  let disposePromise: Promise<void> | undefined
   let revision = 0
   let runtimeStatus: AgentRuntimeStatus = 'ready'
   let runtimeFailure: AgentRuntimeFailure | undefined
-  let draftGeneration = 0
+  let persistenceGeneration = 0
   let commitTail = Promise.resolve()
+  let persistenceTail = Promise.resolve()
 
   const emit = () => {
     revision += 1
@@ -414,26 +460,53 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     })
   }
 
-  const persistTask = async (task: MutableTask, persistedPhase: AgentPhase) => {
+  const persistTaskNow = async (task: MutableTask, persistedPhase: AgentPhase) => {
     const batchId = options.idFactory.next('batch')
-    const result = await options.persistence.commit({
-      schemaVersion: 1,
-      projectId: binding.projectId,
-      branchId: binding.branchId,
-      sessionId: task.sessionId,
-      batchId,
-      expectedDraftGeneration: draftGeneration,
-      records: [
-        {
-          recordId: `task:${task.taskId}`,
-          kind: 'agent-runtime-task',
-          value: toRecordValue(task, persistedPhase),
-        },
-      ],
-    })
+    let result: PersistenceCommitResult
+    try {
+      result = await options.persistence.commit({
+        schemaVersion: 1,
+        projectId: binding.projectId,
+        branchId: binding.branchId,
+        sessionId: task.sessionId,
+        batchId,
+        expectedPersistenceGeneration: persistenceGeneration,
+        records: [
+          {
+            recordId: `task:${task.taskId}`,
+            kind: 'agent-runtime-task',
+            value: toRecordValue(task, persistedPhase),
+          },
+        ],
+      })
+    } catch (error) {
+      const failure = retryablePersistenceFailureFrom(error)
+      if (!failure) throw error
+      task.failure = failure
+      return false
+    }
     if (result.status === 'committed') {
-      draftGeneration = result.draftGeneration
+      persistenceGeneration = result.persistenceGeneration
+      task.lastDurablePhase = persistedPhase
       return true
+    }
+    persistenceGeneration = Math.max(persistenceGeneration, result.persistenceGeneration)
+    if (result.status === 'generation-conflict') {
+      try {
+        const current = await options.persistence.read({
+          schemaVersion: 1,
+          projectId: binding.projectId,
+          branchId: binding.branchId,
+          sessionId: task.sessionId,
+          expectedPersistenceGeneration: persistenceGeneration,
+        })
+        persistenceGeneration = Math.max(persistenceGeneration, current.persistenceGeneration)
+      } catch (error) {
+        const failure = retryablePersistenceFailureFrom(error)
+        if (!failure) throw error
+        task.failure = failure
+        return false
+      }
     }
     task.failure = result.failure ?? {
       code: result.status,
@@ -443,9 +516,25 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     return false
   }
 
+  const persistTask = async (task: MutableTask, persistedPhase: AgentPhase) => {
+    const previous = persistenceTail
+    let release = () => {}
+    persistenceTail = new Promise<void>(resolve => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await persistTaskNow(task, persistedPhase)
+    } finally {
+      release()
+    }
+  }
+
   const completeTask = async (task: MutableTask) => {
     setPhase(task, 'CHECKPOINT')
-    if (!(await persistTask(task, 'COMPLETED'))) {
+    const persisted = await persistTask(task, 'COMPLETED')
+    if (disposed || activeTask !== task || task.controller?.signal.aborted || terminalPhases.has(task.phase)) return
+    if (!persisted) {
       setPhase(task, 'PAUSED')
       return
     }
@@ -548,16 +637,92 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (task.run) await task.run
   }
 
+  const persistControlPhase = async (task: MutableTask, phase: 'PAUSED' | 'CANCELLED') => {
+    const persisted = await persistTask(task, phase)
+    if (task.pendingControlPhase !== phase) return
+    if (persisted) {
+      task.pendingControlPhase = undefined
+      task.pendingCancellationKind = undefined
+      const clearedFailure = task.failure === task.controlPersistenceFailure && task.failure !== undefined
+      if (clearedFailure) task.failure = undefined
+      task.controlPersistenceFailure = undefined
+      if (clearedFailure) emit()
+      return
+    }
+    task.controlPersistenceFailure = task.failure
+    emit()
+    throw new WorkerStateMachineError(
+      'persistence-failed',
+      task.failure?.message ?? `failed to persist the ${phase.toLowerCase()} task state`,
+    )
+  }
+
+  const queueControlPersistence = (task: MutableTask) => {
+    if (!task.pendingControlPhase) return Promise.resolve()
+    if (task.controlPersistence) return task.controlPersistence
+    const transition = (async () => {
+      await waitForTask(task)
+      const phase = task.pendingControlPhase
+      if (phase) await persistControlPhase(task, phase)
+    })()
+    const tracked = transition.finally(() => {
+      if (task.controlPersistence === tracked) task.controlPersistence = undefined
+    })
+    task.controlPersistence = tracked
+    return tracked
+  }
+
+  const interruptAndPersist = (
+    task: MutableTask,
+    phase: 'PAUSED' | 'CANCELLED',
+    reason: string,
+    cancellationKind?: 'explicit' | 'supersede',
+  ) => {
+    const previous = task.controlPersistence
+    task.controller?.abort(new DOMException(reason, 'AbortError'))
+    task.pendingControlPhase = phase
+    task.pendingCancellationKind = phase === 'CANCELLED' ? cancellationKind : undefined
+    setPhase(task, phase)
+    if (!previous) return queueControlPersistence(task)
+
+    const transition = (async () => {
+      try {
+        await previous
+      } catch {
+        // A newer control phase still has to become durable even if the superseded write failed.
+      }
+      await waitForTask(task)
+      if (task.pendingControlPhase === phase) await persistControlPhase(task, phase)
+    })()
+    const tracked = transition.finally(() => {
+      if (task.controlPersistence === tracked) task.controlPersistence = undefined
+    })
+    task.controlPersistence = tracked
+    return tracked
+  }
+
+  const flushControlPersistence = async () => {
+    while (true) {
+      const pending = [...tasks.values()].filter(task => task.pendingControlPhase)
+      if (pending.length === 0) break
+      await Promise.all(pending.map(queueControlPersistence))
+    }
+    await persistenceTail
+  }
+
   const api: WorkerStateMachine = {
     async submit(input) {
       assertUsable()
       runtimeStatus = 'ready'
       runtimeFailure = undefined
       const previous = activeTask
-      const supersedesPrevious = previous !== undefined && !terminalPhases.has(previous.phase)
-      if (supersedesPrevious) {
-        previous.controller?.abort(new DOMException('Task superseded', 'AbortError'))
-        setPhase(previous, 'CANCELLED')
+      const pendingCancellation = previous?.phase === 'CANCELLED' && previous.pendingControlPhase === 'CANCELLED'
+      const retryingSupersession = pendingCancellation && previous.pendingCancellationKind === 'supersede'
+      const supersedesPrevious = previous !== undefined && (!terminalPhases.has(previous.phase) || retryingSupersession)
+      if (pendingCancellation) {
+        await queueControlPersistence(previous)
+      } else if (supersedesPrevious) {
+        await interruptAndPersist(previous, 'CANCELLED', 'Task superseded', 'supersede')
       }
       const now = options.clock.now()
       const task: MutableTask = {
@@ -583,12 +748,14 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     async pause(taskId) {
       assertUsable()
       const task = findTask(taskId)
+      if (task.phase === 'PAUSED' && task.pendingControlPhase === 'PAUSED') {
+        await queueControlPersistence(task)
+        return
+      }
       if (terminalPhases.has(task.phase) || task.phase === 'PAUSED') {
         throw new WorkerStateMachineError('invalid-task-phase', `cannot pause task in ${task.phase}`)
       }
-      task.controller?.abort(new DOMException('Task paused', 'AbortError'))
-      setPhase(task, 'PAUSED')
-      await waitForTask(task)
+      await interruptAndPersist(task, 'PAUSED', 'Task paused')
     },
 
     async resume(taskId) {
@@ -597,6 +764,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       if (task.phase !== 'PAUSED') {
         throw new WorkerStateMachineError('invalid-task-phase', `cannot resume task in ${task.phase}`)
       }
+      await queueControlPersistence(task)
       await waitForTask(task)
       task.failure = undefined
       task.controller = new AbortController()
@@ -607,10 +775,12 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     async cancel(taskId) {
       assertUsable()
       const task = findTask(taskId)
+      if (task.phase === 'CANCELLED') {
+        await queueControlPersistence(task)
+        return
+      }
       if (terminalPhases.has(task.phase)) return
-      task.controller?.abort(new DOMException('Task cancelled', 'AbortError'))
-      setPhase(task, 'CANCELLED')
-      await waitForTask(task)
+      await interruptAndPersist(task, 'CANCELLED', 'Task cancelled', 'explicit')
     },
 
     async respond(taskId, response) {
@@ -636,11 +806,10 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         projectId: binding.projectId,
         branchId: binding.branchId,
         sessionId,
-        expectedDraftGeneration: draftGeneration,
+        expectedPersistenceGeneration: persistenceGeneration,
       })
-      draftGeneration = result.draftGeneration
-      const record = [...result.records].reverse().find(entry => entry.kind === 'agent-runtime-task')
-      const recovered = record ? parseRecoveredTask(record.value) : undefined
+      persistenceGeneration = result.persistenceGeneration
+      const recovered = selectLatestRecoveredTask(result.records)
       if (!recovered) return
       tasks.set(recovered.taskId, recovered)
       activeTask = recovered
@@ -665,17 +834,36 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
 
     async waitForIdle() {
       while (runs.size > 0) await Promise.allSettled([...runs])
+      await flushControlPersistence()
     },
 
     async dispose() {
-      if (disposed) return
+      if (disposeComplete) return
+      if (disposePromise) return disposePromise
       disposed = true
-      for (const task of tasks.values()) task.controller?.abort(new DOMException('Worker disposed', 'AbortError'))
-      await Promise.allSettled([...runs])
-      if (activeTask && !terminalPhases.has(activeTask.phase)) await persistTask(activeTask, activeTask.phase)
-      listeners.clear()
-      runtimeStatus = 'disposed'
-      emit()
+      const transition = (async () => {
+        for (const task of tasks.values()) task.controller?.abort(new DOMException('Worker disposed', 'AbortError'))
+        await Promise.allSettled([...runs])
+        await flushControlPersistence()
+        if (
+          activeTask &&
+          !terminalPhases.has(activeTask.phase) &&
+          activeTask.lastDurablePhase !== activeTask.phase &&
+          !terminalPhases.has(activeTask.lastDurablePhase ?? 'IDLE')
+        ) {
+          await persistTask(activeTask, activeTask.phase)
+        }
+        listeners.clear()
+        runtimeStatus = 'disposed'
+        disposeComplete = true
+        emit()
+      })()
+      disposePromise = transition
+      try {
+        await transition
+      } finally {
+        if (!disposeComplete && disposePromise === transition) disposePromise = undefined
+      }
     },
   }
 

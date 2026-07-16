@@ -1,10 +1,9 @@
-import { getPageInfoFromLocalStorage, getPageSchemaFromLocalStorage } from '@/lib/schema'
 import {
   CURRENT_PROJECT_SCHEMA_VERSION,
   type ComponentsMap,
+  DESIGNER_EVENT,
   type NpmInfo,
   type ProjectSchema,
-  type RootSchema,
   validateProjectSchema,
 } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
@@ -14,7 +13,14 @@ import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
 import type { RemotePackageLoadFailure, RemotePackageLoadResult } from './remote/remote-load-batch.js'
-import { composeDashboardAgentHost, dashboardAgentRuntimeFeatureFlags, engine, remoteResources } from './runtime'
+import {
+  captureDashboardPersistenceInput,
+  composeDashboardAgentHost,
+  dashboardAgentRuntimeFeatureFlags,
+  dashboardPersistence,
+  engine,
+  remoteResources,
+} from './runtime'
 import { setterMap } from './setters'
 
 import './overrides.css'
@@ -23,6 +29,7 @@ export { composeDashboardAgentHost, dashboardAgentRuntimeFeatureFlags }
 export type { DashboardAgentHostAuthority } from './agent/host/index.mjs'
 
 let releaseSimulatorReady: (() => void) | undefined
+let releasePersistenceListeners: Array<() => void> = []
 let disposePromise: Promise<void> | undefined
 let lifecycleDisposalInstalled = false
 
@@ -36,12 +43,27 @@ export const disposeDashboardEditor = (): Promise<void> => {
   if (disposePromise) return disposePromise
   releaseSimulatorReady?.()
   releaseSimulatorReady = undefined
-  const destroyAttempt = engine.destroy()
-  disposePromise = destroyAttempt
-  void destroyAttempt.then(uninstallLifecycleDisposal, () => {
-    if (disposePromise === destroyAttempt) disposePromise = undefined
+  for (const release of releasePersistenceListeners.splice(0)) release()
+  const disposalAttempt = (async () => {
+    const failures: unknown[] = []
+    try {
+      await dashboardPersistence.dispose()
+    } catch (error) {
+      failures.push(error)
+    }
+    try {
+      await engine.destroy()
+    } catch (error) {
+      failures.push(error)
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'Dashboard persistence and engine disposal failed')
+  })()
+  disposePromise = disposalAttempt
+  void disposalAttempt.then(uninstallLifecycleDisposal, () => {
+    if (disposePromise === disposalAttempt) disposePromise = undefined
   })
-  return destroyAttempt
+  return disposalAttempt
 }
 
 const handlePageHide = (event: PageTransitionEvent) => {
@@ -116,40 +138,57 @@ const autoLoadAllRemoteComponents = async () => {
   if (failed) console.warn(`[EasyEditor] ${failed} remote components failed to auto-load`)
 }
 
-const createInitialProjectSchema = async (): Promise<ProjectSchema> => {
+const createInitialProjectSchema = async () => {
   const fallback: ProjectSchema = {
     componentsTree: [defaultRootSchema],
     version: CURRENT_PROJECT_SCHEMA_VERSION,
   }
-  const pageInfo = getPageInfoFromLocalStorage()
-  if (!pageInfo?.length) return fallback
+  const draft = await dashboardPersistence.initialize(
+    fallback as unknown as Parameters<typeof dashboardPersistence.initialize>[0],
+  )
+  const schema = validateProjectSchema(
+    draft.projectSchema as unknown as ProjectSchema,
+    engine.trustPolicy,
+  ) as ProjectSchema
+  await loadRemoteMaterialsFromComponentsMap(schema.componentsMap)
+  return { activeDocument: draft.activeDocument, schema }
+}
 
-  const schemas = pageInfo.map(item => getPageSchemaFromLocalStorage(item.path) as ProjectSchema<RootSchema> | null)
-  if (schemas.some(schema => !schema)) return fallback
+const scheduleDashboardAutosave = () => {
+  dashboardPersistence.scheduleAutosave(captureDashboardPersistenceInput)
+}
 
-  const loadedSchemas = schemas
-    .filter((schema): schema is ProjectSchema<RootSchema> => schema !== null)
-    .map(schema => validateProjectSchema(schema, engine.trustPolicy) as ProjectSchema<RootSchema>)
-  if (!loadedSchemas.length) return fallback
+const installPersistenceListeners = () => {
+  if (releasePersistenceListeners.length) return
+  const mutationEvents = [
+    DESIGNER_EVENT.CURRENT_DOCUMENT_CHANGE,
+    DESIGNER_EVENT.CURRENT_HISTORY_CHANGE,
+    DESIGNER_EVENT.INSERT_NODE_BEFORE,
+    DESIGNER_EVENT.INSERT_NODE_AFTER,
+    DESIGNER_EVENT.NODE_VISIBLE_CHANGE,
+    DESIGNER_EVENT.NODE_LOCK_CHANGE,
+    DESIGNER_EVENT.NODE_CHILDREN_CHANGE,
+    DESIGNER_EVENT.NODE_PROPS_CHANGE,
+    DESIGNER_EVENT.NODE_REMOVE,
+  ]
+  releasePersistenceListeners = mutationEvents.map(event => engine.designer.onEvent(event, scheduleDashboardAutosave))
+  releasePersistenceListeners.push(
+    engine.project.onDocumentAdd(scheduleDashboardAutosave),
+    engine.project.onDocumentRemove(scheduleDashboardAutosave),
+    engine.project.onCurrentDocumentChange(scheduleDashboardAutosave),
+  )
+}
 
-  const componentsMap: ComponentsMap = []
-  const seenComponents = new Set<string>()
-  for (const schema of loadedSchemas) {
-    for (const component of schema.componentsMap || []) {
-      const key =
-        'package' in component ? `${component.package}@${component.componentName || ''}` : component.componentName || ''
-      if (seenComponents.has(key)) continue
-      seenComponents.add(key)
-      componentsMap.push(component)
-    }
-  }
-
-  await loadRemoteMaterialsFromComponentsMap(componentsMap)
-  return {
-    componentsTree: loadedSchemas.map(schema => schema.componentsTree[0]),
-    componentsMap,
-    version: CURRENT_PROJECT_SCHEMA_VERSION,
-  }
+const restoreActiveDocument = (
+  activeDocument: Awaited<ReturnType<typeof dashboardPersistence.initialize>>['activeDocument'],
+) => {
+  if (!activeDocument) return
+  const document =
+    engine.project.getDocument(activeDocument.documentId) ??
+    engine.project.getDocumentByFileName(activeDocument.fileName) ??
+    engine.project.documents[activeDocument.index]
+  if (!document) throw new Error('Canonical Dashboard active document cannot be restored')
+  engine.project.open(document)
 }
 
 const bootstrapDashboardEditor = async () => {
@@ -182,8 +221,10 @@ const bootstrapDashboardEditor = async () => {
     reportOptionalRemoteFailures('setter package', remoteResult.setters)
     registerMissingLocalSetters()
 
-    const projectSchema = await createInitialProjectSchema()
-    engine.loadProject(projectSchema, true)
+    const initialProject = await createInitialProjectSchema()
+    engine.loadProject(initialProject.schema, true)
+    restoreActiveDocument(initialProject.activeDocument)
+    installPersistenceListeners()
 
     void remoteResources
       .runBackground('auto-load remote component implementations', autoLoadAllRemoteComponents)

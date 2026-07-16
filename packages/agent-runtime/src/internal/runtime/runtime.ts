@@ -64,6 +64,8 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
   let transportGeneration = 0
   let singleEndpointConsumed = false
   let disposed = false
+  let disposing = false
+  let disposalPromise: Promise<void> | undefined
   let current = frozenClone<AgentRuntimeSnapshot>({
     schemaVersion: 1,
     binding,
@@ -163,7 +165,13 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
   }
 
   const handleEndpointFault = (candidate: RuntimeTransport, error: unknown) => {
-    if (disposed || candidate.closed || candidate.generation !== transportGeneration || transport !== candidate) {
+    if (
+      disposed ||
+      disposing ||
+      candidate.closed ||
+      candidate.generation !== transportGeneration ||
+      transport !== candidate
+    ) {
       return
     }
     const cleanup = cleanupTransport(
@@ -269,7 +277,7 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
   )
 
   const requirePeer = async () => {
-    if (disposed) throw new Error('agent runtime is disposed')
+    if (disposed || disposing) throw new Error('agent runtime is disposed')
     await initialization
     if (!transport || transport.closed) throw new Error('agent runtime transport is unavailable')
     return transport.peer
@@ -295,7 +303,7 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
     },
     getSnapshot: () => current,
     subscribe(listener) {
-      if (disposed) throw new Error('agent runtime is disposed')
+      if (disposed || disposing) throw new Error('agent runtime is disposed')
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
@@ -307,7 +315,7 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
       return (await requirePeer()).request('runtime.diagnostics', null, context('runtime', 'diagnostics'))
     },
     restart() {
-      if (disposed) return observeRejection(Promise.reject(new Error('agent runtime is disposed')))
+      if (disposed || disposing) return observeRejection(Promise.reject(new Error('agent runtime is disposed')))
       if (!endpointFactory) {
         return observeRejection(Promise.reject(new Error('runtime restart requires a worker endpoint factory')))
       }
@@ -323,21 +331,18 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
     },
     dispose() {
       if (disposed) return Promise.resolve()
+      if (disposalPromise) return disposalPromise
+      disposing = true
       const priorInitialization = initialization
       const disposal = enqueueLifecycle(async () => {
-        if (disposed) return
         let initializationError: unknown
         try {
           await priorInitialization
         } catch (error) {
           initializationError = error
         }
-        disposed = true
-        try {
-          if (!initializationError) {
-            await transport?.peer.request('runtime.dispose', null, context('runtime', 'dispose'))
-          }
-        } finally {
+        if (initializationError) {
+          disposed = true
           await cleanupTransport('runtime disposed')
           listeners.clear()
           if (current.status !== 'disposed') {
@@ -347,10 +352,26 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
               revision: current.revision + 1,
             })
           }
+          throw initializationError
         }
-        if (initializationError) throw initializationError
+
+        await transport?.peer.request('runtime.dispose', null, context('runtime', 'dispose'))
+        disposed = true
+        await cleanupTransport('runtime disposed')
+        listeners.clear()
+        if (current.status !== 'disposed') {
+          current = frozenClone({
+            ...current,
+            status: 'disposed',
+            revision: current.revision + 1,
+          })
+        }
       })
-      return observeRejection(disposal)
+      const tracked = disposal.finally(() => {
+        if (!disposed && disposalPromise === tracked) disposalPromise = undefined
+      })
+      disposalPromise = observeRejection(tracked)
+      return disposalPromise
     },
   }
 

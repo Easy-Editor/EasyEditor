@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const appUrl = 'http://127.0.0.1:5173'
+const appPort = process.env.DASHBOARD_E2E_PORT ?? '5197'
+const appUrl = `http://127.0.0.1:${appPort}`
 
 export default defineConfig({
   testDir: './examples/dashboard/e2e',
@@ -23,9 +24,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'pnpm --dir examples/dashboard dev --host 127.0.0.1 --port 5173 --strictPort',
+    command: `pnpm --dir examples/dashboard dev --host 127.0.0.1 --port ${appPort} --strictPort`,
     env: { VITE_E2E: '1' },
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     stderr: 'pipe',
     stdout: 'ignore',
     timeout: 120_000,

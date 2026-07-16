@@ -213,7 +213,7 @@ export const parseToolReceipt = (value: unknown): ToolReceipt | null => {
 export const parsePersistenceReadRequest = (value: unknown): PersistenceReadRequest => {
   assertExactFields(
     value,
-    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'expectedDraftGeneration'],
+    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'expectedPersistenceGeneration'],
     [],
     'PersistenceReadRequest',
   )
@@ -221,14 +221,14 @@ export const parsePersistenceReadRequest = (value: unknown): PersistenceReadRequ
   stringField(value.projectId, 'PersistenceReadRequest.projectId')
   stringField(value.branchId, 'PersistenceReadRequest.branchId')
   stringField(value.sessionId, 'PersistenceReadRequest.sessionId')
-  integerField(value.expectedDraftGeneration, 'PersistenceReadRequest.expectedDraftGeneration')
+  integerField(value.expectedPersistenceGeneration, 'PersistenceReadRequest.expectedPersistenceGeneration')
   return value as unknown as PersistenceReadRequest
 }
 
 export const parsePersistenceReadResult = (value: unknown): PersistenceReadResult => {
   assertExactFields(
     value,
-    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'draftGeneration', 'records'],
+    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'persistenceGeneration', 'records'],
     [],
     'PersistenceReadResult',
   )
@@ -236,7 +236,7 @@ export const parsePersistenceReadResult = (value: unknown): PersistenceReadResul
   stringField(value.projectId, 'PersistenceReadResult.projectId')
   stringField(value.branchId, 'PersistenceReadResult.branchId')
   stringField(value.sessionId, 'PersistenceReadResult.sessionId')
-  integerField(value.draftGeneration, 'PersistenceReadResult.draftGeneration')
+  integerField(value.persistenceGeneration, 'PersistenceReadResult.persistenceGeneration')
   parseRecords(value.records, 'PersistenceReadResult.records')
   return value as unknown as PersistenceReadResult
 }
@@ -244,7 +244,7 @@ export const parsePersistenceReadResult = (value: unknown): PersistenceReadResul
 export const parsePersistenceBatch = (value: unknown): AgentPersistenceBatch => {
   assertExactFields(
     value,
-    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'batchId', 'expectedDraftGeneration', 'records'],
+    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'batchId', 'expectedPersistenceGeneration', 'records'],
     [],
     'AgentPersistenceBatch',
   )
@@ -253,7 +253,7 @@ export const parsePersistenceBatch = (value: unknown): AgentPersistenceBatch => 
   stringField(value.branchId, 'AgentPersistenceBatch.branchId')
   stringField(value.sessionId, 'AgentPersistenceBatch.sessionId')
   stringField(value.batchId, 'AgentPersistenceBatch.batchId')
-  integerField(value.expectedDraftGeneration, 'AgentPersistenceBatch.expectedDraftGeneration')
+  integerField(value.expectedPersistenceGeneration, 'AgentPersistenceBatch.expectedPersistenceGeneration')
   parseRecords(value.records, 'AgentPersistenceBatch.records')
   return value as unknown as AgentPersistenceBatch
 }
@@ -261,14 +261,14 @@ export const parsePersistenceBatch = (value: unknown): AgentPersistenceBatch => 
 export const parsePersistenceCommitResult = (value: unknown): PersistenceCommitResult => {
   assertExactFields(
     value,
-    ['schemaVersion', 'batchId', 'status', 'draftGeneration'],
+    ['schemaVersion', 'batchId', 'status', 'persistenceGeneration'],
     ['failure'],
     'PersistenceCommitResult',
   )
   schemaVersion(value.schemaVersion)
   stringField(value.batchId, 'PersistenceCommitResult.batchId')
   literalField(value.status, ['committed', 'generation-conflict', 'rejected'], 'PersistenceCommitResult.status')
-  integerField(value.draftGeneration, 'PersistenceCommitResult.draftGeneration')
+  integerField(value.persistenceGeneration, 'PersistenceCommitResult.persistenceGeneration')
   if (value.failure !== undefined) parseFailure(value.failure, 'PersistenceCommitResult.failure')
   return value as unknown as PersistenceCommitResult
 }

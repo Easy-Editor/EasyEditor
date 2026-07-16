@@ -64,7 +64,7 @@ const batch: AgentPersistenceBatch = {
   branchId: 'branch-1',
   sessionId: 'session-1',
   batchId: 'batch-1',
-  expectedDraftGeneration: 0,
+  expectedPersistenceGeneration: 0,
   records: [{ recordId: 'record-1', kind: 'journal', value: { phase: 'OBSERVE' } }],
 }
 const commit = persistence.commit(batch)

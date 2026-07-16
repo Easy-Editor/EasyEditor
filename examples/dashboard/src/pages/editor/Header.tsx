@@ -1,31 +1,55 @@
 import BannerImg from '@/assets/banner.png'
 import { Button } from '@/components/ui/button'
-import { engine } from '@/editor/runtime'
-import { savePageInfoToLocalStorage, savePageSchemaToLocalStorage, saveProjectSchemaToLocalStorage } from '@/lib/schema'
+import { type DashboardPreviewWindowHandle, openDashboardPreviewAfterSave } from '@/editor/persistence-runtime'
+import { dashboardPersistence, persistDashboardProject } from '@/editor/runtime'
 import { cn } from '@/lib/utils'
-import { TRANSFORM_STAGE } from '@easy-editor/core/instance'
 import { toast } from 'sonner'
 
-const project = engine.project
+const createPreviewWindow = (): DashboardPreviewWindowHandle | null => {
+  const popup = window.open('', '_blank')
+  if (!popup) return null
+  return {
+    navigate: url => popup.location.replace(url),
+    showFailure: message => {
+      popup.document.title = '预览失败'
+      popup.document.body.replaceChildren()
+      const content = popup.document.createElement('p')
+      content.textContent = message
+      content.style.cssText = 'font: 14px sans-serif; padding: 24px; color: #b91c1c;'
+      popup.document.body.append(content)
+    },
+  }
+}
 
 export const AppHeader = ({ className }: { className?: string }) => {
-  const save = (kind: 'project' | 'page' = 'page') => {
-    if (kind === 'project') {
-      saveProjectSchemaToLocalStorage(project.export(TRANSFORM_STAGE.SAVE))
-    } else {
-      const pageInfo = []
-      for (const doc of project.documents) {
-        pageInfo.push({ path: doc.fileName, title: doc.rootNode?.getExtraPropValue('fileDesc') as string })
-        savePageSchemaToLocalStorage(doc.fileName, doc.toData())
+  const save = async () => {
+    try {
+      const result = await persistDashboardProject('manual-save')
+      await dashboardPersistence.flush()
+      if (result.compatibilityWarning) {
+        toast.warning('已保存，但旧版兼容快照刷新失败')
+      } else {
+        toast.success('保存成功')
       }
-      savePageInfoToLocalStorage(pageInfo)
+    } catch (error) {
+      console.error('[EasyEditor] Dashboard manual save failed:', error)
+      toast.error('保存失败，当前更改尚未保存')
     }
-    toast.success('保存成功')
   }
 
-  const preview = () => {
-    save('page')
-    window.open('/preview', '_blank')
+  const preview = async () => {
+    const result = await openDashboardPreviewAfterSave({
+      openWindow: createPreviewWindow,
+      persist: async () => {
+        await persistDashboardProject('manual-save')
+        await dashboardPersistence.flush()
+      },
+      previewUrl: '/preview',
+    })
+    if (result.status === 'failed') {
+      console.error('[EasyEditor] Dashboard preview save failed:', result.error)
+      toast.error('预览失败：当前更改尚未保存')
+    }
   }
 
   return (
@@ -46,10 +70,10 @@ export const AppHeader = ({ className }: { className?: string }) => {
           <div className='flex flex-1 items-center justify-between gap-2 md:justify-end'>
             <div className='w-full flex-1 md:w-auto md:flex-none' />
             <div className='flex items-center gap-2'>
-              <Button variant='outline' onClick={preview}>
+              <Button variant='outline' onClick={() => void preview()}>
                 预览
               </Button>
-              <Button variant='outline' onClick={() => save('page')}>
+              <Button variant='outline' onClick={() => void save()}>
                 保存
               </Button>
             </div>

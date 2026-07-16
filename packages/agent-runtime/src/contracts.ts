@@ -220,7 +220,7 @@ export interface PersistenceReadRequest {
   readonly projectId: string
   readonly branchId: string
   readonly sessionId: string
-  readonly expectedDraftGeneration: number
+  readonly expectedPersistenceGeneration: number
 }
 
 export interface PersistenceRecord {
@@ -234,7 +234,7 @@ export interface PersistenceReadResult {
   readonly projectId: string
   readonly branchId: string
   readonly sessionId: string
-  readonly draftGeneration: number
+  readonly persistenceGeneration: number
   readonly records: readonly PersistenceRecord[]
 }
 
@@ -244,7 +244,7 @@ export interface AgentPersistenceBatch {
   readonly branchId: string
   readonly sessionId: string
   readonly batchId: string
-  readonly expectedDraftGeneration: number
+  readonly expectedPersistenceGeneration: number
   readonly records: readonly PersistenceRecord[]
 }
 
@@ -254,7 +254,7 @@ export interface PersistenceCommitResult {
   readonly schemaVersion: 1
   readonly batchId: string
   readonly status: PersistenceCommitStatus
-  readonly draftGeneration: number
+  readonly persistenceGeneration: number
   readonly failure?: AgentRuntimeFailure
 }
 

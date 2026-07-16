@@ -222,6 +222,44 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
   assert.ok(phases.includes('EXECUTE') && phases.includes('CHECKPOINT'))
 })
 
+test('real module Worker pauses on an allowlisted persistence failure crossing RPC', async () => {
+  const endpoints = createEndpointFactory([
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+  ])
+  const backing = new persistenceModule.MemoryAgentPersistence()
+  const persistence = {
+    read: request => backing.read(request),
+    async commit() {
+      const error = new Error('browser storage quota exhausted')
+      error.code = 'quota-exceeded'
+      throw error
+    },
+  }
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host: new hostModule.FakeAgentHost(),
+    persistence,
+    clock: fixturesModule.createDeterministicClock(),
+    idFactory: fixturesModule.createDeterministicIdFactory('main-persistence-failure-'),
+  })
+
+  await runtime.submit({ text: 'Pause rather than lose an unsaved checkpoint' })
+  await runtime.waitForIdle()
+
+  assert.equal(runtime.getSnapshot().status, 'ready')
+  assert.equal(runtime.getSnapshot().phase, 'PAUSED')
+  assert.deepEqual(runtime.getSnapshot().activeTask.failure, {
+    code: 'quota-exceeded',
+    message: 'persistence operation failed: quota-exceeded',
+    retryable: true,
+  })
+  await runtime.dispose()
+})
+
 test('initial transport failures stay API-visible without process rejection events', async () => {
   const unhandled = []
   const warnings = []
@@ -351,6 +389,70 @@ test('real module Worker cancel prevents future calls', async () => {
   await runtime.dispose()
 })
 
+test('public runtime disposal retries a failed durable cancellation before closing the Worker', async () => {
+  const endpoints = createEndpointFactory([[{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }]])
+  const backing = new persistenceModule.MemoryAgentPersistence()
+  let cancellationConflicts = 2
+  let externalSequence = 0
+  const persistence = {
+    read: request => backing.read(request),
+    async commit(batch) {
+      const phase = batch.records.find(record => record.kind === 'agent-runtime-task')?.value?.phase
+      if (phase === 'CANCELLED' && cancellationConflicts > 0) {
+        cancellationConflicts -= 1
+        externalSequence += 1
+        const external = await backing.commit({
+          schemaVersion: 1,
+          projectId: batch.projectId,
+          branchId: batch.branchId,
+          sessionId: batch.sessionId,
+          batchId: `external-${externalSequence}`,
+          expectedPersistenceGeneration: batch.expectedPersistenceGeneration,
+          records: [
+            {
+              recordId: `external:${externalSequence}`,
+              kind: 'external-generation-advance',
+              value: { sequence: externalSequence },
+            },
+          ],
+        })
+        return {
+          schemaVersion: 1,
+          batchId: batch.batchId,
+          status: 'generation-conflict',
+          persistenceGeneration: external.persistenceGeneration,
+        }
+      }
+      return backing.commit(batch)
+    },
+  }
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host: new hostModule.FakeAgentHost(),
+    persistence,
+    clock: fixturesModule.createDeterministicClock(),
+    idFactory: fixturesModule.createDeterministicIdFactory('main-dispose-retry-'),
+  })
+  const task = await runtime.submit({ text: 'Persist cancellation before shutdown' })
+  await waitForPhase(runtime, 'BLUEPRINT')
+
+  await assert.rejects(runtime.cancel(task.taskId), /persistence commit generation-conflict/)
+  await assert.rejects(runtime.dispose(), /persistence commit generation-conflict/)
+  assert.notEqual(runtime.getSnapshot().status, 'disposed')
+  assert.equal(endpoints.liveWorkers, 1)
+
+  await runtime.dispose()
+  await waitFor(() => endpoints.liveWorkers === 0, 'zero live Workers after retried disposal')
+  const recovered = await backing.read({
+    schemaVersion: 1,
+    ...binding,
+    expectedPersistenceGeneration: 3,
+  })
+  assert.equal(recovered.records.find(record => record.recordId === `task:${task.taskId}`)?.value.phase, 'CANCELLED')
+  assert.equal(runtime.getSnapshot().status, 'disposed')
+})
+
 test('restart recovers persisted work and forces a full observation', async () => {
   const endpoints = createEndpointFactory([
     [{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }],
@@ -374,7 +476,7 @@ test('restart recovers persisted work and forces a full observation', async () =
     schemaVersion: 1,
     ...binding,
     batchId: 'seed-1',
-    expectedDraftGeneration: 0,
+    expectedPersistenceGeneration: 0,
     records: [
       {
         recordId: `task:${task.taskId}`,
@@ -739,7 +841,7 @@ test('unexpected Worker exit automatically recovers persisted work without trans
     schemaVersion: 1,
     ...binding,
     batchId: 'seed-crash',
-    expectedDraftGeneration: 0,
+    expectedPersistenceGeneration: 0,
     records: [
       {
         recordId: `task:${task.taskId}`,
@@ -929,12 +1031,18 @@ test('testing fakes preserve serializable generations and deterministic values',
     schemaVersion: 1,
     ...binding,
     batchId: 'batch-1',
-    expectedDraftGeneration: 0,
+    expectedPersistenceGeneration: 0,
     records: [{ recordId: 'record-1', kind: 'test', value: { stable: true } }],
   })
   assert.equal(committed.status, 'committed')
   assert.equal(
-    (await persistence.read({ schemaVersion: 1, ...binding, expectedDraftGeneration: 1 })).draftGeneration,
+    (
+      await persistence.read({
+        schemaVersion: 1,
+        ...binding,
+        expectedPersistenceGeneration: 1,
+      })
+    ).persistenceGeneration,
     1,
   )
 })
