@@ -24,7 +24,8 @@ const assignRef = (ref: Ref<HTMLDivElement> | undefined, element: HTMLDivElement
 }
 
 const GeneratedMaterialHost = (props: GeneratedMaterialHostProps) => {
-  const { ref, __id: instanceId, __schema: node, __appHelper: appHelper } = props
+  const { ref, __id, __schema: node, __appHelper: appHelper } = props
+  const instanceId = __id ?? node?.id
   const elementRef = useRef<HTMLDivElement | null>(null)
   const bindingRef = useRef<DashboardOnlineComponentBindingHandle | null>(null)
   const bridge = appHelper?.[DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY]

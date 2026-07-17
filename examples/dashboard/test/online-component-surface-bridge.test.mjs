@@ -356,6 +356,7 @@ test('trusted host is registered in component/meta maps without a palette snippe
   const components = readFileSync(new URL('../src/editor/materials/component.ts', import.meta.url), 'utf8')
   const metas = readFileSync(new URL('../src/editor/materials/meta.ts', import.meta.url), 'utf8')
   assert.match(component, /DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY/)
+  assert.match(component, /const instanceId = __id \?\? node\?\.id/)
   assert.match(component, /data-easy-editor-generated-material-host/)
   assert.match(component, /pointerEvents:\s*'none'/)
   assert.match(meta, /componentName:\s*'GeneratedMaterialHost'/)
