@@ -10,6 +10,14 @@ import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import type { CanonicalWorkingDraftV1 } from '../lib/storage/contracts.mjs'
 import {
+  DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY,
+  createDashboardOnlineComponentSurfaceBridge,
+  dispatchDashboardOnlineComponentRuntimeEvent,
+  isDashboardOnlineComponentSurfaceEnabled,
+  resolveDashboardOnlineComponentSafeBoot,
+  startDashboardOnlineComponentSurface,
+} from '../runtime/online-components/surface-bridge.mjs'
+import {
   DASHBOARD_NODE_ADD_EVENT,
   DASHBOARD_NODE_REMOVE_EVENT,
   type DashboardObservedMutationAttribution,
@@ -48,6 +56,14 @@ const dashboardDataRuntime = createDashboardDataRuntime({
 const dashboardDataSourceRenderReducer = createDashboardDataSourceRenderReducer({
   safeDataEnabled: dashboardAgentRuntimeFeatureFlags.data,
 })
+const dashboardOnlineComponentSurfaceEnabled = isDashboardOnlineComponentSurfaceEnabled(
+  dashboardAgentRuntimeFeatureFlags,
+)
+const dashboardOnlineComponentSurfaceBridge = dashboardOnlineComponentSurfaceEnabled
+  ? createDashboardOnlineComponentSurfaceBridge({
+      onError: error => console.error('[EasyEditor] Dashboard online component editor surface failed:', error),
+    })
+  : null
 
 let releaseSimulatorReady: (() => void) | undefined
 let releasePersistenceListeners: Array<() => void> = []
@@ -318,7 +334,12 @@ const bootstrapDashboardEditor = async () => {
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
     await engine.init({
-      appHelper: { expressionEvaluator: dashboardExpressionEvaluator },
+      appHelper: {
+        expressionEvaluator: dashboardExpressionEvaluator,
+        ...(dashboardOnlineComponentSurfaceBridge
+          ? { [DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY]: dashboardOnlineComponentSurfaceBridge }
+          : {}),
+      },
     })
     releaseSimulatorReady = engine.project.onSimulatorReady(simulator => {
       simulator.set('deviceStyle', { viewport: { width: 1920, height: 1080 } })
@@ -330,6 +351,31 @@ const bootstrapDashboardEditor = async () => {
     registerMissingLocalSetters()
 
     const initialProject = await createInitialProjectSchema()
+    if (dashboardOnlineComponentSurfaceEnabled && dashboardOnlineComponentSurfaceBridge) {
+      const persistenceSnapshot = dashboardPersistence.getSnapshot()
+      if (!persistenceSnapshot.projectId || !persistenceSnapshot.branchId) {
+        throw new Error('Dashboard online component editor surface requires an active persistence scope')
+      }
+      const surface = startDashboardOnlineComponentSurface({
+        enabled: true,
+        safeBoot: resolveDashboardOnlineComponentSafeBoot(window.location.search),
+        mode: 'editor',
+        projectId: persistenceSnapshot.projectId,
+        branchId: persistenceSnapshot.branchId,
+        surfaceId: 'dashboard-editor-online',
+        bridge: dashboardOnlineComponentSurfaceBridge,
+        markerStore: window.localStorage,
+        persistence: dashboardPersistence,
+        document: window.document,
+        onSelection: event => {
+          if (event.type === 'select' || event.type === 'drag-start') {
+            engine.designer.selection.select(event.instanceId)
+          }
+        },
+        onRuntimeEvent: event => dispatchDashboardOnlineComponentRuntimeEvent(window, event),
+      })
+      registerDashboardEditorDisposer(() => surface.dispose())
+    }
     engine.loadProject(initialProject.schema, true)
     restoreActiveDocument(initialProject.activeDocument)
     installPersistenceListeners()

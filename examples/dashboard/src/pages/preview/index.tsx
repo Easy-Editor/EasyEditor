@@ -1,3 +1,4 @@
+import { resolveAgentRuntimeFeatureFlags } from '@/editor/agent/feature-flags.mjs'
 import { defaultRootSchema } from '@/editor/const'
 import {
   composeDashboardRootSchema,
@@ -8,6 +9,14 @@ import { dashboardExpressionEvaluator } from '@/editor/expression-policy'
 import { components } from '@/editor/materials'
 import { createDashboardPersistenceRuntime, selectDashboardActiveDocumentSchema } from '@/editor/persistence-runtime'
 import {
+  DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY,
+  createDashboardOnlineComponentSurfaceBridge,
+  dispatchDashboardOnlineComponentRuntimeEvent,
+  isDashboardOnlineComponentSurfaceEnabled,
+  resolveDashboardOnlineComponentSafeBoot,
+  startDashboardOnlineComponentSurface,
+} from '@/runtime/online-components/surface-bridge.mjs'
+import {
   CURRENT_PROJECT_SCHEMA_VERSION,
   type ProjectSchema,
   type RootSchema,
@@ -15,7 +24,10 @@ import {
   validateProjectSchema,
 } from '@easy-editor/core/instance'
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+
+const previewAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
+const previewOnlineComponentSurfaceEnabled = isDashboardOnlineComponentSurfaceEnabled(previewAgentRuntimeFeatureFlags)
 
 interface DashboardPreviewDocument {
   readonly dataSourceEngine: ReturnType<typeof createDashboardDataRuntime>['dataSourceEngine']
@@ -26,10 +38,20 @@ interface DashboardPreviewDocument {
 const Preview = () => {
   const [document, setDocument] = useState<DashboardPreviewDocument | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const onlineComponentSurfaceBridge = useMemo(
+    () =>
+      previewOnlineComponentSurfaceEnabled
+        ? createDashboardOnlineComponentSurfaceBridge({
+            onError: cause => console.error('[EasyEditor] Dashboard online component preview surface failed:', cause),
+          })
+        : null,
+    [],
+  )
 
   useEffect(() => {
     let active = true
     let projectId: string | null = null
+    let onlineComponentSurface: ReturnType<typeof startDashboardOnlineComponentSurface> | null = null
     const safeDataEnabled = resolveDashboardSafeDataFeatureFlag(import.meta.env)
     const dataRuntime = createDashboardDataRuntime({
       expressionEvaluator: dashboardExpressionEvaluator,
@@ -62,13 +84,27 @@ const Preview = () => {
           draft.activeDocument,
         ) as unknown as RootSchema
         projectId = draft.projectId
-        if (active) {
-          setDocument({
-            dataSourceEngine: dataRuntime.dataSourceEngine,
-            project: validatedProject,
-            schema: composeDashboardRootSchema(validatedProject, activeSchema, { safeDataEnabled }),
+        if (!active) return
+        if (previewOnlineComponentSurfaceEnabled && onlineComponentSurfaceBridge) {
+          onlineComponentSurface = startDashboardOnlineComponentSurface({
+            enabled: true,
+            safeBoot: resolveDashboardOnlineComponentSafeBoot(window.location.search),
+            mode: 'preview',
+            projectId: draft.projectId,
+            branchId: draft.branchId,
+            surfaceId: 'dashboard-preview-online',
+            bridge: onlineComponentSurfaceBridge,
+            markerStore: window.localStorage,
+            persistence,
+            document: window.document,
+            onRuntimeEvent: event => dispatchDashboardOnlineComponentRuntimeEvent(window, event),
           })
         }
+        setDocument({
+          dataSourceEngine: dataRuntime.dataSourceEngine,
+          project: validatedProject,
+          schema: composeDashboardRootSchema(validatedProject, activeSchema, { safeDataEnabled }),
+        })
       } catch (cause) {
         console.error('[EasyEditor] Failed to load canonical Dashboard preview:', cause)
         if (active) setError('预览加载失败：无法读取已保存的大屏项目。')
@@ -77,12 +113,13 @@ const Preview = () => {
     void load()
     return () => {
       active = false
+      onlineComponentSurface?.dispose()
       dataRuntime.dispose()
       void persistence.dispose().catch(cause => {
         console.error('[EasyEditor] Failed to dispose Dashboard preview persistence:', cause)
       })
     }
-  }, [])
+  }, [onlineComponentSurfaceBridge])
 
   return (
     <div className='h-full w-full'>
@@ -97,6 +134,9 @@ const Preview = () => {
           expressionEvaluator={dashboardExpressionEvaluator}
           appHelper={{
             dataSourceEngine: document.dataSourceEngine,
+            ...(onlineComponentSurfaceBridge
+              ? { [DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY]: onlineComponentSurfaceBridge }
+              : {}),
           }}
           viewport={{ width: 1920, height: 1080 }}
         />

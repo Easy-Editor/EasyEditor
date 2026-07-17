@@ -3,6 +3,7 @@ import Root from './root/component'
 // Basic
 import Image from './basic/image/component'
 import Text from './basic/text/component'
+import GeneratedMaterialHost from './inner/generated-material-host/component'
 // Inner
 import Group from './inner/group/component'
 
@@ -28,4 +29,5 @@ export const components = {
   Root,
   Text,
   Group,
+  GeneratedMaterialHost,
 }

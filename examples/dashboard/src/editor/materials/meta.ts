@@ -1,5 +1,6 @@
 import Root from './root/meta'
 
+import GeneratedMaterialHost from './inner/generated-material-host/meta'
 // Inner
 import Group from './inner/group/meta'
 export { Group }
@@ -29,4 +30,5 @@ export const componentMetaMap = {
   RadialChart,
   Root,
   Text,
+  GeneratedMaterialHost,
 }
