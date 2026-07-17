@@ -156,6 +156,20 @@ export const createBrowserOnlineComponentSurfaceEnvironment = () => {
         for (const [type, listener] of listeners) shell.addEventListener(type, listener)
         slot.append(shell)
 
+        let releaseTrustedBinding
+        try {
+          if (input.bindTrustedShell) {
+            releaseTrustedBinding = input.bindTrustedShell(shell, input.instanceId)
+            if (typeof releaseTrustedBinding !== 'function') {
+              throw new TypeError('trusted shell binder must return a disposer')
+            }
+          }
+        } catch (error) {
+          for (const [type, listener] of listeners) shell.removeEventListener(type, listener)
+          shell.remove()
+          throw error
+        }
+
         const update = next => {
           assignShellRect(shell, next.rect)
           shell.style.zIndex = String(next.generatedZ + 1)
@@ -170,14 +184,21 @@ export const createBrowserOnlineComponentSurfaceEnvironment = () => {
             if (shellDisposed) return
             shellDisposed = true
             dragging = false
-            for (const [type, listener] of listeners) shell.removeEventListener(type, listener)
-            shell.remove()
-            shellHandles.delete(handle)
+            try {
+              releaseTrustedBinding?.()
+            } catch {
+              // A trusted editor binding cannot retain shell-owned resources.
+            } finally {
+              releaseTrustedBinding = undefined
+              for (const [type, listener] of listeners) shell.removeEventListener(type, listener)
+              shell.remove()
+              shellHandles.delete(handle)
+            }
           },
           getResourceCounts: () =>
             Object.freeze({
               shellCount: shellDisposed ? 0 : 1,
-              listenerCount: shellDisposed ? 0 : listeners.length,
+              listenerCount: shellDisposed ? 0 : listeners.length + (releaseTrustedBinding ? 1 : 0),
             }),
         })
         shellHandles.add(handle)
@@ -286,6 +307,7 @@ export const createOnlineComponentSurfaceHost = options => {
     allowedRuntimeEvents = ['activate'],
     onSelection = () => {},
     onRuntimeEvent = () => {},
+    bindTrustedShell,
   } = options ?? {}
 
   const mode = requestedMode ?? 'editor'
@@ -293,6 +315,12 @@ export const createOnlineComponentSurfaceHost = options => {
   if (enabled !== true) return createInertSurfaceHost({ state: 'disabled', mode, surfaceId })
 
   assertMode(mode)
+  if (bindTrustedShell !== undefined && typeof bindTrustedShell !== 'function') {
+    throw new TypeError('bindTrustedShell must be a function')
+  }
+  if (mode === 'preview' && bindTrustedShell !== undefined) {
+    throw new TypeError('preview surfaces cannot bind trusted drag shells')
+  }
   assertIdentifier(surfaceId, 'surfaceId')
   if (safeBoot) return createInertSurfaceHost({ state: 'safe-boot', mode, surfaceId })
   const activationId = assertIdentifier(requestedActivationId, 'activationId')
@@ -449,6 +477,7 @@ export const createOnlineComponentSurfaceHost = options => {
       generatedZ: instance.generatedZ,
       mode,
       onEvent: eventAdapter.dispatch,
+      ...(bindTrustedShell ? { bindTrustedShell } : {}),
     })
     shells.set(instance.instanceId, shell)
   }

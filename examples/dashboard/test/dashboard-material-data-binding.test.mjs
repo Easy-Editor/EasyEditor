@@ -7,6 +7,7 @@ import ts from 'typescript'
 
 const dashboardRoot = fileURLToPath(new URL('..', import.meta.url))
 const contract = await import('../src/editor/data/contract.mjs')
+const bindingRuntime = await import('../src/editor/data/binding-runtime.mjs')
 
 const loadBinding = () => {
   const filename = resolve(dashboardRoot, 'src/editor/data/binding.ts')
@@ -18,6 +19,7 @@ const loadBinding = () => {
   new Function('require', 'module', 'exports', output)(
     request => {
       if (request === './contract.mjs') return contract
+      if (request === './binding-runtime.mjs') return bindingRuntime
       throw new Error(`Unexpected dependency ${request}`)
     },
     loaded,
@@ -84,6 +86,29 @@ test('manual material values remain the fallback for absent, invalid, or unresol
     }),
     fallback,
   )
+})
+
+test('material binding never evaluates renderer-owned accessors', () => {
+  let getterReads = 0
+  const page = {}
+  Object.defineProperty(page, 'rows', {
+    enumerable: true,
+    get() {
+      getterReads += 1
+      return [{ value: 'stolen' }]
+    },
+  })
+  const fallback = [{ value: 'manual' }]
+  assert.strictEqual(
+    binding.resolveDashboardMaterialBinding({
+      bindingField: 'data',
+      dataBindings: { schemaVersion: 1, fields: { data: { sourceId: 'rows' } } },
+      dataSource: { page },
+      fallback,
+    }),
+    fallback,
+  )
+  assert.equal(getterReads, 0)
 })
 
 test('Text retains its normalized manual fallback when resolved bound data is an object or array', () => {

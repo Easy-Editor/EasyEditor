@@ -6,6 +6,7 @@ import {
   createDashboardOnlineComponentSurfaceBridge,
   dispatchDashboardOnlineComponentRuntimeEvent,
   isDashboardOnlineComponentSurfaceEnabled,
+  resolveDashboardOnlineComponentContext,
   resolveDashboardOnlineComponentSafeBoot,
   resolveDashboardOnlineComponentSurfaceFeatureFlags,
   sanitizeDashboardOnlineComponentProps,
@@ -54,6 +55,41 @@ const createMount = () => ({
   },
 })
 
+const createCancelableController = () => {
+  const events = []
+  const pending = []
+  const records = new Map()
+  return {
+    controller: {
+      register(input) {
+        if (records.has(input.instanceId)) throw new Error(`instance ${input.instanceId} is already registered`)
+        let resolve
+        let reject
+        const operation = new Promise((operationResolve, operationReject) => {
+          resolve = operationResolve
+          reject = operationReject
+        })
+        const record = { input, reject, resolve }
+        records.set(input.instanceId, record)
+        pending.push(record)
+        events.push(`register:${input.payload.props.title}`)
+        return operation.then(applied => (records.get(input.instanceId) === record ? applied : false))
+      },
+      update: () => Promise.resolve(true),
+      unregister(instanceId) {
+        const current = records.get(instanceId)
+        events.push(`unregister:${current?.input.payload.props.title ?? 'missing'}`)
+        return records.delete(instanceId)
+      },
+    },
+    events,
+    pending,
+    records,
+  }
+}
+
+const flushPromiseJobs = () => new Promise(resolve => setImmediate(resolve))
+
 const node = Object.freeze({ componentName: 'GeneratedMaterialHost', $agent: { schemaVersion: 1, artifactRef: {} } })
 
 test('surface props keep JSON data while dropping callbacks, renderer internals, cycles, and prototype objects', () => {
@@ -68,12 +104,81 @@ test('surface props keep JSON data while dropping callbacks, renderer internals,
     nested: { ok: true, callback: () => undefined, cycle },
     date: new Date(0),
   })
-  assert.deepEqual(sanitized, {
-    title: 'KPI',
-    count: 2,
-    nested: { ok: true, cycle: {} },
-  })
+  assert.deepEqual(sanitized, {})
   assert.doesNotMatch(JSON.stringify(sanitized), /onClick|callback|__schema|date/)
+})
+
+test('shared context resolver projects resolved data, theme, and asset handles without host authority', () => {
+  let getterReads = 0
+  const props = {
+    title: 'KPI',
+    accessToken: 'host-access-token',
+    authorization: 'Bearer host',
+    credentialRef: 'credential://host',
+    token: 'business-prop-token',
+    onClick: () => undefined,
+    data: { value: 'manual' },
+    dataBindings: {
+      schemaVersion: 1,
+      fields: { data: { sourceId: 'rows', transform: [{ op: 'take', count: 1 }] } },
+    },
+    __dataSource: {
+      page: { rows: [{ value: 7, token: 'business-data-token' }, { value: 8 }] },
+    },
+    __appHelper: { dataSourceEngine: { fetch: () => undefined }, engine: { forged: true } },
+    theme: { mode: 'dark', designTokens: { token: 'business-theme-token', spacing: 8 } },
+    assets: [{ id: 'asset-a', handle: 'asset://a' }],
+    dom: new Date(0),
+  }
+  const context = resolveDashboardOnlineComponentContext(props)
+  assert.equal(getterReads, 0)
+  assert.deepEqual(context.data, [{ value: 7, token: 'business-data-token' }])
+  assert.deepEqual(context.theme, {
+    mode: 'dark',
+    designTokens: { token: 'business-theme-token', spacing: 8 },
+  })
+  assert.deepEqual(context.assets, [{ id: 'asset-a', handle: 'asset://a' }])
+  assert.equal(context.props.title, 'KPI')
+  assert.equal(context.props.token, 'business-prop-token')
+  assert.equal(context.props.data, undefined)
+  assert.equal(context.props.dom, undefined)
+  const serialized = JSON.stringify(context)
+  assert.doesNotMatch(serialized, /host-access-token|Bearer host|credential:\/\/host|onClick/)
+  assert.doesNotMatch(serialized, /dataSourceEngine|__appHelper/)
+
+  const accessorProps = { title: 'hidden-on-invalid-props' }
+  Object.defineProperty(accessorProps, 'getterSecret', {
+    enumerable: true,
+    get() {
+      getterReads += 1
+      return 'stolen'
+    },
+  })
+  assert.deepEqual(resolveDashboardOnlineComponentContext(accessorProps).props, {})
+  assert.equal(getterReads, 0)
+})
+
+test('context fields fail closed as a whole on cycles, accessors, and byte-budget overflow', () => {
+  let getterReads = 0
+  const cycle = { ok: true }
+  cycle.self = cycle
+  const asset = { id: 'asset-a' }
+  Object.defineProperty(asset, 'secret', {
+    enumerable: true,
+    get() {
+      getterReads += 1
+      return 'stolen'
+    },
+  })
+  const context = resolveDashboardOnlineComponentContext({
+    data: cycle,
+    theme: { label: 'x'.repeat(50 * 1024) },
+    assets: [asset],
+  })
+  assert.equal(getterReads, 0)
+  assert.equal(context.data, null)
+  assert.deepEqual(context.theme, {})
+  assert.deepEqual(context.assets, [])
 })
 
 test('runtime and online flags are both required and URL safe-boot is explicit', () => {
@@ -189,6 +294,71 @@ test('twenty bindings share one animation-frame sampler and one mount measuremen
   assert.equal(frames.size(), 0)
 })
 
+test('editor and preview bridge composition produce identical resolved context payloads', async () => {
+  const payloads = new Map()
+  const handles = []
+  for (const mode of ['editor', 'preview']) {
+    const frames = createFrames()
+    const bridge = createDashboardOnlineComponentSurfaceBridge({
+      ...frames,
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    })
+    const mount = createMount()
+    const surface = startDashboardOnlineComponentSurface({
+      enabled: true,
+      mode,
+      projectId: 'project-a',
+      branchId: 'main',
+      surfaceId: `dashboard-${mode}-online`,
+      bridge,
+      markerStore: {},
+      persistence: { readArtifact: async () => null },
+      document: { documentElement: {}, querySelector: () => mount },
+      ...frames,
+      createController: options => ({
+        register(input) {
+          assert.equal(options.surfaceHostOptions.mode, mode)
+          payloads.set(mode, input.payload)
+          return Promise.resolve(true)
+        },
+        update: () => Promise.resolve(true),
+        unregister: () => true,
+        dispose: () => undefined,
+      }),
+    })
+    const binding = bridge.connect({
+      instanceId: 'node',
+      node,
+      props: {
+        label: 'shared',
+        data: { value: 0 },
+        dataBindings: { schemaVersion: 1, fields: { data: { sourceId: 'kpi' } } },
+        __dataSource: { page: { kpi: { value: 42 } } },
+        theme: { mode: 'dark' },
+        assets: [{ id: 'logo', handle: 'asset://logo' }],
+      },
+      element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+    })
+    frames.flush()
+    handles.push({ binding, surface })
+  }
+  await Promise.resolve()
+  assert.deepEqual(payloads.get('editor'), payloads.get('preview'))
+  assert.deepEqual(payloads.get('editor'), {
+    props: {
+      label: 'shared',
+    },
+    data: { value: 42 },
+    theme: { mode: 'dark' },
+    assets: [{ id: 'logo', handle: 'asset://logo' }],
+    size: { width: 100, height: 50 },
+  })
+  for (const handle of handles) {
+    handle.binding.dispose()
+    handle.surface.dispose()
+  }
+})
+
 test('pending register retains dirty state and dispatches only the latest props and rect after resolution', async () => {
   const frames = createFrames()
   const mount = createMount()
@@ -224,6 +394,83 @@ test('pending register retains dirty state and dispatches only the latest props 
   assert.equal(updates.length, 1)
   assert.equal(updates[0].payload.props.title, 'final')
   assert.deepEqual(updates[0].rect, { x: 60, y: 40, width: 120, height: 60 })
+  binding.dispose()
+})
+
+test('same-ID reconnect cancels stale registration before old resolve or reject can affect the replacement', async () => {
+  for (const outcome of ['resolve', 'reject']) {
+    const frames = createFrames()
+    const model = createCancelableController()
+    const errors = []
+    const bridge = createDashboardOnlineComponentSurfaceBridge({
+      ...frames,
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+      onError: error => errors.push(error),
+    })
+    bridge.attach({ controller: model.controller, projectId: 'project-a', mount: createMount() })
+
+    const first = bridge.connect({
+      instanceId: 'node',
+      node,
+      props: { title: 'first' },
+      element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+    })
+    frames.flush()
+    first.dispose()
+
+    const replacement = bridge.connect({
+      instanceId: 'node',
+      node,
+      props: { title: 'replacement' },
+      element: createElement({ left: 130, top: 70, width: 60, height: 30 }),
+    })
+    frames.flush()
+    assert.deepEqual(model.events, ['register:first', 'unregister:first', 'register:replacement'])
+    assert.equal(model.records.get('node'), model.pending[1])
+
+    if (outcome === 'resolve') model.pending[0].resolve(true)
+    else model.pending[0].reject(new Error('stale registration failed'))
+    await flushPromiseJobs()
+    assert.deepEqual(model.events, ['register:first', 'unregister:first', 'register:replacement'])
+    assert.equal(model.records.get('node'), model.pending[1])
+    assert.equal(errors.length, outcome === 'reject' ? 1 : 0)
+
+    model.pending[1].resolve(true)
+    await flushPromiseJobs()
+    replacement.dispose()
+    assert.deepEqual(model.events, [
+      'register:first',
+      'unregister:first',
+      'register:replacement',
+      'unregister:replacement',
+    ])
+    assert.equal(model.records.size, 0)
+  }
+})
+
+test('surface detach cancels controller-owned pending registrations', async () => {
+  const frames = createFrames()
+  const model = createCancelableController()
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  const detach = bridge.attach({ controller: model.controller, projectId: 'project-a', mount: createMount() })
+  const binding = bridge.connect({
+    instanceId: 'node',
+    node,
+    props: { title: 'pending' },
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  frames.flush()
+
+  assert.equal(detach(), true)
+  assert.deepEqual(model.events, ['register:pending', 'unregister:pending'])
+  assert.equal(model.records.size, 0)
+  model.pending[0].resolve(true)
+  await flushPromiseJobs()
+  assert.deepEqual(model.events, ['register:pending', 'unregister:pending'])
+
   binding.dispose()
 })
 
@@ -390,9 +637,13 @@ test('editor and preview wire the top-level bridge behind runtime plus online fl
   assert.match(editor, /persistence:\s*dashboardPersistence/)
   assert.match(editor, /onSelection:/)
   assert.match(editor, /engine\.designer\.selection\.select\(event\.instanceId\)/)
+  assert.match(editor, /engine\.designer\.dragon\.from\(/)
+  assert.match(editor, /type:\s*DragObjectType\.Node/)
+  assert.match(editor, /bindTrustedShell:/)
   assert.match(preview, /mode:\s*'preview'/)
   assert.match(preview, /surfaceId:\s*'dashboard-preview-online'/)
   assert.doesNotMatch(preview, /onSelection:/)
+  assert.doesNotMatch(preview, /bindTrustedShell:/)
   assert.match(editorOverlay, /data-easy-editor-surface-overlay-mount='editor'/)
   assert.match(previewOverlay, /data-easy-editor-surface-overlay-mount='preview'/)
 })

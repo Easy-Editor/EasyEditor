@@ -38,6 +38,7 @@ export interface OnlineComponentSandboxFrameHandle {
         readonly type: OnlineComponentTrustedShellEventType
         readonly event?: object
       }) => OnlineComponentTrustedShellEvent
+      readonly bindTrustedShell?: (shell: HTMLElement, instanceId: string) => () => void
     },
   ): OnlineComponentShellHandle
   getResourceCounts(): OnlineComponentFrameResourceCounts
@@ -130,6 +131,7 @@ export interface OnlineComponentSurfaceHostOptions {
   readonly allowedRuntimeEvents?: readonly OnlineComponentTrustedShellEventType[]
   readonly onSelection?: (event: OnlineComponentTrustedShellEvent) => void
   readonly onRuntimeEvent?: (event: OnlineComponentTrustedShellEvent | OnlineComponentRuntimeEvent) => void
+  readonly bindTrustedShell?: (shell: HTMLElement, instanceId: string) => () => void
 }
 
 export declare const createBrowserOnlineComponentSurfaceEnvironment: () => OnlineComponentSurfaceEnvironment

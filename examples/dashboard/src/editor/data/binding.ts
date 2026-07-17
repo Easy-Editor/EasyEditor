@@ -1,4 +1,4 @@
-import { applySafeDataTransform, parseSafeDataBindings } from './contract.mjs'
+import { resolveDashboardMaterialBindingValue } from './binding-runtime.mjs'
 
 export interface DashboardRendererDataSource {
   readonly page?: Readonly<Record<string, unknown>>
@@ -21,24 +21,8 @@ export const resolveDashboardMaterialBinding = ({
   dataBindings,
   dataSource,
   fallback,
-}: ResolveDashboardMaterialBindingOptions): unknown => {
-  if (dataBindings === undefined) return fallback
-
-  try {
-    const parsed = parseSafeDataBindings(dataBindings)
-    const field = parsed.fields[bindingField]
-    if (!field) return fallback
-    const page = dataSource?.page
-    if (!page || !Object.hasOwn(page, field.sourceId)) return fallback
-    const sourceValue = page[field.sourceId]
-    if (sourceValue === undefined) return fallback
-    return field.transform
-      ? applySafeDataTransform(sourceValue as Parameters<typeof applySafeDataTransform>[0], field.transform)
-      : sourceValue
-  } catch {
-    return fallback
-  }
-}
+}: ResolveDashboardMaterialBindingOptions): unknown =>
+  resolveDashboardMaterialBindingValue({ bindingField, dataBindings, dataSource, fallback })
 
 export const resolveDashboardText = (value: unknown, fallback = ''): string => {
   if (value === null || value === undefined) return fallback

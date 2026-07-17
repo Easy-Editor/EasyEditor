@@ -2,6 +2,7 @@ import {
   CURRENT_PROJECT_SCHEMA_VERSION,
   type ComponentsMap,
   DESIGNER_EVENT,
+  DragObjectType,
   type NpmInfo,
   type ProjectSchema,
   validateProjectSchema,
@@ -367,6 +368,15 @@ const bootstrapDashboardEditor = async () => {
         markerStore: window.localStorage,
         persistence: dashboardPersistence,
         document: window.document,
+        bindTrustedShell: (shell, instanceId) =>
+          engine.designer.dragon.from(
+            shell,
+            () => {
+              const node = engine.project.currentDocument?.getNode(instanceId)
+              return node ? { type: DragObjectType.Node, nodes: [node] } : null
+            },
+            'mouse',
+          ),
         onSelection: event => {
           if (event.type === 'select' || event.type === 'drag-start') {
             engine.designer.selection.select(event.instanceId)

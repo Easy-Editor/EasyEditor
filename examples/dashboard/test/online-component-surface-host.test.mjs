@@ -93,9 +93,12 @@ const createFakeEnvironment = () => {
           this.connections.push({ message, transferredPort })
         },
         createShell(input) {
-          const listenerCount = options.mode === 'editor' ? 5 : 1
+          const trustedElement = { instanceId: input.instanceId }
+          const releaseTrustedBinding = input.bindTrustedShell?.(trustedElement, input.instanceId)
+          const listenerCount = (options.mode === 'editor' ? 5 : 1) + (releaseTrustedBinding ? 1 : 0)
           const shell = {
             input,
+            trustedElement,
             updates: [],
             disposed: false,
             update(next) {
@@ -105,7 +108,9 @@ const createFakeEnvironment = () => {
               return input.onEvent({ instanceId: input.instanceId, type, event })
             },
             dispose() {
+              if (this.disposed) return
               this.disposed = true
+              releaseTrustedBinding?.()
               shells.delete(input.instanceId)
             },
             getResourceCounts() {
@@ -343,6 +348,70 @@ test('twenty instances share one iframe and one render batch per animation frame
   environment.frames[0].shells.get('node-1').dispatch('select', { button: 0, clientX: 1, clientY: 2 })
   assert.equal(selections.length, 1)
   assert.equal(runtimeEvents.length, 0)
+})
+
+test('editor trusted shell bindings are surface-owned across restart, unregister, and dispose', () => {
+  const environment = createFakeEnvironment()
+  const events = []
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore: createMarkerStore(),
+    bindTrustedShell: (shell, instanceId) => {
+      events.push(['bind', instanceId, shell])
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        events.push(['release', instanceId, shell])
+      }
+    },
+  })
+
+  host.register(createInstance(1))
+  const firstShell = environment.frames[0].shells.get('node-1').trustedElement
+  assert.deepEqual(events, [['bind', 'node-1', firstShell]])
+  const firstFrame = makeReady(environment)
+  acknowledgeLastBatch(environment, firstFrame)
+  host.restart('test-restart')
+  environment.flushAnimationFrame()
+  const secondShell = environment.frames.at(-1).shells.get('node-1').trustedElement
+  assert.notEqual(secondShell, firstShell)
+  assert.deepEqual(events, [
+    ['bind', 'node-1', firstShell],
+    ['release', 'node-1', firstShell],
+    ['bind', 'node-1', secondShell],
+  ])
+
+  const secondFrame = makeReady(environment)
+  acknowledgeLastBatch(environment, secondFrame)
+  host.unregister('node-1')
+  assert.deepEqual(events.at(-1), ['release', 'node-1', secondShell])
+  host.register(createInstance(1))
+  const thirdShell = environment.frames.at(-1).shells.get('node-1').trustedElement
+  host.dispose()
+  assert.deepEqual(events.at(-1), ['release', 'node-1', thirdShell])
+  assert.equal(events.filter(([type]) => type === 'bind').length, 3)
+  assert.equal(events.filter(([type]) => type === 'release').length, 3)
+
+  assert.throws(
+    () =>
+      createOnlineComponentSurfaceHost({
+        enabled: true,
+        mount: {},
+        mode: 'preview',
+        surfaceId: 'preview-surface',
+        activationId: 'tab-b',
+        environment: createFakeEnvironment(),
+        markerStore: createMarkerStore(),
+        bindTrustedShell: () => () => undefined,
+      }),
+    /preview surfaces cannot bind trusted drag shells/,
+  )
 })
 
 test('out-of-order acknowledgements are rejected and reported object URL leaks quarantine activation', () => {

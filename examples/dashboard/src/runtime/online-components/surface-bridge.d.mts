@@ -73,10 +73,12 @@ export interface DashboardOnlineComponentSurfaceOptions {
       mount: HTMLElement
       onSelection?: (event: OnlineComponentTrustedShellEvent) => void
       onRuntimeEvent?: (event: OnlineComponentTrustedShellEvent) => void
+      bindTrustedShell?: (shell: HTMLElement, instanceId: string) => () => void
     }>
   }) => OnlineComponentSurfaceController
   readonly onSelection?: (event: OnlineComponentTrustedShellEvent) => void
   readonly onRuntimeEvent?: (event: OnlineComponentTrustedShellEvent) => void
+  readonly bindTrustedShell?: (shell: HTMLElement, instanceId: string) => () => void
 }
 
 export declare const DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY: 'onlineComponentSurfaceBridge'
@@ -85,6 +87,12 @@ export declare const DASHBOARD_ONLINE_COMPONENT_RUNTIME_EVENT: 'easy-editor:onli
 export declare const sanitizeDashboardOnlineComponentProps: (
   props: Readonly<Record<string, unknown>>,
 ) => Readonly<Record<string, OnlineComponentJsonValue>>
+export declare const resolveDashboardOnlineComponentContext: (props: Readonly<Record<string, unknown>>) => Readonly<{
+  props: Readonly<Record<string, OnlineComponentJsonValue>>
+  data: OnlineComponentJsonValue
+  theme: Readonly<Record<string, OnlineComponentJsonValue>>
+  assets: readonly OnlineComponentJsonValue[]
+}>
 export declare const resolveDashboardOnlineComponentSafeBoot: (search: string) => boolean
 export declare const resolveDashboardOnlineComponentSurfaceFeatureFlags: (
   source?: Readonly<Record<string, unknown>>,

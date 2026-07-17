@@ -1,11 +1,13 @@
+import { resolveDashboardOnlineComponentContext, sanitizeDashboardOnlineComponentProps } from './context-resolver.mjs'
 import { createOnlineComponentSurfaceController } from './surface-controller.mjs'
+
+export { resolveDashboardOnlineComponentContext, sanitizeDashboardOnlineComponentProps }
 
 export const DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY = 'onlineComponentSurfaceBridge'
 export const DASHBOARD_ONLINE_COMPONENT_SAFE_BOOT_QUERY = 'easy-editor-online-safe-boot'
 export const DASHBOARD_ONLINE_COMPONENT_RUNTIME_EVENT = 'easy-editor:online-component-runtime-event'
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/
-const INTERNAL_PROP_KEYS = new Set(['children', 'ref', '__appHelper', '__components', '__id', '__schema'])
 const UNSAFE_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 
 const isFeatureEnabled = value => value === true || value === 'true' || value === '1'
@@ -45,17 +47,6 @@ const sanitizeJsonValue = (value, depth, seen) => {
   }
   seen.delete(value)
   return sanitized
-}
-
-export const sanitizeDashboardOnlineComponentProps = props => {
-  const value = assertPlainObject(props, 'online component props')
-  const sanitized = {}
-  for (const [key, child] of Object.entries(value)) {
-    if (INTERNAL_PROP_KEYS.has(key) || key.startsWith('__') || UNSAFE_JSON_KEYS.has(key)) continue
-    const next = sanitizeJsonValue(child, 0, new Set())
-    if (next !== undefined) sanitized[key] = next
-  }
-  return Object.freeze(sanitized)
 }
 
 export const resolveDashboardOnlineComponentSafeBoot = search => {
@@ -148,8 +139,8 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
 
   const applyBinding = (binding, measurement) => {
     const payload = Object.freeze({
-      props: binding.props,
-      ...(Object.hasOwn(binding.props, 'data') ? { data: binding.props.data } : {}),
+      ...binding.context,
+      size: Object.freeze({ width: measurement.rect.width, height: measurement.rect.height }),
     })
     const fingerprint = JSON.stringify({
       node: binding.node,
@@ -252,7 +243,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     projectId = undefined
     mount = undefined
     for (const binding of bindings.values()) {
-      if (binding.registered) previous.unregister(binding.instanceId)
+      previous.unregister(binding.instanceId)
       binding.registered = false
       binding.pending = false
       binding.pendingToken = undefined
@@ -271,7 +262,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     const binding = {
       instanceId,
       node: value.node,
-      props: sanitizeDashboardOnlineComponentProps(value.props ?? {}),
+      context: resolveDashboardOnlineComponentContext(value.props ?? {}),
       element: value.element,
       generatedZ: nextGeneratedZ++,
       registered: false,
@@ -291,7 +282,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
         }
         if (typeof next.element?.getBoundingClientRect !== 'function') throw new TypeError('binding element is invalid')
         binding.node = next.node
-        binding.props = sanitizeDashboardOnlineComponentProps(next.props ?? {})
+        binding.context = resolveDashboardOnlineComponentContext(next.props ?? {})
         binding.element = next.element
         schedule()
         return true
@@ -300,7 +291,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
         if (!active) return false
         active = false
         bindings.delete(instanceId)
-        if (binding.registered) controller?.unregister(instanceId)
+        controller?.unregister(instanceId)
         if (bindings.size === 0 && frame !== undefined) {
           cancelFrame(frame)
           frame = undefined
@@ -333,6 +324,12 @@ export const startDashboardOnlineComponentSurface = options => {
   }
   const mode = options.mode
   if (mode !== 'editor' && mode !== 'preview') throw new TypeError('surface mode must be editor or preview')
+  if (options.bindTrustedShell !== undefined && typeof options.bindTrustedShell !== 'function') {
+    throw new TypeError('bindTrustedShell must be a function')
+  }
+  if (mode === 'preview' && options.bindTrustedShell !== undefined) {
+    throw new TypeError('preview surfaces cannot bind trusted drag shells')
+  }
   const projectId = assertIdentifier(options.projectId, 'projectId')
   const branchId = assertIdentifier(options.branchId, 'branchId')
   const surfaceId = assertIdentifier(options.surfaceId, 'surfaceId')
@@ -396,6 +393,7 @@ export const startDashboardOnlineComponentSurface = options => {
           mount,
           ...(options.onSelection ? { onSelection: options.onSelection } : {}),
           ...(options.onRuntimeEvent ? { onRuntimeEvent: options.onRuntimeEvent } : {}),
+          ...(options.bindTrustedShell ? { bindTrustedShell: options.bindTrustedShell } : {}),
         },
       })
       releaseBridge = bridge.attach({ controller, projectId, mount })
