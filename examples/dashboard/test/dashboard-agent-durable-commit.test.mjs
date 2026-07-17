@@ -251,6 +251,115 @@ test('applied outcome atomically commits the full draft, exact lineage, journal,
   )
 })
 
+test('an applied durable batch atomically replaces the branch working-draft artifact root', async () => {
+  const { backend, coordinator } = createHarness()
+  const intent = intentFor()
+  const outcome = appliedOutcome()
+  const previousRoot = {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    ownerType: 'working-draft',
+    ownerId: authority.branchId,
+    artifactId: 'artifact-kpi',
+    sourceRevision: 'revision-6',
+  }
+  await coordinator.createArtifactRoot(previousRoot)
+  await recordDurableAgentIntent({ coordinator, intent })
+
+  await commitDurableAgentBatch({
+    coordinator,
+    batch: commitInput(intent, outcome, {
+      artifactRefs: [
+        {
+          ownerType: 'working-draft',
+          ownerId: authority.branchId,
+          artifactId: 'artifact-kpi',
+          sourceRevision: 'revision-7',
+        },
+      ],
+      artifactRefDeletes: [
+        {
+          ownerType: previousRoot.ownerType,
+          ownerId: previousRoot.ownerId,
+          artifactId: previousRoot.artifactId,
+          sourceRevision: previousRoot.sourceRevision,
+        },
+      ],
+    }),
+  })
+
+  assert.equal(
+    await backend.get('artifactRefs', [
+      authority.projectId,
+      authority.branchId,
+      previousRoot.ownerType,
+      previousRoot.ownerId,
+      previousRoot.artifactId,
+      previousRoot.sourceRevision,
+    ]),
+    undefined,
+  )
+  assert.deepEqual(
+    await backend.get('artifactRefs', [
+      authority.projectId,
+      authority.branchId,
+      'working-draft',
+      authority.branchId,
+      'artifact-kpi',
+      'revision-7',
+    ]),
+    {
+      schemaVersion: 1,
+      projectId: authority.projectId,
+      branchId: authority.branchId,
+      ownerType: 'working-draft',
+      ownerId: authority.branchId,
+      artifactId: 'artifact-kpi',
+      sourceRevision: 'revision-7',
+      callId: authority.callId,
+      draftGeneration: 1,
+    },
+  )
+})
+
+test('artifact-root replacement authority and conflicts reject before any durable write', async () => {
+  const { backend, coordinator } = createHarness()
+  const intent = intentFor()
+  const outcome = appliedOutcome()
+  const workingDraftRoot = {
+    ownerType: 'working-draft',
+    ownerId: authority.branchId,
+    artifactId: 'artifact-kpi',
+    sourceRevision: 'revision-7',
+  }
+  const cases = [
+    commitInput(intent, outcome, {
+      artifactRefs: [{ ...workingDraftRoot, ownerId: 'another-branch' }],
+    }),
+    commitInput(intent, outcome, {
+      artifactRefDeletes: [{ ...workingDraftRoot, ownerType: 'checkpoint' }],
+    }),
+    commitInput(intent, outcome, {
+      artifactRefDeletes: [{ ...workingDraftRoot, ownerId: 'another-branch' }],
+    }),
+    commitInput(intent, outcome, {
+      artifactRefs: [workingDraftRoot],
+      artifactRefDeletes: [workingDraftRoot],
+    }),
+  ]
+
+  for (const batch of cases) {
+    await assert.rejects(
+      commitDurableAgentBatch({ coordinator, batch }),
+      error => error instanceof PersistenceLineageContractError && error.code === 'INVALID_LINEAGE_DTO',
+    )
+  }
+  assert.deepEqual(await backend.getAll('workingDrafts'), [])
+  assert.deepEqual(await backend.getAll('toolReceipts'), [])
+  assert.deepEqual(await backend.getAll('artifactRefs'), [])
+})
+
 test('ACK-loss recovery returns the original applied receipt only through exact durable lineage', async () => {
   const { coordinator } = createHarness()
   const intent = intentFor()

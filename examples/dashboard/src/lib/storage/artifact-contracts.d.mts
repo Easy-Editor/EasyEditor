@@ -29,12 +29,30 @@ export interface ArtifactRecordV1 extends ArtifactSourceRevision {
   readonly source: string
   readonly css: string
   readonly safeManifest: JsonObject & Readonly<{ schemaVersion: 1 }>
-  readonly lockedDependencies: readonly JsonValue[]
+  readonly lockedDependencies: readonly LockedArtifactDependencyV1[]
   readonly dependencyLockDigest: `sha256:${string}`
   readonly diagnostics: readonly JsonValue[]
   readonly provenance: JsonObject
   readonly createdAt: number
   readonly supersedes: ArtifactSourceRevision | null
+}
+
+export interface LockedArtifactDependencyModuleV1 {
+  readonly format: 'bundled-esm'
+  readonly contentType: 'text/javascript'
+  readonly encoding: 'base64'
+  readonly byteLength: number
+  readonly bytes: string
+}
+
+export interface LockedArtifactDependencyV1 {
+  readonly package: string
+  readonly range: string
+  readonly exactVersion: string
+  readonly finalUrl: string
+  readonly integrity: `sha256-${string}`
+  readonly cached: boolean
+  readonly module: LockedArtifactDependencyModuleV1
 }
 
 export interface ArtifactReadRequestV1 {
@@ -122,6 +140,7 @@ export declare const ARTIFACT_PROVENANCE_MAX_BYTES: number
 export declare const ARTIFACT_RECORD_MAX_BYTES: number
 export declare const cloneFrozenJson: <T extends JsonValue>(value: T) => Readonly<T>
 export declare const validateArtifactSourceRevision: (value: unknown) => ArtifactSourceRevision
+export declare const validateLockedArtifactDependency: (value: unknown) => LockedArtifactDependencyV1
 export declare const validateArtifactRef: (value: unknown) => ArtifactRef
 export declare const createArtifactRevisionKey: (value: unknown) => string
 export declare const validateArtifactRecord: (value: unknown) => ArtifactRecordV1

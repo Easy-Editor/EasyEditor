@@ -5,6 +5,8 @@ export type {
   CanonicalNodeAgentExtraV1,
   CanonicalNodeExtra,
   LocalMaterialArtifactRef,
+  LockedArtifactDependencyModuleV1,
+  LockedArtifactDependencyV1,
   OnlineArtifactRef,
 } from '../../../lib/storage/artifact-contracts.mjs'
 export {
@@ -14,5 +16,6 @@ export {
   validateArtifactRecord,
   validateArtifactRef,
   validateArtifactSourceRevision,
+  validateLockedArtifactDependency,
   writeCanonicalNodeArtifactRef,
 } from '../../../lib/storage/artifact-contracts.mjs'

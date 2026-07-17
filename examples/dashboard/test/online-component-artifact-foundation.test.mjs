@@ -7,6 +7,7 @@ import {
   validateArtifactRecord,
   validateArtifactRef,
   validateArtifactSourceRevision,
+  validateLockedArtifactDependency,
   writeCanonicalNodeArtifactRef,
 } from '../src/editor/agent/online-components/artifact-contracts.mjs'
 import { scanArtifactSource } from '../src/editor/agent/online-components/artifact-source.mjs'
@@ -53,10 +54,19 @@ const artifactRecord = (overrides = {}) => ({
   safeManifest: { schemaVersion: 1, displayName: 'KPI', events: ['select'] },
   lockedDependencies: [
     {
-      specifier: 'chart',
-      version: '1.2.3',
-      integrity: digest('b'),
-      bytes: 'base64:ZXhwb3J0IGRlZmF1bHQge30=',
+      package: 'chart',
+      range: '^1.2.0',
+      exactVersion: '1.2.3',
+      finalUrl: 'https://cdn.example.test/chart@1.2.3/index.mjs',
+      integrity: 'sha256-muuNWbTUg8pimOmkUPvzff0rTGOZATWrHQQNdjFAh+w=',
+      cached: true,
+      module: {
+        format: 'bundled-esm',
+        contentType: 'text/javascript',
+        encoding: 'base64',
+        byteLength: 17,
+        bytes: 'ZXhwb3J0IGRlZmF1bHQge30=',
+      },
     },
   ],
   dependencyLockDigest: digest('c'),
@@ -81,12 +91,12 @@ test('ArtifactSourceRevision, ArtifactRef, and ArtifactRecord are strict detache
   const record = validateArtifactRecord(mutable)
 
   mutable.safeManifest.events.push('mutated-after-validation')
-  mutable.lockedDependencies[0].version = '9.9.9'
+  mutable.lockedDependencies[0].exactVersion = '9.9.9'
 
   assert.deepEqual(revision, sourceRevision)
   assert.deepEqual(ref, onlineRef)
   assert.equal(record.safeManifest.events.includes('mutated-after-validation'), false)
-  assert.equal(record.lockedDependencies[0].version, '1.2.3')
+  assert.equal(record.lockedDependencies[0].exactVersion, '1.2.3')
   assertDeeplyFrozen(revision)
   assertDeeplyFrozen(ref)
   assertDeeplyFrozen(record)
@@ -118,6 +128,88 @@ test('ArtifactSourceRevision, ArtifactRef, and ArtifactRecord are strict detache
   assert.throws(
     () => validateArtifactRecord(artifactRecord({ provenance: { value: undefined } })),
     error => error.code === 'validation-failed' && error.reason === 'value-is-not-json',
+  )
+})
+
+test('locked dependencies accept only the canonical resolver DTO without invoking accessors', () => {
+  const dependency = artifactRecord().lockedDependencies[0]
+  const locked = validateLockedArtifactDependency(dependency)
+
+  assert.deepEqual(locked, dependency)
+  assertDeeplyFrozen(locked)
+  assert.throws(
+    () => validateLockedArtifactDependency({ ...dependency, extra: true }),
+    error =>
+      error.code === 'validation-failed' && error.reason === 'artifact-locked-dependency-fields-must-match-contract',
+  )
+  assert.throws(
+    () => validateLockedArtifactDependency({ ...dependency, integrity: digest('a') }),
+    error =>
+      error.code === 'validation-failed' && error.reason === 'artifact-locked-dependency.integrity-must-be-sha256-sri',
+  )
+  assert.throws(
+    () =>
+      validateLockedArtifactDependency({
+        ...dependency,
+        module: { ...dependency.module, format: 'esm' },
+      }),
+    error =>
+      error.code === 'validation-failed' && error.reason === 'artifact-locked-dependency.module-contract-is-invalid',
+  )
+  assert.throws(
+    () =>
+      validateLockedArtifactDependency({
+        ...dependency,
+        module: { ...dependency.module, byteLength: dependency.module.byteLength + 1 },
+      }),
+    error =>
+      error.code === 'validation-failed' &&
+      error.reason === 'artifact-locked-dependency.module.byteLength-does-not-match-bytes',
+  )
+  assert.throws(
+    () =>
+      validateLockedArtifactDependency({
+        ...dependency,
+        module: { ...dependency.module, bytes: 'AB==' },
+      }),
+    error =>
+      error.code === 'validation-failed' &&
+      error.reason === 'artifact-locked-dependency.module.bytes-is-not-canonical-base64',
+  )
+  assert.throws(
+    () => validateLockedArtifactDependency({ ...dependency, finalUrl: 'http://cdn.example.test/chart.mjs' }),
+    error =>
+      error.code === 'validation-failed' && error.reason === 'artifact-locked-dependency.finalUrl-must-be-an-https-url',
+  )
+
+  let getterRuns = 0
+  const hostile = { ...dependency }
+  Object.defineProperty(hostile, 'package', {
+    enumerable: true,
+    get() {
+      getterRuns += 1
+      return 'chart'
+    },
+  })
+  assert.throws(
+    () => validateLockedArtifactDependency(hostile),
+    error => error.code === 'validation-failed' && error.reason === 'accessor-values-are-not-json',
+  )
+  assert.equal(getterRuns, 0)
+})
+
+test('artifact records reject duplicate dependency packages', () => {
+  const dependency = artifactRecord().lockedDependencies[0]
+  assert.throws(
+    () =>
+      validateArtifactRecord(
+        artifactRecord({
+          lockedDependencies: [dependency, { ...dependency, exactVersion: '1.2.4' }],
+        }),
+      ),
+    error =>
+      error.code === 'validation-failed' &&
+      error.reason === 'artifact-record.lockedDependencies-must-not-contain-duplicate-packages',
   )
 })
 
@@ -231,7 +323,16 @@ test('artifact records enforce source, CSS, dependency-count, and total-record b
     () =>
       validateArtifactRecord(
         artifactRecord({
-          lockedDependencies: [{ bytes: 'x'.repeat(2 * 1024 * 1024) }],
+          lockedDependencies: [
+            {
+              ...artifactRecord().lockedDependencies[0],
+              module: {
+                ...artifactRecord().lockedDependencies[0].module,
+                byteLength: 1_572_864,
+                bytes: 'AAAA'.repeat(524_288),
+              },
+            },
+          ],
         }),
       ),
     error => error.code === 'validation-failed' && error.reason === 'artifact-record-exceeds-byte-budget',

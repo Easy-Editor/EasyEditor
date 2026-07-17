@@ -62,6 +62,8 @@ export interface DurableAgentBatchV1 {
   readonly journalDeletes?: readonly string[]
   readonly checkpoint: DurableAgentCheckpointInputV1
   readonly artifactRefs?: readonly DurableAgentArtifactRefInputV1[]
+  /** Exact artifact-root keys deleted atomically with the replacement draft and receipt. */
+  readonly artifactRefDeletes?: readonly DurableAgentArtifactRefInputV1[]
 }
 
 export interface DurableAgentCommitResultV1 {

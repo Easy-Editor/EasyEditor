@@ -1,3 +1,4 @@
+import { DASHBOARD_ARTIFACT_ROOT_OWNER_TYPES } from '../../../lib/storage/lifecycle.mjs'
 import {
   assertExactRecord,
   cloneJsonObject,
@@ -120,24 +121,59 @@ const parseJournalDeletes = (value, journal) => {
 
 const artifactRefKey = value => [value.ownerType, value.ownerId, value.artifactId, value.sourceRevision].join('\u0000')
 
-const parseArtifactRefs = value => {
+const ARTIFACT_ROOT_OWNER_TYPES = new Set(DASHBOARD_ARTIFACT_ROOT_OWNER_TYPES)
+
+const parseArtifactRoots = (value, field) => {
   if (value === undefined) return []
-  if (!Array.isArray(value)) return failContract('must-be-an-array', 'DurableAgentBatch.artifactRefs')
-  const parsed = cloneJsonValue(value, 'DurableAgentBatch.artifactRefs').map((entry, index) => {
-    const label = `DurableAgentBatch.artifactRefs[${index}]`
+  const collectionLabel = `DurableAgentBatch.${field}`
+  if (!Array.isArray(value)) return failContract('must-be-an-array', collectionLabel)
+  const parsed = cloneJsonValue(value, collectionLabel).map((entry, index) => {
+    const label = `${collectionLabel}[${index}]`
     assertExactRecord(entry, ['ownerType', 'ownerId', 'artifactId', 'sourceRevision'], [], label)
+    const ownerType = requireNonEmptyString(ownDataValue(entry, 'ownerType', label), `${label}.ownerType`)
+    if (!ARTIFACT_ROOT_OWNER_TYPES.has(ownerType)) {
+      return failContract('owner-type-is-unsupported', `${label}.ownerType`)
+    }
+    const ownerId = requireNonEmptyString(ownDataValue(entry, 'ownerId', label), `${label}.ownerId`)
     return {
-      ownerType: requireNonEmptyString(ownDataValue(entry, 'ownerType', label), `${label}.ownerType`),
-      ownerId: requireNonEmptyString(ownDataValue(entry, 'ownerId', label), `${label}.ownerId`),
+      ownerType,
+      ownerId,
       artifactId: requireNonEmptyString(ownDataValue(entry, 'artifactId', label), `${label}.artifactId`),
       sourceRevision: requireNonEmptyString(ownDataValue(entry, 'sourceRevision', label), `${label}.sourceRevision`),
     }
   })
   parsed.sort((left, right) => compareCodeUnits(artifactRefKey(left), artifactRefKey(right)))
   if (parsed.some((entry, index) => index > 0 && artifactRefKey(entry) === artifactRefKey(parsed[index - 1]))) {
-    return failContract('must-not-contain-duplicate-refs', 'DurableAgentBatch.artifactRefs')
+    return failContract('must-not-contain-duplicate-refs', collectionLabel)
   }
   return parsed
+}
+
+const parseArtifactRefs = value => parseArtifactRoots(value, 'artifactRefs')
+
+const parseArtifactRefDeletes = (value, artifactRefs, authority) => {
+  const deletes = parseArtifactRoots(value, 'artifactRefDeletes')
+  for (const [index, root] of artifactRefs.entries()) {
+    if (root.ownerType === 'working-draft' && root.ownerId !== authority.branchId) {
+      return failContract('working-draft-owner-must-match-branch', `DurableAgentBatch.artifactRefs[${index}].ownerId`)
+    }
+  }
+  for (const [index, root] of deletes.entries()) {
+    if (root.ownerType !== 'working-draft') {
+      return failContract('only-working-draft-roots-can-be-deleted', `DurableAgentBatch.artifactRefDeletes[${index}]`)
+    }
+    if (root.ownerId !== authority.branchId) {
+      return failContract(
+        'working-draft-owner-must-match-branch',
+        `DurableAgentBatch.artifactRefDeletes[${index}].ownerId`,
+      )
+    }
+  }
+  const additions = new Set(artifactRefs.map(artifactRefKey))
+  if (deletes.some(root => additions.has(artifactRefKey(root)))) {
+    return failContract('artifact-ref-cannot-be-added-and-deleted', 'DurableAgentBatch.artifactRefDeletes')
+  }
+  return deletes
 }
 
 const parseProvenance = (value, authority, draftGeneration) => {
@@ -190,7 +226,7 @@ const parseDurableAgentBatch = value => {
       'journal',
       'checkpoint',
     ],
-    ['artifactRefs', 'journalDeletes'],
+    ['artifactRefDeletes', 'artifactRefs', 'journalDeletes'],
     'DurableAgentBatch',
   )
   requireSchemaVersion(ownDataValue(value, 'schemaVersion', 'DurableAgentBatch'), 'DurableAgentBatch.schemaVersion')
@@ -250,6 +286,7 @@ const parseDurableAgentBatch = value => {
   }
 
   const journal = parseJournal(ownDataValue(value, 'journal', 'DurableAgentBatch'))
+  const artifactRefs = parseArtifactRefs(optionalOwnDataValue(value, 'artifactRefs', 'DurableAgentBatch'))
   return freezeDto({
     ...authority,
     schemaVersion: 1,
@@ -276,7 +313,12 @@ const parseDurableAgentBatch = value => {
     journal,
     journalDeletes: parseJournalDeletes(optionalOwnDataValue(value, 'journalDeletes', 'DurableAgentBatch'), journal),
     checkpoint: parseCheckpoint(ownDataValue(value, 'checkpoint', 'DurableAgentBatch')),
-    artifactRefs: parseArtifactRefs(optionalOwnDataValue(value, 'artifactRefs', 'DurableAgentBatch')),
+    artifactRefs,
+    artifactRefDeletes: parseArtifactRefDeletes(
+      optionalOwnDataValue(value, 'artifactRefDeletes', 'DurableAgentBatch'),
+      artifactRefs,
+      authority,
+    ),
   })
 }
 
@@ -375,6 +417,11 @@ const buildOperations = batch => {
         callId: batch.callId,
         draftGeneration: batch.draftGeneration,
       },
+    })),
+    ...batch.artifactRefDeletes.map(ref => ({
+      type: 'delete',
+      store: 'artifactRefs',
+      key: [batch.projectId, batch.branchId, ref.ownerType, ref.ownerId, ref.artifactId, ref.sourceRevision],
     })),
   ]
   return operations

@@ -5,5 +5,6 @@ export {
   validateArtifactRecord,
   validateArtifactRef,
   validateArtifactSourceRevision,
+  validateLockedArtifactDependency,
   writeCanonicalNodeArtifactRef,
 } from '../../../lib/storage/artifact-contracts.mjs'

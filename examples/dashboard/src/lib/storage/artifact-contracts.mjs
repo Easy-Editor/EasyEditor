@@ -24,6 +24,16 @@ const artifactRecordFields = Object.freeze([
   'sourceRevision',
   'supersedes',
 ])
+const lockedDependencyFields = Object.freeze([
+  'cached',
+  'exactVersion',
+  'finalUrl',
+  'integrity',
+  'module',
+  'package',
+  'range',
+])
+const lockedDependencyModuleFields = Object.freeze(['byteLength', 'bytes', 'contentType', 'encoding', 'format'])
 const artifactReadFields = Object.freeze(['artifactId', 'projectId', 'schemaVersion', 'sourceRevision'])
 const artifactRootFields = Object.freeze([
   'artifactId',
@@ -57,6 +67,12 @@ export const ARTIFACT_PROVENANCE_MAX_BYTES = 64 * 1024
 export const ARTIFACT_RECORD_MAX_BYTES = 2 * 1024 * 1024
 
 const textEncoder = new TextEncoder()
+const packageNamePattern = /^(?:@[a-z0-9][a-z0-9._-]{0,63}\/)?[a-z0-9][a-z0-9._-]{0,127}$/u
+const exactVersionPattern =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
+const canonicalBase64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
+const base64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const sriSha256Pattern = /^sha256-[A-Za-z0-9+/]{43}=$/u
 
 const validationFailure = reason => new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.validationFailed, reason)
 
@@ -98,6 +114,85 @@ const requireTimestamp = (value, label) => {
     throw validationFailure(`${label}-must-be-a-non-negative-safe-integer`)
   }
   return value
+}
+
+const requireBoolean = (value, label) => {
+  if (value !== true && value !== false) throw validationFailure(`${label}-must-be-a-boolean`)
+  return value
+}
+
+const decodedBase64ByteLength = value => {
+  if (value.length === 0 || value.length % 4 !== 0 || !canonicalBase64Pattern.test(value)) return null
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  if (padding === 2 && (base64Alphabet.indexOf(value.at(-3)) & 15) !== 0) return null
+  if (padding === 1 && (base64Alphabet.indexOf(value.at(-2)) & 3) !== 0) return null
+  return (value.length / 4) * 3 - padding
+}
+
+const requireHttpsUrl = (value, label) => {
+  const source = requireNonEmptyString(value, label)
+  let url
+  try {
+    url = new URL(source)
+  } catch {
+    throw validationFailure(`${label}-must-be-an-https-url`)
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.href !== source) {
+    throw validationFailure(`${label}-must-be-an-https-url`)
+  }
+  return source
+}
+
+export const validateLockedArtifactDependency = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, lockedDependencyFields, 'artifact-locked-dependency')
+  assertExactFields(value.module, lockedDependencyModuleFields, 'artifact-locked-dependency.module')
+  const packageName = requireNonEmptyString(value.package, 'artifact-locked-dependency.package')
+  if (!packageNamePattern.test(packageName)) {
+    throw validationFailure('artifact-locked-dependency.package-is-invalid')
+  }
+  const range = requireNonEmptyString(value.range, 'artifact-locked-dependency.range')
+  if (range.length > 128) throw validationFailure('artifact-locked-dependency.range-exceeds-byte-budget')
+  const exactVersion = requireNonEmptyString(value.exactVersion, 'artifact-locked-dependency.exactVersion')
+  if (!exactVersionPattern.test(exactVersion)) {
+    throw validationFailure('artifact-locked-dependency.exactVersion-is-invalid')
+  }
+  if (!sriSha256Pattern.test(value.integrity)) {
+    throw validationFailure('artifact-locked-dependency.integrity-must-be-sha256-sri')
+  }
+  if (
+    value.module.format !== 'bundled-esm' ||
+    value.module.contentType !== 'text/javascript' ||
+    value.module.encoding !== 'base64'
+  ) {
+    throw validationFailure('artifact-locked-dependency.module-contract-is-invalid')
+  }
+  const bytes = requireNonEmptyString(value.module.bytes, 'artifact-locked-dependency.module.bytes')
+  const decodedLength = decodedBase64ByteLength(bytes)
+  if (decodedLength === null) {
+    throw validationFailure('artifact-locked-dependency.module.bytes-is-not-canonical-base64')
+  }
+  if (!Number.isSafeInteger(value.module.byteLength) || value.module.byteLength < 1) {
+    throw validationFailure('artifact-locked-dependency.module.byteLength-is-invalid')
+  }
+  if (value.module.byteLength !== decodedLength) {
+    throw validationFailure('artifact-locked-dependency.module.byteLength-does-not-match-bytes')
+  }
+  return cloneFrozenJson({
+    package: packageName,
+    range,
+    exactVersion,
+    finalUrl: requireHttpsUrl(value.finalUrl, 'artifact-locked-dependency.finalUrl'),
+    integrity: value.integrity,
+    cached: requireBoolean(value.cached, 'artifact-locked-dependency.cached'),
+    module: {
+      format: 'bundled-esm',
+      contentType: 'text/javascript',
+      encoding: 'base64',
+      byteLength: decodedLength,
+      bytes,
+    },
+  })
 }
 
 const byteLengthOfJson = value => textEncoder.encode(canonicalJsonStringify(value)).byteLength
@@ -192,8 +287,13 @@ export const validateArtifactRecord = value => {
   if (value.lockedDependencies.length > ARTIFACT_LOCKED_DEPENDENCY_MAX_COUNT) {
     throw validationFailure('artifact-record.lockedDependencies-exceeds-count-budget')
   }
-  for (const [index, dependency] of value.lockedDependencies.entries()) {
-    assertPlainObject(dependency, `artifact-record.lockedDependencies[${index}]`)
+  const lockedDependencies = value.lockedDependencies.map(validateLockedArtifactDependency)
+  const dependencyPackages = new Set()
+  for (const dependency of lockedDependencies) {
+    if (dependencyPackages.has(dependency.package)) {
+      throw validationFailure('artifact-record.lockedDependencies-must-not-contain-duplicate-packages')
+    }
+    dependencyPackages.add(dependency.package)
   }
   if (!Array.isArray(value.diagnostics)) throw validationFailure('artifact-record.diagnostics-must-be-an-array')
   if (value.diagnostics.length > ARTIFACT_DIAGNOSTIC_MAX_COUNT) {
@@ -222,7 +322,7 @@ export const validateArtifactRecord = value => {
     source,
     css: value.css,
     safeManifest: value.safeManifest,
-    lockedDependencies: value.lockedDependencies,
+    lockedDependencies,
     dependencyLockDigest: requireDigest(value.dependencyLockDigest, 'artifact-record.dependencyLockDigest'),
     diagnostics: value.diagnostics,
     provenance: value.provenance,
