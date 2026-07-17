@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { createEnvironmentDataProxyMiddleware } from './data/index.mjs'
+import { createEnvironmentOnlineComponentDependencyMiddleware } from './online-components/index.mjs'
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultDistDirectory = resolve(moduleDirectory, '..', 'dist')
@@ -89,6 +90,10 @@ export const createDashboardServer = ({
   dataProxyHandler,
   dataProxyInboundTimeoutMs,
   dataProxyPublicOrigins,
+  onlineComponentDependencyOptions = {},
+  onlineComponentDependencyHandler,
+  onlineComponentDependencyInboundTimeoutMs,
+  onlineComponentDependencyPublicOrigins,
 } = {}) => {
   const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
     env,
@@ -98,8 +103,17 @@ export const createDashboardServer = ({
     publicOrigins: dataProxyPublicOrigins,
     transport: dataProxyOptions.transport,
   })
+  const onlineComponentDependencyMiddleware = createEnvironmentOnlineComponentDependencyMiddleware({
+    env,
+    handler: onlineComponentDependencyHandler,
+    inboundTimeoutMs: onlineComponentDependencyInboundTimeoutMs,
+    lookup: onlineComponentDependencyOptions.lookup,
+    publicOrigins: onlineComponentDependencyPublicOrigins,
+    transport: onlineComponentDependencyOptions.transport,
+  })
   return createServer((request, response) => {
     void (async () => {
+      if (await onlineComponentDependencyMiddleware(request, response)) return
       if (await dataProxyMiddleware(request, response)) return
       await serveDashboard(request, response, distDir)
     })()

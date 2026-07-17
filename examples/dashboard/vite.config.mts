@@ -5,10 +5,15 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { type UserConfig, defineConfig } from 'vite'
 import { type DataProxyMiddlewareOptions, createEnvironmentDataProxyMiddleware } from './server/data/index.mjs'
+import {
+  type OnlineComponentDependencyMiddlewareOptions,
+  createEnvironmentOnlineComponentDependencyMiddleware,
+} from './server/online-components/index.mjs'
 
 export interface DashboardViteConfigOptions {
   env?: NodeJS.ProcessEnv
   dataProxyOptions?: Pick<DataProxyMiddlewareOptions, 'lookup' | 'transport'>
+  onlineComponentDependencyOptions?: Pick<OnlineComponentDependencyMiddlewareOptions, 'lookup' | 'transport'>
 }
 
 const dashboardDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -17,6 +22,7 @@ const dashboardDirectory = path.dirname(fileURLToPath(import.meta.url))
 export const createDashboardViteConfig = ({
   env = process.env,
   dataProxyOptions = {},
+  onlineComponentDependencyOptions = {},
 }: DashboardViteConfigOptions = {}): UserConfig => {
   const agentRuntimeE2EEnabled = env.VITE_E2E === '1'
   const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
@@ -24,11 +30,24 @@ export const createDashboardViteConfig = ({
     lookup: dataProxyOptions.lookup,
     transport: dataProxyOptions.transport,
   })
+  const onlineComponentDependencyMiddleware = createEnvironmentOnlineComponentDependencyMiddleware({
+    env,
+    lookup: onlineComponentDependencyOptions.lookup,
+    transport: onlineComponentDependencyOptions.transport,
+  })
   return {
     define: {
       __EASY_EDITOR_AGENT_RUNTIME_E2E__: JSON.stringify(agentRuntimeE2EEnabled),
     },
     plugins: [
+      {
+        name: 'easy-editor-online-component-dependency',
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            void onlineComponentDependencyMiddleware(request, response, next)
+          })
+        },
+      },
       {
         name: 'easy-editor-data-proxy',
         configureServer(server) {
