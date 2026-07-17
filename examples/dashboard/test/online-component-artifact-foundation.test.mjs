@@ -448,8 +448,8 @@ test('ArtifactStore accepts only ProjectPersistenceCoordinator and reconciles im
     schemaVersion: 1,
     projectId: 'project-1',
     branchId: 'main',
-    ownerType: 'working-draft',
-    ownerId: 'main',
+    ownerType: 'checkpoint',
+    ownerId: 'checkpoint-1',
     artifactId: 'artifact-kpi',
     sourceRevision: 'revision-7',
   }

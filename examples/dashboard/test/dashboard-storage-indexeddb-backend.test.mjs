@@ -529,7 +529,24 @@ test('IndexedDB coordinator matches Phase 4 session, version, grant, restore, an
   const indexedDB = createFactory()
   const backend = new IndexedDbDashboardStorageBackend({ indexedDB })
   const coordinator = new ProjectPersistenceCoordinator({ backend })
-  const projectSchema = { componentsTree: [{ componentName: 'GeneratedMaterialHost', id: 'root' }] }
+  const projectSchema = {
+    componentsTree: [
+      {
+        componentName: 'GeneratedMaterialHost',
+        id: 'root',
+        $agent: {
+          schemaVersion: 1,
+          artifactRef: {
+            artifactId: 'artifact-1',
+            sourceRevision: 'revision-1',
+            logicalComponentId: 'logical-artifact-1',
+            sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+            target: { kind: 'online' },
+          },
+        },
+      },
+    ],
+  }
   await coordinator.commit({
     schemaVersion: 1,
     batchId: 'phase-4-bootstrap',
@@ -547,19 +564,6 @@ test('IndexedDB coordinator matches Phase 4 session, version, grant, restore, an
         value: {
           schemaVersion: 1,
           projectId: 'project-1',
-          artifactId: 'artifact-1',
-          sourceRevision: 'revision-1',
-        },
-      },
-      {
-        type: 'put',
-        store: 'artifactRefs',
-        value: {
-          schemaVersion: 1,
-          projectId: 'project-1',
-          branchId: 'main',
-          ownerType: 'working-draft',
-          ownerId: 'main',
           artifactId: 'artifact-1',
           sourceRevision: 'revision-1',
         },
@@ -636,7 +640,7 @@ test('IndexedDB coordinator matches Phase 4 session, version, grant, restore, an
     versionId: 'version-taskless',
     name: 'Version taskless',
     createdAt: 4,
-    artifactRefs: [],
+    artifactRefs: [{ artifactId: 'artifact-1', sourceRevision: 'revision-1' }],
     sourceSessionId: null,
     sourceTaskId: null,
     sourceCheckpointId: null,
@@ -789,7 +793,24 @@ test('IndexedDB immutable artifact/root APIs and atomic GC sweep match Memory se
     branchId: 'main',
     expectedDraftGeneration: 0,
     activeDocument: null,
-    projectSchema: { value: 1 },
+    projectSchema: {
+      componentsTree: [
+        {
+          id: 'generated-live',
+          componentName: 'GeneratedMaterialHost',
+          $agent: {
+            schemaVersion: 1,
+            artifactRef: {
+              artifactId: artifact.artifactId,
+              sourceRevision: artifact.sourceRevision,
+              logicalComponentId: artifact.logicalComponentId,
+              sourceIntegrity: artifact.sourceIntegrity,
+              target: { kind: 'online' },
+            },
+          },
+        },
+      ],
+    },
     commitKind: 'manual-save',
     updatedAt: 1,
     operations: [],
@@ -853,4 +874,71 @@ test('IndexedDB GC transaction revalidates the root fence even with no deletion 
     error => error.code === 'generation-conflict' && error.reason === 'artifact-gc-root-fence-changed',
   )
   assert.equal((await backend.getAll('artifactRefs')).length, 1)
+})
+
+test('IndexedDB quota abort rolls back canonical draft replacement and exact working-draft root reconciliation together', async () => {
+  const indexedDB = createFactory()
+  const backend = new IndexedDbDashboardStorageBackend({ indexedDB })
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  const ref = sourceRevision => ({
+    artifactId: 'artifact-atomic-root',
+    sourceRevision,
+    logicalComponentId: 'logical-atomic-root',
+    sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+    target: { kind: 'online' },
+  })
+  const schema = artifactRef => ({
+    componentsTree: [
+      {
+        id: 'generated-atomic-root',
+        componentName: 'GeneratedMaterialHost',
+        $agent: { schemaVersion: 1, artifactRef },
+      },
+    ],
+  })
+  const rootKey = sourceRevision => [
+    'project-1',
+    'main',
+    'working-draft',
+    'main',
+    'artifact-atomic-root',
+    sourceRevision,
+  ]
+
+  await coordinator.commit({
+    schemaVersion: 1,
+    batchId: 'atomic-root-bootstrap',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 0,
+    activeDocument: null,
+    projectSchema: schema(ref('revision-1')),
+    commitKind: 'manual-save',
+    updatedAt: 1,
+    operations: [],
+  })
+  indexedDB.database.writeFault = {
+    successfulWrites: 1,
+    error: new DOMException('Full', 'QuotaExceededError'),
+  }
+
+  await assert.rejects(
+    coordinator.commit({
+      schemaVersion: 1,
+      batchId: 'atomic-root-replacement',
+      projectId: 'project-1',
+      branchId: 'main',
+      expectedDraftGeneration: 1,
+      activeDocument: null,
+      projectSchema: schema(ref('revision-2')),
+      commitKind: 'manual-save',
+      updatedAt: 2,
+      operations: [],
+    }),
+    error => error.code === 'quota-exceeded',
+  )
+
+  assert.equal((await coordinator.readWorkingDraft({ projectId: 'project-1', branchId: 'main' })).draftGeneration, 1)
+  assert.notEqual(await backend.get('artifactRefs', rootKey('revision-1')), undefined)
+  assert.equal(await backend.get('artifactRefs', rootKey('revision-2')), undefined)
 })

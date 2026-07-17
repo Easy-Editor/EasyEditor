@@ -319,6 +319,30 @@ test('createOnline locks dependencies, persists the immutable artifact first, an
       artifactId: artifact.artifactId,
       sourceRevision: artifact.sourceRevision,
     },
+    {
+      ownerType: 'receipt-intent',
+      ownerId: createCall().callId,
+      artifactId: artifact.artifactId,
+      sourceRevision: artifact.sourceRevision,
+    },
+    {
+      ownerType: 'tool-receipt',
+      ownerId: createCall().callId,
+      artifactId: artifact.artifactId,
+      sourceRevision: artifact.sourceRevision,
+    },
+    {
+      ownerType: 'task-journal',
+      ownerId: `task-journal-v1:${authority.sessionId}:call%3A${createCall().callId}`,
+      artifactId: artifact.artifactId,
+      sourceRevision: artifact.sourceRevision,
+    },
+    {
+      ownerType: 'checkpoint',
+      ownerId: `call:${createCall().callId}`,
+      artifactId: artifact.artifactId,
+      sourceRevision: artifact.sourceRevision,
+    },
   ])
   assert.deepEqual(batch.artifactRefDeletes, [])
 })
@@ -347,7 +371,7 @@ test('resolver outputs are exact data DTOs and forged module SRI is rejected bef
   }
 })
 
-test('Core rollback leaves an unrooted artifact and commits a terminal non-applied receipt', async () => {
+test('Core rollback leaves the immutable artifact unrooted for generation-fenced orphan GC', async () => {
   const harness = await createHarness({ coreFailure: new Error('Core rejected insert') })
   const result = await harness.service.createOnline(createCall())
 
@@ -559,8 +583,20 @@ test('reviseOnline preserves artifact identity, creates a superseding revision, 
       sourceRevision: 'revision-existing',
     },
   ])
-  assert.equal(batch.artifactRefs[0].artifactId, 'artifact-existing')
-  assert.equal(batch.artifactRefs[0].sourceRevision, artifact.sourceRevision)
+  assert.deepEqual(
+    batch.artifactRefs
+      .filter(root => root.sourceRevision === artifact.sourceRevision)
+      .map(root => root.ownerType)
+      .sort(),
+    ['checkpoint', 'receipt-intent', 'task-journal', 'tool-receipt', 'working-draft'],
+  )
+  assert.deepEqual(
+    batch.artifactRefs
+      .filter(root => root.sourceRevision === 'revision-existing')
+      .map(root => root.ownerType)
+      .sort(),
+    ['checkpoint', 'receipt-intent', 'task-journal', 'tool-receipt'],
+  )
 })
 
 test('call and dependency request DTOs reject extra fields, accessors, duplicates, and caller-controlled proxy identity', async () => {

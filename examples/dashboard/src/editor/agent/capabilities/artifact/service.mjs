@@ -141,12 +141,34 @@ const artifactSourceRevision = artifactRef => ({
   sourceIntegrity: artifactRef.sourceIntegrity,
 })
 
-const artifactRoot = (branchId, artifactRef) => ({
-  ownerType: 'working-draft',
-  ownerId: branchId,
+const artifactRoot = (ownerType, ownerId, artifactRef) => ({
+  ownerType,
+  ownerId,
   artifactId: artifactRef.artifactId,
   sourceRevision: artifactRef.sourceRevision,
 })
+
+const durableArtifactRoots = ({ call, artifactRef, previousArtifactRef, journal, checkpoint, includeWorkingDraft }) => {
+  const lineageRefs = [artifactRef, ...(previousArtifactRef === null ? [] : [previousArtifactRef])].filter(
+    (candidate, index, values) =>
+      values.findIndex(
+        value => value.artifactId === candidate.artifactId && value.sourceRevision === candidate.sourceRevision,
+      ) === index,
+  )
+  return [
+    ...(includeWorkingDraft ? [artifactRoot('working-draft', call.branchId, artifactRef)] : []),
+    ...lineageRefs.flatMap(lineageRef => [
+      artifactRoot('receipt-intent', call.callId, lineageRef),
+      artifactRoot('tool-receipt', call.callId, lineageRef),
+      artifactRoot(
+        'task-journal',
+        `task-journal-v1:${encodeURIComponent(call.sessionId)}:${encodeURIComponent(journal.recordId)}`,
+        lineageRef,
+      ),
+      artifactRoot('checkpoint', checkpoint.checkpointId, lineageRef),
+    ]),
+  ]
+}
 
 const normalizeRecoveryPostImages = value => {
   assertExactRecord(
@@ -776,6 +798,8 @@ const createService = options => {
           revision: post.revision,
           witness: createToolReceiptWitness(witness),
         })
+        const journal = terminalJournal({ call, prepare, artifactRef, status: 'applied' })
+        const checkpoint = terminalCheckpoint({ call, status: 'applied' })
         const committed = await session.commitBatch({
           schemaVersion: 1,
           ...recoveryAuthority,
@@ -788,11 +812,20 @@ const createService = options => {
           witness,
           provenance,
           sessionId: call.sessionId,
-          journal: terminalJournal({ call, prepare, artifactRef, status: 'applied' }),
-          checkpoint: terminalCheckpoint({ call, status: 'applied' }),
-          artifactRefs: [artifactRoot(call.branchId, artifactRef)],
+          journal,
+          checkpoint,
+          artifactRefs: durableArtifactRoots({
+            call,
+            artifactRef,
+            previousArtifactRef: prepare.previousArtifactRef,
+            journal,
+            checkpoint,
+            includeWorkingDraft: true,
+          }),
           artifactRefDeletes:
-            prepare.previousArtifactRef === null ? [] : [artifactRoot(call.branchId, prepare.previousArtifactRef)],
+            prepare.previousArtifactRef === null
+              ? []
+              : [artifactRoot('working-draft', call.branchId, prepare.previousArtifactRef)],
         })
         return invocationFromReceipt(createToolReceipt(committed.receipt), payloads.expectedPostImages)
       })

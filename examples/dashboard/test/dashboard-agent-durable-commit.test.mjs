@@ -109,6 +109,24 @@ const createHarness = options => {
   return { backend, coordinator }
 }
 
+const immutableArtifact = (artifactId, sourceRevision) => ({
+  schemaVersion: 1,
+  projectId: authority.projectId,
+  artifactId,
+  sourceRevision,
+  logicalComponentId: `logical-${artifactId}`,
+  sourceIntegrity: SHA_A,
+  source: 'export default { mount() {}, update() {}, destroy() {} }',
+  css: '',
+  safeManifest: { schemaVersion: 1 },
+  lockedDependencies: [],
+  dependencyLockDigest: SHA_B,
+  diagnostics: [],
+  provenance: { actor: 'test' },
+  createdAt: 1,
+  supersedes: null,
+})
+
 const commitInput = (intent, outcome, overrides = {}) => {
   const callId = overrides.callId ?? authority.callId
   return {
@@ -254,7 +272,7 @@ test('applied outcome atomically commits the full draft, exact lineage, journal,
 test('an applied durable batch atomically replaces the branch working-draft artifact root', async () => {
   const { backend, coordinator } = createHarness()
   const intent = intentFor()
-  const outcome = appliedOutcome()
+  const outcome = appliedOutcome({ draftGeneration: 2 })
   const previousRoot = {
     schemaVersion: 1,
     projectId: authority.projectId,
@@ -264,12 +282,59 @@ test('an applied durable batch atomically replaces the branch working-draft arti
     artifactId: 'artifact-kpi',
     sourceRevision: 'revision-6',
   }
-  await coordinator.createArtifactRoot(previousRoot)
+  await coordinator.commit({
+    schemaVersion: 1,
+    batchId: 'seed-previous-working-draft-root',
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    expectedDraftGeneration: 0,
+    activeDocument,
+    projectSchema: {
+      componentsTree: [
+        {
+          id: 'generated-kpi',
+          componentName: 'GeneratedMaterialHost',
+          $agent: {
+            schemaVersion: 1,
+            artifactRef: {
+              artifactId: previousRoot.artifactId,
+              sourceRevision: previousRoot.sourceRevision,
+              logicalComponentId: 'logical-kpi',
+              sourceIntegrity: SHA_A,
+              target: { kind: 'online' },
+            },
+          },
+        },
+      ],
+    },
+    commitKind: 'manual-save',
+    updatedAt: 99,
+    operations: [],
+  })
   await recordDurableAgentIntent({ coordinator, intent })
 
   await commitDurableAgentBatch({
     coordinator,
     batch: commitInput(intent, outcome, {
+      expectedDraftGeneration: 1,
+      projectSchema: {
+        componentsTree: [
+          {
+            id: 'generated-kpi',
+            componentName: 'GeneratedMaterialHost',
+            $agent: {
+              schemaVersion: 1,
+              artifactRef: {
+                artifactId: 'artifact-kpi',
+                sourceRevision: 'revision-7',
+                logicalComponentId: 'logical-kpi',
+                sourceIntegrity: SHA_A,
+                target: { kind: 'online' },
+              },
+            },
+          },
+        ],
+      },
       artifactRefs: [
         {
           ownerType: 'working-draft',
@@ -317,8 +382,6 @@ test('an applied durable batch atomically replaces the branch working-draft arti
       ownerId: authority.branchId,
       artifactId: 'artifact-kpi',
       sourceRevision: 'revision-7',
-      callId: authority.callId,
-      draftGeneration: 1,
     },
   )
 })
@@ -440,6 +503,37 @@ test('failure outcome commits an exact FailureWitness with no Agent provenance a
     receiptIntent: intent,
     receipt: outcome.receipt,
   })
+})
+
+test('a terminal not-applied durable outcome leaves its never-activated artifact collectible', async () => {
+  const { backend, coordinator } = createHarness()
+  const artifact = immutableArtifact('artifact-core-failed', 'revision-orphan')
+  await coordinator.createArtifact(artifact)
+  const failureAuthority = { ...authority, callId: 'call-core-failed' }
+  const intent = intentFor({ callId: failureAuthority.callId })
+  const outcome = failedOutcome(failureAuthority)
+  await recordDurableAgentIntent({ coordinator, intent })
+  await commitDurableAgentBatch({
+    coordinator,
+    batch: commitInput(intent, outcome, {
+      callId: failureAuthority.callId,
+      artifactRefs: [],
+      checkpoint: {
+        checkpointId: 'failed:call-core-failed',
+        value: { taskId: 'task-1', stepId: 'step-1', verified: false },
+      },
+    }),
+  })
+
+  const plan = await coordinator.planArtifactGcDryRun({ schemaVersion: 1, projectId: authority.projectId })
+  assert.deepEqual(plan.deletionCandidates, [
+    { artifactId: artifact.artifactId, sourceRevision: artifact.sourceRevision },
+  ])
+  assert.deepEqual((await coordinator.sweepArtifactGc(plan)).deletedArtifacts, plan.deletionCandidates)
+  assert.equal(
+    await backend.get('artifacts', [authority.projectId, artifact.artifactId, artifact.sourceRevision]),
+    undefined,
+  )
 })
 
 test('human/stale Agent failure atomically invalidates prior Agent provenance even after same-byte ABA', async () => {

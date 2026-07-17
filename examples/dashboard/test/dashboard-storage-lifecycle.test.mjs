@@ -10,12 +10,13 @@ const projectSchema = Object.freeze({
     {
       componentName: 'GeneratedMaterialHost',
       id: 'root',
-      extra: {
+      $agent: {
+        schemaVersion: 1,
         artifactRef: {
           artifactId: 'artifact-kpi',
           sourceRevision: 'revision-7',
           logicalComponentId: 'logical-kpi',
-          sourceIntegrity: 'sha256:test',
+          sourceIntegrity: `sha256:${'a'.repeat(64)}`,
           target: { kind: 'online' },
         },
       },
@@ -44,18 +45,6 @@ const bootstrap = async (backend = new MemoryDashboardStorageBackend()) => {
           artifactId: 'artifact-kpi',
           sourceRevision: 'revision-7',
           createdAt: 8,
-        },
-      },
-      {
-        type: 'put',
-        store: 'artifactRefs',
-        value: {
-          schemaVersion: 1,
-          ...scope,
-          ownerType: 'working-draft',
-          ownerId: scope.branchId,
-          artifactId: 'artifact-kpi',
-          sourceRevision: 'revision-7',
         },
       },
     ],
@@ -120,6 +109,117 @@ test('named project versions are immutable, stable-listable, and exact retries d
   assert.deepEqual(await coordinator.listProjectVersions({ schemaVersion: 1, projectId: scope.projectId }), [
     first.version,
   ])
+})
+
+test('an original project-version request reconciles after later draft edits without advancing the draft', async () => {
+  const { backend, coordinator } = await bootstrap()
+  const first = await coordinator.createProjectVersion(versionRequest())
+  const edited = await coordinator.commit({
+    schemaVersion: 1,
+    batchId: 'edit-after-version-create',
+    ...scope,
+    expectedDraftGeneration: 2,
+    activeDocument,
+    projectSchema: { componentsTree: [{ componentName: 'Root', id: 'root' }] },
+    commitKind: 'manual-save',
+    updatedAt: 21,
+    operations: [],
+  })
+  assert.equal(edited.draft.draftGeneration, 3)
+
+  const replayed = await coordinator.createProjectVersion(versionRequest())
+  assert.equal(replayed.status, 'reconciled')
+  assert.deepEqual(replayed.version, first.version)
+  assert.equal(replayed.draft.draftGeneration, 3)
+  assert.deepEqual(
+    await backend.get('artifactRefs', [
+      scope.projectId,
+      scope.branchId,
+      'project-version',
+      'city-v1',
+      'artifact-kpi',
+      'revision-7',
+    ]),
+    {
+      schemaVersion: 1,
+      ...scope,
+      ownerType: 'project-version',
+      ownerId: 'city-v1',
+      artifactId: 'artifact-kpi',
+      sourceRevision: 'revision-7',
+    },
+  )
+})
+
+test('named project versions reject missing or forged artifact refs before creating roots', async () => {
+  const { backend, coordinator } = await bootstrap()
+  const cases = [
+    versionRequest({
+      batchId: 'version-missing-ref',
+      versionId: 'missing-ref',
+      artifactRefs: [],
+    }),
+    versionRequest({
+      batchId: 'version-forged-ref',
+      versionId: 'forged-ref',
+      artifactRefs: [
+        { artifactId: 'artifact-kpi', sourceRevision: 'revision-7' },
+        { artifactId: 'artifact-forged', sourceRevision: 'revision-1' },
+      ],
+    }),
+  ]
+
+  for (const request of cases) {
+    await assert.rejects(
+      coordinator.createProjectVersion(request),
+      error =>
+        error.code === 'validation-failed' &&
+        error.reason === 'project-version-create.artifactRefs-must-match-current-project-schema',
+    )
+    assert.equal(await backend.get('projectVersions', [scope.projectId, scope.branchId, request.versionId]), undefined)
+  }
+  assert.equal(
+    await backend.get('artifactRefs', [
+      scope.projectId,
+      scope.branchId,
+      'project-version',
+      'forged-ref',
+      'artifact-forged',
+      'revision-1',
+    ]),
+    undefined,
+  )
+  assert.equal((await coordinator.readWorkingDraft(scope)).draftGeneration, 1)
+})
+
+test('stored project versions fail closed when schema-derived and recorded artifact refs diverge', async () => {
+  const { backend, coordinator } = await bootstrap()
+  const created = await coordinator.createProjectVersion(versionRequest())
+  const current = await coordinator.readWorkingDraft(scope)
+  await backend.commit({
+    schemaVersion: 1,
+    batchId: 'inject-inconsistent-project-version',
+    ...scope,
+    expectedDraftGeneration: current.draftGeneration,
+    draft: {
+      ...current,
+      draftGeneration: current.draftGeneration + 1,
+      commitKind: 'manual-save',
+      updatedAt: 22,
+    },
+    operations: [
+      {
+        type: 'put',
+        store: 'projectVersions',
+        value: { ...created.version, artifactRefs: [] },
+      },
+    ],
+  })
+
+  await assert.rejects(
+    coordinator.getProjectVersion({ schemaVersion: 1, ...scope, versionId: created.version.versionId }),
+    error => error.code === 'integrity-mismatch' && error.reason === 'stored-project-version-contract-is-invalid',
+  )
 })
 
 test('version creation is atomic under a storage abort and can be retried without partial roots', async () => {

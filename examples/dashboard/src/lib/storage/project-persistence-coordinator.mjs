@@ -1,5 +1,6 @@
 import {
   cloneFrozenJson,
+  readCanonicalNodeArtifactRef,
   validateArtifactReadRequest,
   validateArtifactRecord,
   validateArtifactRootReadRequest,
@@ -781,6 +782,36 @@ const artifactRootFenceFromRecords = roots =>
     sourceRevision: root.sourceRevision,
   }))
 
+const artifactIdentityKey = value => `${value.artifactId}\u0000${value.sourceRevision}`
+const workingDraftRootKey = value => `${value.ownerId}\u0000${artifactIdentityKey(value)}`
+
+const collectCanonicalProjectArtifactIdentities = projectSchema => {
+  const identities = new Map()
+  const visitNode = node => {
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) return
+    const artifactRef = readCanonicalNodeArtifactRef(node)
+    if (artifactRef) {
+      const identity = { artifactId: artifactRef.artifactId, sourceRevision: artifactRef.sourceRevision }
+      identities.set(artifactIdentityKey(identity), identity)
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) visitNode(child)
+    }
+  }
+  if (Array.isArray(projectSchema.componentsTree)) {
+    for (const node of projectSchema.componentsTree) visitNode(node)
+  }
+  return [...identities.values()].sort(compareArtifactIdentity)
+}
+
+const isCallerSuppliedWorkingDraftRootOperation = operation => {
+  if (operation?.store !== 'artifactRefs') return false
+  if (operation.type === 'put') {
+    return operation.value?.ownerType === 'working-draft'
+  }
+  return operation.type === 'delete' && Array.isArray(operation.key) && operation.key[2] === 'working-draft'
+}
+
 const validateArtifactCreateResult = (value, artifact) => {
   try {
     assertExactFields(value, ['artifact', 'schemaVersion', 'status'], 'artifact-create-result')
@@ -1004,6 +1035,52 @@ export class ProjectPersistenceCoordinator {
       commitKind: request.commitKind,
       updatedAt: request.updatedAt,
     }
+    // Legacy coordinator-only adapters predate artifact storage. Production
+    // backends expose getAll, while those adapters have no prior roots to
+    // reconcile and can safely begin from an empty set.
+    const storedArtifactRoots =
+      typeof this.#backend.getAll === 'function' ? await this.#backend.getAll('artifactRefs') : []
+    const storedWorkingDraftRoots = storedArtifactRoots
+      .filter(
+        root =>
+          root?.projectId === request.projectId &&
+          root?.branchId === request.branchId &&
+          root?.ownerType === 'working-draft',
+      )
+      .map(normalizeArtifactRootRecord)
+      .sort(compareRoot)
+    const desiredWorkingDraftRoots = collectCanonicalProjectArtifactIdentities(request.projectSchema).map(identity => ({
+      schemaVersion: 1,
+      projectId: request.projectId,
+      branchId: request.branchId,
+      ownerType: 'working-draft',
+      ownerId: request.branchId,
+      ...identity,
+    }))
+    const desiredKeys = new Set(desiredWorkingDraftRoots.map(workingDraftRootKey))
+    const currentKeys = new Set(storedWorkingDraftRoots.map(workingDraftRootKey))
+    const workingDraftRootOperations = [
+      ...storedWorkingDraftRoots
+        .filter(root => !desiredKeys.has(workingDraftRootKey(root)))
+        .map(root => ({
+          type: 'delete',
+          store: 'artifactRefs',
+          key: [
+            request.projectId,
+            request.branchId,
+            'working-draft',
+            root.ownerId,
+            root.artifactId,
+            root.sourceRevision,
+          ],
+        })),
+      ...desiredWorkingDraftRoots
+        .filter(root => !currentKeys.has(workingDraftRootKey(root)))
+        .map(value => ({ type: 'put', store: 'artifactRefs', value })),
+    ]
+    const requestedOperations = request.operations.filter(
+      operation => !isCallerSuppliedWorkingDraftRootOperation(operation),
+    )
     const forceProvenanceInvalidation = request.forceProvenanceInvalidation === true
     const invalidateProvenance =
       forceProvenanceInvalidation ||
@@ -1016,9 +1093,10 @@ export class ProjectPersistenceCoordinator {
             store: 'mutationProvenance',
             ...(forceProvenanceInvalidation ? { force: true } : {}),
           },
-          ...request.operations,
+          ...requestedOperations,
+          ...workingDraftRootOperations,
         ]
-      : request.operations
+      : [...requestedOperations, ...workingDraftRootOperations]
     const result = await this.#backend.commit({
       schemaVersion: 1,
       batchId: request.batchId,
@@ -1386,6 +1464,9 @@ export class ProjectPersistenceCoordinator {
       }
       const hash = await hashCanonicalJson(version.projectSchema, { crypto: this.#crypto })
       if (hash !== version.projectHash) throw validationFailure('project-version-project-hash-does-not-match')
+      if (!jsonEqual(version.artifactRefs, collectCanonicalProjectArtifactIdentities(version.projectSchema))) {
+        throw validationFailure('project-version-artifact-refs-do-not-match-project-schema')
+      }
       return version
     } catch (error) {
       throw new DashboardStorageError(
@@ -1445,6 +1526,10 @@ export class ProjectPersistenceCoordinator {
             },
           )
         }
+        const artifactRefs = collectCanonicalProjectArtifactIdentities(current.projectSchema)
+        if (!jsonEqual(request.artifactRefs, artifactRefs)) {
+          throw validationFailure('project-version-create.artifactRefs-must-match-current-project-schema')
+        }
         const version = validateProjectVersionRecord({
           schemaVersion: 1,
           projectId: request.projectId,
@@ -1456,7 +1541,7 @@ export class ProjectPersistenceCoordinator {
           activeDocument: current.activeDocument,
           projectSchema: current.projectSchema,
           projectHash: current.projectHash,
-          artifactRefs: request.artifactRefs,
+          artifactRefs,
           sourceSessionId: request.sourceSessionId,
           sourceTaskId: request.sourceTaskId,
           sourceCheckpointId: request.sourceCheckpointId,
@@ -1733,22 +1818,7 @@ export class ProjectPersistenceCoordinator {
             projectSchema: version.projectSchema,
             commitKind: 'version-restore',
             updatedAt: request.restoredAt,
-            operations: [
-              { type: 'put', store: 'agentSessions', mode: 'add', value: expectedSession },
-              ...version.artifactRefs.map(ref => ({
-                type: 'put',
-                store: 'artifactRefs',
-                mode: 'add',
-                value: {
-                  schemaVersion: 1,
-                  projectId: request.projectId,
-                  branchId: request.targetBranchId,
-                  ownerType: 'working-draft',
-                  ownerId: request.targetBranchId,
-                  ...ref,
-                },
-              })),
-            ],
+            operations: [{ type: 'put', store: 'agentSessions', mode: 'add', value: expectedSession }],
           }),
           version.projectHash,
         )
@@ -1989,6 +2059,9 @@ export class ProjectPersistenceCoordinator {
   async createArtifactRoot(value) {
     this.#assertAccepting()
     const root = validateArtifactRootRecord(value)
+    if (root.ownerType === 'working-draft') {
+      throw validationFailure('working-draft-artifact-roots-are-coordinator-controlled')
+    }
     if (typeof this.#backend.createArtifactRoot !== 'function') {
       throw validationFailure('storage-backend-artifact-root-create-seam-is-required')
     }
@@ -2029,6 +2102,9 @@ export class ProjectPersistenceCoordinator {
   async deleteArtifactRoot(value) {
     this.#assertAccepting()
     const root = validateArtifactRootReadRequest(value)
+    if (root.ownerType === 'working-draft') {
+      throw validationFailure('working-draft-artifact-roots-are-coordinator-controlled')
+    }
     if (typeof this.#backend.deleteArtifactRoot !== 'function') {
       throw validationFailure('storage-backend-artifact-root-delete-seam-is-required')
     }
