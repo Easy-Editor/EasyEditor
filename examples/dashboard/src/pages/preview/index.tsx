@@ -1,4 +1,3 @@
-import { resolveAgentRuntimeFeatureFlags } from '@/editor/agent/feature-flags.mjs'
 import { defaultRootSchema } from '@/editor/const'
 import {
   composeDashboardRootSchema,
@@ -14,6 +13,7 @@ import {
   dispatchDashboardOnlineComponentRuntimeEvent,
   isDashboardOnlineComponentSurfaceEnabled,
   resolveDashboardOnlineComponentSafeBoot,
+  resolveDashboardOnlineComponentSurfaceFeatureFlags,
   startDashboardOnlineComponentSurface,
 } from '@/runtime/online-components/surface-bridge.mjs'
 import {
@@ -26,8 +26,9 @@ import {
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 import { useEffect, useMemo, useState } from 'react'
 
-const previewAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
-const previewOnlineComponentSurfaceEnabled = isDashboardOnlineComponentSurfaceEnabled(previewAgentRuntimeFeatureFlags)
+const previewOnlineComponentSurfaceEnabled = isDashboardOnlineComponentSurfaceEnabled(
+  resolveDashboardOnlineComponentSurfaceFeatureFlags(import.meta.env),
+)
 
 interface DashboardPreviewDocument {
   readonly dataSourceEngine: ReturnType<typeof createDashboardDataRuntime>['dataSourceEngine']

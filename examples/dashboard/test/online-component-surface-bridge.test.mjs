@@ -7,6 +7,7 @@ import {
   dispatchDashboardOnlineComponentRuntimeEvent,
   isDashboardOnlineComponentSurfaceEnabled,
   resolveDashboardOnlineComponentSafeBoot,
+  resolveDashboardOnlineComponentSurfaceFeatureFlags,
   sanitizeDashboardOnlineComponentProps,
   startDashboardOnlineComponentSurface,
 } from '../src/runtime/online-components/surface-bridge.mjs'
@@ -82,6 +83,28 @@ test('runtime and online flags are both required and URL safe-boot is explicit',
   assert.equal(resolveDashboardOnlineComponentSafeBoot('?easy-editor-online-safe-boot=1'), true)
   assert.equal(resolveDashboardOnlineComponentSafeBoot('?easy-editor-online-safe-boot=true'), true)
   assert.equal(resolveDashboardOnlineComponentSafeBoot('?easy-editor-online-safe-boot=0'), false)
+})
+
+test('preview surface flags use the strict shared runtime and online environment mapping', () => {
+  assert.deepEqual(resolveDashboardOnlineComponentSurfaceFeatureFlags(), { runtime: false, online: false })
+  for (const enabled of [true, 'true', '1']) {
+    assert.deepEqual(
+      resolveDashboardOnlineComponentSurfaceFeatureFlags({
+        VITE_DASHBOARD_AGENT_RUNTIME: enabled,
+        VITE_DASHBOARD_AGENT_ONLINE: enabled,
+      }),
+      { runtime: true, online: true },
+    )
+  }
+  for (const disabled of [false, 'false', '0', 1, null, undefined]) {
+    assert.deepEqual(
+      resolveDashboardOnlineComponentSurfaceFeatureFlags({
+        VITE_DASHBOARD_AGENT_RUNTIME: disabled,
+        VITE_DASHBOARD_AGENT_ONLINE: disabled,
+      }),
+      { runtime: false, online: false },
+    )
+  }
 })
 
 test('runtime CustomEvent exposes only the stable safe DTO', () => {

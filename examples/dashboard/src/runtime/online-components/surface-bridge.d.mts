@@ -86,6 +86,12 @@ export declare const sanitizeDashboardOnlineComponentProps: (
   props: Readonly<Record<string, unknown>>,
 ) => Readonly<Record<string, OnlineComponentJsonValue>>
 export declare const resolveDashboardOnlineComponentSafeBoot: (search: string) => boolean
+export declare const resolveDashboardOnlineComponentSurfaceFeatureFlags: (
+  source?: Readonly<Record<string, unknown>>,
+) => Readonly<{
+  runtime: boolean
+  online: boolean
+}>
 export declare const isDashboardOnlineComponentSurfaceEnabled: (flags: {
   readonly runtime?: boolean
   readonly online?: boolean

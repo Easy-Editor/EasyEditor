@@ -8,6 +8,8 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/
 const INTERNAL_PROP_KEYS = new Set(['children', 'ref', '__appHelper', '__components', '__id', '__schema'])
 const UNSAFE_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 
+const isFeatureEnabled = value => value === true || value === 'true' || value === '1'
+
 const assertIdentifier = (value, name) => {
   if (typeof value !== 'string' || !IDENTIFIER_PATTERN.test(value)) throw new TypeError(`${name} is invalid`)
   return value
@@ -61,6 +63,12 @@ export const resolveDashboardOnlineComponentSafeBoot = search => {
   const value = new URLSearchParams(search).get(DASHBOARD_ONLINE_COMPONENT_SAFE_BOOT_QUERY)
   return value === '1' || value === 'true'
 }
+
+export const resolveDashboardOnlineComponentSurfaceFeatureFlags = (source = {}) =>
+  Object.freeze({
+    runtime: isFeatureEnabled(source.VITE_DASHBOARD_AGENT_RUNTIME),
+    online: isFeatureEnabled(source.VITE_DASHBOARD_AGENT_ONLINE),
+  })
 
 export const isDashboardOnlineComponentSurfaceEnabled = flags => flags?.runtime === true && flags?.online === true
 
