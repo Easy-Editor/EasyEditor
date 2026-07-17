@@ -336,6 +336,8 @@ const buildOperations = batch => {
         recordId: batch.journal.recordId,
         kind: batch.journal.kind,
         ...authority,
+        updatedAt: batch.updatedAt,
+        ...(batch.journal.kind === 'compensation-run' ? { writerCheckpointId: batch.checkpoint.checkpointId } : {}),
         value: batch.journal.value,
       },
     },

@@ -270,9 +270,17 @@ export const parseInvocationResult = (value: unknown): InvocationResult => {
 }
 
 export const parseReceiptQueryRequest = (value: unknown): ReceiptQueryRequest => {
-  assertExactFields(value, ['projectId', 'branchId', 'callId'], [], 'ReceiptQueryRequest')
+  assertExactFields(
+    value,
+    ['schemaVersion', 'projectId', 'branchId', 'sessionId', 'taskId', 'callId'],
+    [],
+    'ReceiptQueryRequest',
+  )
+  schemaVersion(value.schemaVersion)
   stringField(value.projectId, 'ReceiptQueryRequest.projectId')
   stringField(value.branchId, 'ReceiptQueryRequest.branchId')
+  stringField(value.sessionId, 'ReceiptQueryRequest.sessionId')
+  stringField(value.taskId, 'ReceiptQueryRequest.taskId')
   stringField(value.callId, 'ReceiptQueryRequest.callId')
   return value as unknown as ReceiptQueryRequest
 }

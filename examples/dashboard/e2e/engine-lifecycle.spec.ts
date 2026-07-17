@@ -64,18 +64,32 @@ test('dashboard lifecycle, reload, persistence, and preview remain coherent', as
   await expect(page.locator('.lc-designer')).toBeVisible()
   await expect(page.locator('.lc-simulator-canvas')).toBeVisible()
   await expectEngineState(page, 'ready')
+  await expect
+    .poll(() => page.evaluate(() => window.__EASY_EDITOR_E2E__?.getAgentWorkspaceState() ?? null), {
+      message: 'expected the E2E Agent Workspace composition to become observable',
+    })
+    .toMatchObject({
+      binding: { branchId: 'main' },
+      snapshot: { remote: { availability: { state: 'ready' }, runtimeStatus: 'ready' } },
+    })
+  const agentToggle = page.getByTestId('agent-workspace-toggle')
+  await expect(agentToggle).toBeVisible()
+  await agentToggle.click()
+  await expect(page.getByTestId('agent-workspace')).toBeVisible()
+  await agentToggle.click()
+  await expect(page.getByTestId('agent-workspace')).toHaveCount(0)
   const initialPersistence = await flushAndReadPersistence(page)
   expect(initialPersistence).toMatchObject({
     state: 'ready',
     branchId: 'main',
-    draftGeneration: 1,
+    draftGeneration: 2,
     projectSchemaVersion: '1.0.0',
     pendingAutosave: false,
   })
   expect(initialPersistence.projectId).toBeTruthy()
 
   const probeKeys = await page.evaluate(() => Object.keys(window.__EASY_EDITOR_E2E__ ?? {}).sort())
-  expect(probeKeys).toEqual(['flushPersistence', 'getEngineState', 'getPersistenceState'])
+  expect(probeKeys).toEqual(['flushPersistence', 'getAgentWorkspaceState', 'getEngineState', 'getPersistenceState'])
 
   await dispatchPageHide(page, true)
   await expectEngineState(page, 'ready')

@@ -3,6 +3,7 @@ export {
   HumanActivityLeaseDisposedError,
   createHumanActivityLease,
 } from './human-activity-lease.mjs'
+export { createDashboardInvocationActivity } from './invocation-activity.mjs'
 
 const requireEventTarget = target => {
   if (!target || typeof target.addEventListener !== 'function' || typeof target.removeEventListener !== 'function') {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { IndexedDbDashboardStorageBackend } from '../src/lib/storage/indexeddb-backend.mjs'
+import { ProjectPersistenceCoordinator } from '../src/lib/storage/project-persistence-coordinator.mjs'
 import { DASHBOARD_STORAGE_STORES, DASHBOARD_STORAGE_STORE_NAMES } from '../src/lib/storage/schema.mjs'
 
 const clone = value => (value === undefined ? undefined : structuredClone(value))
@@ -521,5 +522,207 @@ test('IndexedDB receipt intent CAS and lineage lookup share the narrow durable c
   assert.deepEqual(
     lineage.provenance.map(record => record.slotKey),
     ['slot-agent'],
+  )
+})
+
+test('IndexedDB coordinator matches Phase 4 session, version, grant, restore, and root lifecycle semantics', async () => {
+  const indexedDB = createFactory()
+  const backend = new IndexedDbDashboardStorageBackend({ indexedDB })
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  const projectSchema = { componentsTree: [{ componentName: 'GeneratedMaterialHost', id: 'root' }] }
+  await coordinator.commit({
+    schemaVersion: 1,
+    batchId: 'phase-4-bootstrap',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 0,
+    activeDocument: null,
+    projectSchema,
+    commitKind: 'manual-save',
+    updatedAt: 1,
+    operations: [
+      {
+        type: 'put',
+        store: 'artifacts',
+        value: {
+          schemaVersion: 1,
+          projectId: 'project-1',
+          artifactId: 'artifact-1',
+          sourceRevision: 'revision-1',
+        },
+      },
+      {
+        type: 'put',
+        store: 'artifactRefs',
+        value: {
+          schemaVersion: 1,
+          projectId: 'project-1',
+          branchId: 'main',
+          ownerType: 'working-draft',
+          ownerId: 'main',
+          artifactId: 'artifact-1',
+          sourceRevision: 'revision-1',
+        },
+      },
+    ],
+  })
+  const session = await coordinator.saveAgentSession({
+    schemaVersion: 1,
+    batchId: 'phase-4-session',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 1,
+    sessionId: 'session-1',
+    status: 'active',
+    createdAt: 2,
+    updatedAt: 2,
+    forkedFrom: null,
+  })
+  await coordinator.commitAgentPersistence({
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'main',
+    sessionId: 'session-1',
+    batchId: 'phase-4-journal',
+    expectedPersistenceGeneration: 0,
+    records: [{ recordId: 'task:1', kind: 'journal-head', value: { taskId: 'task-1' } }],
+  })
+  assert.deepEqual(await backend.get('agentSessions', ['project-1', 'main', 'session-1']), {
+    ...session.session,
+    persistenceGeneration: 1,
+  })
+
+  const version = await coordinator.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'phase-4-version',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 2,
+    versionId: 'version-1',
+    name: 'Version 1',
+    createdAt: 3,
+    artifactRefs: [{ artifactId: 'artifact-1', sourceRevision: 'revision-1' }],
+    sourceSessionId: 'session-1',
+    sourceTaskId: 'task-1',
+    sourceCheckpointId: null,
+  })
+  assert.equal(version.draft.draftGeneration, 3)
+  assert.equal(
+    (
+      await coordinator.createProjectVersion({
+        schemaVersion: 1,
+        batchId: 'phase-4-version',
+        projectId: 'project-1',
+        branchId: 'main',
+        expectedDraftGeneration: 2,
+        versionId: 'version-1',
+        name: 'Version 1',
+        createdAt: 3,
+        artifactRefs: [{ artifactId: 'artifact-1', sourceRevision: 'revision-1' }],
+        sourceSessionId: 'session-1',
+        sourceTaskId: 'task-1',
+        sourceCheckpointId: null,
+      })
+    ).status,
+    'reconciled',
+  )
+
+  const tasklessVersion = await coordinator.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'phase-4-version-taskless',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 3,
+    versionId: 'version-taskless',
+    name: 'Version taskless',
+    createdAt: 4,
+    artifactRefs: [],
+    sourceSessionId: null,
+    sourceTaskId: null,
+    sourceCheckpointId: null,
+  })
+  assert.equal(tasklessVersion.draft.draftGeneration, 4)
+
+  await coordinator.authorizeLocalGrant({
+    schemaVersion: 1,
+    batchId: 'phase-4-grant',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 4,
+    userId: 'user-1',
+    scope: 'project.write',
+    policyVersion: 1,
+    providerId: 'provider-1',
+    providerFingerprint: 'fingerprint-1',
+    updatedAt: 5,
+  })
+  assert.equal(
+    (
+      await coordinator.checkLocalGrant({
+        schemaVersion: 1,
+        userId: 'user-1',
+        projectId: 'project-1',
+        scope: 'project.write',
+        policyVersion: 1,
+        providerId: 'provider-1',
+        providerFingerprint: 'fingerprint-1',
+      })
+    ).granted,
+    true,
+  )
+
+  const roots = await coordinator.planArtifactGcDryRun({ schemaVersion: 1, projectId: 'project-1' })
+  assert.equal(roots.deletionCandidates.length, 0)
+  assert.deepEqual(roots.generationFence, [{ branchId: 'main', draftGeneration: 5 }])
+
+  const restored = await coordinator.restoreProjectVersion({
+    schemaVersion: 1,
+    batchId: 'phase-4-restore',
+    projectId: 'project-1',
+    sourceBranchId: 'main',
+    versionId: 'version-1',
+    targetBranchId: 'restored',
+    targetSessionId: 'session-2',
+    forkedFromSessionId: 'session-1',
+    forkedFromTaskId: 'task-1',
+    restoredAt: 6,
+  })
+  assert.equal(restored.draft.branchId, 'restored')
+  assert.equal(restored.session.forkedFrom.versionId, 'version-1')
+  assert.equal(await backend.get('taskJournals', ['project-1', 'restored', 'session-2', 'task:1']), undefined)
+
+  const restoredTaskless = await coordinator.restoreProjectVersion({
+    schemaVersion: 1,
+    batchId: 'phase-4-restore-taskless',
+    projectId: 'project-1',
+    sourceBranchId: 'main',
+    versionId: 'version-taskless',
+    targetBranchId: 'restored-taskless',
+    targetSessionId: 'session-taskless',
+    forkedFromSessionId: null,
+    forkedFromTaskId: null,
+    restoredAt: 7,
+  })
+  assert.deepEqual(restoredTaskless.session.forkedFrom, {
+    sessionId: null,
+    taskId: null,
+    versionId: 'version-taskless',
+  })
+  assert.equal(
+    (
+      await coordinator.restoreProjectVersion({
+        schemaVersion: 1,
+        batchId: 'phase-4-restore-taskless',
+        projectId: 'project-1',
+        sourceBranchId: 'main',
+        versionId: 'version-taskless',
+        targetBranchId: 'restored-taskless',
+        targetSessionId: 'session-taskless',
+        forkedFromSessionId: null,
+        forkedFromTaskId: null,
+        restoredAt: 7,
+      })
+    ).status,
+    'reconciled',
   )
 })

@@ -8,6 +8,7 @@ import {
 } from '@easy-editor/core/instance'
 import DashboardPlugin from '@easy-editor/plugin-dashboard'
 import HotkeyPlugin from '@easy-editor/plugin-hotkey'
+import type { CanonicalWorkingDraftV1 } from '../lib/storage/contracts.mjs'
 import {
   DASHBOARD_NODE_ADD_EVENT,
   DASHBOARD_NODE_REMOVE_EVENT,
@@ -36,8 +37,21 @@ export type { DashboardAgentHostAuthority } from './agent/host/index.mjs'
 
 let releaseSimulatorReady: (() => void) | undefined
 let releasePersistenceListeners: Array<() => void> = []
+const dashboardEditorDisposers = new Set<() => void | Promise<void>>()
 let disposePromise: Promise<void> | undefined
+let editorDisposalStarted = false
 let lifecycleDisposalInstalled = false
+
+export const registerDashboardEditorDisposer = (disposer: () => void | Promise<void>): (() => void) => {
+  if (editorDisposalStarted) throw new Error('Dashboard editor disposal has already started')
+  dashboardEditorDisposers.add(disposer)
+  let registered = true
+  return () => {
+    if (!registered) return
+    registered = false
+    dashboardEditorDisposers.delete(disposer)
+  }
+}
 
 const uninstallLifecycleDisposal = () => {
   if (!lifecycleDisposalInstalled) return
@@ -47,12 +61,26 @@ const uninstallLifecycleDisposal = () => {
 
 export const disposeDashboardEditor = (): Promise<void> => {
   if (disposePromise) return disposePromise
+  editorDisposalStarted = true
   releaseSimulatorReady?.()
   releaseSimulatorReady = undefined
   for (const release of releasePersistenceListeners.splice(0)) release()
+  const registeredDisposers = [...dashboardEditorDisposers].reverse()
+  dashboardEditorDisposers.clear()
   const disposalAttempt = (async () => {
     const failures: unknown[] = []
-    disposeDashboardAgentActivity()
+    for (const dispose of registeredDisposers) {
+      try {
+        await dispose()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    try {
+      disposeDashboardAgentActivity()
+    } catch (error) {
+      failures.push(error)
+    }
     try {
       await dashboardPersistence.dispose()
     } catch (error) {
@@ -64,7 +92,7 @@ export const disposeDashboardEditor = (): Promise<void> => {
       failures.push(error)
     }
     if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) throw new AggregateError(failures, 'Dashboard persistence and engine disposal failed')
+    if (failures.length > 1) throw new AggregateError(failures, 'Dashboard editor disposal failed')
   })()
   disposePromise = disposalAttempt
   void disposalAttempt.then(uninstallLifecycleDisposal, () => {
@@ -213,6 +241,19 @@ const installPersistenceListeners = () => {
   )
 }
 
+/**
+ * Stops editor-originated persistence writes while a branch restore owns the
+ * canonical project binding. The caller must always either reattach the
+ * listeners to the old binding or finish loading the restored binding.
+ */
+export const detachDashboardPersistenceListeners = (): void => {
+  for (const release of releasePersistenceListeners.splice(0)) release()
+}
+
+export const reattachDashboardPersistenceListeners = (): void => {
+  installPersistenceListeners()
+}
+
 const restoreActiveDocument = (
   activeDocument: Awaited<ReturnType<typeof dashboardPersistence.initialize>>['activeDocument'],
 ) => {
@@ -223,6 +264,21 @@ const restoreActiveDocument = (
     engine.project.documents[activeDocument.index]
   if (!document) throw new Error('Canonical Dashboard active document cannot be restored')
   engine.project.open(document)
+}
+
+/**
+ * Loads a canonical, already-durable draft into the editor. Validation and
+ * remote material discovery happen before the project swap so a rejected
+ * restore leaves the currently rendered project untouched.
+ */
+export const loadDashboardEditorDraft = async (draft: CanonicalWorkingDraftV1): Promise<void> => {
+  const schema = validateProjectSchema(
+    draft.projectSchema as unknown as ProjectSchema,
+    engine.trustPolicy,
+  ) as ProjectSchema
+  await loadRemoteMaterialsFromComponentsMap(schema.componentsMap)
+  engine.loadProject(schema, true)
+  restoreActiveDocument(draft.activeDocument)
 }
 
 const bootstrapDashboardEditor = async () => {

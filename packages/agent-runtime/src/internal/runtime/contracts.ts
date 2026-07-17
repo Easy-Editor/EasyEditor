@@ -3,6 +3,7 @@ import type {
   AgentQuestion,
   AgentRuntimeBinding,
   AgentRuntimeFailure,
+  AgentRuntimeRecovery,
   AgentRuntimeSnapshot,
   AgentRuntimeStatus,
   AgentTaskSnapshot,
@@ -14,6 +15,7 @@ import type {
 } from '../../contracts.js'
 import { assertExactFields, assertJsonValue } from '../protocol/index.js'
 import { type RpcContractMap, agentBoundaryRpcContracts } from '../rpc/index.js'
+import { parseAgentSessionContextDigest } from '../session-context/index.js'
 
 const fail = (message: string): never => {
   throw new TypeError(message)
@@ -94,31 +96,81 @@ const parseQuestion = (value: unknown, field: string): AgentQuestion => {
   return value as unknown as AgentQuestion
 }
 
+const parseIntentValue = (value: unknown, field: string): UserIntent => {
+  assertExactFields(value, ['text'], ['metadata'], field)
+  stringField(value.text, `${field}.text`)
+  if (value.metadata !== undefined) jsonObjectField(value.metadata, `${field}.metadata`)
+  return value as unknown as UserIntent
+}
+
+const parseAcceptedBlueprint = (value: unknown, field: string) => {
+  assertExactFields(value, ['schemaVersion', 'summary', 'unresolvedConstraints'], [], field)
+  if (value.schemaVersion !== 1) fail(`${field}.schemaVersion must be 1`)
+  stringField(value.summary, `${field}.summary`)
+  const unresolvedConstraints = value.unresolvedConstraints
+  if (!Array.isArray(unresolvedConstraints)) fail(`${field}.unresolvedConstraints must be an array`)
+  const constraints = unresolvedConstraints as unknown[]
+  constraints.forEach((constraint, index) => stringField(constraint, `${field}.unresolvedConstraints[${index}]`))
+}
+
 const parseTaskSnapshot = (value: unknown, field: string): AgentTaskSnapshot => {
   assertExactFields(
     value,
-    ['taskId', 'sessionId', 'phase', 'createdAt', 'updatedAt', 'repairAttempts'],
-    ['parentTaskId', 'supersedesTaskId', 'question', 'failure'],
+    [
+      'taskId',
+      'sessionId',
+      'phase',
+      'compensationEligible',
+      'createdAt',
+      'updatedAt',
+      'repairAttempts',
+      'intent',
+      'sessionContext',
+    ],
+    [
+      'parentTaskId',
+      'supersedesTaskId',
+      'compensatesTaskId',
+      'acceptedBlueprint',
+      'completionSummary',
+      'question',
+      'failure',
+    ],
     field,
   )
   for (const key of ['taskId', 'sessionId'] as const) stringField(value[key], `${field}.${key}`)
-  for (const key of ['parentTaskId', 'supersedesTaskId'] as const) {
+  for (const key of ['parentTaskId', 'supersedesTaskId', 'compensatesTaskId'] as const) {
     if (value[key] !== undefined) stringField(value[key], `${field}.${key}`)
   }
   enumField(value.phase, AGENT_PHASES, `${field}.phase`)
+  if (typeof value.compensationEligible !== 'boolean') fail(`${field}.compensationEligible must be boolean`)
   for (const key of ['createdAt', 'updatedAt', 'repairAttempts'] as const) {
     finiteNumberField(value[key], `${field}.${key}`)
   }
+  parseIntentValue(value.intent, `${field}.intent`)
+  parseAgentSessionContextDigest(value.sessionContext)
+  if (value.acceptedBlueprint !== undefined)
+    parseAcceptedBlueprint(value.acceptedBlueprint, `${field}.acceptedBlueprint`)
+  if (value.completionSummary !== undefined) stringField(value.completionSummary, `${field}.completionSummary`)
   if (value.question !== undefined) parseQuestion(value.question, `${field}.question`)
   if (value.failure !== undefined) parseFailure(value.failure, `${field}.failure`)
   return value as unknown as AgentTaskSnapshot
+}
+
+const parseRecovery = (value: unknown, field: string): AgentRuntimeRecovery => {
+  assertExactFields(value, ['schemaVersion', 'kind', 'recoveryId', 'taskId', 'callId', 'occurredAt'], [], field)
+  if (value.schemaVersion !== 1) fail(`${field}.schemaVersion must be 1`)
+  if (value.kind !== 'applied-undurable') fail(`${field}.kind is invalid`)
+  for (const key of ['recoveryId', 'taskId', 'callId'] as const) stringField(value[key], `${field}.${key}`)
+  finiteNumberField(value.occurredAt, `${field}.occurredAt`)
+  return value as unknown as AgentRuntimeRecovery
 }
 
 export const parseRuntimeSnapshot = (value: unknown): AgentRuntimeSnapshot => {
   assertJsonValue(value, 'AgentRuntimeSnapshot')
   assertExactFields(
     value,
-    ['schemaVersion', 'binding', 'status', 'phase', 'revision', 'tasks'],
+    ['schemaVersion', 'binding', 'status', 'phase', 'revision', 'tasks', 'recoveries'],
     ['activeTask', 'failure'],
     'AgentRuntimeSnapshot',
   )
@@ -130,6 +182,9 @@ export const parseRuntimeSnapshot = (value: unknown): AgentRuntimeSnapshot => {
   if (!Array.isArray(value.tasks)) fail('AgentRuntimeSnapshot.tasks must be an array')
   const tasks = value.tasks as unknown[]
   tasks.forEach((task, index) => parseTaskSnapshot(task, `AgentRuntimeSnapshot.tasks[${index}]`))
+  if (!Array.isArray(value.recoveries)) fail('AgentRuntimeSnapshot.recoveries must be an array')
+  const recoveries = value.recoveries as unknown[]
+  recoveries.forEach((recovery, index) => parseRecovery(recovery, `AgentRuntimeSnapshot.recoveries[${index}]`))
   if (value.activeTask !== undefined) parseTaskSnapshot(value.activeTask, 'AgentRuntimeSnapshot.activeTask')
   if (value.failure !== undefined) parseFailure(value.failure, 'AgentRuntimeSnapshot.failure')
   return value as unknown as AgentRuntimeSnapshot
@@ -146,15 +201,7 @@ const parseInitialize = (value: unknown): RuntimeInitializeRequest => {
 }
 
 const parseIntent = (value: unknown): UserIntent => {
-  assertExactFields(value, ['text'], ['metadata'], 'UserIntent')
-  stringField(value.text, 'UserIntent.text')
-  if (value.metadata !== undefined) {
-    assertJsonValue(value.metadata, 'UserIntent.metadata')
-    if (typeof value.metadata !== 'object' || value.metadata === null || Array.isArray(value.metadata)) {
-      fail('UserIntent.metadata must be an object')
-    }
-  }
-  return value as unknown as UserIntent
+  return parseIntentValue(value, 'UserIntent')
 }
 
 const parseTaskRef = (value: unknown): TaskRef => {
@@ -170,6 +217,12 @@ const parseTaskId = (value: unknown): { readonly taskId: string } => {
   assertExactFields(value, ['taskId'], [], 'TaskIdRequest')
   stringField(value.taskId, 'TaskIdRequest.taskId')
   return value as { readonly taskId: string }
+}
+
+const parseCompensationTargetId = (value: unknown): { readonly targetTaskId: string } => {
+  assertExactFields(value, ['targetTaskId'], [], 'RuntimeCompensateRequest')
+  stringField(value.targetTaskId, 'RuntimeCompensateRequest.targetTaskId')
+  return value as { readonly targetTaskId: string }
 }
 
 const parseResponse = (value: unknown): { readonly taskId: string; readonly response: UserResponse } => {
@@ -189,6 +242,7 @@ export const runtimeRpcContracts = {
   ...agentBoundaryRpcContracts,
   'runtime.initialize': { parseRequest: parseInitialize, parseResponse: parseRuntimeSnapshot },
   'runtime.submit': { parseRequest: parseIntent, parseResponse: parseTaskRef },
+  'runtime.compensate': { parseRequest: parseCompensationTargetId, parseResponse: nullValue },
   'runtime.pause': { parseRequest: parseTaskId, parseResponse: nullValue },
   'runtime.resume': { parseRequest: parseTaskId, parseResponse: nullValue },
   'runtime.cancel': { parseRequest: parseTaskId, parseResponse: nullValue },

@@ -7,6 +7,14 @@ export {
   type HumanActivityKind,
   type HumanActivityLeaseOptions,
 } from './human-activity-lease.mjs'
+export { createDashboardInvocationActivity } from './invocation-activity.mjs'
+export type {
+  DashboardInvocationActivity,
+  DashboardInvocationActivityCall,
+  DashboardInvocationActivityInput,
+  DashboardInvocationActivitySnapshot,
+  DashboardInvocationActivityTarget,
+} from './invocation-activity.mjs'
 
 export interface HumanActivityTrackingOptions {
   readonly lease: import('./human-activity-lease.mjs').HumanActivityLease

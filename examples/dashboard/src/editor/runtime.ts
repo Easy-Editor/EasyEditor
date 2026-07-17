@@ -6,13 +6,22 @@ import {
   createEngine,
 } from '@easy-editor/core/instance'
 import { createDashboardUmdGlobals } from '../globals'
-import { createHumanActivityLease, installHumanActivityTracking } from './agent/activity/index.mjs'
+import {
+  createDashboardInvocationActivity,
+  createHumanActivityLease,
+  installHumanActivityTracking,
+} from './agent/activity/index.mjs'
 import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
 import {
   type DashboardAgentHost,
   type DashboardAgentHostAuthority,
   createDashboardAgentHost,
 } from './agent/host/index.mjs'
+import {
+  type DashboardAgentSessionHost,
+  type DashboardAgentSessionHostAuthority,
+  createDashboardAgentSessionHost,
+} from './agent/host/session-host.mjs'
 import { createDashboardAgentPersistencePort } from './agent/persistence/agent-persistence-port.mjs'
 import {
   type DashboardPersistenceInput,
@@ -49,7 +58,30 @@ remoteResources.bindEngine(engine)
 
 export const dashboardAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
 
+export interface DashboardAgentWorkspaceE2EProbeState {
+  readonly binding: Readonly<{
+    projectId: string
+    branchId: string
+    sessionId?: string
+  }>
+  readonly snapshot: unknown
+}
+
+let dashboardAgentWorkspaceE2EProbe: (() => DashboardAgentWorkspaceE2EProbeState) | null = null
+
+export const registerDashboardAgentWorkspaceE2EProbe = (
+  probe: () => DashboardAgentWorkspaceE2EProbeState,
+): (() => void) => {
+  if (import.meta.env.VITE_E2E !== '1') return () => undefined
+  if (dashboardAgentWorkspaceE2EProbe) throw new Error('Dashboard Agent Workspace E2E probe is already registered')
+  dashboardAgentWorkspaceE2EProbe = probe
+  return () => {
+    if (dashboardAgentWorkspaceE2EProbe === probe) dashboardAgentWorkspaceE2EProbe = null
+  }
+}
+
 const dashboardHumanActivityLease = createHumanActivityLease()
+export const dashboardInvocationActivity = createDashboardInvocationActivity()
 let releaseDashboardHumanActivityTracking: (() => void) | null =
   dashboardAgentRuntimeFeatureFlags.runtime === true
     ? installHumanActivityTracking({
@@ -100,20 +132,35 @@ export const disposeDashboardAgentActivity = () => {
   releaseDashboardHumanActivityTracking?.()
   releaseDashboardHumanActivityTracking = null
   dashboardHumanActivityLease.dispose()
+  dashboardInvocationActivity.dispose()
 }
 
-export const composeDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost | null =>
-  createDashboardAgentHost({
+const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost => {
+  const host = createDashboardAgentHost({
     activityLease: dashboardHumanActivityLease,
     authority,
-    enabled: dashboardAgentRuntimeFeatureFlags.runtime,
+    enabled: true,
     engine,
+    invocationActivity: dashboardInvocationActivity,
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     persistence: dashboardPersistence,
   })
+  if (!host) throw new Error('Dashboard Agent Host could not be composed while enabled')
+  return host
+}
 
-if (import.meta.hot) import.meta.hot.dispose(disposeDashboardAgentActivity)
+export const composeDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost | null =>
+  dashboardAgentRuntimeFeatureFlags.runtime ? createBoundDashboardAgentHost(authority) : null
+
+export const composeDashboardAgentSessionHost = (
+  authority: DashboardAgentSessionHostAuthority,
+): DashboardAgentSessionHost | null =>
+  createDashboardAgentSessionHost({
+    authority,
+    createHost: createBoundDashboardAgentHost,
+    enabled: dashboardAgentRuntimeFeatureFlags.runtime,
+  })
 
 if (import.meta.env.VITE_E2E === '1') {
   Object.defineProperty(window, '__EASY_EDITOR_E2E__', {
@@ -121,6 +168,7 @@ if (import.meta.env.VITE_E2E === '1') {
     value: Object.freeze({
       getEngineState: () => engine.lifecycleState,
       getPersistenceState: () => dashboardPersistence.getSnapshot(),
+      getAgentWorkspaceState: () => dashboardAgentWorkspaceE2EProbe?.() ?? null,
       flushPersistence: () => dashboardPersistence.flush(),
     }),
   })

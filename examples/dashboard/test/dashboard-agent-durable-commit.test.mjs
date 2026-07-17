@@ -109,37 +109,40 @@ const createHarness = options => {
   return { backend, coordinator }
 }
 
-const commitInput = (intent, outcome, overrides = {}) => ({
-  schemaVersion: 1,
-  ...authority,
-  expectedDraftGeneration: 0,
-  activeDocument,
-  projectSchema,
-  updatedAt: 100,
-  receiptIntent: intent,
-  receipt: outcome.receipt,
-  witness: outcome.witness,
-  provenance: outcome.provenance,
-  sessionId: 'session-1',
-  journal: {
-    recordId: 'task:task-1',
-    kind: 'journal-head',
-    value: { taskId: 'task-1', stepId: 'step-1', phase: 'VERIFY' },
-  },
-  checkpoint: {
-    checkpointId: 'verified:call-1',
-    value: { taskId: 'task-1', stepId: 'step-1', verified: true },
-  },
-  artifactRefs: [
-    {
-      ownerType: 'checkpoint',
-      ownerId: 'verified:call-1',
-      artifactId: 'artifact-kpi',
-      sourceRevision: 'revision-7',
+const commitInput = (intent, outcome, overrides = {}) => {
+  const callId = overrides.callId ?? authority.callId
+  return {
+    schemaVersion: 1,
+    ...authority,
+    expectedDraftGeneration: 0,
+    activeDocument,
+    projectSchema,
+    updatedAt: 100,
+    receiptIntent: intent,
+    receipt: outcome.receipt,
+    witness: outcome.witness,
+    provenance: outcome.provenance,
+    sessionId: 'session-1',
+    journal: {
+      recordId: 'task:task-1',
+      kind: 'journal-head',
+      value: { taskId: 'task-1', stepId: 'step-1', phase: 'VERIFY' },
     },
-  ],
-  ...overrides,
-})
+    checkpoint: {
+      checkpointId: 'verified:call-1',
+      value: { taskId: 'task-1', stepId: 'step-1', verified: true },
+    },
+    artifactRefs: [
+      {
+        ownerType: 'checkpoint',
+        ownerId: 'verified:call-1',
+        artifactId: 'artifact-kpi',
+        sourceRevision: 'revision-7',
+      },
+    ],
+    ...overrides,
+  }
+}
 
 test('receipt intent is written only through the coordinator and is idempotent for exact bytes', async () => {
   const { backend, coordinator } = createHarness()
@@ -206,6 +209,7 @@ test('applied outcome atomically commits the full draft, exact lineage, journal,
       kind: 'journal-head',
       callId: authority.callId,
       draftGeneration: 1,
+      updatedAt: 100,
       value: { taskId: 'task-1', stepId: 'step-1', phase: 'VERIFY' },
     },
   )

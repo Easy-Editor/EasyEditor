@@ -90,6 +90,13 @@ const semanticCall = ({ arguments: args = {}, callId, capability, expectedRevisi
   ...overrides,
 })
 
+const receiptQuery = (callId, overrides = {}) => ({
+  schemaVersion: 1,
+  ...authority,
+  callId,
+  ...overrides,
+})
+
 const invocationContext = compensationTarget => ({
   schemaVersion: 1,
   ...(compensationTarget === undefined ? {} : { compensationTarget }),
@@ -255,6 +262,7 @@ const createHarness = async (t, options = {}) => {
       }),
     enabled: true,
     engine,
+    invocationActivity: options.invocationActivity,
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     now: () => 1_700_000_000_000,
@@ -420,13 +428,10 @@ test('Host validates fixed authority and exposes the Phase-3B semantic write des
     }),
     error => error.code === DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
   )
-  assert.equal(
-    await rpc.call('queryReceipt', {
-      projectId: authority.projectId,
-      branchId: authority.branchId,
-      callId: 'read-only-call',
-    }),
-    null,
+  assert.equal(await rpc.call('queryReceipt', receiptQuery('read-only-call')), null)
+  await assert.rejects(
+    rpc.call('queryReceipt', receiptQuery('foreign-task-call', { taskId: 'foreign-task' })),
+    error => error.code === DASHBOARD_AGENT_HOST_ERROR_CODE.authorityMismatch,
   )
 })
 
@@ -438,8 +443,7 @@ test('Host queryReceipt maps durable missing and indeterminate lineage without r
     },
   }
   const { rpc } = await createHarness(t, { persistence })
-  const query = callId =>
-    rpc.call('queryReceipt', { projectId: authority.projectId, branchId: authority.branchId, callId })
+  const query = callId => rpc.call('queryReceipt', receiptQuery(callId))
 
   assert.equal(await query('missing-call'), null)
   assert.deepEqual(await query('unknown-call'), {
@@ -585,14 +589,7 @@ test('Host accepts only an exact runtime-owned compensation context and routes i
   assert.equal(Object.isFrozen(compensateInput.target), true)
   assert.equal(Object.isFrozen(compensateInput.target.callIndex), true)
   assert.equal(Object.isFrozen(compensateInput.target.callIndex[0]), true)
-  assert.deepEqual(
-    await rpc.call('queryReceipt', {
-      projectId: authority.projectId,
-      branchId: authority.branchId,
-      callId: call.callId,
-    }),
-    compensationReceipt,
-  )
+  assert.deepEqual(await rpc.call('queryReceipt', receiptQuery(call.callId)), compensationReceipt)
 })
 
 test('Host rejects missing, accessor-backed, misplaced, and mismatched invoke contexts before effects', async t => {
@@ -703,11 +700,7 @@ test('Host applies a semantic Screen ChangeSet once and strictly recovers its pr
   const appliedMutationVersion = engine.project.currentDocument.mutationVersion
   assert.ok(appliedMutationVersion > beforeMutationVersion)
 
-  const recovered = await rpc.call('queryReceipt', {
-    projectId: authority.projectId,
-    branchId: authority.branchId,
-    callId: call.callId,
-  })
+  const recovered = await rpc.call('queryReceipt', receiptQuery(call.callId))
   assert.equal(recovered.status, 'applied')
   assert.equal(recovered.callId, call.callId)
   assert.equal(Object.hasOwn(recovered, 'receiptIntent'), false)
@@ -719,14 +712,69 @@ test('Host applies a semantic Screen ChangeSet once and strictly recovers its pr
   persistence.tamperReceiptIntent(call.callId, intent => {
     intent.expectedPostImages.images[0].value = 'image://tampered'
   })
-  const tampered = await rpc.call('queryReceipt', {
-    projectId: authority.projectId,
-    branchId: authority.branchId,
-    callId: call.callId,
-  })
+  const tampered = await rpc.call('queryReceipt', receiptQuery(call.callId))
   assert.equal(tampered.status, 'indeterminate')
   assert.equal(tampered.failure.code, 'INDETERMINATE_RECEIPT')
   assert.equal(tampered.failure.details.reason, 'screen-prepared-hash-mismatch')
+})
+
+test('Host projects active Screen targets without granting UI observers invocation authority', async t => {
+  const events = []
+  const invocationActivity = {
+    begin(input) {
+      events.push({ phase: 'started', input: structuredClone(input) })
+      return () => {
+        events.push({ phase: 'finished', callId: input.callId })
+        throw new Error('observer cleanup failure')
+      }
+    },
+  }
+  const { engine, rpc } = await createHarness(t, { invocationActivity })
+  const full = await rpc.call('observe', observeRequest())
+  const result = await rpc.call(
+    'invoke',
+    invokeRequest(
+      semanticCall({
+        arguments: {
+          schemaVersion: 1,
+          documentId: engine.project.currentDocument.id,
+          operations: [
+            {
+              opId: 'update-image',
+              type: 'set',
+              nodeId: 'image-1',
+              fieldId: 'image.source',
+              value: { base64: 'image://target-projection', raw: { width: 640, height: 360 } },
+            },
+          ],
+        },
+        callId: 'screen-target-projection',
+        capability: 'screen.applyChangeSet',
+        expectedRevision: full.revision,
+      }),
+    ),
+  )
+
+  assert.equal(result.status, 'applied', JSON.stringify(result))
+  assert.deepEqual(events, [
+    {
+      phase: 'started',
+      input: {
+        callId: 'screen-target-projection',
+        capability: 'screen.applyChangeSet',
+        taskId: authority.taskId,
+        targetNodeIds: ['image-1'],
+        targets: [
+          {
+            nodeId: 'image-1',
+            label: 'Hero image',
+            rect: { x: 20, y: 30, width: 640, height: 360 },
+          },
+        ],
+      },
+    },
+    { phase: 'finished', callId: 'screen-target-projection' },
+  ])
 })
 
 test('actual Root/Image manifests compile on demand and refresh with real Materials.version', async t => {

@@ -6,9 +6,10 @@ import type {
   Clock,
 } from '../../contracts.js'
 import { createProductionIdFactory } from '../production-id-factory.js'
-import { type RpcPeer, type RpcPeerStats, createRpcPeer } from '../rpc/index.js'
+import { ProtocolValidationError } from '../protocol/index.js'
+import { type RpcPeer, type RpcPeerStats, RpcRemoteError, createRpcPeer } from '../rpc/index.js'
 import { runtimeRpcContracts } from '../runtime/contracts.js'
-import { type WorkerStateMachine, createWorkerStateMachine } from '../state-machine/index.js'
+import { type WorkerStateMachine, WorkerStateMachineError, createWorkerStateMachine } from '../state-machine/index.js'
 
 export interface StartedAgentWorker {
   dispose(): Promise<void>
@@ -58,6 +59,17 @@ export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAg
   const requireMachine = () => {
     if (!machine) throw new Error('agent worker is not initialized')
     return machine
+  }
+
+  const exposeRecoveryLock = async <Value>(operation: () => Promise<Value>) => {
+    try {
+      return await operation()
+    } catch (error) {
+      if (error instanceof WorkerStateMachineError && error.code === 'applied-undurable-recovery-locked') {
+        throw new RpcRemoteError(error.code, error.message)
+      }
+      throw error
+    }
   }
 
   const host: AgentHost = {
@@ -112,6 +124,7 @@ export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAg
           persistence,
           clock,
           idFactory,
+          sessionContextBudget: options.sessionContextBudget,
           onSnapshot: publish,
         })
         if (request.recover) {
@@ -122,23 +135,40 @@ export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAg
         await flushPublishes()
         return machine.getSnapshot()
       },
-      'runtime.submit': input => requireMachine().submit(input),
+      'runtime.submit': input => exposeRecoveryLock(() => requireMachine().submit(input)),
+      async 'runtime.compensate'({ targetTaskId }, context) {
+        const activeMachine = requireMachine()
+        const runtimeBinding = activeMachine.getSnapshot().binding
+        if (
+          context.sessionId !== runtimeBinding.sessionId ||
+          context.taskId !== targetTaskId ||
+          context.stepId !== 'compensate'
+        ) {
+          throw new ProtocolValidationError(
+            'invalid-field',
+            'runtime.compensate RPC context does not match the bound runtime and target task',
+          )
+        }
+        await exposeRecoveryLock(() => activeMachine.compensate(targetTaskId))
+        await flushPublishes()
+        return null
+      },
       async 'runtime.pause'({ taskId }) {
         await requireMachine().pause(taskId)
         await flushPublishes()
         return null
       },
       async 'runtime.resume'({ taskId }) {
-        await requireMachine().resume(taskId)
+        await exposeRecoveryLock(() => requireMachine().resume(taskId))
         return null
       },
       async 'runtime.cancel'({ taskId }) {
-        await requireMachine().cancel(taskId)
+        await exposeRecoveryLock(() => requireMachine().cancel(taskId))
         await flushPublishes()
         return null
       },
       async 'runtime.respond'({ taskId, response }) {
-        await requireMachine().respond(taskId, response)
+        await exposeRecoveryLock(() => requireMachine().respond(taskId, response))
         return null
       },
       async 'runtime.waitForIdle'() {

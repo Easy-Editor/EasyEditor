@@ -56,8 +56,16 @@ export const parseModelEvent = (value: unknown): ModelEvent => {
 
   switch (value.kind) {
     case 'blueprint':
-      assertExactFields(value, ['schemaVersion', 'kind', 'summary'])
+      assertExactFields(value, ['schemaVersion', 'kind', 'summary'], ['unresolvedConstraints'])
       nonEmptyString(value.summary, 'blueprint.summary')
+      if (value.unresolvedConstraints !== undefined) {
+        if (!Array.isArray(value.unresolvedConstraints)) {
+          throw new ModelEventValidationError('invalid-model-event', 'blueprint.unresolvedConstraints must be an array')
+        }
+        value.unresolvedConstraints.forEach((constraint, index) =>
+          nonEmptyString(constraint, `blueprint.unresolvedConstraints[${index}]`),
+        )
+      }
       break
     case 'question': {
       assertExactFields(value, ['schemaVersion', 'kind', 'question'])

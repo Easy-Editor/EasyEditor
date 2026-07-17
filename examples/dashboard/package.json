@@ -11,8 +11,9 @@
     "dev": "vite",
     "build:deps": "pnpm --filter @easy-editor/agent-runtime --filter @easy-editor/core --filter @easy-editor/plugin-dashboard --filter @easy-editor/plugin-datasource --filter @easy-editor/plugin-hotkey --filter @easy-editor/renderer-core --filter @easy-editor/react-renderer --filter @easy-editor/react-renderer-dashboard run types",
     "prebuild": "pnpm run build:deps",
-    "build": "tsc -b && vite build",
-    "build:only": "vite build",
+    "build": "tsc -b && vite build && pnpm run verify:production-bundle",
+    "build:only": "vite build && pnpm run verify:production-bundle",
+    "verify:production-bundle": "node scripts/verify-production-bundle.mjs",
     "preview": "node server/index.mjs",
     "start": "node server/index.mjs",
     "add:ui": "pnpm dlx shadcn@canary add"

@@ -293,6 +293,544 @@ test('empty storage initializes one canonical full-project draft and an indexedd
   await runtime.dispose()
 })
 
+test('runtime subscriptions project pending, durable, failure, and disposal state without observer authority', async () => {
+  const notifications = []
+  const { runtime } = createRuntime()
+  const release = runtime.subscribe(() => {
+    notifications.push(runtime.getSnapshot())
+  })
+
+  await runtime.initialize(project())
+  runtime.scheduleAutosave(() => ({ activeDocument: activeDocument(), projectSchema: project('subscribed') }))
+  assert.equal(runtime.getSnapshot().pendingAutosave, true)
+  await runtime.flush()
+  assert.equal(runtime.getSnapshot().pendingAutosave, false)
+  assert.equal(runtime.getSnapshot().lastFailure, null)
+
+  let attemptedObserverMutation = false
+  const releaseThrowingObserver = runtime.subscribe(() => {
+    attemptedObserverMutation = true
+    throw new Error('observer failure')
+  })
+  runtime.scheduleAutosave(() => ({ activeDocument: activeDocument(), projectSchema: project('observer-safe') }))
+  await runtime.flush()
+  assert.equal(attemptedObserverMutation, true)
+  assert.equal(runtime.getSnapshot().draftGeneration, 3)
+  releaseThrowingObserver()
+
+  await runtime.dispose()
+  release()
+  const countAfterRelease = notifications.length
+  assert.equal(
+    notifications.some(snapshot => snapshot.state === 'initializing'),
+    true,
+  )
+  assert.equal(
+    notifications.some(snapshot => snapshot.state === 'ready' && snapshot.pendingAutosave),
+    true,
+  )
+  assert.equal(notifications.at(-1)?.state, 'disposed')
+  assert.equal(runtime.getSnapshot().state, 'disposed')
+  assert.equal(notifications.length, countAfterRelease)
+})
+
+test('runtime serializes Phase 4 lifecycle wrappers and switches the active branch only after restore commits', async () => {
+  const notifications = []
+  const { backend, runtime, storage } = createRuntime({ autosaveDelayMs: 60_000 })
+  await runtime.initialize(project())
+  const release = runtime.subscribe(() => notifications.push(runtime.getSnapshot()))
+
+  const session = await runtime.saveAgentSession({
+    schemaVersion: 1,
+    batchId: 'runtime-session-main',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 1,
+    sessionId: 'session-main',
+    status: 'active',
+    createdAt: 1_100,
+    updatedAt: 1_100,
+    forkedFrom: null,
+  })
+  assert.equal(session.draft.draftGeneration, 2)
+  assert.equal(
+    (
+      await runtime.resolveAgentSession({
+        schemaVersion: 1,
+        projectId: 'project-dashboard',
+        branchId: 'main',
+      })
+    )?.sessionId,
+    'session-main',
+  )
+  assert.equal(
+    (
+      await runtime.listAgentSessions({
+        schemaVersion: 1,
+        projectId: 'project-dashboard',
+        branchId: 'main',
+      })
+    ).length,
+    1,
+  )
+
+  const version = await runtime.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-version-main-v1',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 2,
+    versionId: 'main-v1',
+    name: 'Main v1',
+    createdAt: 1_200,
+    artifactRefs: [],
+    sourceSessionId: 'session-main',
+    sourceTaskId: 'task-main',
+    sourceCheckpointId: null,
+  })
+  assert.equal(version.draft.draftGeneration, 3)
+  assert.equal(
+    (
+      await runtime.createProjectVersion({
+        schemaVersion: 1,
+        batchId: 'runtime-version-main-v1',
+        projectId: 'project-dashboard',
+        branchId: 'main',
+        expectedDraftGeneration: 2,
+        versionId: 'main-v1',
+        name: 'Main v1',
+        createdAt: 1_200,
+        artifactRefs: [],
+        sourceSessionId: 'session-main',
+        sourceTaskId: 'task-main',
+        sourceCheckpointId: null,
+      })
+    ).draft.draftGeneration,
+    3,
+    'an exact lifecycle command retry must reconcile without another generation',
+  )
+  assert.equal(
+    (
+      await runtime.getProjectVersion({
+        schemaVersion: 1,
+        projectId: 'project-dashboard',
+        branchId: 'main',
+        versionId: 'main-v1',
+      })
+    )?.name,
+    'Main v1',
+  )
+  assert.deepEqual(
+    (
+      await runtime.listProjectVersions({
+        schemaVersion: 1,
+        projectId: 'project-dashboard',
+      })
+    ).map(item => item.versionId),
+    ['main-v1'],
+  )
+
+  const grant = await runtime.authorizeLocalGrant({
+    schemaVersion: 1,
+    batchId: 'runtime-grant-project-write',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 3,
+    userId: 'user-runtime',
+    scope: 'project.write',
+    policyVersion: 'policy-v1',
+    providerId: 'provider-main',
+    providerFingerprint: 'provider-main:v1',
+    updatedAt: 1_300,
+  })
+  assert.equal(grant.draft.draftGeneration, 4)
+  assert.equal(
+    (
+      await runtime.checkLocalGrant({
+        schemaVersion: 1,
+        userId: 'user-runtime',
+        projectId: 'project-dashboard',
+        scope: 'project.write',
+        policyVersion: 'policy-v1',
+        providerId: 'provider-main',
+        providerFingerprint: 'provider-main:v1',
+      })
+    ).granted,
+    true,
+  )
+  assert.equal(
+    (
+      await runtime.listLocalGrants({
+        schemaVersion: 1,
+        userId: 'user-runtime',
+        projectId: 'project-dashboard',
+      })
+    ).length,
+    1,
+  )
+  const revoked = await runtime.revokeLocalGrant({
+    schemaVersion: 1,
+    batchId: 'runtime-revoke-project-write',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 4,
+    userId: 'user-runtime',
+    scope: 'project.write',
+    policyVersion: 'policy-v1',
+    revokedAt: 1_400,
+  })
+  assert.equal(revoked.draft.draftGeneration, 5)
+
+  const roots = await runtime.enumerateArtifactRoots({ schemaVersion: 1, projectId: 'project-dashboard' })
+  assert.deepEqual(roots.generationFence, [{ branchId: 'main', draftGeneration: 5 }])
+  assert.equal((await runtime.planArtifactGcDryRun({ schemaVersion: 1, projectId: 'project-dashboard' })).dryRun, true)
+
+  const restored = await runtime.restoreProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-restore-main-v1',
+    projectId: 'project-dashboard',
+    sourceBranchId: 'main',
+    versionId: 'main-v1',
+    targetBranchId: 'restored-main-v1',
+    targetSessionId: 'session-restored-main-v1',
+    forkedFromSessionId: 'session-main',
+    forkedFromTaskId: 'task-main',
+    restoredAt: 1_500,
+  })
+  assert.equal(restored.draft.branchId, 'restored-main-v1')
+  assert.equal(restored.draft.draftGeneration, 1)
+  assert.equal(runtime.getSnapshot().branchId, 'restored-main-v1')
+  assert.equal(runtime.getSnapshot().draftGeneration, 1)
+  assert.equal(
+    (
+      await runtime.resolveAgentSession({
+        schemaVersion: 1,
+        projectId: 'project-dashboard',
+        branchId: 'restored-main-v1',
+      })
+    )?.sessionId,
+    'session-restored-main-v1',
+  )
+  assert.deepEqual(JSON.parse(storage.getItem('easy-editor:storage:active:v1')), {
+    schemaVersion: 1,
+    projectId: 'project-dashboard',
+    branchId: 'restored-main-v1',
+  })
+  assert.equal(dashboardStorage.readStorageCompatibilityMarker(storage).marker?.branchId, 'restored-main-v1')
+  assert.equal(JSON.parse(storage.getItem(dashboardStorage.DASHBOARD_STORAGE_BRANCH_SWITCH_KEY)).status, 'complete')
+  assert.equal(
+    notifications.some(snapshot => snapshot.state === 'restoring' && snapshot.branchId === 'main'),
+    true,
+  )
+  assert.equal(
+    notifications.some(snapshot => snapshot.state === 'ready' && snapshot.branchId === 'restored-main-v1'),
+    true,
+  )
+
+  const restoredAgain = await runtime.restoreProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-restore-main-v1-again',
+    projectId: 'project-dashboard',
+    sourceBranchId: 'main',
+    versionId: 'main-v1',
+    targetBranchId: 'restored-main-v1-again',
+    targetSessionId: 'session-restored-main-v1-again',
+    forkedFromSessionId: 'session-main',
+    forkedFromTaskId: 'task-main',
+    restoredAt: 1_600,
+  })
+  assert.equal(restoredAgain.draft.branchId, 'restored-main-v1-again')
+  assert.equal(runtime.getSnapshot().branchId, 'restored-main-v1-again')
+  assert.equal((await backend.get('workingDrafts', ['project-dashboard', 'restored-main-v1'])).draftGeneration, 1)
+  assert.equal((await backend.get('workingDrafts', ['project-dashboard', 'main'])).draftGeneration, 5)
+
+  const saved = await runtime.save({
+    activeDocument: activeDocument(),
+    commitKind: 'manual-save',
+    projectSchema: project('restored-edit'),
+  })
+  assert.equal(saved.draft.branchId, 'restored-main-v1-again')
+  assert.equal(saved.draft.draftGeneration, 2)
+  assert.equal((await backend.get('workingDrafts', ['project-dashboard', 'main'])).draftGeneration, 5)
+
+  release()
+  await runtime.dispose()
+})
+
+test('a pending save failure prevents project-version restore from changing canonical or compatibility authority', async () => {
+  let rejectAutosave = false
+  const backend = new dashboardStorage.MemoryDashboardStorageBackend({
+    faultInjector(event) {
+      if (rejectAutosave && event.phase === 'before-commit' && event.batch.draft.commitKind === 'autosave') {
+        throw new Error('restore drain autosave failed')
+      }
+    },
+  })
+  const { runtime, storage } = createRuntime({ autosaveDelayMs: 60_000, backend })
+  await runtime.initialize(project())
+  await runtime.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-version-before-failed-restore',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 1,
+    versionId: 'before-failed-restore',
+    name: 'Before failed restore',
+    createdAt: 1_200,
+    artifactRefs: [],
+    sourceSessionId: null,
+    sourceTaskId: null,
+    sourceCheckpointId: null,
+  })
+  const markerBefore = dashboardStorage.readStorageCompatibilityMarker(storage).marker
+  const identityBefore = storage.getItem('easy-editor:storage:active:v1')
+  rejectAutosave = true
+  runtime.scheduleAutosave(() => ({ activeDocument: activeDocument(), projectSchema: project('unsaved') }))
+
+  await assert.rejects(
+    runtime.restoreProjectVersion({
+      schemaVersion: 1,
+      batchId: 'runtime-restore-blocked-by-save',
+      projectId: 'project-dashboard',
+      sourceBranchId: 'main',
+      versionId: 'before-failed-restore',
+      targetBranchId: 'restore-must-not-exist',
+      targetSessionId: 'session-restore-must-not-exist',
+      forkedFromSessionId: null,
+      forkedFromTaskId: null,
+      restoredAt: 1_300,
+    }),
+    /memory-storage-fault-injected/,
+  )
+
+  assert.equal(await backend.get('workingDrafts', ['project-dashboard', 'restore-must-not-exist']), undefined)
+  assert.deepEqual(dashboardStorage.readStorageCompatibilityMarker(storage).marker, markerBefore)
+  assert.equal(storage.getItem('easy-editor:storage:active:v1'), identityBefore)
+  assert.equal(storage.getItem(dashboardStorage.DASHBOARD_STORAGE_BRANCH_SWITCH_KEY), null)
+  assert.equal(runtime.getSnapshot().state, 'ready')
+  assert.equal(runtime.getSnapshot().branchId, 'main')
+  assert.equal(runtime.getSnapshot().lastFailure?.source, 'restore')
+
+  rejectAutosave = false
+  const recoveredSave = await runtime.save({
+    activeDocument: activeDocument(),
+    commitKind: 'manual-save',
+    projectSchema: project('recovered-after-restore-drain'),
+  })
+  assert.equal(recoveredSave.draft.branchId, 'main')
+  await runtime.dispose()
+})
+
+test('initialization recovers a crashed compatibility branch switch before inspecting marker identity', async () => {
+  let crashOnce = true
+  const storage = new MemoryLocalStorage()
+  const backend = new dashboardStorage.MemoryDashboardStorageBackend()
+  const first = createRuntime({
+    autosaveDelayMs: 60_000,
+    backend,
+    storage,
+    switchCompatibilityBranch(options) {
+      if (crashOnce) {
+        crashOnce = false
+        throw new Error('simulated runtime crash after target commit before compatibility switch')
+      }
+      return dashboardStorage.switchIndexedDbCompatibilityBranch(options)
+    },
+  })
+  await first.runtime.initialize(project())
+  await first.runtime.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-version-before-crash',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 1,
+    versionId: 'before-crash',
+    name: 'Before crash',
+    createdAt: 1_200,
+    artifactRefs: [],
+    sourceSessionId: null,
+    sourceTaskId: null,
+    sourceCheckpointId: null,
+  })
+  await assert.rejects(
+    first.runtime.restoreProjectVersion({
+      schemaVersion: 1,
+      batchId: 'runtime-restore-crash',
+      projectId: 'project-dashboard',
+      sourceBranchId: 'main',
+      versionId: 'before-crash',
+      targetBranchId: 'restored-after-crash',
+      targetSessionId: 'session-restored-after-crash',
+      forkedFromSessionId: null,
+      forkedFromTaskId: null,
+      restoredAt: 1_300,
+    }),
+    /simulated runtime crash after target commit before compatibility switch/,
+  )
+  assert.equal(first.runtime.getSnapshot().state, 'failed')
+  assert.equal(JSON.parse(storage.getItem(dashboardStorage.DASHBOARD_STORAGE_BRANCH_SWITCH_KEY)).status, 'pending')
+  assert.equal(dashboardStorage.readStorageCompatibilityMarker(storage).marker?.branchId, 'main')
+
+  const recovered = createRuntime({ autosaveDelayMs: 60_000, backend, storage })
+  const draft = await recovered.runtime.initialize(project('unused-fallback'))
+  assert.equal(draft.branchId, 'restored-after-crash')
+  assert.equal(recovered.runtime.getSnapshot().branchId, 'restored-after-crash')
+  assert.equal(dashboardStorage.readStorageCompatibilityMarker(storage).marker?.branchId, 'restored-after-crash')
+  assert.deepEqual(JSON.parse(storage.getItem('easy-editor:storage:active:v1')), {
+    schemaVersion: 1,
+    projectId: 'project-dashboard',
+    branchId: 'restored-after-crash',
+  })
+  assert.deepEqual(
+    (
+      await recovered.runtime.resolveAgentSession({
+        schemaVersion: 1,
+        projectId: 'project-dashboard',
+        branchId: 'restored-after-crash',
+      })
+    )?.forkedFrom,
+    { sessionId: null, taskId: null, versionId: 'before-crash' },
+  )
+  assert.equal(JSON.parse(storage.getItem(dashboardStorage.DASHBOARD_STORAGE_BRANCH_SWITCH_KEY)).status, 'complete')
+  assert.equal(
+    (await backend.getAll('workingDrafts')).filter(
+      record => record.projectId === 'project-dashboard' && record.branchId === 'restored-after-crash',
+    ).length,
+    1,
+  )
+  assert.equal(
+    (await backend.getAll('agentSessions')).filter(
+      record => record.projectId === 'project-dashboard' && record.branchId === 'restored-after-crash',
+    ).length,
+    1,
+  )
+
+  await recovered.runtime.dispose()
+})
+
+test('initialization replays the stored restore request after a crash before the target commit', async () => {
+  let crashOnce = true
+  const storage = new MemoryLocalStorage()
+  const backend = new dashboardStorage.MemoryDashboardStorageBackend()
+  const first = createRuntime({
+    autosaveDelayMs: 60_000,
+    backend,
+    storage,
+    prepareCompatibilityBranchSwitch(options) {
+      return dashboardStorage.prepareIndexedDbCompatibilityBranchSwitch({
+        ...options,
+        crashInjector(event) {
+          if (crashOnce && event.point === 'after-transition-intent') {
+            crashOnce = false
+            throw new Error('simulated process death after restore intent')
+          }
+        },
+      })
+    },
+  })
+  await first.runtime.initialize(project())
+  await first.runtime.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-version-before-prepare-crash',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 1,
+    versionId: 'before-prepare-crash',
+    name: 'Before prepare crash',
+    createdAt: 1_400,
+    artifactRefs: [],
+    sourceSessionId: null,
+    sourceTaskId: null,
+    sourceCheckpointId: null,
+  })
+  await assert.rejects(
+    first.runtime.restoreProjectVersion({
+      schemaVersion: 1,
+      batchId: 'runtime-restore-prepare-crash',
+      projectId: 'project-dashboard',
+      sourceBranchId: 'main',
+      versionId: 'before-prepare-crash',
+      targetBranchId: 'restored-after-prepare-crash',
+      targetSessionId: 'session-restored-after-prepare-crash',
+      forkedFromSessionId: null,
+      forkedFromTaskId: null,
+      restoredAt: 1_500,
+    }),
+    /simulated process death after restore intent/,
+  )
+  assert.equal(first.runtime.getSnapshot().state, 'failed')
+  assert.equal(await backend.get('workingDrafts', ['project-dashboard', 'restored-after-prepare-crash']), undefined)
+  const intent = JSON.parse(storage.getItem(dashboardStorage.DASHBOARD_STORAGE_BRANCH_SWITCH_KEY))
+  assert.equal(intent.status, 'pending')
+  assert.equal(intent.restoreRequest.targetBranchId, 'restored-after-prepare-crash')
+
+  const recovered = createRuntime({ autosaveDelayMs: 60_000, backend, storage })
+  const draft = await recovered.runtime.initialize(project('unused-fallback'))
+  assert.equal(draft.branchId, 'restored-after-prepare-crash')
+  assert.equal(
+    (await backend.getAll('workingDrafts')).filter(
+      record => record.projectId === 'project-dashboard' && record.branchId === 'restored-after-prepare-crash',
+    ).length,
+    1,
+  )
+  assert.equal(
+    (await backend.getAll('agentSessions')).filter(
+      record => record.projectId === 'project-dashboard' && record.branchId === 'restored-after-prepare-crash',
+    ).length,
+    1,
+  )
+  await recovered.runtime.dispose()
+})
+
+test('a pre-commit restore failure aborts the prepared transition and keeps the source writable', async () => {
+  let rejectRestore = false
+  const backend = new dashboardStorage.MemoryDashboardStorageBackend({
+    faultInjector(event) {
+      if (rejectRestore && event.phase === 'before-commit' && event.batch.draft.commitKind === 'version-restore') {
+        throw new Error('restore target transaction rejected')
+      }
+    },
+  })
+  const { runtime, storage } = createRuntime({ autosaveDelayMs: 60_000, backend })
+  await runtime.initialize(project())
+  await runtime.createProjectVersion({
+    schemaVersion: 1,
+    batchId: 'runtime-version-before-target-rejection',
+    projectId: 'project-dashboard',
+    branchId: 'main',
+    expectedDraftGeneration: 1,
+    versionId: 'before-target-rejection',
+    name: 'Before target rejection',
+    createdAt: 1_600,
+    artifactRefs: [],
+    sourceSessionId: null,
+    sourceTaskId: null,
+    sourceCheckpointId: null,
+  })
+  rejectRestore = true
+  await assert.rejects(
+    runtime.restoreProjectVersion({
+      schemaVersion: 1,
+      batchId: 'runtime-restore-target-rejection',
+      projectId: 'project-dashboard',
+      sourceBranchId: 'main',
+      versionId: 'before-target-rejection',
+      targetBranchId: 'rejected-restore-target',
+      targetSessionId: 'session-rejected-restore-target',
+      forkedFromSessionId: null,
+      forkedFromTaskId: null,
+      restoredAt: 1_700,
+    }),
+    /memory-storage-fault-injected/,
+  )
+  assert.equal(runtime.getSnapshot().state, 'ready')
+  assert.equal(runtime.getSnapshot().branchId, 'main')
+  assert.equal(await backend.get('workingDrafts', ['project-dashboard', 'rejected-restore-target']), undefined)
+  assert.equal(JSON.parse(storage.getItem(dashboardStorage.DASHBOARD_STORAGE_BRANCH_SWITCH_KEY)).status, 'aborted')
+  assert.equal(dashboardStorage.readStorageCompatibilityMarker(storage).marker?.branchId, 'main')
+  await runtime.dispose()
+})
+
 test('two runtimes bootstrap one shared project identity and canonical generation', async () => {
   const storage = new MemoryLocalStorage()
   const backend = new dashboardStorage.MemoryDashboardStorageBackend()

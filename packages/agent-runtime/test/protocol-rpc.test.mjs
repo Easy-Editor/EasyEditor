@@ -11,6 +11,7 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 let emittedRoot
 let protocol
 let rpc
+let runtimeContracts
 
 before(async () => {
   emittedRoot = await mkdtemp(path.join(tmpdir(), 'easy-editor-agent-protocol-'))
@@ -41,6 +42,7 @@ before(async () => {
 
   protocol = await import(pathToFileURL(path.join(emittedRoot, 'internal/protocol/index.js')).href)
   rpc = await import(pathToFileURL(path.join(emittedRoot, 'internal/rpc/index.js')).href)
+  runtimeContracts = await import(pathToFileURL(path.join(emittedRoot, 'internal/runtime/contracts.js')).href)
 })
 
 after(async () => {
@@ -261,6 +263,37 @@ test('Host invoke RPC rejects accessor and non-enumerable fields without evaluat
     () => rpc.agentBoundaryRpcContracts['host.invoke'].parseRequest(hiddenFieldRequest),
     error => error instanceof protocol.ProtocolValidationError && error.code === 'unknown-field',
   )
+})
+
+test('Runtime compensate RPC accepts only an exact target task request', () => {
+  const contract = runtimeContracts.runtimeRpcContracts['runtime.compensate']
+  const request = { targetTaskId: 'target-task' }
+  assert.deepEqual(contract.parseRequest(request), request)
+  assert.equal(contract.parseResponse(null), null)
+
+  for (const invalid of [
+    {},
+    { targetTaskId: '' },
+    { targetTaskId: 'target-task', taskId: 'caller-controlled' },
+    { targetTaskId: 'target-task', projectId: 'caller-controlled' },
+  ]) {
+    assert.throws(
+      () => contract.parseRequest(invalid),
+      error => error instanceof protocol.ProtocolValidationError || error instanceof TypeError,
+    )
+  }
+
+  let reads = 0
+  const accessor = {}
+  Object.defineProperty(accessor, 'targetTaskId', {
+    enumerable: true,
+    get() {
+      reads += 1
+      return 'target-task'
+    },
+  })
+  assert.throws(() => contract.parseRequest(accessor), protocol.ProtocolValidationError)
+  assert.equal(reads, 0)
 })
 
 const createEchoContracts = () => ({
@@ -767,8 +800,10 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
       return { schemaVersion: 1, callId: call.callId, status: 'applied', revision: 'revision-2' }
     },
     queryReceipt: async request => ({
-      ...request,
       schemaVersion: 1,
+      projectId: request.projectId,
+      branchId: request.branchId,
+      callId: request.callId,
       status: 'not-applied',
       failure: { code: 'NO_CHANGE', message: 'already satisfied', retryable: false },
     }),
@@ -859,7 +894,14 @@ test('built-in Host/Persistence handlers roundtrip exact DTOs over real MessageP
   })
   const receipt = await client.request(
     'host.queryReceipt',
-    { projectId: 'project-1', branchId: 'branch-1', callId: 'call-1' },
+    {
+      schemaVersion: 1,
+      projectId: 'project-1',
+      branchId: 'branch-1',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      callId: 'call-1',
+    },
     baseContext,
   )
   assert.equal(receipt.failure.code, 'NO_CHANGE')

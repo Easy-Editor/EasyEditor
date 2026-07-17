@@ -1,6 +1,8 @@
 {
   "@easy-editor/agent-runtime": {
     "all": [
+      "AgentAcceptedBlueprint",
+      "AgentAppliedUndurableRecovery",
       "AgentHost",
       "AgentPersistenceBatch",
       "AgentPersistencePort",
@@ -10,8 +12,15 @@
       "AgentRuntimeBinding",
       "AgentRuntimeFailure",
       "AgentRuntimeOptions",
+      "AgentRuntimeRecovery",
       "AgentRuntimeSnapshot",
       "AgentRuntimeStatus",
+      "AgentSessionContextBudget",
+      "AgentSessionContextDigest",
+      "AgentSessionContextSourceRange",
+      "AgentSessionTaskExcerpt",
+      "AgentSessionUnresolvedConstraint",
+      "AgentSessionUnresolvedConstraintKind",
       "AgentTaskSnapshot",
       "AgentWorkerEndpoint",
       "BoundAgentRuntimeBinding",
@@ -74,6 +83,12 @@
   },
   "@easy-editor/agent-runtime/worker": {
     "all": [
+      "AgentSessionContextBudget",
+      "AgentSessionContextDigest",
+      "AgentSessionContextSourceRange",
+      "AgentSessionTaskExcerpt",
+      "AgentSessionUnresolvedConstraint",
+      "AgentSessionUnresolvedConstraintKind",
       "AgentWorkerOptions",
       "Clock",
       "IdFactory",

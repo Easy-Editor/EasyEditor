@@ -1,4 +1,5 @@
 import type {
+  AgentAcceptedBlueprint,
   AgentHost,
   AgentPersistencePort,
   AgentPhase,
@@ -7,6 +8,8 @@ import type {
   AgentRuntimeFailure,
   AgentRuntimeSnapshot,
   AgentRuntimeStatus,
+  AgentSessionContextBudget,
+  AgentSessionContextDigest,
   AgentTaskSnapshot,
   Clock,
   HostInvocationContextV1,
@@ -27,6 +30,11 @@ import type {
 } from '../../contracts.js'
 import { collectModelEvents } from '../model/index.js'
 import { assertExactFields, assertJsonValue } from '../protocol/index.js'
+import {
+  createAgentSessionContext,
+  normalizeAgentSessionContextBudget,
+  parseAgentSessionContextDigest,
+} from '../session-context/index.js'
 import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
 
 type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
@@ -38,6 +46,7 @@ export type WorkerStateMachineErrorCode =
   | 'missing-task'
   | 'invalid-model-turn'
   | 'invalid-tool-call-context'
+  | 'applied-undurable-recovery-locked'
   | 'persistence-failed'
 
 export class WorkerStateMachineError extends Error {
@@ -58,11 +67,13 @@ export interface WorkerStateMachineOptions {
   readonly clock: Clock
   readonly idFactory: IdFactory
   readonly repairBudget?: number
+  readonly sessionContextBudget?: AgentSessionContextBudget
   readonly onSnapshot?: (snapshot: AgentRuntimeSnapshot) => void
 }
 
 export interface WorkerStateMachine {
   submit(input: UserIntent): Promise<TaskRef>
+  compensate(targetTaskId: string): Promise<void>
   pause(taskId: string): Promise<void>
   resume(taskId: string): Promise<void>
   cancel(taskId: string): Promise<void>
@@ -79,11 +90,15 @@ interface MutableTask {
   sessionId: string
   parentTaskId?: string
   supersedesTaskId?: string
+  compensatesTaskId?: string
   phase: AgentPhase
   createdAt: number
   updatedAt: number
   repairAttempts: number
   intent: UserIntent
+  acceptedBlueprint?: AgentAcceptedBlueprint
+  completionSummary?: string
+  sessionContext?: AgentSessionContextDigest
   response?: UserResponse
   question?: AgentQuestion
   failure?: AgentRuntimeFailure
@@ -97,6 +112,8 @@ interface MutableTask {
   lastDurablePhase?: AgentPhase
   nextModelPhase: ModelTurnPhase
   pendingInvocation?: PendingInvocationV1
+  reconciledInvocation?: InvocationResult
+  reconciliationResume?: Promise<void>
   pendingInvocationDurable: boolean
   callIds: string[]
   callIndex: RuntimeTaskCallIndexEntryV1[]
@@ -108,6 +125,7 @@ interface PendingInvocationV1 {
   readonly schemaVersion: 1
   readonly state: 'invoked'
   readonly completeAfterTool: boolean
+  readonly completionSummary?: string
   readonly call: SemanticCall
 }
 
@@ -115,6 +133,8 @@ type ExecutionDisposition = 'satisfied' | 'completed' | 'repair' | 'repair-durab
 
 interface TurnOutcome {
   readonly complete: boolean
+  readonly acceptedBlueprint?: AgentAcceptedBlueprint
+  readonly completionSummary?: string
   readonly question?: AgentQuestion
   readonly pauseReason?: string
   readonly toolCall?: ModelToolCallProposal
@@ -183,16 +203,49 @@ const taskRef = (task: MutableTask): TaskRef =>
     ...(task.supersedesTaskId ? { supersedesTaskId: task.supersedesTaskId } : {}),
   })
 
-const taskSnapshot = (task: MutableTask): AgentTaskSnapshot =>
-  cloneFrozen({
+const taskSnapshot = (task: MutableTask, compensationEligible: boolean): AgentTaskSnapshot => {
+  if (!task.sessionContext) {
+    throw new WorkerStateMachineError('invalid-model-turn', `task ${task.taskId} is missing its session context`)
+  }
+  return cloneFrozen({
     ...taskRef(task),
     phase: task.phase,
+    compensationEligible,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     repairAttempts: task.repairAttempts,
+    intent: task.intent,
+    sessionContext: task.sessionContext,
+    ...(task.compensatesTaskId ? { compensatesTaskId: task.compensatesTaskId } : {}),
+    ...(task.acceptedBlueprint ? { acceptedBlueprint: task.acceptedBlueprint } : {}),
+    ...(task.completionSummary ? { completionSummary: task.completionSummary } : {}),
     ...(task.question ? { question: task.question } : {}),
     ...(task.failure ? { failure: task.failure } : {}),
   })
+}
+
+type AppliedUndurableRecoveryTask = MutableTask & {
+  failure: AgentRuntimeFailure & { readonly code: 'APPLIED_UNDURABLE' }
+  pendingInvocation: PendingInvocationV1
+}
+
+const isAppliedUndurableRecoveryTask = (task: MutableTask): task is AppliedUndurableRecoveryTask =>
+  task.phase === 'PAUSED' && task.failure?.code === 'APPLIED_UNDURABLE' && task.pendingInvocation !== undefined
+
+const appliedUndurableRecovery = (task: MutableTask) => {
+  if (!isAppliedUndurableRecoveryTask(task)) return undefined
+  const callId = task.pendingInvocation.call.callId
+  return cloneFrozen({
+    schemaVersion: 1 as const,
+    kind: 'applied-undurable' as const,
+    recoveryId: `applied-undurable-v1:${encodeURIComponent(task.sessionId)}:${encodeURIComponent(
+      task.taskId,
+    )}:${encodeURIComponent(callId)}`,
+    taskId: task.taskId,
+    callId,
+    occurredAt: task.updatedAt,
+  })
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -223,9 +276,21 @@ const parseRecoveredPendingInvocation = (
 ): PendingInvocationV1 | undefined => {
   if (!isRecord(value) || value.schemaVersion !== 1 || value.state !== 'invoked') return undefined
   if (typeof value.completeAfterTool !== 'boolean') return undefined
+  if (
+    value.completionSummary !== undefined &&
+    (typeof value.completionSummary !== 'string' || !value.completionSummary)
+  ) {
+    return undefined
+  }
   const call = parseRecoveredSemanticCall(value.call, taskId, sessionId)
   if (!call) return undefined
-  return cloneFrozen({ schemaVersion: 1, state: 'invoked', completeAfterTool: value.completeAfterTool, call })
+  return cloneFrozen({
+    schemaVersion: 1,
+    state: 'invoked',
+    completeAfterTool: value.completeAfterTool,
+    ...(typeof value.completionSummary === 'string' ? { completionSummary: value.completionSummary } : {}),
+    call,
+  })
 }
 
 interface RecoveredCallIndex {
@@ -256,9 +321,80 @@ const parseRecoveredCallIndex = (value: unknown): RecoveredCallIndex | undefined
   return { entries, provided: true }
 }
 
+const parseRecoveredIntent = (value: unknown): UserIntent | undefined => {
+  try {
+    assertExactFields(value, ['text'], ['metadata'], 'persisted task intent')
+    if (typeof value.text !== 'string' || value.text.length === 0) return undefined
+    if (value.metadata !== undefined) {
+      assertJsonValue(value.metadata, 'persisted task intent.metadata')
+      if (typeof value.metadata !== 'object' || value.metadata === null || Array.isArray(value.metadata)) {
+        return undefined
+      }
+    }
+    return cloneFrozen({
+      text: value.text,
+      ...(value.metadata ? { metadata: value.metadata as JsonObject } : {}),
+    })
+  } catch {
+    return undefined
+  }
+}
+
+const parseRecoveredBlueprint = (value: unknown): AgentAcceptedBlueprint | undefined => {
+  try {
+    assertExactFields(value, ['schemaVersion', 'summary', 'unresolvedConstraints'], [], 'persisted task blueprint')
+    if (value.schemaVersion !== 1 || typeof value.summary !== 'string' || value.summary.length === 0) return undefined
+    if (
+      !Array.isArray(value.unresolvedConstraints) ||
+      value.unresolvedConstraints.some(constraint => typeof constraint !== 'string' || constraint.length === 0)
+    ) {
+      return undefined
+    }
+    return cloneFrozen({
+      schemaVersion: 1,
+      summary: value.summary,
+      unresolvedConstraints: [...value.unresolvedConstraints] as string[],
+    })
+  } catch {
+    return undefined
+  }
+}
+
+const parseRecoveredQuestion = (value: unknown): AgentQuestion | undefined => {
+  try {
+    assertExactFields(value, ['questionId', 'prompt'], ['responseSchema'], 'persisted task question')
+    if (
+      typeof value.questionId !== 'string' ||
+      value.questionId.length === 0 ||
+      typeof value.prompt !== 'string' ||
+      value.prompt.length === 0
+    ) {
+      return undefined
+    }
+    if (value.responseSchema !== undefined) {
+      assertJsonValue(value.responseSchema, 'persisted task question.responseSchema')
+      if (
+        typeof value.responseSchema !== 'object' ||
+        value.responseSchema === null ||
+        Array.isArray(value.responseSchema)
+      ) {
+        return undefined
+      }
+    }
+    return cloneFrozen({
+      questionId: value.questionId,
+      prompt: value.prompt,
+      ...(value.responseSchema ? { responseSchema: value.responseSchema as JsonObject } : {}),
+    })
+  } catch {
+    return undefined
+  }
+}
+
 const parseRecoveredTask = (value: unknown, expectedSessionId: string): MutableTask | undefined => {
-  if (!isRecord(value) || !isRecord(value.intent)) return undefined
+  if (!isRecord(value)) return undefined
   const { taskId, sessionId, phase, createdAt, updatedAt, repairAttempts } = value
+  const intent = parseRecoveredIntent(value.intent)
   if (
     typeof taskId !== 'string' ||
     typeof sessionId !== 'string' ||
@@ -267,7 +403,7 @@ const parseRecoveredTask = (value: unknown, expectedSessionId: string): MutableT
     typeof createdAt !== 'number' ||
     typeof updatedAt !== 'number' ||
     typeof repairAttempts !== 'number' ||
-    typeof value.intent.text !== 'string' ||
+    !intent ||
     sessionId !== expectedSessionId
   ) {
     return undefined
@@ -319,6 +455,23 @@ const parseRecoveredTask = (value: unknown, expectedSessionId: string): MutableT
       return undefined
     }
   }
+  const acceptedBlueprint =
+    value.acceptedBlueprint === undefined ? undefined : parseRecoveredBlueprint(value.acceptedBlueprint)
+  if (value.acceptedBlueprint !== undefined && !acceptedBlueprint) return undefined
+  const completionSummary = value.completionSummary
+  if (completionSummary !== undefined && (typeof completionSummary !== 'string' || completionSummary.length === 0)) {
+    return undefined
+  }
+  const question = value.question === undefined ? undefined : parseRecoveredQuestion(value.question)
+  if (value.question !== undefined && !question) return undefined
+  let sessionContext: AgentSessionContextDigest | undefined
+  if (value.sessionContext !== undefined) {
+    try {
+      sessionContext = cloneFrozen(parseAgentSessionContextDigest(value.sessionContext))
+    } catch {
+      return undefined
+    }
+  }
   const pendingInvocation =
     value.pendingInvocation === undefined
       ? undefined
@@ -350,6 +503,16 @@ const parseRecoveredTask = (value: unknown, expectedSessionId: string): MutableT
     callIndex.every((entry, index) => entry.callId === callIds[index])
   if (value.callIndexComplete === true && !indexesAlign) return undefined
   const callIndexComplete = value.callIndexComplete === true && indexesAlign
+  const compensatesTaskId = value.compensatesTaskId
+  if (
+    compensatesTaskId !== undefined &&
+    (typeof compensatesTaskId !== 'string' ||
+      compensatesTaskId.length === 0 ||
+      compensatesTaskId === taskId ||
+      !callIndex.some(entry => entry.capability === 'task.compensate'))
+  ) {
+    return undefined
+  }
   return {
     taskId,
     sessionId,
@@ -357,15 +520,20 @@ const parseRecoveredTask = (value: unknown, expectedSessionId: string): MutableT
     createdAt,
     updatedAt,
     repairAttempts,
-    intent: value.intent as unknown as UserIntent,
+    intent,
     parentTaskId: typeof value.parentTaskId === 'string' ? value.parentTaskId : undefined,
     supersedesTaskId: typeof value.supersedesTaskId === 'string' ? value.supersedesTaskId : undefined,
+    compensatesTaskId: typeof compensatesTaskId === 'string' ? compensatesTaskId : undefined,
     lastDurablePhase: phase as AgentPhase,
     nextModelPhase: phase === 'REPAIR' ? 'REPAIR' : 'PLAN_STEP',
     callIds,
     callIndex,
     callIndexComplete,
     consecutiveYields,
+    ...(acceptedBlueprint ? { acceptedBlueprint } : {}),
+    ...(typeof completionSummary === 'string' ? { completionSummary } : {}),
+    ...(sessionContext ? { sessionContext } : {}),
+    ...(question ? { question } : {}),
     ...(failure ? { failure } : {}),
     pendingInvocationDurable: pendingInvocation !== undefined && pendingCallIdWasIndexed && pendingCapabilityWasIndexed,
     ...(pendingInvocation ? { pendingInvocation } : {}),
@@ -436,8 +604,13 @@ const toRecordValue = (task: MutableTask, persistedPhase: AgentPhase): JsonObjec
     text: task.intent.text,
     ...(task.intent.metadata ? { metadata: task.intent.metadata } : {}),
   },
+  ...(task.acceptedBlueprint ? { acceptedBlueprint: task.acceptedBlueprint as unknown as JsonObject } : {}),
+  ...(task.completionSummary ? { completionSummary: task.completionSummary } : {}),
+  ...(task.sessionContext ? { sessionContext: task.sessionContext as unknown as JsonObject } : {}),
+  ...(task.question ? { question: task.question as unknown as JsonObject } : {}),
   ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
   ...(task.supersedesTaskId ? { supersedesTaskId: task.supersedesTaskId } : {}),
+  ...(task.compensatesTaskId ? { compensatesTaskId: task.compensatesTaskId } : {}),
   ...(task.pendingInvocation ? { pendingInvocation: task.pendingInvocation as unknown as JsonObject } : {}),
 })
 
@@ -454,6 +627,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const tasks = new Map<string, MutableTask>()
   const runs = new Set<Promise<void>>()
   const repairBudget = options.repairBudget ?? 2
+  const sessionContextBudget = normalizeAgentSessionContextBudget(options.sessionContextBudget)
   let activeTask: MutableTask | undefined
   let currentSnapshot: AgentRuntimeSnapshot
   let disposed = false
@@ -465,6 +639,11 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   let persistenceGeneration = 0
   let commitTail = Promise.resolve()
   let persistenceTail = Promise.resolve()
+
+  const refreshSessionContext = (task: MutableTask) => {
+    task.sessionContext = cloneFrozen(createAgentSessionContext([...tasks.values()], sessionContextBudget))
+    return task.sessionContext
+  }
 
   const sessionCallIds = () => {
     const callIds = new Set<string>()
@@ -538,16 +717,50 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       expectedRevision: proposal.expectedRevision,
     })
 
+  const isCompensationTargetEligible = (
+    requestingTask: MutableTask | undefined,
+    targetTaskId: string,
+    occupiedTargetIds?: ReadonlySet<string>,
+  ): boolean => {
+    const target = tasks.get(targetTaskId)
+    if (!target) return false
+    const occupied = occupiedTargetIds
+      ? occupiedTargetIds.has(targetTaskId)
+      : [...tasks.values()].some(
+          candidate => candidate !== requestingTask && candidate.compensatesTaskId === targetTaskId,
+        )
+    return !(
+      target === requestingTask ||
+      target.sessionId !== (requestingTask?.sessionId ?? sessionId) ||
+      !compensationTargetPhases.has(target.phase) ||
+      target.lastDurablePhase !== target.phase ||
+      !target.callIndexComplete ||
+      target.callIndex.some(entry => entry.capability === 'task.compensate') ||
+      target.compensatesTaskId !== undefined ||
+      occupied ||
+      (requestingTask?.compensatesTaskId !== undefined && requestingTask.compensatesTaskId !== targetTaskId)
+    )
+  }
+
   const emit = () => {
     revision += 1
+    const occupiedTargetIds = new Set(
+      [...tasks.values()].flatMap(task => (task.compensatesTaskId ? [task.compensatesTaskId] : [])),
+    )
+    const snapshotTask = (task: MutableTask): AgentTaskSnapshot =>
+      taskSnapshot(task, isCompensationTargetEligible(undefined, task.taskId, occupiedTargetIds))
     const next: AgentRuntimeSnapshot = {
       schemaVersion: 1,
       binding,
       status: runtimeStatus,
       phase: activeTask?.phase ?? 'IDLE',
       revision,
-      ...(activeTask ? { activeTask: taskSnapshot(activeTask) } : {}),
-      tasks: [...tasks.values()].map(taskSnapshot),
+      ...(activeTask ? { activeTask: snapshotTask(activeTask) } : {}),
+      tasks: [...tasks.values()].map(snapshotTask),
+      recoveries: [...tasks.values()].flatMap(task => {
+        const recovery = appliedUndurableRecovery(task)
+        return recovery ? [recovery] : []
+      }),
       ...(runtimeFailure ? { failure: runtimeFailure } : {}),
     }
     currentSnapshot = cloneFrozen(next)
@@ -562,6 +775,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     phase: 'IDLE',
     revision,
     tasks: [],
+    recoveries: [],
   })
 
   const assertUsable = () => {
@@ -572,6 +786,21 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     const task = tasks.get(taskId)
     if (!task) throw new WorkerStateMachineError('missing-task', `unknown task ${taskId}`)
     return task
+  }
+
+  const recoveryLockedTasks = () => [...tasks.values()].filter(isAppliedUndurableRecoveryTask)
+
+  const recoveryLockedError = (task: AppliedUndurableRecoveryTask, evidence?: 'missing' | 'indeterminate') =>
+    new WorkerStateMachineError(
+      'applied-undurable-recovery-locked',
+      `task ${task.taskId} remains locked on applied-undurable call ${task.pendingInvocation.call.callId}${
+        evidence ? ` because exact receipt evidence is ${evidence}` : ''
+      }; only exact terminal receipt reconciliation can continue`,
+    )
+
+  const assertNoRecoveryLock = () => {
+    const locked = recoveryLockedTasks()[0]
+    if (locked) throw recoveryLockedError(locked)
   }
 
   const setPhase = (task: MutableTask, phase: AgentPhase) => {
@@ -659,20 +888,27 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       phase,
       intent: task.intent,
       snapshot: task.latestSnapshot,
+      sessionContext: refreshSessionContext(task),
       ...(task.response ? { response: task.response } : {}),
       repairAttempts: task.repairAttempts,
     }
   }
 
-  const interpretEvents = (events: readonly ModelEvent[]): TurnOutcome => {
+  const interpretEvents = (events: readonly ModelEvent[], phase: ModelTurnPhase): TurnOutcome => {
     let complete = false
+    let acceptedBlueprint: AgentAcceptedBlueprint | undefined
+    let completionSummary: string | undefined
     let question: AgentQuestion | undefined
     let pauseReason: string | undefined
     let toolCall: ModelToolCallProposal | undefined
     for (const event of events) {
       switch (event.kind) {
         case 'complete':
+          if (complete) {
+            throw new WorkerStateMachineError('invalid-model-turn', 'model turn emitted multiple completion events')
+          }
           complete = true
+          completionSummary = event.summary
           break
         case 'question':
           if (question) {
@@ -693,6 +929,17 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
           toolCall = event.call
           break
         case 'blueprint':
+          if (phase !== 'BLUEPRINT') {
+            throw new WorkerStateMachineError('invalid-model-turn', 'blueprint events are only valid during BLUEPRINT')
+          }
+          if (acceptedBlueprint) {
+            throw new WorkerStateMachineError('invalid-model-turn', 'model turn emitted multiple blueprints')
+          }
+          acceptedBlueprint = cloneFrozen({
+            schemaVersion: 1,
+            summary: event.summary,
+            unresolvedConstraints: [...(event.unresolvedConstraints ?? [])],
+          })
           break
       }
     }
@@ -702,7 +949,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         'question, pause, and tool-call outcomes are mutually exclusive',
       )
     }
-    return { complete, question, pauseReason, toolCall }
+    return { complete, acceptedBlueprint, completionSummary, question, pauseReason, toolCall }
   }
 
   const runTurn = async (task: MutableTask, phase: ModelTurnPhase) => {
@@ -712,7 +959,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       turnRequest(task, phase),
       task.controller?.signal ?? new AbortController().signal,
     )
-    return interpretEvents(events)
+    return interpretEvents(events, phase)
   }
 
   const assertCallContext = (task: MutableTask, call: SemanticCall) => {
@@ -745,6 +992,17 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     return call.arguments.targetTaskId
   }
 
+  const resolveCompensationTarget = (task: MutableTask | undefined, targetTaskId: string) => {
+    const target = tasks.get(targetTaskId)
+    if (!target || !isCompensationTargetEligible(task, targetTaskId)) {
+      throw new WorkerStateMachineError(
+        'invalid-model-turn',
+        'task.compensate target is unknown, non-durable, ineligible, foreign, current, incomplete, nested, or already compensated',
+      )
+    }
+    return target
+  }
+
   const hostInvocationContext = (task: MutableTask, call: SemanticCall): HostInvocationContextV1 => {
     if (call.capability !== 'task.compensate') return cloneFrozen({ schemaVersion: 1 })
     const targetTaskId = compensationTargetId(call)
@@ -754,20 +1012,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         'task.compensate requires exact {schemaVersion: 1, targetTaskId} arguments',
       )
     }
-    const target = tasks.get(targetTaskId)
-    if (
-      !target ||
-      target === task ||
-      target.sessionId !== task.sessionId ||
-      !compensationTargetPhases.has(target.phase) ||
-      !target.callIndexComplete ||
-      target.callIndex.some(entry => entry.capability === 'task.compensate')
-    ) {
-      throw new WorkerStateMachineError(
-        'invalid-model-turn',
-        'task.compensate target is unknown, ineligible, foreign, current, incomplete, or nested',
-      )
-    }
+    const target = resolveCompensationTarget(task, targetTaskId)
+    task.compensatesTaskId ??= targetTaskId
     const compensationTarget: RuntimeTaskCompensationTargetV1 = {
       schemaVersion: 1,
       taskId: target.taskId,
@@ -798,11 +1044,13 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       : { ...base, status: receipt.status, failure: receipt.failure }
   }
 
-  const queryInvocationReceipt = async (task: MutableTask, call: SemanticCall) => {
-    setPhase(task, 'QUERY_RECEIPT')
+  const queryExactInvocationReceipt = async (task: MutableTask, call: SemanticCall) => {
     const receipt = await options.host.queryReceipt({
+      schemaVersion: 1,
       projectId: binding.projectId,
       branchId: binding.branchId,
+      sessionId: task.sessionId,
+      taskId: task.taskId,
       callId: call.callId,
     })
     if (
@@ -817,6 +1065,11 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       )
     }
     return receipt
+  }
+
+  const queryInvocationReceipt = async (task: MutableTask, call: SemanticCall) => {
+    setPhase(task, 'QUERY_RECEIPT')
+    return queryExactInvocationReceipt(task, call)
   }
 
   const invokeWithReceiptRecovery = async (
@@ -885,6 +1138,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const clearPendingAndComplete = async (task: MutableTask): Promise<ExecutionDisposition> => {
     const pending = task.pendingInvocation
     const pendingWasDurable = task.pendingInvocationDurable
+    const previousCompletionSummary = task.completionSummary
+    task.completionSummary = pending?.completionSummary
     task.pendingInvocation = undefined
     task.pendingInvocationDurable = false
     setPhase(task, 'CHECKPOINT')
@@ -893,6 +1148,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       setPhase(task, 'COMPLETED')
       return 'completed'
     }
+    task.completionSummary = previousCompletionSummary
     task.pendingInvocation = pending
     task.pendingInvocationDurable = pendingWasDurable
     setPhase(task, 'PAUSED')
@@ -976,7 +1232,12 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     return persistRepairTransition(task, { clearPendingInvocation: true })
   }
 
-  const persistPendingInvocation = async (task: MutableTask, call: SemanticCall, completeAfterTool: boolean) => {
+  const persistPendingInvocation = async (
+    task: MutableTask,
+    call: SemanticCall,
+    completeAfterTool: boolean,
+    completionSummary?: string,
+  ) => {
     const priorOwner = [...tasks.values()].find(candidate => candidate.callIds.includes(call.callId))
     if (priorOwner) {
       throw new WorkerStateMachineError(
@@ -984,7 +1245,13 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         `callId ${call.callId} has already been used by task ${priorOwner.taskId}`,
       )
     }
-    task.pendingInvocation = cloneFrozen({ schemaVersion: 1, state: 'invoked', completeAfterTool, call })
+    task.pendingInvocation = cloneFrozen({
+      schemaVersion: 1,
+      state: 'invoked',
+      completeAfterTool,
+      ...(completionSummary ? { completionSummary } : {}),
+      call,
+    })
     task.pendingInvocationDurable = false
     task.callIds.push(call.callId)
     task.callIndex.push({ callId: call.callId, capability: call.capability })
@@ -1004,13 +1271,14 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task: MutableTask,
     call: SemanticCall,
     completeAfterTool: boolean,
+    completionSummary?: string,
   ): Promise<ExecutionDisposition> => {
     assertCallContext(task, call)
     if (call.expectedRevision !== task.latestSnapshot?.revision) return 'repair'
-    const context = hostInvocationContext(task, call)
 
     return withCommitLock(task, async () => {
-      if (!(await persistPendingInvocation(task, call, completeAfterTool))) return 'paused'
+      const context = hostInvocationContext(task, call)
+      if (!(await persistPendingInvocation(task, call, completeAfterTool, completionSummary))) return 'paused'
       if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
       const result = await invokeWithReceiptRecovery(task, call, context)
       return handleInvocationResult(task, call, result, completeAfterTool)
@@ -1022,7 +1290,6 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (!pending) return 'repair'
     const call = pending.call
     assertCallContext(task, call)
-    const context = hostInvocationContext(task, call)
     return withCommitLock(task, async () => {
       if (!task.pendingInvocationDurable) {
         setPhase(task, 'EXECUTE')
@@ -1032,6 +1299,22 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         }
       }
       if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
+      const reconciled = task.reconciledInvocation
+      if (reconciled) {
+        if (reconciled.callId !== call.callId || reconciled.status === 'indeterminate') {
+          throw new WorkerStateMachineError(
+            'invalid-tool-call-context',
+            'reconciled receipt result does not match the pending terminal invocation',
+          )
+        }
+        task.reconciledInvocation = undefined
+        return handleInvocationResult(task, call, reconciled, pending.completeAfterTool)
+      }
+      if (task.failure?.code === 'APPLIED_UNDURABLE') {
+        setPhase(task, 'PAUSED')
+        return 'paused'
+      }
+      const context = hostInvocationContext(task, call)
       const receipt = await queryInvocationReceipt(task, call)
       const recovered = invocationFromReceipt(receipt)
       if (recovered && !isResumeSafeCompensation(call, recovered)) {
@@ -1163,6 +1446,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (mode === 'fresh' || task.nextModelPhase === 'BLUEPRINT') {
       setPhase(task, 'BLUEPRINT')
       const blueprint = await runTurn(task, 'BLUEPRINT')
+      if (blueprint.acceptedBlueprint) task.acceptedBlueprint = blueprint.acceptedBlueprint
       if (blueprint.question) {
         task.question = blueprint.question
         setPhase(task, 'WAITING_USER')
@@ -1201,16 +1485,71 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
             `${phase} turn produced neither a tool call nor completion`,
           )
         }
+        task.completionSummary = outcome.completionSummary
         await completeTask(task)
         return
       }
 
       const call = createRuntimeOwnedCall(task, outcome.toolCall)
-      const disposition = await executeAndVerify(task, call, outcome.complete)
+      const disposition = await executeAndVerify(task, call, outcome.complete, outcome.completionSummary)
       const nextPhase = await consumeDisposition(task, disposition, outcome.complete)
       if (!nextPhase) return
       phase = nextPhase
     }
+  }
+
+  const driveCompensation = async (task: MutableTask, targetTaskId: string) => {
+    setPhase(task, 'OBSERVE')
+    const observed = await observeFull(task)
+    const call = createRuntimeOwnedCall(task, {
+      schemaVersion: 1,
+      capability: 'task.compensate',
+      arguments: { schemaVersion: 1, targetTaskId },
+      expectedRevision: observed.revision,
+    })
+    const disposition = await executeAndVerify(task, call, true, `Compensated task ${targetTaskId}`)
+    if (disposition === 'completed') return
+    if (task.controller?.signal.aborted || task.phase === 'CANCELLED' || activeTask !== task) {
+      throw task.controller?.signal.reason ?? new DOMException('Compensation task is no longer active', 'AbortError')
+    }
+
+    task.failure ??= {
+      code: 'compensation-command-incomplete',
+      message: `Runtime compensation for task ${targetTaskId} did not complete`,
+      retryable: disposition === 'yielded' || disposition === 'repair' || disposition === 'repair-durable',
+    }
+    if (task.phase !== 'PAUSED') {
+      setPhase(task, 'PAUSED')
+      await persistTask(task, 'PAUSED')
+    }
+    throw new WorkerStateMachineError(
+      'invalid-task-phase',
+      task.failure?.message ?? `Runtime compensation for task ${targetTaskId} did not complete`,
+    )
+  }
+
+  const startCompensationRun = (task: MutableTask, targetTaskId: string) => {
+    const execution = driveCompensation(task, targetTaskId).catch(error => {
+      if (task.phase !== 'PAUSED' && task.phase !== 'CANCELLED' && !disposed) {
+        setFailure(
+          task,
+          failureFrom(error instanceof WorkerStateMachineError ? error.code : 'worker-task-failed', error),
+        )
+      }
+      throw error
+    })
+    const tracked = execution
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        runs.delete(tracked)
+        if (task.run === tracked) task.run = undefined
+      })
+    task.run = tracked
+    runs.add(tracked)
+    return execution
   }
 
   const startRun = (task: MutableTask, mode: 'fresh' | 'resume' | 'respond' | 'recover') => {
@@ -1311,6 +1650,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const api: WorkerStateMachine = {
     async submit(input) {
       assertUsable()
+      assertNoRecoveryLock()
       runtimeStatus = 'ready'
       runtimeFailure = undefined
       const previous = activeTask
@@ -1342,10 +1682,63 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         ...(supersedesPrevious ? { supersedesTaskId: previous.taskId } : {}),
       }
       tasks.set(task.taskId, task)
+      refreshSessionContext(task)
       activeTask = task
       emit()
       startRun(task, 'fresh')
       return taskRef(task)
+    },
+
+    async compensate(targetTaskId) {
+      assertUsable()
+      if (
+        typeof targetTaskId !== 'string' ||
+        targetTaskId.length === 0 ||
+        targetTaskId.length > MAX_RUNTIME_ID_LENGTH
+      ) {
+        throw new WorkerStateMachineError(
+          'invalid-tool-call-context',
+          `targetTaskId must contain 1-${MAX_RUNTIME_ID_LENGTH} characters`,
+        )
+      }
+      assertNoRecoveryLock()
+      const target = resolveCompensationTarget(undefined, targetTaskId)
+      if (activeTask && !terminalPhases.has(activeTask.phase)) {
+        throw new WorkerStateMachineError(
+          'invalid-task-phase',
+          `cannot compensate while task ${activeTask.taskId} is in ${activeTask.phase}`,
+        )
+      }
+
+      runtimeStatus = 'ready'
+      runtimeFailure = undefined
+      const now = options.clock.now()
+      const task: MutableTask = {
+        taskId: nextUniqueTaskId(),
+        sessionId,
+        parentTaskId: target.taskId,
+        compensatesTaskId: target.taskId,
+        phase: 'IDLE',
+        createdAt: now,
+        updatedAt: now,
+        repairAttempts: 0,
+        intent: cloneFrozen({
+          text: `Compensate task ${target.taskId}`,
+          metadata: { runtimeCommand: 'task.compensate', targetTaskId: target.taskId },
+        }),
+        controller: new AbortController(),
+        nextModelPhase: 'PLAN_STEP',
+        pendingInvocationDurable: false,
+        callIds: [],
+        callIndex: [],
+        callIndexComplete: true,
+        consecutiveYields: 0,
+      }
+      tasks.set(task.taskId, task)
+      refreshSessionContext(task)
+      activeTask = task
+      emit()
+      await startCompensationRun(task, target.taskId)
     },
 
     async pause(taskId) {
@@ -1364,6 +1757,43 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     async resume(taskId) {
       assertUsable()
       const task = findTask(taskId)
+      if (task.reconciliationResume) return task.reconciliationResume
+      const locks = recoveryLockedTasks()
+      if (locks.length > 0) {
+        if (!isAppliedUndurableRecoveryTask(task)) throw recoveryLockedError(locks[0])
+        const call = task.pendingInvocation.call
+        const reconciliation = (async () => {
+          await waitForTask(task)
+          assertUsable()
+          if (!isAppliedUndurableRecoveryTask(task) || task.pendingInvocation.call.callId !== call.callId) {
+            const remainingLock = recoveryLockedTasks()[0]
+            if (remainingLock) throw recoveryLockedError(remainingLock)
+            throw new WorkerStateMachineError('invalid-task-phase', `cannot reconcile task in ${task.phase}`)
+          }
+          const receipt = await queryExactInvocationReceipt(task, call)
+          assertUsable()
+          if (!isAppliedUndurableRecoveryTask(task) || task.pendingInvocation.call.callId !== call.callId) {
+            const remainingLock = recoveryLockedTasks()[0]
+            if (remainingLock) throw recoveryLockedError(remainingLock)
+            throw new WorkerStateMachineError('invalid-task-phase', `cannot reconcile task in ${task.phase}`)
+          }
+          const reconciled = invocationFromReceipt(receipt)
+          if (!reconciled || reconciled.status === 'indeterminate') {
+            throw recoveryLockedError(task, reconciled ? 'indeterminate' : 'missing')
+          }
+          task.reconciledInvocation = cloneFrozen(reconciled)
+          task.controller = new AbortController()
+          activeTask = task
+          startRun(task, 'resume')
+        })()
+        const tracked = reconciliation.finally(() => {
+          runs.delete(tracked)
+          if (task.reconciliationResume === tracked) task.reconciliationResume = undefined
+        })
+        task.reconciliationResume = tracked
+        runs.add(tracked)
+        return tracked
+      }
       if (task.phase !== 'PAUSED') {
         throw new WorkerStateMachineError('invalid-task-phase', `cannot resume task in ${task.phase}`)
       }
@@ -1378,6 +1808,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     async cancel(taskId) {
       assertUsable()
       const task = findTask(taskId)
+      assertNoRecoveryLock()
       if (task.phase === 'CANCELLED') {
         await queueControlPersistence(task)
         return
@@ -1389,6 +1820,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     async respond(taskId, response) {
       assertUsable()
       const task = findTask(taskId)
+      assertNoRecoveryLock()
       if (task.phase !== 'WAITING_USER') {
         throw new WorkerStateMachineError('invalid-task-phase', `cannot respond to task in ${task.phase}`)
       }
@@ -1411,12 +1843,31 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         sessionId,
         expectedPersistenceGeneration: persistenceGeneration,
       })
+      if (
+        result.projectId !== binding.projectId ||
+        result.branchId !== binding.branchId ||
+        result.sessionId !== sessionId
+      ) {
+        throw new WorkerStateMachineError(
+          'invalid-tool-call-context',
+          'persistence recovery result does not belong to the bound project, branch, and session',
+        )
+      }
       persistenceGeneration = result.persistenceGeneration
       const recoveredTasks = recoverTasks(result.records, sessionId)
       const mergedTasks = new Map(tasks)
       for (const task of recoveredTasks) mergedTasks.set(task.taskId, task)
       assertUniqueSessionCallIds([...mergedTasks.values()])
       for (const task of recoveredTasks) tasks.set(task.taskId, task)
+      for (const task of recoveredTasks) {
+        if (!task.sessionContext) refreshSessionContext(task)
+      }
+      const recoveredLock = selectLatestRecoveredTask(recoveryLockedTasks())
+      if (recoveredLock) {
+        activeTask = recoveredLock
+        emit()
+        return
+      }
       const recovered = selectLatestRecoveredTask(recoveredTasks)
       if (!recovered) return
       activeTask = recovered

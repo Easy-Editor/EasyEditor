@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { type DashboardPreviewWindowHandle, openDashboardPreviewAfterSave } from '@/editor/persistence-runtime'
 import { dashboardPersistence, persistDashboardProject } from '@/editor/runtime'
 import { cn } from '@/lib/utils'
+import { Bot } from 'lucide-react'
 import { toast } from 'sonner'
 
 const createPreviewWindow = (): DashboardPreviewWindowHandle | null => {
@@ -21,7 +22,14 @@ const createPreviewWindow = (): DashboardPreviewWindowHandle | null => {
   }
 }
 
-export const AppHeader = ({ className }: { className?: string }) => {
+export interface AppHeaderProps {
+  readonly className?: string
+  readonly agentEnabled?: boolean
+  readonly agentOpen?: boolean
+  readonly onAgentToggle?: () => void
+}
+
+export const AppHeader = ({ className, agentEnabled = false, agentOpen = false, onAgentToggle }: AppHeaderProps) => {
   const save = async () => {
     try {
       const result = await persistDashboardProject('manual-save')
@@ -70,6 +78,19 @@ export const AppHeader = ({ className }: { className?: string }) => {
           <div className='flex flex-1 items-center justify-between gap-2 md:justify-end'>
             <div className='w-full flex-1 md:w-auto md:flex-none' />
             <div className='flex items-center gap-2'>
+              {agentEnabled ? (
+                <Button
+                  type='button'
+                  variant={agentOpen ? 'default' : 'outline'}
+                  aria-pressed={agentOpen}
+                  aria-controls='dashboard-agent-workspace'
+                  data-testid='agent-workspace-toggle'
+                  onClick={onAgentToggle}
+                >
+                  <Bot className='size-4' aria-hidden='true' />
+                  Agent
+                </Button>
+              ) : null}
               <Button variant='outline' onClick={() => void preview()}>
                 预览
               </Button>

@@ -7,6 +7,7 @@ import {
 import {
   validateAgentPersistenceBatch,
   validateAgentPersistenceReadRequest,
+  validateCompensationRunListRequest,
   validateCompensationRunReadRequest,
   validateCompensationRunStateCommit,
   validateCompensationTargetClaimReadRequest,
@@ -19,6 +20,16 @@ import {
 import { materializeLegacyFromCanonical, selectForwardReentryDraft } from './downgrade.mjs'
 import { DASHBOARD_STORAGE_ERROR_CODE, DashboardStorageError } from './errors.mjs'
 import { requestLegacyIdentityLock, requestLegacySnapshotLock } from './legacy-snapshot-lock.mjs'
+import {
+  DASHBOARD_LOCAL_GRANT_SCOPES,
+  normalizeArtifactIdentities,
+  normalizeArtifactRootRecord,
+  normalizeStoredAgentSessionRecord,
+  normalizeStoredArtifactIdentity,
+  validateAgentSessionRecord,
+  validateLocalGrantRecord,
+  validateProjectVersionRecord,
+} from './lifecycle.mjs'
 
 const commitRequestFields = Object.freeze([
   'activeDocument',
@@ -65,6 +76,81 @@ const legacyMigrationTransitionFields = Object.freeze([
   'updatedAt',
 ])
 const indexedDbBootstrapFields = Object.freeze(['branchId', 'legacy', 'migration', 'projectId', 'updatedAt'])
+const projectVersionCreateFields = Object.freeze([
+  'artifactRefs',
+  'batchId',
+  'branchId',
+  'createdAt',
+  'expectedDraftGeneration',
+  'name',
+  'projectId',
+  'schemaVersion',
+  'sourceCheckpointId',
+  'sourceSessionId',
+  'sourceTaskId',
+  'versionId',
+])
+const projectVersionReadFields = Object.freeze(['branchId', 'projectId', 'schemaVersion', 'versionId'])
+const projectListFields = Object.freeze(['projectId', 'schemaVersion'])
+const agentSessionSaveFields = Object.freeze([
+  'batchId',
+  'branchId',
+  'createdAt',
+  'expectedDraftGeneration',
+  'forkedFrom',
+  'projectId',
+  'schemaVersion',
+  'sessionId',
+  'status',
+  'updatedAt',
+])
+const agentSessionScopeFields = Object.freeze(['branchId', 'projectId', 'schemaVersion'])
+const projectVersionRestoreFields = Object.freeze([
+  'batchId',
+  'forkedFromSessionId',
+  'forkedFromTaskId',
+  'projectId',
+  'restoredAt',
+  'schemaVersion',
+  'sourceBranchId',
+  'targetBranchId',
+  'targetSessionId',
+  'versionId',
+])
+const localGrantAuthorizeFields = Object.freeze([
+  'batchId',
+  'branchId',
+  'expectedDraftGeneration',
+  'policyVersion',
+  'projectId',
+  'providerFingerprint',
+  'providerId',
+  'schemaVersion',
+  'scope',
+  'updatedAt',
+  'userId',
+])
+const localGrantCheckFields = Object.freeze([
+  'policyVersion',
+  'projectId',
+  'providerFingerprint',
+  'providerId',
+  'schemaVersion',
+  'scope',
+  'userId',
+])
+const localGrantRevokeFields = Object.freeze([
+  'batchId',
+  'branchId',
+  'expectedDraftGeneration',
+  'policyVersion',
+  'projectId',
+  'revokedAt',
+  'schemaVersion',
+  'scope',
+  'userId',
+])
+const localGrantListFields = Object.freeze(['projectId', 'schemaVersion', 'userId'])
 const compensationJournalRecordFields = Object.freeze([
   'branchId',
   'callId',
@@ -74,7 +160,28 @@ const compensationJournalRecordFields = Object.freeze([
   'recordId',
   'schemaVersion',
   'sessionId',
+  'updatedAt',
   'value',
+])
+const compensationJournalRecordOptionalFields = Object.freeze(['writerCheckpointId'])
+const durableAgentCheckpointFields = Object.freeze([
+  'branchId',
+  'callId',
+  'checkpointId',
+  'draftGeneration',
+  'journalRecordId',
+  'outcome',
+  'projectId',
+  'schemaVersion',
+  'sessionId',
+  'value',
+])
+const compensationCursorCheckpointValueFields = Object.freeze([
+  'compensationRunId',
+  'cursor',
+  'inverseCallId',
+  'originalCallId',
+  'schemaVersion',
 ])
 const compensationClaimValueFields = Object.freeze([
   'branchId',
@@ -141,6 +248,21 @@ const assertExactFieldsWithOptional = (value, requiredFields, optionalFields, la
 const requireAuthority = (value, label) => {
   if (typeof value !== 'string' || value.length === 0) throw validationFailure(`${label}-must-be-a-non-empty-string`)
   return value
+}
+
+const requireGeneration = (value, label) => {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw validationFailure(`${label}-must-be-a-non-negative-safe-integer`)
+  }
+  return value
+}
+
+const requireNullableAuthority = (value, label) => (value === null ? null : requireAuthority(value, label))
+
+const requirePolicyVersion = value => {
+  if (typeof value === 'string' && value.trim().length > 0) return value
+  if (Number.isSafeInteger(value) && value >= 0) return value
+  throw validationFailure('local-grant.policyVersion-must-be-a-non-empty-string-or-non-negative-safe-integer')
 }
 
 const normalizeCommitRequest = value => {
@@ -251,6 +373,201 @@ const normalizeDowngradeRequest = value => {
   })
 }
 
+const normalizeProjectVersionCreate = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, projectVersionCreateFields, 'project-version-create')
+  if (value.schemaVersion !== 1) throw validationFailure('project-version-create-schema-version-is-unsupported')
+  return {
+    schemaVersion: 1,
+    batchId: requireAuthority(value.batchId, 'project-version-create.batchId'),
+    projectId: requireAuthority(value.projectId, 'project-version-create.projectId'),
+    branchId: requireAuthority(value.branchId, 'project-version-create.branchId'),
+    expectedDraftGeneration: requireGeneration(
+      value.expectedDraftGeneration,
+      'project-version-create.expectedDraftGeneration',
+    ),
+    versionId: requireAuthority(value.versionId, 'project-version-create.versionId'),
+    name: requireAuthority(value.name, 'project-version-create.name'),
+    createdAt: requireGeneration(value.createdAt, 'project-version-create.createdAt'),
+    artifactRefs: normalizeArtifactIdentities(value.artifactRefs, 'project-version-create.artifactRefs'),
+    sourceSessionId: requireNullableAuthority(value.sourceSessionId, 'project-version-create.sourceSessionId'),
+    sourceTaskId: requireNullableAuthority(value.sourceTaskId, 'project-version-create.sourceTaskId'),
+    sourceCheckpointId: requireNullableAuthority(value.sourceCheckpointId, 'project-version-create.sourceCheckpointId'),
+  }
+}
+
+const normalizeProjectVersionRead = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, projectVersionReadFields, 'project-version-read')
+  if (value.schemaVersion !== 1) throw validationFailure('project-version-read-schema-version-is-unsupported')
+  return {
+    schemaVersion: 1,
+    projectId: requireAuthority(value.projectId, 'project-version-read.projectId'),
+    branchId: requireAuthority(value.branchId, 'project-version-read.branchId'),
+    versionId: requireAuthority(value.versionId, 'project-version-read.versionId'),
+  }
+}
+
+const normalizeProjectList = (value, label = 'project-list') => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, projectListFields, label)
+  if (value.schemaVersion !== 1) throw validationFailure(`${label}-schema-version-is-unsupported`)
+  return { schemaVersion: 1, projectId: requireAuthority(value.projectId, `${label}.projectId`) }
+}
+
+const normalizeAgentSessionSave = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, agentSessionSaveFields, 'agent-session-save')
+  if (value.schemaVersion !== 1) throw validationFailure('agent-session-save-schema-version-is-unsupported')
+  const projectId = requireAuthority(value.projectId, 'agent-session-save.projectId')
+  const branchId = requireAuthority(value.branchId, 'agent-session-save.branchId')
+  const sessionId = requireAuthority(value.sessionId, 'agent-session-save.sessionId')
+  const createdAt = requireGeneration(value.createdAt, 'agent-session-save.createdAt')
+  const updatedAt = requireGeneration(value.updatedAt, 'agent-session-save.updatedAt')
+  const session = validateAgentSessionRecord({
+    schemaVersion: 1,
+    projectId,
+    branchId,
+    sessionId,
+    status: value.status,
+    persistenceGeneration: 0,
+    createdAt,
+    updatedAt,
+    closedAt: value.status === 'closed' ? updatedAt : null,
+    forkedFrom: value.forkedFrom,
+  })
+  return {
+    schemaVersion: 1,
+    batchId: requireAuthority(value.batchId, 'agent-session-save.batchId'),
+    expectedDraftGeneration: requireGeneration(
+      value.expectedDraftGeneration,
+      'agent-session-save.expectedDraftGeneration',
+    ),
+    ...session,
+  }
+}
+
+const normalizeAgentSessionScope = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, agentSessionScopeFields, 'agent-session-scope')
+  if (value.schemaVersion !== 1) throw validationFailure('agent-session-scope-schema-version-is-unsupported')
+  return {
+    schemaVersion: 1,
+    projectId: requireAuthority(value.projectId, 'agent-session-scope.projectId'),
+    branchId: requireAuthority(value.branchId, 'agent-session-scope.branchId'),
+  }
+}
+
+const normalizeProjectVersionRestore = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, projectVersionRestoreFields, 'project-version-restore')
+  if (value.schemaVersion !== 1) throw validationFailure('project-version-restore-schema-version-is-unsupported')
+  const projectId = requireAuthority(value.projectId, 'project-version-restore.projectId')
+  const sourceBranchId = requireAuthority(value.sourceBranchId, 'project-version-restore.sourceBranchId')
+  const targetBranchId = requireAuthority(value.targetBranchId, 'project-version-restore.targetBranchId')
+  if (sourceBranchId === targetBranchId) {
+    throw validationFailure('project-version-restore-must-fork-a-new-branch')
+  }
+  return {
+    schemaVersion: 1,
+    batchId: requireAuthority(value.batchId, 'project-version-restore.batchId'),
+    projectId,
+    sourceBranchId,
+    versionId: requireAuthority(value.versionId, 'project-version-restore.versionId'),
+    targetBranchId,
+    targetSessionId: requireAuthority(value.targetSessionId, 'project-version-restore.targetSessionId'),
+    forkedFromSessionId: requireNullableAuthority(
+      value.forkedFromSessionId,
+      'project-version-restore.forkedFromSessionId',
+    ),
+    forkedFromTaskId: requireNullableAuthority(value.forkedFromTaskId, 'project-version-restore.forkedFromTaskId'),
+    restoredAt: requireGeneration(value.restoredAt, 'project-version-restore.restoredAt'),
+  }
+}
+
+const normalizeLocalGrantAuthorize = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, localGrantAuthorizeFields, 'local-grant-authorize')
+  if (value.schemaVersion !== 1) throw validationFailure('local-grant-authorize-schema-version-is-unsupported')
+  const projectId = requireAuthority(value.projectId, 'local-grant-authorize.projectId')
+  const updatedAt = requireGeneration(value.updatedAt, 'local-grant-authorize.updatedAt')
+  const grant = validateLocalGrantRecord({
+    schemaVersion: 1,
+    userId: value.userId,
+    projectId,
+    scope: value.scope,
+    policyVersion: value.policyVersion,
+    providerId: value.providerId,
+    providerFingerprint: value.providerFingerprint,
+    status: 'granted',
+    grantedAt: updatedAt,
+    updatedAt,
+    revokedAt: null,
+  })
+  return {
+    schemaVersion: 1,
+    batchId: requireAuthority(value.batchId, 'local-grant-authorize.batchId'),
+    branchId: requireAuthority(value.branchId, 'local-grant-authorize.branchId'),
+    expectedDraftGeneration: requireGeneration(
+      value.expectedDraftGeneration,
+      'local-grant-authorize.expectedDraftGeneration',
+    ),
+    ...grant,
+  }
+}
+
+const normalizeLocalGrantCheck = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, localGrantCheckFields, 'local-grant-check')
+  if (value.schemaVersion !== 1) throw validationFailure('local-grant-check-schema-version-is-unsupported')
+  if (!DASHBOARD_LOCAL_GRANT_SCOPES.includes(value.scope)) {
+    throw validationFailure('local-grant.scope-is-unsupported')
+  }
+  return {
+    schemaVersion: 1,
+    userId: requireAuthority(value.userId, 'local-grant-check.userId'),
+    projectId: requireAuthority(value.projectId, 'local-grant-check.projectId'),
+    scope: value.scope,
+    policyVersion: requirePolicyVersion(value.policyVersion),
+    providerId: requireAuthority(value.providerId, 'local-grant-check.providerId'),
+    providerFingerprint: requireAuthority(value.providerFingerprint, 'local-grant-check.providerFingerprint'),
+  }
+}
+
+const normalizeLocalGrantRevoke = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, localGrantRevokeFields, 'local-grant-revoke')
+  if (value.schemaVersion !== 1) throw validationFailure('local-grant-revoke-schema-version-is-unsupported')
+  if (!DASHBOARD_LOCAL_GRANT_SCOPES.includes(value.scope)) {
+    throw validationFailure('local-grant.scope-is-unsupported')
+  }
+  return {
+    schemaVersion: 1,
+    batchId: requireAuthority(value.batchId, 'local-grant-revoke.batchId'),
+    projectId: requireAuthority(value.projectId, 'local-grant-revoke.projectId'),
+    branchId: requireAuthority(value.branchId, 'local-grant-revoke.branchId'),
+    expectedDraftGeneration: requireGeneration(
+      value.expectedDraftGeneration,
+      'local-grant-revoke.expectedDraftGeneration',
+    ),
+    userId: requireAuthority(value.userId, 'local-grant-revoke.userId'),
+    scope: value.scope,
+    policyVersion: requirePolicyVersion(value.policyVersion),
+    revokedAt: requireGeneration(value.revokedAt, 'local-grant-revoke.revokedAt'),
+  }
+}
+
+const normalizeLocalGrantList = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, localGrantListFields, 'local-grant-list')
+  if (value.schemaVersion !== 1) throw validationFailure('local-grant-list-schema-version-is-unsupported')
+  return {
+    schemaVersion: 1,
+    userId: requireAuthority(value.userId, 'local-grant-list.userId'),
+    projectId: requireAuthority(value.projectId, 'local-grant-list.projectId'),
+  }
+}
+
 const normalizeScope = value => {
   canonicalJsonStringify(value)
   assertExactFields(value, ['branchId', 'projectId'], 'project-persistence-scope')
@@ -266,6 +583,114 @@ const agentPersistenceScopeKey = scope =>
 
 const compensationRunRecordId = outerCallId => `compensation-run:${outerCallId}`
 const compensationTargetRecordId = targetTaskId => `compensation-target:${targetTaskId}`
+
+const assertWriterAuthority = (value, request, callId, label) => {
+  assertRecord(value, label)
+  if (
+    value.schemaVersion !== 1 ||
+    value.projectId !== request.projectId ||
+    value.branchId !== request.branchId ||
+    value.callId !== callId
+  ) {
+    throw validationFailure(`${label}-authority-mismatch`)
+  }
+}
+
+const validateCompensationRunWriter = async (backend, request, stored) => {
+  const outerCallId = stored.value.outerCallId
+  if (stored.callId === outerCallId) {
+    if (stored.writerCheckpointId !== null && stored.writerCheckpointId !== undefined) {
+      throw validationFailure('compensation-state-writer-checkpoint-must-be-null')
+    }
+    return
+  }
+
+  const derivedCheckpointId = `compensation-cursor-v1:${encodeURIComponent(
+    stored.value.compensationRunId,
+  )}:${stored.value.cursor}:${encodeURIComponent(stored.callId)}`
+  const checkpointId =
+    stored.writerCheckpointId === undefined
+      ? derivedCheckpointId
+      : requireAuthority(stored.writerCheckpointId, 'compensation-run.writerCheckpointId')
+  if (checkpointId !== derivedCheckpointId) {
+    throw validationFailure('compensation-run-writer-checkpoint-id-mismatch')
+  }
+  const checkpoint = await backend.get('agentCheckpoints', [request.projectId, request.branchId, checkpointId])
+  canonicalJsonStringify(checkpoint)
+  assertExactFields(checkpoint, durableAgentCheckpointFields, 'compensation-run-writer-checkpoint')
+  if (
+    checkpoint.schemaVersion !== 1 ||
+    checkpoint.projectId !== request.projectId ||
+    checkpoint.branchId !== request.branchId ||
+    checkpoint.checkpointId !== checkpointId ||
+    checkpoint.sessionId !== request.sessionId ||
+    checkpoint.callId !== stored.callId ||
+    checkpoint.draftGeneration !== stored.draftGeneration ||
+    checkpoint.journalRecordId !== stored.recordId ||
+    (checkpoint.outcome !== 'committed' && checkpoint.outcome !== 'failed')
+  ) {
+    throw validationFailure('compensation-run-writer-checkpoint-authority-mismatch')
+  }
+  assertExactFields(
+    checkpoint.value,
+    compensationCursorCheckpointValueFields,
+    'compensation-run-writer-checkpoint.value',
+  )
+  if (
+    checkpoint.value.schemaVersion !== 1 ||
+    checkpoint.value.compensationRunId !== stored.value.compensationRunId ||
+    checkpoint.value.cursor !== stored.value.cursor ||
+    checkpoint.value.inverseCallId !== stored.callId ||
+    !Array.isArray(stored.value.originalCallIds) ||
+    !Number.isSafeInteger(stored.value.cursor) ||
+    stored.value.cursor < 0 ||
+    stored.value.cursor > stored.value.originalCallIds.length ||
+    checkpoint.value.originalCallId !==
+      (stored.value.originalCallIds.length === 0
+        ? '$empty'
+        : stored.value.cursor > 0
+          ? stored.value.originalCallIds[stored.value.cursor - 1]
+          : null)
+  ) {
+    throw validationFailure('compensation-run-writer-checkpoint-value-mismatch')
+  }
+
+  const authorityKey = [request.projectId, request.branchId, stored.callId]
+  const [intent, receipt, applyWitness, failureWitness] = await Promise.all([
+    backend.get('receiptIntents', authorityKey),
+    backend.get('toolReceipts', authorityKey),
+    backend.get('applyWitnesses', authorityKey),
+    backend.get('failureWitnesses', authorityKey),
+  ])
+  const parsedIntent = validateReceiptIntentRecord(intent)
+  if (
+    parsedIntent.projectId !== request.projectId ||
+    parsedIntent.branchId !== request.branchId ||
+    parsedIntent.callId !== stored.callId
+  ) {
+    throw validationFailure('compensation-run-writer-intent-authority-mismatch')
+  }
+  canonicalJsonStringify(receipt)
+  assertWriterAuthority(receipt, request, stored.callId, 'compensation-run-writer-receipt')
+  const committed = checkpoint.outcome === 'committed'
+  const witness = committed ? applyWitness : failureWitness
+  const forbiddenWitness = committed ? failureWitness : applyWitness
+  if (
+    (committed && receipt.status !== 'applied') ||
+    (!committed && receipt.status !== 'not-applied' && receipt.status !== 'rejected') ||
+    forbiddenWitness !== undefined
+  ) {
+    throw validationFailure('compensation-run-writer-terminal-lineage-mismatch')
+  }
+  if (committed && (typeof receipt.revision !== 'string' || receipt.revision.length === 0)) {
+    throw validationFailure('compensation-run-writer-receipt-revision-is-invalid')
+  }
+  canonicalJsonStringify(witness)
+  assertWriterAuthority(witness, request, stored.callId, 'compensation-run-writer-witness')
+  if (witness.draftGeneration !== stored.draftGeneration) {
+    throw validationFailure('compensation-run-writer-witness-generation-mismatch')
+  }
+}
 
 const compensationClaimValue = request => ({
   schemaVersion: 1,
@@ -312,6 +737,40 @@ const asIntegrityMismatch = (scope, reason, cause) =>
 
 const hasExactMutationAttribution = operations =>
   operations.some(operation => operation.type === 'put' && operation.store === 'mutationProvenance')
+
+const jsonEqual = (left, right) => canonicalJsonStringify(left) === canonicalJsonStringify(right)
+
+const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
+
+const compareArtifactIdentity = (left, right) =>
+  compareText(`${left.artifactId}\u0000${left.sourceRevision}`, `${right.artifactId}\u0000${right.sourceRevision}`)
+
+const compareSession = (left, right) => left.createdAt - right.createdAt || compareText(left.sessionId, right.sessionId)
+
+const compareVersion = (left, right) =>
+  left.createdAt - right.createdAt ||
+  compareText(left.branchId, right.branchId) ||
+  compareText(left.versionId, right.versionId)
+
+const compareGrant = (left, right) =>
+  compareText(left.scope, right.scope) ||
+  compareText(String(left.policyVersion), String(right.policyVersion)) ||
+  left.updatedAt - right.updatedAt
+
+const compareRoot = (left, right) =>
+  compareText(
+    [left.branchId, left.ownerType, left.ownerId, left.artifactId, left.sourceRevision].join('\u0000'),
+    [right.branchId, right.ownerType, right.ownerId, right.artifactId, right.sourceRevision].join('\u0000'),
+  )
+
+const draftFenceFromRecords = (records, projectId) =>
+  records
+    .filter(record => record?.projectId === projectId)
+    .map(record => ({
+      branchId: requireAuthority(record.branchId, 'artifact-root-fence.branchId'),
+      draftGeneration: requireGeneration(record.draftGeneration, 'artifact-root-fence.draftGeneration'),
+    }))
+    .sort((left, right) => compareText(left.branchId, right.branchId))
 
 const defaultCompatibilityStorage = () => {
   if (typeof globalThis.window === 'undefined') return null
@@ -823,6 +1282,705 @@ export class ProjectPersistenceCoordinator {
     return this.#enqueue(agentPersistenceScopeKey(batch), () => this.#backend.commitAgentPersistence(batch))
   }
 
+  async #commitLifecycleNow({
+    batchId,
+    projectId,
+    branchId,
+    expectedDraftGeneration,
+    updatedAt,
+    commitKind,
+    operations,
+  }) {
+    const scope = { projectId, branchId }
+    this.#assertOrdinaryCommitAuthority(scope)
+    const current = await this.#readWorkingDraftNow(scope)
+    if (!current) throw validationFailure('lifecycle-write-requires-a-working-draft')
+    if (current.draftGeneration !== expectedDraftGeneration) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+        'lifecycle-write-generation-does-not-match',
+        { projectId, branchId, expected: expectedDraftGeneration, actual: current.draftGeneration },
+      )
+    }
+    return this.#commitNow(
+      normalizeCommitRequest({
+        schemaVersion: 1,
+        batchId,
+        projectId,
+        branchId,
+        expectedDraftGeneration,
+        activeDocument: current.activeDocument,
+        projectSchema: current.projectSchema,
+        commitKind,
+        updatedAt,
+        operations,
+      }),
+    )
+  }
+
+  async #normalizeStoredProjectVersion(stored, authority) {
+    try {
+      const version = validateProjectVersionRecord(stored)
+      if (
+        version.projectId !== authority.projectId ||
+        (authority.branchId !== undefined && version.branchId !== authority.branchId) ||
+        (authority.versionId !== undefined && version.versionId !== authority.versionId)
+      ) {
+        throw validationFailure('project-version-authority-mismatch')
+      }
+      const hash = await hashCanonicalJson(version.projectSchema, { crypto: this.#crypto })
+      if (hash !== version.projectHash) throw validationFailure('project-version-project-hash-does-not-match')
+      return version
+    } catch (error) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'stored-project-version-contract-is-invalid',
+        { projectId: authority.projectId, branchId: authority.branchId ?? '' },
+        { cause: error },
+      )
+    }
+  }
+
+  async #readProjectVersionNow(request) {
+    const stored = await this.#backend.get('projectVersions', [request.projectId, request.branchId, request.versionId])
+    return stored === undefined ? null : this.#normalizeStoredProjectVersion(stored, request)
+  }
+
+  async createProjectVersion(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectVersionCreate(value)
+    return this.#enqueue(scopeKey(request), () =>
+      this.#withSnapshotLock(request, async () => {
+        const existing = await this.#readProjectVersionNow(request)
+        const current = await this.#readWorkingDraftNow(request)
+        if (!current) throw validationFailure('project-version-create-requires-a-working-draft')
+        if (existing) {
+          const sameRequest =
+            existing.creationBatchId === request.batchId &&
+            existing.name === request.name &&
+            existing.createdAt === request.createdAt &&
+            jsonEqual(existing.artifactRefs, request.artifactRefs) &&
+            existing.sourceSessionId === request.sourceSessionId &&
+            existing.sourceTaskId === request.sourceTaskId &&
+            existing.sourceCheckpointId === request.sourceCheckpointId
+          if (sameRequest) {
+            return Object.freeze({
+              schemaVersion: 1,
+              status: 'reconciled',
+              version: structuredClone(existing),
+              draft: structuredClone(current),
+            })
+          }
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+            'project-version-id-was-reused-with-different-bytes',
+            { projectId: request.projectId, branchId: request.branchId, versionId: request.versionId },
+          )
+        }
+        if (current.draftGeneration !== request.expectedDraftGeneration) {
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+            'project-version-create-generation-does-not-match',
+            {
+              projectId: request.projectId,
+              branchId: request.branchId,
+              expected: request.expectedDraftGeneration,
+              actual: current.draftGeneration,
+            },
+          )
+        }
+        const version = validateProjectVersionRecord({
+          schemaVersion: 1,
+          projectId: request.projectId,
+          branchId: request.branchId,
+          versionId: request.versionId,
+          name: request.name,
+          createdAt: request.createdAt,
+          creationBatchId: request.batchId,
+          activeDocument: current.activeDocument,
+          projectSchema: current.projectSchema,
+          projectHash: current.projectHash,
+          artifactRefs: request.artifactRefs,
+          sourceSessionId: request.sourceSessionId,
+          sourceTaskId: request.sourceTaskId,
+          sourceCheckpointId: request.sourceCheckpointId,
+        })
+        const result = await this.#commitLifecycleNow({
+          ...request,
+          updatedAt: request.createdAt,
+          commitKind: 'named-version',
+          operations: [
+            { type: 'put', store: 'projectVersions', mode: 'add', value: version },
+            ...version.artifactRefs.map(ref => ({
+              type: 'put',
+              store: 'artifactRefs',
+              mode: 'add',
+              value: {
+                schemaVersion: 1,
+                projectId: request.projectId,
+                branchId: request.branchId,
+                ownerType: 'project-version',
+                ownerId: request.versionId,
+                ...ref,
+              },
+            })),
+          ],
+        })
+        return Object.freeze({
+          schemaVersion: 1,
+          status: 'committed',
+          version: structuredClone(version),
+          draft: structuredClone(result.draft),
+        })
+      }),
+    )
+  }
+
+  async getProjectVersion(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectVersionRead(value)
+    return this.#enqueue(scopeKey(request), () => this.#readProjectVersionNow(request))
+  }
+
+  async listProjectVersions(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectList(value, 'project-version-list')
+    const records = (await this.#backend.getAll('projectVersions')).filter(
+      record => record?.projectId === request.projectId,
+    )
+    return Promise.all(records.map(record => this.#normalizeStoredProjectVersion(record, request))).then(versions =>
+      versions.sort(compareVersion),
+    )
+  }
+
+  async #listAgentSessionsNow(request) {
+    const records = (await this.#backend.getAll('agentSessions')).filter(
+      record => record?.projectId === request.projectId && record?.branchId === request.branchId,
+    )
+    try {
+      return records
+        .map(record =>
+          normalizeStoredAgentSessionRecord(record, {
+            projectId: request.projectId,
+            branchId: request.branchId,
+          }),
+        )
+        .sort(compareSession)
+    } catch (error) {
+      throw asIntegrityMismatch(request, 'stored-agent-session-contract-is-invalid', error)
+    }
+  }
+
+  async saveAgentSession(value) {
+    this.#assertAccepting()
+    const request = normalizeAgentSessionSave(value)
+    return this.#enqueue(scopeKey(request), () =>
+      this.#withSnapshotLock(request, async () => {
+        const currentDraft = await this.#readWorkingDraftNow(request)
+        if (!currentDraft) throw validationFailure('agent-session-save-requires-a-working-draft')
+        const sessions = await this.#listAgentSessionsNow(request)
+        const existing = sessions.find(session => session.sessionId === request.sessionId) ?? null
+        const isPlaceholder = existing?.createdAt === 0 && existing.updatedAt === 0 && existing.forkedFrom === null
+        if (existing) {
+          if (
+            (!isPlaceholder && existing.createdAt !== request.createdAt) ||
+            (!isPlaceholder && !jsonEqual(existing.forkedFrom, request.forkedFrom))
+          ) {
+            throw new DashboardStorageError(
+              DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+              'agent-session-id-was-reused-with-different-origin',
+              { projectId: request.projectId, branchId: request.branchId, sessionId: request.sessionId },
+            )
+          }
+          if (existing.status === 'closed' && request.status !== 'closed') {
+            throw validationFailure('closed-agent-session-cannot-be-reopened')
+          }
+          if (request.updatedAt < existing.updatedAt) {
+            throw new DashboardStorageError(
+              DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+              'agent-session-update-is-stale',
+              { projectId: request.projectId, branchId: request.branchId, sessionId: request.sessionId },
+            )
+          }
+        }
+        const target = validateAgentSessionRecord({
+          schemaVersion: 1,
+          projectId: request.projectId,
+          branchId: request.branchId,
+          sessionId: request.sessionId,
+          status: request.status,
+          persistenceGeneration: existing?.persistenceGeneration ?? 0,
+          createdAt: isPlaceholder ? request.createdAt : (existing?.createdAt ?? request.createdAt),
+          updatedAt: request.updatedAt,
+          closedAt: request.status === 'closed' ? request.updatedAt : null,
+          forkedFrom: isPlaceholder ? request.forkedFrom : (existing?.forkedFrom ?? request.forkedFrom),
+        })
+        const demotions =
+          target.status === 'active'
+            ? sessions
+                .filter(session => session.sessionId !== target.sessionId && session.status === 'active')
+                .map(session =>
+                  validateAgentSessionRecord({
+                    ...session,
+                    status: 'idle',
+                    updatedAt: Math.max(session.updatedAt, request.updatedAt),
+                    closedAt: null,
+                  }),
+                )
+            : []
+        if (existing && jsonEqual(existing, target) && demotions.length === 0) {
+          return Object.freeze({
+            schemaVersion: 1,
+            status: 'reconciled',
+            session: structuredClone(existing),
+            draft: structuredClone(currentDraft),
+          })
+        }
+        const result = await this.#commitLifecycleNow({
+          ...request,
+          commitKind: 'session-lifecycle',
+          operations: [...demotions, target].map(session => ({
+            type: 'put',
+            store: 'agentSessions',
+            value: session,
+          })),
+        })
+        return Object.freeze({
+          schemaVersion: 1,
+          status: 'committed',
+          session: structuredClone(target),
+          draft: structuredClone(result.draft),
+        })
+      }),
+    )
+  }
+
+  async listAgentSessions(value) {
+    this.#assertAccepting()
+    const request = normalizeAgentSessionScope(value)
+    return this.#enqueue(scopeKey(request), () => this.#listAgentSessionsNow(request))
+  }
+
+  async resolveAgentSession(value) {
+    this.#assertAccepting()
+    const request = normalizeAgentSessionScope(value)
+    return this.#enqueue(scopeKey(request), async () => {
+      const sessions = await this.#listAgentSessionsNow(request)
+      const candidates = sessions
+        .filter(session => session.status !== 'closed')
+        .sort(
+          (left, right) =>
+            Number(right.status === 'active') - Number(left.status === 'active') ||
+            right.updatedAt - left.updatedAt ||
+            compareText(right.sessionId, left.sessionId),
+        )
+      return candidates.length === 0 ? null : structuredClone(candidates[0])
+    })
+  }
+
+  async restoreProjectVersion(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectVersionRestore(value)
+    const targetScope = { projectId: request.projectId, branchId: request.targetBranchId }
+    return this.#enqueue(scopeKey(targetScope), () =>
+      this.#withSnapshotLock(targetScope, async () => {
+        const version = await this.#readProjectVersionNow({
+          projectId: request.projectId,
+          branchId: request.sourceBranchId,
+          versionId: request.versionId,
+        })
+        if (!version) throw validationFailure('project-version-restore-source-does-not-exist')
+        if (
+          version.sourceSessionId !== request.forkedFromSessionId ||
+          version.sourceTaskId !== request.forkedFromTaskId
+        ) {
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+            'project-version-restore-source-lineage-mismatch',
+            { projectId: request.projectId, branchId: request.sourceBranchId },
+          )
+        }
+        const forkedFrom = {
+          sessionId: request.forkedFromSessionId,
+          taskId: request.forkedFromTaskId,
+          versionId: request.versionId,
+        }
+        const expectedSession = validateAgentSessionRecord({
+          schemaVersion: 1,
+          projectId: request.projectId,
+          branchId: request.targetBranchId,
+          sessionId: request.targetSessionId,
+          status: 'active',
+          persistenceGeneration: 0,
+          createdAt: request.restoredAt,
+          updatedAt: request.restoredAt,
+          closedAt: null,
+          forkedFrom,
+        })
+        const current = await this.#readWorkingDraftNow(targetScope)
+        if (current) {
+          const storedSession = await this.#backend.get('agentSessions', [
+            request.projectId,
+            request.targetBranchId,
+            request.targetSessionId,
+          ])
+          let session
+          try {
+            session = normalizeStoredAgentSessionRecord(storedSession, expectedSession)
+          } catch (error) {
+            throw asIntegrityMismatch(targetScope, 'restored-agent-session-contract-is-invalid', error)
+          }
+          if (
+            current.commitKind !== 'version-restore' ||
+            current.draftGeneration !== 1 ||
+            current.projectHash !== version.projectHash ||
+            !jsonEqual(current.projectSchema, version.projectSchema) ||
+            !jsonEqual(current.activeDocument, version.activeDocument) ||
+            !jsonEqual(session, expectedSession)
+          ) {
+            throw new DashboardStorageError(
+              DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+              'project-version-restore-target-branch-already-diverged',
+              { projectId: request.projectId, branchId: request.targetBranchId },
+            )
+          }
+          return Object.freeze({
+            schemaVersion: 1,
+            status: 'reconciled',
+            version: structuredClone(version),
+            session: structuredClone(session),
+            draft: structuredClone(current),
+          })
+        }
+        if (
+          (await this.#backend.get('agentSessions', [
+            request.projectId,
+            request.targetBranchId,
+            request.targetSessionId,
+          ])) !== undefined
+        ) {
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+            'project-version-restore-target-session-exists-without-a-draft',
+            { projectId: request.projectId, branchId: request.targetBranchId },
+          )
+        }
+        this.#assertOrdinaryCommitAuthority(targetScope)
+        const result = await this.#commitNow(
+          normalizeCommitRequest({
+            schemaVersion: 1,
+            batchId: request.batchId,
+            projectId: request.projectId,
+            branchId: request.targetBranchId,
+            expectedDraftGeneration: 0,
+            activeDocument: version.activeDocument,
+            projectSchema: version.projectSchema,
+            commitKind: 'version-restore',
+            updatedAt: request.restoredAt,
+            operations: [
+              { type: 'put', store: 'agentSessions', mode: 'add', value: expectedSession },
+              ...version.artifactRefs.map(ref => ({
+                type: 'put',
+                store: 'artifactRefs',
+                mode: 'add',
+                value: {
+                  schemaVersion: 1,
+                  projectId: request.projectId,
+                  branchId: request.targetBranchId,
+                  ownerType: 'working-draft',
+                  ownerId: request.targetBranchId,
+                  ...ref,
+                },
+              })),
+            ],
+          }),
+          version.projectHash,
+        )
+        return Object.freeze({
+          schemaVersion: 1,
+          status: 'committed',
+          version: structuredClone(version),
+          session: structuredClone(expectedSession),
+          draft: structuredClone(result.draft),
+        })
+      }),
+    )
+  }
+
+  async #readLocalGrantNow(request) {
+    const stored = await this.#backend.get('grants', [
+      request.userId,
+      request.projectId,
+      request.scope,
+      request.policyVersion,
+    ])
+    if (stored === undefined) return null
+    try {
+      const grant = validateLocalGrantRecord(stored)
+      if (
+        grant.userId !== request.userId ||
+        grant.projectId !== request.projectId ||
+        grant.scope !== request.scope ||
+        grant.policyVersion !== request.policyVersion
+      ) {
+        throw validationFailure('local-grant-authority-mismatch')
+      }
+      return grant
+    } catch (error) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'stored-local-grant-contract-is-invalid',
+        { projectId: request.projectId },
+        { cause: error },
+      )
+    }
+  }
+
+  async authorizeLocalGrant(value) {
+    this.#assertAccepting()
+    const request = normalizeLocalGrantAuthorize(value)
+    return this.#enqueue(scopeKey(request), () =>
+      this.#withSnapshotLock(request, async () => {
+        const existing = await this.#readLocalGrantNow(request)
+        const current = await this.#readWorkingDraftNow(request)
+        if (!current) throw validationFailure('local-grant-authorize-requires-a-working-draft')
+        const grant = validateLocalGrantRecord({
+          schemaVersion: 1,
+          userId: request.userId,
+          projectId: request.projectId,
+          scope: request.scope,
+          policyVersion: request.policyVersion,
+          providerId: request.providerId,
+          providerFingerprint: request.providerFingerprint,
+          status: 'granted',
+          grantedAt: request.grantedAt,
+          updatedAt: request.updatedAt,
+          revokedAt: null,
+        })
+        if (existing && jsonEqual(existing, grant)) {
+          return Object.freeze({
+            schemaVersion: 1,
+            status: 'reconciled',
+            grant: structuredClone(existing),
+            draft: structuredClone(current),
+          })
+        }
+        if (existing && request.updatedAt < existing.updatedAt) {
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+            'local-grant-authorization-is-stale',
+            { projectId: request.projectId },
+          )
+        }
+        const result = await this.#commitLifecycleNow({
+          ...request,
+          commitKind: 'local-grant',
+          operations: [{ type: 'put', store: 'grants', value: grant }],
+        })
+        return Object.freeze({
+          schemaVersion: 1,
+          status: 'committed',
+          grant: structuredClone(grant),
+          draft: structuredClone(result.draft),
+        })
+      }),
+    )
+  }
+
+  async checkLocalGrant(value) {
+    this.#assertAccepting()
+    const request = normalizeLocalGrantCheck(value)
+    const grant = await this.#readLocalGrantNow(request)
+    if (!grant) {
+      const policyChanged = (await this.#backend.getAll('grants')).some(
+        candidate =>
+          candidate?.userId === request.userId &&
+          candidate?.projectId === request.projectId &&
+          candidate?.scope === request.scope &&
+          candidate?.policyVersion !== request.policyVersion,
+      )
+      return Object.freeze({
+        schemaVersion: 1,
+        granted: false,
+        reason: policyChanged ? 'policy-version-changed' : 'missing',
+        grant: null,
+      })
+    }
+    let reason = 'granted'
+    if (grant.status === 'revoked') reason = 'revoked'
+    else if (grant.providerId !== request.providerId) reason = 'provider-changed'
+    else if (grant.providerFingerprint !== request.providerFingerprint) reason = 'provider-fingerprint-changed'
+    return Object.freeze({
+      schemaVersion: 1,
+      granted: reason === 'granted',
+      reason,
+      grant: structuredClone(grant),
+    })
+  }
+
+  async revokeLocalGrant(value) {
+    this.#assertAccepting()
+    const request = normalizeLocalGrantRevoke(value)
+    return this.#enqueue(scopeKey(request), () =>
+      this.#withSnapshotLock(request, async () => {
+        const existing = await this.#readLocalGrantNow(request)
+        const current = await this.#readWorkingDraftNow(request)
+        if (!current) throw validationFailure('local-grant-revoke-requires-a-working-draft')
+        if (!existing) {
+          return Object.freeze({
+            schemaVersion: 1,
+            status: 'reconciled',
+            grant: null,
+            draft: structuredClone(current),
+          })
+        }
+        if (existing.status === 'revoked' && existing.revokedAt === request.revokedAt) {
+          return Object.freeze({
+            schemaVersion: 1,
+            status: 'reconciled',
+            grant: structuredClone(existing),
+            draft: structuredClone(current),
+          })
+        }
+        if (request.revokedAt < existing.updatedAt) {
+          throw new DashboardStorageError(
+            DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+            'local-grant-revocation-is-stale',
+            { projectId: request.projectId },
+          )
+        }
+        const grant = validateLocalGrantRecord({
+          ...existing,
+          status: 'revoked',
+          updatedAt: request.revokedAt,
+          revokedAt: request.revokedAt,
+        })
+        const result = await this.#commitLifecycleNow({
+          ...request,
+          updatedAt: request.revokedAt,
+          commitKind: 'local-grant',
+          operations: [{ type: 'put', store: 'grants', value: grant }],
+        })
+        return Object.freeze({
+          schemaVersion: 1,
+          status: 'committed',
+          grant: structuredClone(grant),
+          draft: structuredClone(result.draft),
+        })
+      }),
+    )
+  }
+
+  async listLocalGrants(value) {
+    this.#assertAccepting()
+    const request = normalizeLocalGrantList(value)
+    const records = (await this.#backend.getAll('grants')).filter(
+      record => record?.userId === request.userId && record?.projectId === request.projectId,
+    )
+    try {
+      return records.map(validateLocalGrantRecord).sort(compareGrant)
+    } catch (error) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'stored-local-grant-contract-is-invalid',
+        { projectId: request.projectId },
+        { cause: error },
+      )
+    }
+  }
+
+  async #readArtifactRootSnapshotNow(projectId) {
+    const draftsBefore = await this.#backend.getAll('workingDrafts')
+    const generationFence = draftFenceFromRecords(draftsBefore, projectId)
+    for (const entry of generationFence) {
+      await this.#readWorkingDraftNow({ projectId, branchId: entry.branchId })
+    }
+    const [storedRoots, storedArtifacts, draftsAfter] = await Promise.all([
+      this.#backend.getAll('artifactRefs'),
+      this.#backend.getAll('artifacts'),
+      this.#backend.getAll('workingDrafts'),
+    ])
+    const finalFence = draftFenceFromRecords(draftsAfter, projectId)
+    if (!jsonEqual(generationFence, finalFence)) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.generationConflict,
+        'artifact-root-generation-changed-during-enumeration',
+        { projectId },
+      )
+    }
+    let roots
+    let artifacts
+    try {
+      roots = storedRoots
+        .filter(record => record?.projectId === projectId)
+        .map(normalizeArtifactRootRecord)
+        .sort(compareRoot)
+      artifacts = storedArtifacts
+        .filter(record => record?.projectId === projectId)
+        .map(normalizeStoredArtifactIdentity)
+        .sort(compareArtifactIdentity)
+    } catch (error) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'stored-artifact-root-contract-is-invalid',
+        { projectId },
+        { cause: error },
+      )
+    }
+    return { generationFence, roots, artifacts }
+  }
+
+  async enumerateArtifactRoots(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectList(value, 'artifact-root-enumeration')
+    await this.flush()
+    const snapshot = await this.#readArtifactRootSnapshotNow(request.projectId)
+    return Object.freeze({
+      schemaVersion: 1,
+      projectId: request.projectId,
+      generationFence: structuredClone(snapshot.generationFence),
+      roots: structuredClone(snapshot.roots),
+    })
+  }
+
+  async planArtifactGcDryRun(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectList(value, 'artifact-gc-dry-run')
+    await this.flush()
+    const snapshot = await this.#readArtifactRootSnapshotNow(request.projectId)
+    const retainedByKey = new Map()
+    for (const root of snapshot.roots) {
+      const key = canonicalJsonStringify([root.artifactId, root.sourceRevision])
+      const current = retainedByKey.get(key)
+      retainedByKey.set(key, {
+        artifactId: root.artifactId,
+        sourceRevision: root.sourceRevision,
+        referenceCount: (current?.referenceCount ?? 0) + 1,
+      })
+    }
+    const retainedArtifacts = [...retainedByKey.values()].sort(compareArtifactIdentity)
+    const storedKeys = new Set(
+      snapshot.artifacts.map(artifact => canonicalJsonStringify([artifact.artifactId, artifact.sourceRevision])),
+    )
+    const retainedKeys = new Set(retainedByKey.keys())
+    const missingArtifacts = retainedArtifacts.filter(
+      artifact => !storedKeys.has(canonicalJsonStringify([artifact.artifactId, artifact.sourceRevision])),
+    )
+    const deletionCandidates = snapshot.artifacts.filter(
+      artifact => !retainedKeys.has(canonicalJsonStringify([artifact.artifactId, artifact.sourceRevision])),
+    )
+    return Object.freeze({
+      schemaVersion: 1,
+      projectId: request.projectId,
+      dryRun: true,
+      generationFence: structuredClone(snapshot.generationFence),
+      roots: structuredClone(snapshot.roots),
+      retainedArtifacts: structuredClone(retainedArtifacts),
+      missingArtifacts: structuredClone(missingArtifacts),
+      deletionCandidates: structuredClone(deletionCandidates),
+    })
+  }
+
   async recordReceiptIntent(value) {
     this.#assertAccepting()
     const intent = validateReceiptIntentRecord(value)
@@ -851,7 +2009,12 @@ export class ProjectPersistenceCoordinator {
     if (stored === undefined) return null
     try {
       canonicalJsonStringify(stored)
-      assertExactFields(stored, compensationJournalRecordFields, 'compensation-journal-record')
+      assertExactFieldsWithOptional(
+        stored,
+        compensationJournalRecordFields,
+        compensationJournalRecordOptionalFields,
+        'compensation-journal-record',
+      )
       if (
         stored.schemaVersion !== 1 ||
         stored.projectId !== request.projectId ||
@@ -862,7 +2025,12 @@ export class ProjectPersistenceCoordinator {
         typeof stored.callId !== 'string' ||
         stored.callId.length === 0 ||
         !Number.isSafeInteger(stored.draftGeneration) ||
-        stored.draftGeneration < 1
+        stored.draftGeneration < 1 ||
+        !Number.isSafeInteger(stored.updatedAt) ||
+        stored.updatedAt < 0 ||
+        (stored.writerCheckpointId !== null &&
+          stored.writerCheckpointId !== undefined &&
+          (typeof stored.writerCheckpointId !== 'string' || stored.writerCheckpointId.length === 0))
       ) {
         throw validationFailure('compensation-journal-record-authority-mismatch')
       }
@@ -885,8 +2053,11 @@ export class ProjectPersistenceCoordinator {
         ) {
           throw validationFailure('compensation-run-authority-mismatch')
         }
+        await validateCompensationRunWriter(this.#backend, request, stored)
       } else if (stored.callId !== request.outerCallId) {
         throw validationFailure('compensation-journal-record-authority-mismatch')
+      } else if (stored.writerCheckpointId !== null && stored.writerCheckpointId !== undefined) {
+        throw validationFailure('compensation-claim-writer-checkpoint-must-be-null')
       }
       return structuredClone(stored.value)
     } catch (error) {
@@ -900,6 +2071,87 @@ export class ProjectPersistenceCoordinator {
     return this.#enqueue(scopeKey(request), () =>
       this.#readCompensationJournalNow(request, compensationRunRecordId(request.outerCallId), 'compensation-run'),
     )
+  }
+
+  async listCompensationRuns(value) {
+    this.#assertAccepting()
+    const request = validateCompensationRunListRequest(value)
+    return this.#enqueue(scopeKey(request), async () => {
+      const storedRecords = await this.#backend.getAll('taskJournals')
+      const runs = []
+      for (const stored of storedRecords) {
+        try {
+          canonicalJsonStringify(stored)
+          if (
+            typeof stored !== 'object' ||
+            stored === null ||
+            Array.isArray(stored) ||
+            stored.projectId !== request.projectId ||
+            stored.branchId !== request.branchId ||
+            stored.sessionId !== request.sessionId
+          ) {
+            continue
+          }
+          const recordId = stored.recordId
+          const compensationNamespace =
+            stored.kind === 'compensation-run' ||
+            (typeof recordId === 'string' && recordId.startsWith('compensation-run:'))
+          if (!compensationNamespace) continue
+          assertExactFieldsWithOptional(
+            stored,
+            compensationJournalRecordFields,
+            compensationJournalRecordOptionalFields,
+            'compensation-journal-record',
+          )
+          if (
+            stored.schemaVersion !== 1 ||
+            stored.kind !== 'compensation-run' ||
+            typeof recordId !== 'string' ||
+            !recordId.startsWith('compensation-run:') ||
+            recordId.length === 'compensation-run:'.length ||
+            typeof stored.callId !== 'string' ||
+            stored.callId.length === 0 ||
+            !Number.isSafeInteger(stored.draftGeneration) ||
+            stored.draftGeneration < 1 ||
+            !Number.isSafeInteger(stored.updatedAt) ||
+            stored.updatedAt < 0 ||
+            (stored.writerCheckpointId !== null &&
+              stored.writerCheckpointId !== undefined &&
+              (typeof stored.writerCheckpointId !== 'string' || stored.writerCheckpointId.length === 0))
+          ) {
+            throw validationFailure('compensation-journal-record-authority-mismatch')
+          }
+          const outerCallId = recordId.slice('compensation-run:'.length)
+          assertRecord(stored.value, 'compensation-journal-record.value')
+          if (stored.value.outerCallId !== outerCallId || stored.value.sessionId !== request.sessionId) {
+            throw validationFailure('compensation-run-authority-mismatch')
+          }
+          await validateCompensationRunWriter(this.#backend, request, stored)
+          runs.push({
+            schemaVersion: 1,
+            projectId: request.projectId,
+            branchId: request.branchId,
+            sessionId: request.sessionId,
+            outerCallId,
+            writerCallId: stored.callId,
+            draftGeneration: stored.draftGeneration,
+            updatedAt: stored.updatedAt,
+            run: structuredClone(stored.value),
+          })
+        } catch (error) {
+          throw asIntegrityMismatch(request, 'stored-compensation-journal-contract-is-invalid', error)
+        }
+      }
+      return Object.freeze(
+        runs
+          .sort(
+            (left, right) =>
+              left.draftGeneration - right.draftGeneration ||
+              (left.outerCallId < right.outerCallId ? -1 : left.outerCallId > right.outerCallId ? 1 : 0),
+          )
+          .map(run => Object.freeze(run)),
+      )
+    })
   }
 
   async readCompensationTargetClaim(value) {
@@ -1021,6 +2273,8 @@ export class ProjectPersistenceCoordinator {
           kind,
           callId: request.outerCallId,
           draftGeneration: nextDraftGeneration,
+          updatedAt: request.updatedAt,
+          writerCheckpointId: null,
           value: storedValue,
         })
         const operations = [

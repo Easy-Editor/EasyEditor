@@ -7,6 +7,9 @@ export const DASHBOARD_DRAFT_COMMIT_KINDS = Object.freeze([
   'autosave',
   'manual-save',
   'agent-batch',
+  'named-version',
+  'session-lifecycle',
+  'local-grant',
   'version-restore',
 ])
 
@@ -87,6 +90,7 @@ const receiptIntentFields = Object.freeze([
 ])
 const receiptLineageReadFields = Object.freeze(['branchId', 'callId', 'projectId'])
 const compensationRunReadFields = Object.freeze(['branchId', 'outerCallId', 'projectId', 'schemaVersion', 'sessionId'])
+const compensationRunListFields = Object.freeze(['branchId', 'projectId', 'schemaVersion', 'sessionId'])
 const compensationTargetClaimReadFields = Object.freeze([
   'branchId',
   'projectId',
@@ -417,6 +421,18 @@ export const validateCompensationRunReadRequest = value => {
     branchId: requireNonEmptyString(value.branchId, 'compensation-run-read.branchId'),
     sessionId: requireNonEmptyString(value.sessionId, 'compensation-run-read.sessionId'),
     outerCallId: requireNonEmptyString(value.outerCallId, 'compensation-run-read.outerCallId'),
+  })
+}
+
+export const validateCompensationRunListRequest = value => {
+  canonicalJsonStringify(value)
+  assertExactFields(value, compensationRunListFields, 'compensation-run-list')
+  if (value.schemaVersion !== 1) throw failure('compensation-run-list-schema-version-is-unsupported')
+  return structuredClone({
+    schemaVersion: 1,
+    projectId: requireNonEmptyString(value.projectId, 'compensation-run-list.projectId'),
+    branchId: requireNonEmptyString(value.branchId, 'compensation-run-list.branchId'),
+    sessionId: requireNonEmptyString(value.sessionId, 'compensation-run-list.sessionId'),
   })
 }
 

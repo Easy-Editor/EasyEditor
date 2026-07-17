@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  compensationCursorCheckpointId,
   compensationRunRecordId,
   compensationTargetClaimRecordId,
   createTaskCompensationService,
@@ -470,6 +471,17 @@ test('coordinator atomically acquires one constant-key run/claim, resumes the sa
 
   assert.equal((await commit('acquire')).status, 'committed')
   assert.deepEqual(await coordinator.readCompensationRun({ schemaVersion: 1, ...scope, outerCallId: 'outer-1' }), run)
+  assert.deepEqual(await coordinator.listCompensationRuns({ schemaVersion: 1, ...scope }), [
+    {
+      schemaVersion: 1,
+      ...scope,
+      outerCallId: 'outer-1',
+      writerCallId: 'outer-1',
+      draftGeneration: 2,
+      updatedAt: 11,
+      run,
+    },
+  ])
   assert.deepEqual(
     await coordinator.readCompensationTargetClaim({ schemaVersion: 1, ...scope, targetTaskId: 'task-1' }),
     {
@@ -547,6 +559,7 @@ test('exact-key compensation reads reject hostile stored accessors without invok
       recordId: compensationRunRecordId('outer-hostile'),
       kind: 'compensation-run',
       draftGeneration: 1,
+      updatedAt: 1,
       value: runningRun('outer-hostile'),
     }
     Object.defineProperty(hostile, 'callId', {
@@ -563,6 +576,57 @@ test('exact-key compensation reads reject hostile stored accessors without invok
     error => error?.code === 'integrity-mismatch',
   )
   assert.equal(accessorReads, 0)
+})
+
+test('scoped compensation listing is deterministic and fails closed on a forged compensation namespace', async () => {
+  const backend = new MemoryDashboardStorageBackend()
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  await seedDraft(coordinator)
+  const run = runningRun('outer-list')
+  await coordinator.commitCompensationRunState({
+    schemaVersion: 1,
+    action: 'acquire',
+    ...scope,
+    outerCallId: run.outerCallId,
+    targetTaskId: run.taskId,
+    expectedDraftGeneration: 1,
+    activeDocument,
+    projectSchema,
+    updatedAt: 2,
+    run,
+  })
+
+  const listed = await coordinator.listCompensationRuns({ schemaVersion: 1, ...scope })
+  assert.deepEqual(
+    listed.map(record => record.outerCallId),
+    ['outer-list'],
+  )
+  await assert.rejects(
+    coordinator.listCompensationRuns({ schemaVersion: 1, ...scope, unknown: true }),
+    error => error?.code === 'validation-failed',
+  )
+
+  const forgeWriter = record =>
+    record.recordId === compensationRunRecordId('outer-list') ? { ...record, callId: 'outer-list-forged' } : record
+  const originalGet = backend.get.bind(backend)
+  const originalGetAll = backend.getAll.bind(backend)
+  backend.get = async (store, key) => {
+    const record = await originalGet(store, key)
+    return store === 'taskJournals' && record ? forgeWriter(record) : record
+  }
+  backend.getAll = async store => {
+    const records = await originalGetAll(store)
+    if (store !== 'taskJournals') return records
+    return records.map(forgeWriter)
+  }
+  await assert.rejects(
+    coordinator.readCompensationRun({ schemaVersion: 1, ...scope, outerCallId: 'outer-list' }),
+    error => error?.code === 'integrity-mismatch',
+  )
+  await assert.rejects(
+    coordinator.listCompensationRuns({ schemaVersion: 1, ...scope }),
+    error => error?.code === 'integrity-mismatch',
+  )
 })
 
 test('terminal inverse durable batch deletes the target claim atomically with receipt, run cursor, and checkpoint', async () => {
@@ -633,6 +697,7 @@ test('terminal inverse durable batch deletes the target claim atomically with re
     status: 'completed-with-conflicts',
   })
   await recordDurableAgentIntent({ coordinator, intent })
+  const checkpointId = compensationCursorCheckpointId(completed.compensationRunId, completed.cursor, callId)
   await commitDurableAgentBatch({
     coordinator,
     batch: {
@@ -649,9 +714,22 @@ test('terminal inverse durable batch deletes the target claim atomically with re
       witness,
       provenance: [],
       sessionId: scope.sessionId,
-      journal: { recordId: compensationRunRecordId(run.outerCallId), kind: 'compensation-run', value: completed },
+      journal: {
+        recordId: compensationRunRecordId(run.outerCallId),
+        kind: 'compensation-run',
+        value: completed,
+      },
       journalDeletes: [compensationTargetClaimRecordId(run.taskId)],
-      checkpoint: { checkpointId: 'cursor:1', value: { cursor: 1 } },
+      checkpoint: {
+        checkpointId,
+        value: {
+          schemaVersion: 1,
+          compensationRunId: completed.compensationRunId,
+          cursor: completed.cursor,
+          inverseCallId: callId,
+          originalCallId: 'forward-1',
+        },
+      },
     },
   })
   assert.equal(
@@ -667,8 +745,74 @@ test('terminal inverse durable batch deletes the target claim atomically with re
     await coordinator.readCompensationRun({ schemaVersion: 1, ...scope, outerCallId: run.outerCallId }),
     completed,
   )
+  assert.deepEqual(await coordinator.listCompensationRuns({ schemaVersion: 1, ...scope }), [
+    {
+      schemaVersion: 1,
+      ...scope,
+      outerCallId: run.outerCallId,
+      writerCallId: callId,
+      draftGeneration: 3,
+      updatedAt: 3,
+      run: completed,
+    },
+  ])
+  assert.deepEqual(
+    await backend.get('taskJournals', [
+      scope.projectId,
+      scope.branchId,
+      scope.sessionId,
+      compensationRunRecordId(run.outerCallId),
+    ]),
+    {
+      schemaVersion: 1,
+      ...scope,
+      recordId: compensationRunRecordId(run.outerCallId),
+      kind: 'compensation-run',
+      callId,
+      draftGeneration: 3,
+      updatedAt: 3,
+      writerCheckpointId: checkpointId,
+      value: completed,
+    },
+  )
   assert.ok(await backend.get('toolReceipts', [scope.projectId, scope.branchId, callId]))
-  assert.ok(await backend.get('agentCheckpoints', [scope.projectId, scope.branchId, 'cursor:1']))
+  assert.ok(await backend.get('agentCheckpoints', [scope.projectId, scope.branchId, checkpointId]))
+
+  const originalGet = backend.get.bind(backend)
+  const originalGetAll = backend.getAll.bind(backend)
+  const forgeInverseWriter = value =>
+    value?.recordId === compensationRunRecordId(run.outerCallId)
+      ? { ...value, callId: 'forged-nonempty-inverse-writer' }
+      : value
+  backend.get = async (store, key) => {
+    const value = await originalGet(store, key)
+    return store === 'taskJournals' ? forgeInverseWriter(value) : value
+  }
+  backend.getAll = async store => {
+    const values = await originalGetAll(store)
+    return store === 'taskJournals' ? values.map(forgeInverseWriter) : values
+  }
+  await assert.rejects(
+    coordinator.readCompensationRun({ schemaVersion: 1, ...scope, outerCallId: run.outerCallId }),
+    error => error?.code === 'integrity-mismatch',
+  )
+  await assert.rejects(
+    coordinator.listCompensationRuns({ schemaVersion: 1, ...scope }),
+    error => error?.code === 'integrity-mismatch',
+  )
+
+  backend.get = async (store, key) => {
+    const value = await originalGet(store, key)
+    if (store !== 'taskJournals' || value?.recordId !== compensationRunRecordId(run.outerCallId)) return value
+    const { writerCheckpointId: _legacyMissingPointer, ...legacyV1Record } = value
+    return legacyV1Record
+  }
+  backend.getAll = originalGetAll
+  assert.deepEqual(
+    await coordinator.readCompensationRun({ schemaVersion: 1, ...scope, outerCallId: run.outerCallId }),
+    completed,
+    'schemaVersion 1 run heads written before writerCheckpointId derive the same exact checkpoint key',
+  )
 })
 
 const createFakePersistence = plans => {
@@ -942,6 +1086,7 @@ test('service plans applied receipts in reverse order, resumes a running cursor,
     ]),
   })
   assert.equal(receipt.status, 'applied')
+  assert.equal(Object.hasOwn(receipt, 'revision'), false)
   assert.deepEqual(executionOrder, ['forward-2', 'forward-1'])
   assert.equal(persistence.claims.has('task-1'), false)
   assert.equal(persistence.runs.get('outer-service').status, 'completed')

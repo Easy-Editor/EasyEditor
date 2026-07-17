@@ -7,6 +7,8 @@ import type {
   DashboardAgentPersistenceCommitResultV1,
   DashboardAgentPersistenceReadRequestV1,
   DashboardAgentPersistenceReadResultV1,
+  DashboardCompensationRunListRecordV1,
+  DashboardCompensationRunListRequestV1,
   DashboardCompensationRunReadRequestV1,
   DashboardCompensationRunStateCommitV1,
   DashboardCompensationTargetClaimReadRequestV1,
@@ -23,6 +25,28 @@ import type {
 } from './contracts.mjs'
 import type { DashboardStorageDowngradeCrashEvent, DashboardStorageDowngradeResultV1 } from './downgrade.mjs'
 import type { LegacyStorageAdapter, LegacyStorageDiagnostic, LegacyStorageIdentityV1 } from './legacy-storage.mjs'
+import type {
+  DashboardAgentSessionMutationResultV1,
+  DashboardAgentSessionRecordV1,
+  DashboardAgentSessionSaveV1,
+  DashboardAgentSessionScopeV1,
+  DashboardArtifactGcDryRunV1,
+  DashboardArtifactRootEnumerationV1,
+  DashboardLocalGrantAuthorizeV1,
+  DashboardLocalGrantCheckV1,
+  DashboardLocalGrantDecisionV1,
+  DashboardLocalGrantListV1,
+  DashboardLocalGrantMutationResultV1,
+  DashboardLocalGrantRecordV1,
+  DashboardLocalGrantRevokeV1,
+  DashboardProjectListV1,
+  DashboardProjectVersionCreateV1,
+  DashboardProjectVersionMutationResultV1,
+  DashboardProjectVersionReadV1,
+  DashboardProjectVersionRecordV1,
+  DashboardProjectVersionRestoreResultV1,
+  DashboardProjectVersionRestoreV1,
+} from './lifecycle.mjs'
 
 export interface ProjectPersistenceScope {
   readonly projectId: string
@@ -136,9 +160,25 @@ export declare class ProjectPersistenceCoordinator {
   recordMigrationFailure(value: ProjectPersistenceMigrationFailure): Promise<MigrationStateRecordV1>
   readAgentPersistence(value: DashboardAgentPersistenceReadRequestV1): Promise<DashboardAgentPersistenceReadResultV1>
   commitAgentPersistence(value: DashboardAgentPersistenceBatchV1): Promise<DashboardAgentPersistenceCommitResultV1>
+  createProjectVersion(value: DashboardProjectVersionCreateV1): Promise<DashboardProjectVersionMutationResultV1>
+  getProjectVersion(value: DashboardProjectVersionReadV1): Promise<DashboardProjectVersionRecordV1 | null>
+  listProjectVersions(value: DashboardProjectListV1): Promise<readonly DashboardProjectVersionRecordV1[]>
+  saveAgentSession(value: DashboardAgentSessionSaveV1): Promise<DashboardAgentSessionMutationResultV1>
+  listAgentSessions(value: DashboardAgentSessionScopeV1): Promise<readonly DashboardAgentSessionRecordV1[]>
+  resolveAgentSession(value: DashboardAgentSessionScopeV1): Promise<DashboardAgentSessionRecordV1 | null>
+  restoreProjectVersion(value: DashboardProjectVersionRestoreV1): Promise<DashboardProjectVersionRestoreResultV1>
+  authorizeLocalGrant(value: DashboardLocalGrantAuthorizeV1): Promise<DashboardLocalGrantMutationResultV1>
+  checkLocalGrant(value: DashboardLocalGrantCheckV1): Promise<DashboardLocalGrantDecisionV1>
+  revokeLocalGrant(value: DashboardLocalGrantRevokeV1): Promise<DashboardLocalGrantMutationResultV1>
+  listLocalGrants(value: DashboardLocalGrantListV1): Promise<readonly DashboardLocalGrantRecordV1[]>
+  enumerateArtifactRoots(value: DashboardProjectListV1): Promise<DashboardArtifactRootEnumerationV1>
+  planArtifactGcDryRun(value: DashboardProjectListV1): Promise<DashboardArtifactGcDryRunV1>
   recordReceiptIntent(value: DashboardReceiptIntentV1): Promise<DashboardReceiptIntentV1>
   readReceiptLineage(value: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult>
   readCompensationRun(value: DashboardCompensationRunReadRequestV1): Promise<JsonObject | null>
+  listCompensationRuns(
+    value: DashboardCompensationRunListRequestV1,
+  ): Promise<readonly DashboardCompensationRunListRecordV1[]>
   readCompensationTargetClaim(value: DashboardCompensationTargetClaimReadRequestV1): Promise<JsonObject | null>
   readMutationProvenance(
     value: DashboardMutationProvenanceReadRequestV1,

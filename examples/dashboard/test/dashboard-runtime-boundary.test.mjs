@@ -824,7 +824,7 @@ test('Dashboard bootstrap orders plugin registration, engine init, remote load, 
   assert.match(bootstrap, /new AggregateError\(\[startupError, cleanupError\]/)
   assert.match(bootstrap, /await dashboardPersistence\.dispose\(\)/)
   assert.match(bootstrap, /await engine\.destroy\(\)/)
-  assert.match(bootstrap, /new AggregateError\(failures, ['"]Dashboard persistence and engine disposal failed['"]\)/)
+  assert.match(bootstrap, /new AggregateError\(failures, ['"]Dashboard editor disposal failed['"]\)/)
   assert.match(bootstrap, /validateProjectSchema\([\s\S]*draft\.projectSchema[\s\S]*engine\.trustPolicy/)
   assert.match(bootstrap, /assertRequiredRemoteMaterialsLoaded\(result\)/)
   assert.match(bootstrap, /reportOptionalRemoteFailures\(['"]material metadata['"], remoteResult\.materials\)/)

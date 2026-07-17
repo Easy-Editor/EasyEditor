@@ -6,9 +6,31 @@ import {
   type DashboardAgentPersistenceCommitResultV1,
   type DashboardAgentPersistenceReadRequestV1,
   type DashboardAgentPersistenceReadResultV1,
+  type DashboardAgentSessionMutationResultV1,
+  type DashboardAgentSessionRecordV1,
+  type DashboardAgentSessionSaveV1,
+  type DashboardAgentSessionScopeV1,
+  type DashboardArtifactGcDryRunV1,
+  type DashboardArtifactRootEnumerationV1,
+  type DashboardCompensationRunListRecordV1,
+  type DashboardCompensationRunListRequestV1,
   type DashboardCompensationRunReadRequestV1,
   type DashboardCompensationTargetClaimReadRequestV1,
+  type DashboardLocalGrantAuthorizeV1,
+  type DashboardLocalGrantCheckV1,
+  type DashboardLocalGrantDecisionV1,
+  type DashboardLocalGrantListV1,
+  type DashboardLocalGrantMutationResultV1,
+  type DashboardLocalGrantRecordV1,
+  type DashboardLocalGrantRevokeV1,
   type DashboardMutationProvenanceReadRequestV1,
+  type DashboardProjectListV1,
+  type DashboardProjectVersionCreateV1,
+  type DashboardProjectVersionMutationResultV1,
+  type DashboardProjectVersionReadV1,
+  type DashboardProjectVersionRecordV1,
+  type DashboardProjectVersionRestoreResultV1,
+  type DashboardProjectVersionRestoreV1,
   type DashboardReceiptLineageReadRequest,
   type DashboardReceiptLineageResult,
   type DashboardStorageBackend,
@@ -19,11 +41,15 @@ import {
   ProjectPersistenceCoordinator,
   type ProjectPersistenceMutationProvenanceReadResultV1,
   type StringStorageWriter,
+  abortPreparedIndexedDbCompatibilityBranchSwitch,
   createLegacyStorageAdapter,
   hashCanonicalJson,
   isDashboardStorageError,
   migrateLegacyStorage,
+  prepareIndexedDbCompatibilityBranchSwitch,
+  recoverIndexedDbCompatibilityBranchSwitch,
   refreshIndexedDbCompatibilitySnapshot,
+  switchIndexedDbCompatibilityBranch,
 } from '../lib/storage/index.mjs'
 import {
   type DurableAgentBatchV1,
@@ -39,7 +65,14 @@ import {
 import { createMutationProvenanceBatch } from './agent/persistence/provenance.mjs'
 import type { ReceiptIntentV1, ReceiptRecoveryResult } from './agent/persistence/receipt-ledger.mjs'
 
-type DashboardPersistenceState = 'created' | 'initializing' | 'ready' | 'failed' | 'disposing' | 'disposed'
+type DashboardPersistenceState =
+  | 'created'
+  | 'initializing'
+  | 'ready'
+  | 'restoring'
+  | 'failed'
+  | 'disposing'
+  | 'disposed'
 type DashboardEditorCommitKind = 'autosave' | 'manual-save'
 
 export interface DashboardPersistenceInput {
@@ -109,9 +142,17 @@ export interface DashboardPersistenceSnapshot {
   readonly activeDocument: CanonicalActiveDocumentV1 | null
   readonly pendingAutosave: boolean
   readonly compatibilityWarning: Omit<DashboardPersistenceWarning, 'cause'> | null
+  readonly lastFailure: Readonly<{
+    source: 'initialize' | 'autosave' | 'save' | 'flush' | 'restore'
+    message: string
+  }> | null
 }
 
 type CompatibilitySnapshotWriter = typeof refreshIndexedDbCompatibilitySnapshot
+type CompatibilityBranchSwitchAborter = typeof abortPreparedIndexedDbCompatibilityBranchSwitch
+type CompatibilityBranchSwitchPreparer = typeof prepareIndexedDbCompatibilityBranchSwitch
+type CompatibilityBranchSwitchRecovery = typeof recoverIndexedDbCompatibilityBranchSwitch
+type CompatibilityBranchSwitcher = typeof switchIndexedDbCompatibilityBranch
 
 export interface DashboardPersistenceRuntimeOptions {
   readonly storage: StringStorageWriter
@@ -126,6 +167,14 @@ export interface DashboardPersistenceRuntimeOptions {
   readonly onWarning?: (warning: DashboardPersistenceWarning) => void
   /** Narrow deterministic test seam; production uses the verified compatibility Bridge. */
   readonly refreshCompatibilitySnapshot?: CompatibilitySnapshotWriter
+  /** Narrow deterministic test seam; production uses crash-safe startup branch recovery. */
+  readonly recoverCompatibilityBranchSwitch?: CompatibilityBranchSwitchRecovery
+  /** Narrow deterministic test seam; production persists the exact restore operation before the target commit. */
+  readonly prepareCompatibilityBranchSwitch?: CompatibilityBranchSwitchPreparer
+  /** Narrow deterministic test seam; production aborts only a prepared operation whose target is still absent. */
+  readonly abortCompatibilityBranchSwitch?: CompatibilityBranchSwitchAborter
+  /** Narrow deterministic test seam; production uses the verified branch switch protocol. */
+  readonly switchCompatibilityBranch?: CompatibilityBranchSwitcher
 }
 
 type DashboardPersistenceScope = Readonly<{ projectId: string; branchId: string }>
@@ -205,6 +254,10 @@ export class DashboardPersistenceRuntime {
   readonly #onError: (error: unknown) => void
   readonly #onWarning: (warning: DashboardPersistenceWarning) => void
   readonly #refreshCompatibilitySnapshot: CompatibilitySnapshotWriter
+  readonly #abortCompatibilityBranchSwitch: CompatibilityBranchSwitchAborter
+  readonly #prepareCompatibilityBranchSwitch: CompatibilityBranchSwitchPreparer
+  readonly #recoverCompatibilityBranchSwitch: CompatibilityBranchSwitchRecovery
+  readonly #switchCompatibilityBranch: CompatibilityBranchSwitcher
   readonly #isHumanActivityActive: () => boolean
 
   #state: DashboardPersistenceState = 'created'
@@ -219,6 +272,8 @@ export class DashboardPersistenceRuntime {
   #backgroundAutosaves = new Set<Promise<DashboardPersistenceSaveResult>>()
   #backgroundAutosaveError: unknown = null
   #compatibilityWarning: DashboardPersistenceWarning | null = null
+  #lastFailure: DashboardPersistenceSnapshot['lastFailure'] = null
+  #listeners = new Set<() => void>()
   #mutationAttribution: DashboardMutationAttribution | null = null
   #attributionSequence = 0
   #pendingAttribution = new Map<
@@ -242,6 +297,13 @@ export class DashboardPersistenceRuntime {
       throw new TypeError('Dashboard persistence human activity predicate must be a function')
     }
     this.#refreshCompatibilitySnapshot = options.refreshCompatibilitySnapshot ?? refreshIndexedDbCompatibilitySnapshot
+    this.#abortCompatibilityBranchSwitch =
+      options.abortCompatibilityBranchSwitch ?? abortPreparedIndexedDbCompatibilityBranchSwitch
+    this.#prepareCompatibilityBranchSwitch =
+      options.prepareCompatibilityBranchSwitch ?? prepareIndexedDbCompatibilityBranchSwitch
+    this.#recoverCompatibilityBranchSwitch =
+      options.recoverCompatibilityBranchSwitch ?? recoverIndexedDbCompatibilityBranchSwitch
+    this.#switchCompatibilityBranch = options.switchCompatibilityBranch ?? switchIndexedDbCompatibilityBranch
     const backend =
       options.backend ?? new IndexedDbDashboardStorageBackend({ indexedDB: options.indexedDB, crypto: options.crypto })
     this.#coordinator = new ProjectPersistenceCoordinator({
@@ -267,6 +329,7 @@ export class DashboardPersistenceRuntime {
     if (this.#state !== 'created') return Promise.reject(new Error(`Dashboard persistence is ${this.#state}`))
     const fallback = requireFullProject(defaultProjectSchema)
     this.#state = 'initializing'
+    this.#notify()
     this.#initializePromise = this.#initialize(fallback).then(
       draft => {
         this.#draft = draft
@@ -279,10 +342,16 @@ export class DashboardPersistenceRuntime {
           this.#accepting = true
           this.#state = 'ready'
         }
+        this.#lastFailure = null
+        this.#notify()
         return structuredClone(draft)
       },
       error => {
-        if (this.#state !== 'disposing') this.#state = 'failed'
+        if (this.#state !== 'disposing') {
+          this.#state = 'failed'
+          this.#lastFailure = Object.freeze({ source: 'initialize', message: asError(error).message })
+          this.#notify()
+        }
         throw error
       },
     )
@@ -290,6 +359,15 @@ export class DashboardPersistenceRuntime {
   }
 
   async #initialize(defaultProjectSchema: JsonObject): Promise<CanonicalWorkingDraftV1> {
+    await this.#recoverCompatibilityBranchSwitch({
+      legacy: this.#legacy,
+      ensureRestoreTarget: async request => {
+        const result = await this.#coordinator.restoreProjectVersion(request)
+        await this.#coordinator.flush({ projectId: request.projectId, branchId: request.targetBranchId })
+        return result
+      },
+      now: this.#now,
+    })
     const markerInspection = this.#legacy.inspectCompatibilityMarker()
     if (markerInspection.diagnostic) {
       return (await migrateLegacyStorage({ legacy: this.#legacy, coordinator: this.#coordinator, now: this.#now }))
@@ -355,6 +433,43 @@ export class DashboardPersistenceRuntime {
     }
   }
 
+  #assertProject(value: Readonly<{ projectId: string }>, label: string): void {
+    if (!this.#scope || value.projectId !== this.#scope.projectId) {
+      throw new Error(`${label} does not match the active Dashboard persistence project`)
+    }
+  }
+
+  #matchesScope(scope: DashboardPersistenceScope): boolean {
+    return (
+      this.#scope?.projectId === scope.projectId &&
+      this.#scope.branchId === scope.branchId &&
+      this.#draft?.projectId === scope.projectId &&
+      this.#draft.branchId === scope.branchId
+    )
+  }
+
+  #assertScopeUnchanged(scope: DashboardPersistenceScope, phase: string): void {
+    if (!this.#matchesScope(scope)) {
+      throw new Error(`Dashboard project version restore active scope changed ${phase}`)
+    }
+  }
+
+  #notify(): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener()
+      } catch {
+        // Persistence observers cannot change durable state transitions.
+      }
+    }
+  }
+
+  subscribe(listener: () => void): () => void {
+    if (typeof listener !== 'function') throw new TypeError('Dashboard persistence listener must be a function')
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
   getMutationAttribution(): DashboardMutationAttribution {
     this.#assertReady()
     if (!this.#mutationAttribution) throw new Error('Dashboard mutation attribution is unavailable')
@@ -369,6 +484,7 @@ export class DashboardPersistenceRuntime {
     this.#scheduledAutosave = null
     if (this.#autosaveTimer) clearTimeout(this.#autosaveTimer)
     this.#autosaveTimer = null
+    this.#notify()
   }
 
   #snapshotPendingAttribution(): PendingAttributionSnapshot {
@@ -390,6 +506,7 @@ export class DashboardPersistenceRuntime {
       }
     }
     if (this.#pendingUnknownSequence === snapshot.unknownSequence) this.#pendingUnknownSequence = 0
+    this.#notify()
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -407,6 +524,7 @@ export class DashboardPersistenceRuntime {
     try {
       await this.#refreshCompatibilitySnapshot({ legacy: this.#legacy, draft, now: this.#now })
       this.#compatibilityWarning = null
+      this.#notify()
       return null
     } catch (cause) {
       const warning = Object.freeze({
@@ -416,6 +534,7 @@ export class DashboardPersistenceRuntime {
         cause,
       })
       this.#compatibilityWarning = warning
+      this.#notify()
       try {
         this.#onWarning(warning)
       } catch {
@@ -453,11 +572,37 @@ export class DashboardPersistenceRuntime {
     }
   }
 
+  #commitLifecycle<T extends Readonly<{ draft: CanonicalWorkingDraftV1 }>>(
+    request: Readonly<{ projectId: string; branchId: string; expectedDraftGeneration: number }>,
+    label: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    this.#assertReady()
+    this.#assertScope(request, label)
+    const pendingAutosave = this.#startScheduledAutosave()
+    const task = this.#enqueue(async () => {
+      if (pendingAutosave) await pendingAutosave
+      if (!this.#draft) throw new Error('Dashboard persistence was not initialized')
+      const result = await this.#withGenerationConflictRefresh(operation)
+      this.#draft = result.draft
+      await this.#refreshCompatibilitySnapshotBestEffort(result.draft)
+      this.#backgroundAutosaveError = null
+      this.#lastFailure = null
+      this.#notify()
+      return structuredClone(result)
+    })
+    return task.catch(error => {
+      this.#lastFailure = Object.freeze({ source: 'save', message: asError(error).message })
+      this.#notify()
+      throw error
+    })
+  }
+
   #commit(input: DashboardPersistenceSaveInput): Promise<DashboardPersistenceSaveResult> {
     const projectSchema = requireFullProject(input.projectSchema)
     const activeDocument = input.activeDocument ? structuredClone(input.activeDocument) : null
     const attribution = this.#snapshotPendingAttribution()
-    return this.#enqueue(async () => {
+    const commit = this.#enqueue(async () => {
       if (!this.#scope || !this.#draft) throw new Error('Dashboard persistence was not initialized')
       const scope = this.#scope
       const expectedDraftGeneration = this.#draft.draftGeneration
@@ -497,8 +642,272 @@ export class DashboardPersistenceRuntime {
       this.#consumePendingAttribution(attribution)
       const compatibilityWarning = await this.#refreshCompatibilitySnapshotBestEffort(result.draft)
       this.#backgroundAutosaveError = null
+      this.#lastFailure = null
+      this.#notify()
       return Object.freeze({ draft: structuredClone(result.draft), compatibilityWarning })
     })
+    return commit.catch(error => {
+      this.#lastFailure = Object.freeze({
+        source: input.commitKind === 'autosave' ? 'autosave' : 'save',
+        message: asError(error).message,
+      })
+      this.#notify()
+      throw error
+    })
+  }
+
+  createProjectVersion(request: DashboardProjectVersionCreateV1): Promise<DashboardProjectVersionMutationResultV1> {
+    try {
+      return this.#commitLifecycle(request, 'Dashboard project version create', () =>
+        this.#coordinator.createProjectVersion(request),
+      )
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  getProjectVersion(request: DashboardProjectVersionReadV1): Promise<DashboardProjectVersionRecordV1 | null> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard project version read')
+      return this.#enqueue(() => this.#coordinator.getProjectVersion(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  listProjectVersions(request: DashboardProjectListV1): Promise<readonly DashboardProjectVersionRecordV1[]> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard project version list')
+      return this.#enqueue(() => this.#coordinator.listProjectVersions(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  saveAgentSession(request: DashboardAgentSessionSaveV1): Promise<DashboardAgentSessionMutationResultV1> {
+    try {
+      return this.#commitLifecycle(request, 'Dashboard Agent session save', () =>
+        this.#coordinator.saveAgentSession(request),
+      )
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  listAgentSessions(request: DashboardAgentSessionScopeV1): Promise<readonly DashboardAgentSessionRecordV1[]> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard Agent session list')
+      return this.#enqueue(() => this.#coordinator.listAgentSessions(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  resolveAgentSession(request: DashboardAgentSessionScopeV1): Promise<DashboardAgentSessionRecordV1 | null> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard Agent session resolve')
+      return this.#enqueue(() => this.#coordinator.resolveAgentSession(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  authorizeLocalGrant(request: DashboardLocalGrantAuthorizeV1): Promise<DashboardLocalGrantMutationResultV1> {
+    try {
+      return this.#commitLifecycle(request, 'Dashboard local grant authorize', () =>
+        this.#coordinator.authorizeLocalGrant(request),
+      )
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  checkLocalGrant(request: DashboardLocalGrantCheckV1): Promise<DashboardLocalGrantDecisionV1> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard local grant check')
+      return this.#enqueue(() => this.#coordinator.checkLocalGrant(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  revokeLocalGrant(request: DashboardLocalGrantRevokeV1): Promise<DashboardLocalGrantMutationResultV1> {
+    try {
+      return this.#commitLifecycle(request, 'Dashboard local grant revoke', () =>
+        this.#coordinator.revokeLocalGrant(request),
+      )
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  listLocalGrants(request: DashboardLocalGrantListV1): Promise<readonly DashboardLocalGrantRecordV1[]> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard local grant list')
+      return this.#enqueue(() => this.#coordinator.listLocalGrants(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  enumerateArtifactRoots(request: DashboardProjectListV1): Promise<DashboardArtifactRootEnumerationV1> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard artifact root enumeration')
+      return this.#enqueue(() => this.#coordinator.enumerateArtifactRoots(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  planArtifactGcDryRun(request: DashboardProjectListV1): Promise<DashboardArtifactGcDryRunV1> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard artifact GC dry run')
+      return this.#enqueue(() => this.#coordinator.planArtifactGcDryRun(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  restoreProjectVersion(request: DashboardProjectVersionRestoreV1): Promise<DashboardProjectVersionRestoreResultV1> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard project version restore')
+      if (!this.#scope) throw new Error('Dashboard persistence was not initialized')
+      const activeScope = Object.freeze({ ...this.#scope })
+      this.#accepting = false
+      this.#state = 'restoring'
+      this.#lastFailure = null
+      this.#notify()
+      return this.#restoreProjectVersion(request, activeScope)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  async #restoreProjectVersion(
+    request: DashboardProjectVersionRestoreV1,
+    activeScope: DashboardPersistenceScope,
+  ): Promise<DashboardProjectVersionRestoreResultV1> {
+    let canonicalRestored = false
+    let prepared = false
+    const targetScope = Object.freeze({ projectId: request.projectId, branchId: request.targetBranchId })
+    try {
+      this.#assertScopeUnchanged(activeScope, 'before draining persistence')
+      await this.#flush(activeScope)
+      this.#assertScopeUnchanged(activeScope, 'after draining persistence')
+      if (this.#state === 'disposing') throw new Error('Dashboard persistence is disposing')
+      if (this.#pendingAttribution.size > 0 || this.#pendingUnknownSequence > 0) {
+        throw new Error('Dashboard project version restore is blocked by unsaved attributed changes')
+      }
+      const restored = await this.#enqueue(async () => {
+        this.#assertScopeUnchanged(activeScope, 'before the queued restore')
+        if (!this.#draft) throw new Error('Dashboard persistence was not initialized')
+        const sourceDraft = this.#draft
+        const version = await this.#coordinator.getProjectVersion({
+          schemaVersion: 1,
+          projectId: request.projectId,
+          branchId: request.sourceBranchId,
+          versionId: request.versionId,
+        })
+        if (!version) throw new Error('Dashboard project version restore source does not exist')
+        if (
+          version.sourceSessionId !== request.forkedFromSessionId ||
+          version.sourceTaskId !== request.forkedFromTaskId
+        ) {
+          throw new Error('Dashboard project version restore source lineage does not match the immutable version')
+        }
+        prepared = true
+        await this.#prepareCompatibilityBranchSwitch({
+          legacy: this.#legacy,
+          source: {
+            projectId: sourceDraft.projectId,
+            branchId: sourceDraft.branchId,
+            draftGeneration: sourceDraft.draftGeneration,
+            projectHash: sourceDraft.projectHash,
+          },
+          target: {
+            projectId: request.projectId,
+            branchId: request.targetBranchId,
+            draftGeneration: 1,
+            projectHash: version.projectHash,
+          },
+          restoreRequest: request,
+          readDraft: scope => this.#coordinator.readWorkingDraft(scope),
+          now: this.#now,
+        })
+        let result: DashboardProjectVersionRestoreResultV1
+        try {
+          result = await this.#coordinator.restoreProjectVersion(request)
+        } catch (restoreError) {
+          const targetDraft = await this.#coordinator.readWorkingDraft(targetScope)
+          if (targetDraft) {
+            canonicalRestored = true
+            throw restoreError
+          }
+          try {
+            await this.#abortCompatibilityBranchSwitch({
+              legacy: this.#legacy,
+              restoreRequest: request,
+              readDraft: scope => this.#coordinator.readWorkingDraft(scope),
+              now: this.#now,
+            })
+            prepared = false
+          } catch (abortError) {
+            throw new AggregateError(
+              [restoreError, abortError],
+              'Dashboard project version restore failed and its prepared transition could not be aborted',
+            )
+          }
+          throw restoreError
+        }
+        canonicalRestored = true
+        await this.#coordinator.flush(targetScope)
+        await this.#switchCompatibilityBranch({
+          legacy: this.#legacy,
+          draft: result.draft,
+          restoreRequest: request,
+          now: this.#now,
+        })
+
+        this.#scope = targetScope
+        this.#draft = result.draft
+        this.#mutationAttribution = createDashboardMutationAttribution({
+          authority: targetScope,
+          isHumanActivityActive: this.#isHumanActivityActive,
+        })
+        this.#attributionSequence = 0
+        this.#pendingAttribution.clear()
+        this.#pendingUnknownSequence = 0
+        this.#backgroundAutosaveError = null
+        this.#compatibilityWarning = null
+        this.#lastFailure = null
+        if (this.#state !== 'disposing') {
+          this.#accepting = true
+          this.#state = 'ready'
+        }
+        this.#notify()
+        return structuredClone(result)
+      })
+      this.#assertScopeUnchanged(targetScope, 'after the queued restore')
+      return restored
+    } catch (error) {
+      if (this.#state !== 'disposing') {
+        const activeScopeIntact = this.#matchesScope(activeScope)
+        this.#accepting = !canonicalRestored && !prepared && activeScopeIntact
+        this.#state = this.#accepting ? 'ready' : 'failed'
+        this.#lastFailure = Object.freeze({ source: 'restore', message: asError(error).message })
+        this.#notify()
+      }
+      throw error
+    }
   }
 
   readAgentPersistence(
@@ -639,6 +1048,18 @@ export class DashboardPersistenceRuntime {
     }
   }
 
+  listCompensationRuns(
+    request: DashboardCompensationRunListRequestV1,
+  ): Promise<readonly DashboardCompensationRunListRecordV1[]> {
+    try {
+      this.#assertReady()
+      this.#assertScope(request, 'Dashboard compensation run list')
+      return this.#enqueue(() => this.#coordinator.listCompensationRuns(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
   readCompensationTargetClaim(request: DashboardCompensationTargetClaimReadRequestV1): Promise<JsonObject | null> {
     try {
       this.#assertReady()
@@ -709,6 +1130,7 @@ export class DashboardPersistenceRuntime {
       this.#autosaveTimer = null
       this.#startScheduledAutosave()
     }, this.#autosaveDelayMs)
+    this.#notify()
   }
 
   recordMutationAttribution(input: DashboardMutationAttributionInput): void {
@@ -732,6 +1154,7 @@ export class DashboardPersistenceRuntime {
       const source = current && current.source !== input.source ? 'unknown' : input.source
       this.#pendingAttribution.set(slotKey, { sequence, source })
     }
+    this.#notify()
   }
 
   #startScheduledAutosave(): Promise<DashboardPersistenceSaveResult> | null {
@@ -740,6 +1163,7 @@ export class DashboardPersistenceRuntime {
     this.#scheduledAutosave = null
     if (this.#autosaveTimer) clearTimeout(this.#autosaveTimer)
     this.#autosaveTimer = null
+    this.#notify()
     let task: Promise<DashboardPersistenceSaveResult>
     try {
       const input = capture()
@@ -751,23 +1175,28 @@ export class DashboardPersistenceRuntime {
     void task
       .catch(error => {
         this.#backgroundAutosaveError = error
+        this.#lastFailure = Object.freeze({ source: 'autosave', message: asError(error).message })
+        this.#notify()
         try {
           this.#onError(error)
         } catch {
           // Background observers cannot replace the canonical persistence error.
         }
       })
-      .finally(() => this.#backgroundAutosaves.delete(task))
+      .finally(() => {
+        this.#backgroundAutosaves.delete(task)
+        this.#notify()
+      })
     return task
   }
 
-  async #flush(): Promise<void> {
+  async #flush(scope: DashboardPersistenceScope | null = this.#scope): Promise<void> {
     do {
       this.#startScheduledAutosave()
       await Promise.allSettled([...this.#backgroundAutosaves])
       await this.#tail
     } while (this.#scheduledAutosave || this.#backgroundAutosaves.size > 0)
-    if (this.#scope) await this.#coordinator.flush(this.#scope)
+    if (scope) await this.#coordinator.flush(scope)
     if (this.#backgroundAutosaveError) {
       const error = this.#backgroundAutosaveError
       this.#backgroundAutosaveError = null
@@ -777,7 +1206,15 @@ export class DashboardPersistenceRuntime {
 
   async flush(): Promise<void> {
     if (this.#state !== 'ready') throw new Error(`Dashboard persistence is ${this.#state}`)
-    await this.#flush()
+    try {
+      await this.#flush()
+      this.#lastFailure = null
+      this.#notify()
+    } catch (error) {
+      this.#lastFailure = Object.freeze({ source: 'flush', message: asError(error).message })
+      this.#notify()
+      throw error
+    }
   }
 
   async readWorkingDraft(): Promise<CanonicalWorkingDraftV1 | null> {
@@ -810,6 +1247,7 @@ export class DashboardPersistenceRuntime {
         this.#pendingAttribution.size > 0 ||
         this.#pendingUnknownSequence > 0,
       compatibilityWarning: warning,
+      lastFailure: this.#lastFailure,
     })
   }
 
@@ -817,6 +1255,7 @@ export class DashboardPersistenceRuntime {
     if (this.#disposePromise) return this.#disposePromise
     this.#accepting = false
     this.#state = 'disposing'
+    this.#notify()
     const initialization = this.#initializePromise
     this.#disposePromise = (async () => {
       try {
@@ -831,6 +1270,7 @@ export class DashboardPersistenceRuntime {
       } finally {
         await this.#coordinator.dispose()
         this.#state = 'disposed'
+        this.#notify()
       }
     })()
     return this.#disposePromise

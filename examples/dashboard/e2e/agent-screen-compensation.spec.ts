@@ -59,7 +59,11 @@ const runAgentRoundTrip = (page: import('@playwright/test').Page): Promise<Agent
       { schemaVersion: 1 },
     )
     const afterApply = document.root.getPropValue('backgroundColor')
-    const applyReceipt = await forwardHost.queryReceipt({ projectId, branchId, callId: forwardCallId })
+    const applyReceipt = await forwardHost.queryReceipt({
+      schemaVersion: 1,
+      ...forwardAuthority,
+      callId: forwardCallId,
+    })
     forwardHost.dispose()
 
     const compensationAuthority = {
@@ -99,8 +103,8 @@ const runAgentRoundTrip = (page: import('@playwright/test').Page): Promise<Agent
     )
     const afterCompensate = document.root.getPropValue('backgroundColor')
     const compensationReceipt = await compensationHost.queryReceipt({
-      projectId,
-      branchId,
+      schemaVersion: 1,
+      ...compensationAuthority,
       callId: compensationCallId,
     })
     compensationHost.dispose()

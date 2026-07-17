@@ -62,6 +62,12 @@ test('source entries expose finite profile-specific APIs', () => {
 
   assert.deepEqual(worker, {
     all: [
+      'AgentSessionContextBudget',
+      'AgentSessionContextDigest',
+      'AgentSessionContextSourceRange',
+      'AgentSessionTaskExcerpt',
+      'AgentSessionUnresolvedConstraint',
+      'AgentSessionUnresolvedConstraintKind',
       'AgentWorkerOptions',
       'Clock',
       'IdFactory',

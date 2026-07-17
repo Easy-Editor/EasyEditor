@@ -45,6 +45,9 @@ const { MemoryAgentPersistence } = await import(
 const { HostSnapshotDeltaApplyError, applyHostSnapshotDelta } = await import(
   pathToFileURL(join(compiledRoot, 'internal/snapshot/index.js'))
 )
+const { createAgentSessionContext } = await import(
+  pathToFileURL(join(compiledRoot, 'internal/session-context/index.js'))
+)
 
 const binding = { projectId: 'project-1', branchId: 'branch-1' }
 
@@ -224,6 +227,7 @@ const createMachine = (steps, overrides = {}) => {
     clock: overrides.clock ?? createClock(),
     idFactory: overrides.idFactory ?? createIds(),
     repairBudget: overrides.repairBudget,
+    sessionContextBudget: overrides.sessionContextBudget,
     onSnapshot: snapshot => phases.push(snapshot.phase),
   })
   return { machine, model, host, persistence, phases }
@@ -364,6 +368,154 @@ test('runs the deterministic happy path and commits a serializable checkpoint', 
   assert.deepEqual(fixture.host.invocationContexts, [{ schemaVersion: 1 }])
   assertOrdered(fixture.phases, ['OBSERVE', 'BLUEPRINT', 'PLAN_STEP', 'EXECUTE', 'VERIFY', 'CHECKPOINT', 'COMPLETED'])
   fixture.model.assertFullyConsumed()
+})
+
+test('projects and recovers the submitted intent, accepted blueprint, completion summary, and model context', async () => {
+  const acceptedBlueprint = {
+    schemaVersion: 1,
+    kind: 'blueprint',
+    summary: 'Build a revenue overview',
+    unresolvedConstraints: ['Confirm the production datasource before publishing'],
+  }
+  const completion = { schemaVersion: 1, kind: 'complete', summary: 'Revenue overview is ready' }
+  let blueprintContext
+  let planContext
+  const persistence = new TestPersistence()
+  const fixture = createMachine(
+    [
+      {
+        expectedPhase: 'BLUEPRINT',
+        matchRequest(request) {
+          blueprintContext = structuredClone(request.sessionContext)
+          return request.sessionContext !== undefined
+        },
+        events: [acceptedBlueprint],
+      },
+      {
+        expectedPhase: 'PLAN_STEP',
+        matchRequest(request) {
+          planContext = structuredClone(request.sessionContext)
+          return request.sessionContext?.excerpts[0]?.acceptedBlueprintSummary === acceptedBlueprint.summary
+        },
+        events: [completion],
+      },
+    ],
+    { persistence },
+  )
+
+  const intent = { text: 'Create the revenue overview', metadata: { requestedBy: 'workspace' } }
+  const task = await fixture.machine.submit(intent)
+  await fixture.machine.waitForIdle()
+
+  const projected = fixture.machine.getSnapshot().activeTask
+  assert.deepEqual(projected.intent, intent)
+  assert.deepEqual(projected.acceptedBlueprint, {
+    schemaVersion: 1,
+    summary: acceptedBlueprint.summary,
+    unresolvedConstraints: acceptedBlueprint.unresolvedConstraints,
+  })
+  assert.equal(projected.completionSummary, completion.summary)
+  assert.deepEqual(projected.sessionContext, planContext)
+  assert.deepEqual(blueprintContext.includedTaskIds, [task.taskId])
+  assert.deepEqual(planContext.includedTaskIds, [task.taskId])
+  assert.deepEqual(planContext.unresolvedConstraints, [
+    {
+      taskId: task.taskId,
+      kind: 'blueprint',
+      summary: acceptedBlueprint.unresolvedConstraints[0],
+    },
+  ])
+
+  const durable = persistence.records.find(record => record.recordId === `task:${task.taskId}`)?.value
+  assert.deepEqual(durable.intent, intent)
+  assert.deepEqual(durable.acceptedBlueprint, projected.acceptedBlueprint)
+  assert.equal(durable.completionSummary, completion.summary)
+  assert.deepEqual(durable.sessionContext, planContext)
+
+  const recovered = createMachine([], { persistence })
+  await recovered.machine.recover()
+  const recoveredTask = recovered.machine.getSnapshot().activeTask
+  assert.deepEqual(recoveredTask.intent, projected.intent)
+  assert.deepEqual(recoveredTask.acceptedBlueprint, projected.acceptedBlueprint)
+  assert.equal(recoveredTask.completionSummary, projected.completionSummary)
+  assert.deepEqual(recoveredTask.sessionContext, projected.sessionContext)
+  recovered.model.assertFullyConsumed()
+  fixture.model.assertFullyConsumed()
+})
+
+test('compacts session context deterministically with source lineage and explicit unresolved omissions', async () => {
+  const runScenario = async () => {
+    let context
+    const fixture = createMachine(
+      [
+        { expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' },
+        { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+        { expectedPhase: 'PLAN_STEP', events: [complete] },
+        {
+          expectedPhase: 'BLUEPRINT',
+          matchRequest(request) {
+            context = structuredClone(request.sessionContext)
+            return request.sessionContext?.omittedTaskCount === 1
+          },
+          events: [blueprint],
+        },
+        { expectedPhase: 'PLAN_STEP', events: [complete] },
+      ],
+      {
+        sessionContextBudget: {
+          maxTurns: 2,
+          maxTextBytes: 512,
+          maxUnresolvedConstraints: 1,
+        },
+      },
+    )
+
+    const cancelled = await fixture.machine.submit({
+      text: 'Keep the cancelled task constraint visible even when its excerpt is compacted out',
+    })
+    await waitForPhase(fixture.machine, 'BLUEPRINT')
+    const completed = await fixture.machine.submit({ text: 'Complete the replacement task' })
+    await fixture.machine.waitForIdle()
+    const current = await fixture.machine.submit({ text: 'Create a deterministic follow-up' })
+    await fixture.machine.waitForIdle()
+
+    assert.deepEqual(context.includedTaskIds, [completed.taskId, current.taskId])
+    assert.deepEqual(context.sourceJournalRange, { startPosition: 0, endPosition: 2 })
+    assert.equal(context.sourceTaskCount, 3)
+    assert.equal(context.omittedTaskCount, 1)
+    assert.equal(context.omittedUnresolvedConstraintCount, 0)
+    assert.ok(context.textBytes <= context.budget.maxTextBytes)
+    assert.match(context.sourceHash, /^fnv1a32:[0-9a-f]{8}$/)
+    assert.deepEqual(context.unresolvedConstraints, [
+      {
+        taskId: cancelled.taskId,
+        kind: 'cancelled',
+        summary: 'Keep the cancelled task constraint visible even when its excerpt is compacted out',
+      },
+    ])
+    fixture.model.assertFullyConsumed()
+    return context
+  }
+
+  assert.deepEqual(await runScenario(), await runScenario())
+})
+
+test('a zero unresolved-constraint budget reports every omitted constraint instead of retaining them accidentally', () => {
+  const context = createAgentSessionContext(
+    [
+      {
+        taskId: 'cancelled-task',
+        sessionId: 'session-1',
+        phase: 'CANCELLED',
+        createdAt: 1,
+        intent: { text: 'This intent remains unresolved' },
+      },
+    ],
+    { maxTurns: 1, maxTextBytes: 64, maxUnresolvedConstraints: 0 },
+  )
+
+  assert.deepEqual(context.unresolvedConstraints, [])
+  assert.equal(context.omittedUnresolvedConstraintCount, 1)
 })
 
 test('a terminal tool result clears pending state in the same durable COMPLETED checkpoint', async () => {
@@ -1350,10 +1502,16 @@ test('recovery queries a durable pending call and invokes the same callId once w
   await fixture.machine.waitForIdle()
 
   assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
-  assert.deepEqual(
-    host.receiptQueries.map(query => query.callId),
-    ['call-1'],
-  )
+  assert.deepEqual(host.receiptQueries, [
+    {
+      schemaVersion: 1,
+      projectId: 'project-1',
+      branchId: 'branch-1',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      callId: 'call-1',
+    },
+  ])
   assert.deepEqual(
     host.invocations.map(invocation => invocation.callId),
     ['call-1'],
@@ -1442,6 +1600,225 @@ test('task.compensate receives a Runtime-owned terminal target projection for bo
     assert.deepEqual(fixture.host.invocationContextFrozen, [true])
     fixture.model.assertFullyConsumed()
   }
+})
+
+test('public compensate creates a Runtime-owned task and bypasses the model and direct Host access', async () => {
+  const persistence = new TestPersistence()
+  persistence.generation = 1
+  persistence.records = [terminalTaskRecord()]
+  const fixture = createMachine([], { persistence })
+
+  await fixture.machine.recover()
+  await fixture.machine.compensate('target-task')
+
+  const snapshot = fixture.machine.getSnapshot()
+  assert.equal(snapshot.phase, 'COMPLETED')
+  assert.equal(snapshot.activeTask.parentTaskId, 'target-task')
+  assert.equal(snapshot.activeTask.compensatesTaskId, 'target-task')
+  assert.equal(snapshot.activeTask.compensationEligible, false)
+  assert.equal(snapshot.tasks.find(task => task.taskId === 'target-task')?.compensationEligible, false)
+  assert.equal(snapshot.activeTask.intent.metadata.runtimeCommand, 'task.compensate')
+  assert.deepEqual(fixture.host.invocations, [
+    {
+      schemaVersion: 1,
+      projectId: 'project-1',
+      branchId: 'branch-1',
+      sessionId: 'session-1',
+      taskId: snapshot.activeTask.taskId,
+      stepId: 'step-1',
+      callId: scopedCallId(),
+      capability: 'task.compensate',
+      arguments: { schemaVersion: 1, targetTaskId: 'target-task' },
+      expectedRevision: 'r0',
+    },
+  ])
+  assert.deepEqual(fixture.host.invocationContexts, [
+    {
+      schemaVersion: 1,
+      compensationTarget: {
+        schemaVersion: 1,
+        taskId: 'target-task',
+        sessionId: 'session-1',
+        phase: 'COMPLETED',
+        callIndexComplete: true,
+        callIndex: [{ callId: 'target-call-1', capability: 'screen.applyChangeSet' }],
+      },
+    },
+  ])
+  assert.deepEqual(
+    persistence.records.find(record => record.recordId === `task:${snapshot.activeTask.taskId}`).value
+      .compensatesTaskId,
+    'target-task',
+  )
+  assert.deepEqual(fixture.host.invocationContextFrozen, [true])
+  fixture.model.assertFullyConsumed()
+})
+
+test('public compensate rejects unknown, active, failed, incomplete, nested, and already compensated targets', async () => {
+  const cases = [
+    { label: 'unknown', records: [], targetTaskId: 'missing-task' },
+    {
+      label: 'foreign session',
+      records: [terminalTaskRecord({ sessionId: 'session-foreign' })],
+      targetTaskId: 'target-task',
+    },
+    { label: 'active', records: [terminalTaskRecord({ phase: 'PAUSED' })], targetTaskId: 'target-task' },
+    { label: 'failed', records: [terminalTaskRecord({ phase: 'FAILED' })], targetTaskId: 'target-task' },
+    {
+      label: 'incomplete',
+      records: [terminalTaskRecord({ callIndexComplete: false })],
+      targetTaskId: 'target-task',
+    },
+    {
+      label: 'nested',
+      records: [terminalTaskRecord({ callIndex: [{ callId: 'target-call-1', capability: 'task.compensate' }] })],
+      targetTaskId: 'target-task',
+    },
+    {
+      label: 'already compensated',
+      records: [
+        terminalTaskRecord(),
+        terminalTaskRecord({
+          taskId: 'compensation-task',
+          callIds: ['compensation-call'],
+          callIndex: [{ callId: 'compensation-call', capability: 'task.compensate' }],
+          updatedAt: 3,
+        }),
+      ].map(record =>
+        record.value.taskId === 'compensation-task'
+          ? { ...record, value: { ...record.value, compensatesTaskId: 'target-task' } }
+          : record,
+      ),
+      targetTaskId: 'target-task',
+    },
+  ]
+
+  for (const entry of cases) {
+    const persistence = new TestPersistence()
+    persistence.generation = 1
+    persistence.records = entry.records
+    const fixture = createMachine([], { persistence })
+    await fixture.machine.recover()
+
+    await assert.rejects(fixture.machine.compensate(entry.targetTaskId), WorkerStateMachineError, entry.label)
+    assert.equal(fixture.host.invocations.length, 0, entry.label)
+    fixture.model.assertFullyConsumed()
+  }
+})
+
+test('snapshots expose only Runtime-owned compensation eligibility for durable terminal targets', async () => {
+  const cases = [
+    {
+      label: 'durable eligible',
+      records: [terminalTaskRecord()],
+      expected: true,
+    },
+    {
+      label: 'incomplete lineage',
+      records: [terminalTaskRecord({ callIndexComplete: false })],
+      expected: false,
+    },
+    {
+      label: 'nested compensation capability',
+      records: [
+        terminalTaskRecord({
+          callIndex: [{ callId: 'target-call-1', capability: 'task.compensate' }],
+        }),
+      ],
+      expected: false,
+    },
+    {
+      label: 'already claimed by a compensation task',
+      records: [
+        terminalTaskRecord(),
+        (() => {
+          const record = terminalTaskRecord({
+            taskId: 'compensation-task',
+            callIds: ['compensation-call'],
+            callIndex: [{ callId: 'compensation-call', capability: 'task.compensate' }],
+            updatedAt: 3,
+          })
+          return { ...record, value: { ...record.value, compensatesTaskId: 'target-task' } }
+        })(),
+      ],
+      expected: false,
+    },
+  ]
+
+  for (const entry of cases) {
+    const persistence = new TestPersistence()
+    persistence.generation = 1
+    persistence.records = entry.records
+    const fixture = createMachine([], { persistence })
+
+    await fixture.machine.recover()
+
+    const target = fixture.machine.getSnapshot().tasks.find(task => task.taskId === 'target-task')
+    assert.equal(target?.compensationEligible, entry.expected, entry.label)
+    assert.equal(Object.hasOwn(target ?? {}, 'callIds'), false, entry.label)
+    assert.equal(Object.hasOwn(target ?? {}, 'callIndex'), false, entry.label)
+    fixture.model.assertFullyConsumed()
+  }
+})
+
+test('compensation recovery rejects persistence results outside the bound project, branch, or session', async () => {
+  for (const authority of [
+    { projectId: 'project-foreign', branchId: 'branch-1', sessionId: 'session-1' },
+    { projectId: 'project-1', branchId: 'branch-foreign', sessionId: 'session-1' },
+    { projectId: 'project-1', branchId: 'branch-1', sessionId: 'session-foreign' },
+  ]) {
+    const persistence = new TestPersistence()
+    persistence.generation = 1
+    persistence.records = [terminalTaskRecord()]
+    persistence.read = async request => ({
+      schemaVersion: 1,
+      ...authority,
+      persistenceGeneration: persistence.generation,
+      records: structuredClone(persistence.records),
+    })
+    const fixture = createMachine([], { persistence })
+
+    await assert.rejects(
+      fixture.machine.recover(),
+      error =>
+        error instanceof WorkerStateMachineError &&
+        error.code === 'invalid-tool-call-context' &&
+        /bound project, branch, and session/.test(error.message),
+    )
+    assert.equal(fixture.host.invocations.length, 0)
+    fixture.model.assertFullyConsumed()
+  }
+})
+
+test('cancelling a public compensation preserves the durable CANCELLED phase', async () => {
+  let releaseInvocation
+  const invocationGate = new Promise(resolve => {
+    releaseInvocation = resolve
+  })
+  const persistence = new TestPersistence()
+  persistence.generation = 1
+  persistence.records = [terminalTaskRecord()]
+  const host = new TestHost()
+  host.behaviors.push({ wait: invocationGate })
+  const fixture = createMachine([], { host, persistence })
+  await fixture.machine.recover()
+
+  const compensation = fixture.machine.compensate('target-task')
+  await waitForPhase(fixture.machine, 'EXECUTE')
+  while (host.invocations.length === 0) await new Promise(resolve => setTimeout(resolve, 0))
+  const compensationTaskId = fixture.machine.getSnapshot().activeTask.taskId
+  const compensationRejected = assert.rejects(compensation, error => error?.name === 'AbortError')
+  const cancellation = fixture.machine.cancel(compensationTaskId)
+  releaseInvocation()
+
+  await compensationRejected
+  await cancellation
+  assert.equal(fixture.machine.getSnapshot().phase, 'CANCELLED')
+  assert.equal(
+    persistence.records.find(record => record.recordId === `task:${compensationTaskId}`).value.phase,
+    'CANCELLED',
+  )
+  fixture.model.assertFullyConsumed()
 })
 
 test('restart hydrates every task before resuming a pending compensation invoke', async () => {
@@ -1868,6 +2245,24 @@ test('an explicit APPLIED_UNDURABLE result pauses and never retries even when re
   const snapshot = fixture.machine.getSnapshot()
   assert.equal(snapshot.phase, 'PAUSED')
   assert.equal(snapshot.activeTask.failure.code, 'APPLIED_UNDURABLE')
+  assert.deepEqual(snapshot.recoveries, [
+    {
+      schemaVersion: 1,
+      kind: 'applied-undurable',
+      recoveryId: `applied-undurable-v1:session-1:${snapshot.activeTask.taskId}:${encodeURIComponent(scopedCallId())}`,
+      taskId: snapshot.activeTask.taskId,
+      callId: scopedCallId(),
+      occurredAt: snapshot.activeTask.updatedAt,
+    },
+  ])
+  assert.deepEqual(Object.keys(snapshot.recoveries[0]).sort(), [
+    'callId',
+    'kind',
+    'occurredAt',
+    'recoveryId',
+    'schemaVersion',
+    'taskId',
+  ])
   assert.equal(host.invocations.length, 1)
   assert.deepEqual(
     host.receiptQueries.map(query => query.callId),
@@ -1881,8 +2276,269 @@ test('an explicit APPLIED_UNDURABLE result pauses and never retries even when re
   await restarted.machine.waitForIdle()
   assert.equal(restarted.machine.getSnapshot().phase, 'PAUSED')
   assert.equal(restarted.machine.getSnapshot().activeTask.failure.code, 'APPLIED_UNDURABLE')
+  assert.deepEqual(restarted.machine.getSnapshot().recoveries, snapshot.recoveries)
   assert.equal(restarted.host.invocations.length, 0)
   fixture.model.assertFullyConsumed()
+  restarted.model.assertFullyConsumed()
+})
+
+for (const receiptState of ['missing', 'indeterminate']) {
+  test(`APPLIED_UNDURABLE is a byte-stable recovery lock for resume, cancel, submit, and compensate with ${receiptState} receipt evidence`, async () => {
+    const host = new TestHost()
+    host.behaviors.push({
+      status: 'indeterminate',
+      resultRevision: null,
+      failure: {
+        code: 'APPLIED_UNDURABLE',
+        message: 'Core applied but the durable commit failed',
+        retryable: false,
+        details: { requiredAction: 'pause' },
+      },
+    })
+    const fixture = createMachine(
+      [
+        { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+        { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+      ],
+      { host },
+    )
+
+    const task = await fixture.machine.submit({ text: 'Keep the applied-undurable task locked' })
+    await fixture.machine.waitForIdle()
+    if (receiptState === 'indeterminate') {
+      host.receipts.set(scopedCallId(), {
+        schemaVersion: 1,
+        projectId: binding.projectId,
+        branchId: binding.branchId,
+        callId: scopedCallId(),
+        status: 'indeterminate',
+        failure: {
+          code: 'INDETERMINATE_RECEIPT',
+          message: 'Receipt witnesses remain contradictory',
+          retryable: false,
+        },
+      })
+    }
+
+    const lockedSnapshot = fixture.machine.getSnapshot()
+    const lockedBytes = JSON.stringify(lockedSnapshot)
+    const persistedBytes = JSON.stringify(fixture.persistence.records)
+    const invokeCount = host.invocations.length
+    const operations = [
+      ['resume', () => fixture.machine.resume(task.taskId)],
+      ['cancel', () => fixture.machine.cancel(task.taskId)],
+      ['submit', () => fixture.machine.submit({ text: 'Must not supersede the recovery lock' })],
+      ['compensate', () => fixture.machine.compensate(task.taskId)],
+    ]
+
+    for (const [label, operation] of operations) {
+      await assert.rejects(
+        operation(),
+        error =>
+          error instanceof WorkerStateMachineError &&
+          error.code === 'applied-undurable-recovery-locked' &&
+          error.message.includes(task.taskId),
+        label,
+      )
+      assert.strictEqual(fixture.machine.getSnapshot(), lockedSnapshot, `${label} replaced the snapshot`)
+      assert.equal(JSON.stringify(fixture.machine.getSnapshot()), lockedBytes, `${label} mutated the snapshot`)
+      assert.equal(JSON.stringify(fixture.persistence.records), persistedBytes, `${label} mutated persistence`)
+      assert.equal(host.invocations.length, invokeCount, `${label} invoked Host authority`)
+    }
+
+    assert.equal(host.receiptQueries.length, 2)
+    assert.deepEqual(
+      host.receiptQueries.map(query => query.callId),
+      [scopedCallId(), scopedCallId()],
+    )
+    fixture.model.assertFullyConsumed()
+  })
+}
+
+for (const terminalReceipt of [
+  {
+    label: 'applied',
+    receipt: {
+      schemaVersion: 1,
+      projectId: binding.projectId,
+      branchId: binding.branchId,
+      callId: scopedCallId(),
+      status: 'applied',
+      revision: 'r1',
+    },
+    recoverySteps: [],
+  },
+  {
+    label: 'rejected',
+    receipt: {
+      schemaVersion: 1,
+      projectId: binding.projectId,
+      branchId: binding.branchId,
+      callId: scopedCallId(),
+      status: 'rejected',
+      failure: {
+        code: 'POLICY_REJECTED',
+        message: 'The exact durable receipt proves the call failed',
+        retryable: false,
+      },
+    },
+    recoverySteps: [{ expectedPhase: 'REPAIR', events: [complete] }],
+  },
+]) {
+  test(`APPLIED_UNDURABLE resumes from an exact terminal ${terminalReceipt.label} receipt without replaying the call`, async () => {
+    const host = new TestHost()
+    host.behaviors.push({
+      status: 'indeterminate',
+      resultRevision: null,
+      failure: {
+        code: 'APPLIED_UNDURABLE',
+        message: 'Core applied but the durable commit failed',
+        retryable: false,
+      },
+    })
+    const fixture = createMachine(
+      [
+        { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+        { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+        ...terminalReceipt.recoverySteps,
+      ],
+      { host },
+    )
+
+    const task = await fixture.machine.submit({ text: 'Resume only from exact terminal evidence' })
+    await fixture.machine.waitForIdle()
+    assert.equal(fixture.machine.getSnapshot().phase, 'PAUSED')
+    const lockedSnapshot = fixture.machine.getSnapshot()
+    host.receipts.set(scopedCallId(), { ...terminalReceipt.receipt, projectId: 'foreign-project' })
+    await assert.rejects(
+      fixture.machine.resume(task.taskId),
+      error => error instanceof WorkerStateMachineError && error.code === 'invalid-tool-call-context',
+    )
+    assert.strictEqual(fixture.machine.getSnapshot(), lockedSnapshot)
+    assert.equal(host.invocations.length, 1)
+    host.receipts.set(scopedCallId(), terminalReceipt.receipt)
+
+    const resumeResults = await Promise.allSettled([
+      fixture.machine.resume(task.taskId),
+      fixture.machine.resume(task.taskId),
+    ])
+    assert.deepEqual(
+      resumeResults.map(result => result.status),
+      ['fulfilled', 'fulfilled'],
+    )
+    await fixture.machine.waitForIdle()
+
+    assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
+    assert.deepEqual(fixture.machine.getSnapshot().recoveries, [])
+    assert.equal(host.invocations.length, 1)
+    assert.deepEqual(
+      host.receiptQueries.map(query => query.callId),
+      [scopedCallId(), scopedCallId(), scopedCallId()],
+    )
+    fixture.model.assertFullyConsumed()
+  })
+}
+
+test('a recovered APPLIED_UNDURABLE task locks ordinary mutations targeting every hydrated task', async () => {
+  const host = new TestHost()
+  host.behaviors.push({
+    status: 'indeterminate',
+    resultRevision: null,
+    failure: {
+      code: 'APPLIED_UNDURABLE',
+      message: 'Core applied but the durable commit failed',
+      retryable: false,
+    },
+  })
+  const original = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+    ],
+    { host },
+  )
+  const lockedTask = await original.machine.submit({ text: 'Persist a non-active recovery lock' })
+  await original.machine.waitForIdle()
+  original.persistence.records.push(
+    terminalTaskRecord({
+      taskId: 'newer-paused-task',
+      phase: 'PAUSED',
+      callIds: [],
+      callIndex: [],
+      updatedAt: 999,
+    }),
+  )
+
+  const restarted = createMachine([], { persistence: original.persistence })
+  await restarted.machine.recover()
+  const ordinaryTaskId = 'newer-paused-task'
+  assert.equal(restarted.machine.getSnapshot().activeTask.taskId, lockedTask.taskId)
+  assert.equal(restarted.machine.getSnapshot().recoveries[0].taskId, lockedTask.taskId)
+  const lockedSnapshot = restarted.machine.getSnapshot()
+  const operations = [
+    () => restarted.machine.resume(ordinaryTaskId),
+    () => restarted.machine.cancel(ordinaryTaskId),
+    () => restarted.machine.submit({ text: 'Must not bypass a hydrated recovery lock' }),
+    () => restarted.machine.compensate(ordinaryTaskId),
+  ]
+
+  for (const operation of operations) {
+    await assert.rejects(
+      operation(),
+      error => error instanceof WorkerStateMachineError && error.code === 'applied-undurable-recovery-locked',
+    )
+    assert.strictEqual(restarted.machine.getSnapshot(), lockedSnapshot)
+  }
+  assert.equal(restarted.host.invocations.length, 0)
+  assert.equal(restarted.host.receiptQueries.length, 0)
+  original.model.assertFullyConsumed()
+  restarted.model.assertFullyConsumed()
+})
+
+test('recovery gives an older APPLIED_UNDURABLE lock precedence over newer executable legacy work', async () => {
+  const host = new TestHost()
+  host.behaviors.push({
+    status: 'indeterminate',
+    resultRevision: null,
+    failure: {
+      code: 'APPLIED_UNDURABLE',
+      message: 'Core applied but the durable commit failed',
+      retryable: false,
+    },
+  })
+  const original = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+    ],
+    { host },
+  )
+  const lockedTask = await original.machine.submit({ text: 'Persist an older recovery lock' })
+  await original.machine.waitForIdle()
+  original.persistence.records.push(
+    pendingTaskRecord({
+      callValue: call({ task: 2, callId: 2, revision: 'r1' }),
+      phase: 'EXECUTE',
+      updatedAt: 999,
+    }),
+  )
+  const commitCount = original.persistence.commits.length
+
+  const restarted = createMachine([], { persistence: original.persistence })
+  await restarted.machine.recover()
+  await restarted.machine.waitForIdle()
+
+  const snapshot = restarted.machine.getSnapshot()
+  assert.equal(snapshot.phase, 'PAUSED')
+  assert.equal(snapshot.activeTask.taskId, lockedTask.taskId)
+  assert.equal(snapshot.activeTask.failure.code, 'APPLIED_UNDURABLE')
+  assert.equal(snapshot.recoveries[0].taskId, lockedTask.taskId)
+  assert.equal(restarted.host.observations.length, 0)
+  assert.equal(restarted.host.receiptQueries.length, 0)
+  assert.equal(restarted.host.invocations.length, 0)
+  assert.equal(restarted.model.consumedSteps, 0)
+  assert.equal(original.persistence.commits.length, commitCount)
+  original.model.assertFullyConsumed()
   restarted.model.assertFullyConsumed()
 })
 

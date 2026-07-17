@@ -1,5 +1,13 @@
 export { canonicalJsonStringify, hashCanonicalJson } from './canonical-json.mjs'
 export {
+  abortPreparedIndexedDbCompatibilityBranchSwitch,
+  DASHBOARD_STORAGE_BRANCH_SWITCH_CRASH_POINTS,
+  DASHBOARD_STORAGE_BRANCH_SWITCH_KEY,
+  prepareIndexedDbCompatibilityBranchSwitch,
+  recoverIndexedDbCompatibilityBranchSwitch,
+  switchIndexedDbCompatibilityBranch,
+} from './branch-switch.mjs'
+export {
   assertStorageCompatibilityWritable,
   createStorageCompatibilityMarker,
   DASHBOARD_STORAGE_READER_VERSION,
@@ -46,6 +54,19 @@ export {
 } from './legacy-storage.mjs'
 export { MemoryDashboardStorageBackend } from './memory-backend.mjs'
 export { migrateLegacyStorage } from './migration.mjs'
+export {
+  advanceAgentSessionPersistenceRecord,
+  DASHBOARD_AGENT_SESSION_STATUSES,
+  DASHBOARD_ARTIFACT_ROOT_OWNER_TYPES,
+  DASHBOARD_LOCAL_GRANT_SCOPES,
+  normalizeArtifactIdentities,
+  normalizeArtifactRootRecord,
+  normalizeStoredAgentSessionRecord,
+  normalizeStoredArtifactIdentity,
+  validateAgentSessionRecord,
+  validateLocalGrantRecord,
+  validateProjectVersionRecord,
+} from './lifecycle.mjs'
 export {
   createMigrationBatchId,
   ProjectPersistenceCoordinator,

@@ -1,4 +1,10 @@
 export type {
+  AgentSessionContextBudget,
+  AgentSessionContextDigest,
+  AgentSessionContextSourceRange,
+  AgentSessionTaskExcerpt,
+  AgentSessionUnresolvedConstraint,
+  AgentSessionUnresolvedConstraintKind,
   AgentWorkerOptions,
   Clock,
   IdFactory,

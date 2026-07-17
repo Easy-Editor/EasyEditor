@@ -12,6 +12,7 @@ import {
   validateReceiptLineageReadRequest,
 } from './contracts.mjs'
 import { DASHBOARD_STORAGE_ERROR_CODE, DashboardStorageError, isDashboardStorageError } from './errors.mjs'
+import { advanceAgentSessionPersistenceRecord } from './lifecycle.mjs'
 import {
   DASHBOARD_STORAGE_DATABASE_NAME,
   DASHBOARD_STORAGE_DATABASE_VERSION,
@@ -481,13 +482,7 @@ export class IndexedDbDashboardStorageBackend {
         }
         if (committed) {
           observeWrite(
-            sessions.put({
-              schemaVersion: 1,
-              projectId: batch.projectId,
-              branchId: batch.branchId,
-              sessionId: batch.sessionId,
-              persistenceGeneration: result.persistenceGeneration,
-            }),
+            sessions.put(advanceAgentSessionPersistenceRecord(currentSession, batch, result.persistenceGeneration)),
           )
           for (const record of batch.records) {
             observeWrite(

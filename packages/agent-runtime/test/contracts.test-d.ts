@@ -4,7 +4,10 @@ import type {
   AgentPersistencePort,
   AgentRuntime,
   AgentRuntimeOptions,
+  AgentRuntimeRecovery,
   AgentRuntimeSnapshot,
+  AgentSessionContextDigest,
+  AgentTaskSnapshot,
   AgentWorkerOptions,
   HostInvocationContextV1,
   HostSnapshot,
@@ -27,7 +30,15 @@ declare const request: ModelTurnRequest
 declare const call: SemanticCall
 
 const snapshot: AgentRuntimeSnapshot = runtime.getSnapshot()
+type CompensationEligibilityIsRequired = AgentTaskSnapshot extends { readonly compensationEligible: boolean }
+  ? true
+  : false
+const compensationEligibilityIsRequired: CompensationEligibilityIsRequired = true
+const compensationEligible: boolean | undefined = snapshot.activeTask?.compensationEligible
+const recovery: AgentRuntimeRecovery | undefined = snapshot.recoveries[0]
+const compensatedTaskId: string | undefined = snapshot.activeTask?.compensatesTaskId
 const task: Promise<TaskRef> = runtime.submit({ text: 'Build the dashboard' })
+const compensation: Promise<void> = runtime.compensate('target-task')
 const observation: Promise<HostSnapshot | { readonly schemaVersion: 1 }> = host.observe({
   schemaVersion: 1,
   projectId: 'project-1',
@@ -89,6 +100,7 @@ const invalidFailedReceipt: ToolReceipt = {
   status: 'not-applied',
 }
 const events = model.run(request, new AbortController().signal)
+const sessionContext: AgentSessionContextDigest = request.sessionContext
 
 const batch: AgentPersistenceBatch = {
   schemaVersion: 1,
@@ -111,6 +123,7 @@ const options: AgentRuntimeOptions = {
 const workerOptions: AgentWorkerOptions = {
   port: new MessageChannel().port2,
   model,
+  sessionContextBudget: { maxTurns: 4, maxTextBytes: 4_096, maxUnresolvedConstraints: 8 },
 }
 
 const json: JsonObject = { nested: { values: [true, 1, 'safe', null] } }
@@ -122,7 +135,12 @@ const invalidJson: JsonObject = { callback: () => undefined }
 const invalidOptions: AgentRuntimeOptions = { ...options, model }
 
 void snapshot
+void compensationEligibilityIsRequired
+void compensationEligible
+void recovery
+void compensatedTaskId
 void task
+void compensation
 void observation
 void fullSnapshot
 void invalidFullSnapshot
@@ -133,6 +151,7 @@ void invocationContext
 void compensationTarget
 void receipt
 void events
+void sessionContext
 void commit
 void options
 void workerOptions

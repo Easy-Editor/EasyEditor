@@ -67,14 +67,87 @@ export interface AgentQuestion {
   readonly responseSchema?: JsonObject
 }
 
-export interface AgentTaskSnapshot extends TaskRef {
+export interface AgentAcceptedBlueprint {
+  readonly schemaVersion: 1
+  readonly summary: string
+  readonly unresolvedConstraints: readonly string[]
+}
+
+export interface AgentSessionContextBudget {
+  readonly maxTurns: number
+  readonly maxTextBytes: number
+  readonly maxUnresolvedConstraints: number
+}
+
+export interface AgentSessionContextSourceRange {
+  /** Zero-based inclusive position in the canonical task journal ordered by createdAt, then taskId code units. */
+  readonly startPosition: number
+  /** Zero-based inclusive position; equals sourceTaskCount - 1 for a non-empty task journal. */
+  readonly endPosition: number
+}
+
+export interface AgentSessionTaskExcerpt {
+  readonly taskId: string
   readonly phase: AgentPhase
+  readonly intentExcerpt: string
+  readonly acceptedBlueprintSummary?: string
+  readonly completionSummary?: string
+}
+
+export type AgentSessionUnresolvedConstraintKind = 'blueprint' | 'question' | 'failure' | 'cancelled'
+
+export interface AgentSessionUnresolvedConstraint {
+  readonly taskId: string
+  readonly kind: AgentSessionUnresolvedConstraintKind
+  readonly summary: string
+}
+
+export interface AgentSessionContextDigest {
+  readonly schemaVersion: 1
+  readonly budget: AgentSessionContextBudget
+  readonly includedTaskIds: readonly string[]
+  readonly sourceJournalRange: AgentSessionContextSourceRange
+  /** Deterministic, non-cryptographic fingerprint of the complete canonical source task projection. */
+  readonly sourceHash: string
+  readonly sourceTaskCount: number
+  readonly omittedTaskCount: number
+  readonly unresolvedConstraints: readonly AgentSessionUnresolvedConstraint[]
+  readonly omittedUnresolvedConstraintCount: number
+  readonly excerpts: readonly AgentSessionTaskExcerpt[]
+  readonly textBytes: number
+}
+
+export interface AgentTaskSnapshot extends TaskRef {
+  readonly compensatesTaskId?: string
+  readonly phase: AgentPhase
+  /** Runtime-owned compensation eligibility; call lineage and Host authority remain private. */
+  readonly compensationEligible: boolean
   readonly createdAt: number
   readonly updatedAt: number
   readonly repairAttempts: number
+  readonly intent: UserIntent
+  readonly sessionContext: AgentSessionContextDigest
+  readonly acceptedBlueprint?: AgentAcceptedBlueprint
+  readonly completionSummary?: string
   readonly question?: AgentQuestion
   readonly failure?: AgentRuntimeFailure
 }
+
+/**
+ * Finite operator-facing recovery evidence. The Runtime deliberately projects
+ * only stable identifiers and a timestamp; semantic call arguments and the
+ * private call index never cross this boundary.
+ */
+export interface AgentAppliedUndurableRecovery {
+  readonly schemaVersion: 1
+  readonly kind: 'applied-undurable'
+  readonly recoveryId: string
+  readonly taskId: string
+  readonly callId: string
+  readonly occurredAt: number
+}
+
+export type AgentRuntimeRecovery = AgentAppliedUndurableRecovery
 
 export interface AgentRuntimeSnapshot {
   readonly schemaVersion: 1
@@ -84,11 +157,13 @@ export interface AgentRuntimeSnapshot {
   readonly revision: number
   readonly activeTask?: AgentTaskSnapshot
   readonly tasks: readonly AgentTaskSnapshot[]
+  readonly recoveries: readonly AgentRuntimeRecovery[]
   readonly failure?: AgentRuntimeFailure
 }
 
 export interface AgentRuntime {
   submit(input: UserIntent): Promise<TaskRef>
+  compensate(targetTaskId: string): Promise<void>
   pause(taskId: string): Promise<void>
   resume(taskId: string): Promise<void>
   cancel(taskId: string): Promise<void>
@@ -239,8 +314,11 @@ export type ToolReceipt =
     })
 
 export interface ReceiptQueryRequest {
+  readonly schemaVersion: 1
   readonly projectId: string
   readonly branchId: string
+  readonly sessionId: string
+  readonly taskId: string
   readonly callId: string
 }
 
@@ -318,6 +396,7 @@ export interface ModelTurnRequest {
   readonly phase: ModelTurnPhase
   readonly intent: UserIntent
   readonly snapshot: HostSnapshot
+  readonly sessionContext: AgentSessionContextDigest
   readonly response?: UserResponse
   readonly repairAttempts: number
 }
@@ -327,6 +406,7 @@ export type ModelEvent =
       readonly schemaVersion: 1
       readonly kind: 'blueprint'
       readonly summary: string
+      readonly unresolvedConstraints?: readonly string[]
     }
   | {
       readonly schemaVersion: 1
@@ -363,4 +443,5 @@ export interface AgentWorkerOptions {
   readonly model: ModelAdapter
   readonly clock?: Clock
   readonly idFactory?: IdFactory
+  readonly sessionContextBudget?: AgentSessionContextBudget
 }

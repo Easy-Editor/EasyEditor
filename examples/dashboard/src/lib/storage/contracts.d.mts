@@ -1,7 +1,15 @@
 import type { JsonObject, JsonValue } from './canonical-json.mjs'
 import type { DashboardStorageStoreName } from './schema.mjs'
 
-export type DashboardDraftCommitKind = 'migration' | 'autosave' | 'manual-save' | 'agent-batch' | 'version-restore'
+export type DashboardDraftCommitKind =
+  | 'migration'
+  | 'autosave'
+  | 'manual-save'
+  | 'agent-batch'
+  | 'named-version'
+  | 'session-lifecycle'
+  | 'local-grant'
+  | 'version-restore'
 
 export type MemoryStorageFaultPhase = 'before-cas' | 'after-cas' | 'after-operation' | 'before-commit'
 export type DashboardMigrationSource =
@@ -166,6 +174,22 @@ export interface DashboardCompensationRunReadRequestV1 {
   readonly outerCallId: string
 }
 
+export interface DashboardCompensationRunListRequestV1 {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly branchId: string
+  readonly sessionId: string
+}
+
+export interface DashboardCompensationRunListRecordV1 extends DashboardCompensationRunListRequestV1 {
+  readonly outerCallId: string
+  /** Call that wrote the current run head; run ownership remains outerCallId. */
+  readonly writerCallId: string
+  readonly draftGeneration: number
+  readonly updatedAt: number
+  readonly run: JsonObject
+}
+
 export interface DashboardCompensationTargetClaimReadRequestV1 {
   readonly schemaVersion: 1
   readonly projectId: string
@@ -226,6 +250,7 @@ export declare const createAgentPersistenceCheckpointId: (
 export declare const validateReceiptIntentRecord: (value: unknown) => DashboardReceiptIntentV1
 export declare const validateReceiptLineageReadRequest: (value: unknown) => DashboardReceiptLineageReadRequest
 export declare const validateCompensationRunReadRequest: (value: unknown) => DashboardCompensationRunReadRequestV1
+export declare const validateCompensationRunListRequest: (value: unknown) => DashboardCompensationRunListRequestV1
 export declare const validateCompensationTargetClaimReadRequest: (
   value: unknown,
 ) => DashboardCompensationTargetClaimReadRequestV1

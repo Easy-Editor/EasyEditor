@@ -69,6 +69,7 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
     phase: 'IDLE',
     revision: 0,
     tasks: [],
+    recoveries: [],
   })
 
   const assertSnapshotAuthority = (snapshot: AgentRuntimeSnapshot, envelopeSessionId = binding.sessionId) => {
@@ -83,6 +84,15 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
     assertMatches(snapshot.binding.sessionId, binding.sessionId, 'AgentRuntimeSnapshot.binding.sessionId')
     snapshot.tasks.forEach((task, index) => {
       assertMatches(task.sessionId, binding.sessionId, `AgentRuntimeSnapshot.tasks[${index}].sessionId`)
+    })
+    const taskIds = new Set(snapshot.tasks.map(task => task.taskId))
+    snapshot.recoveries.forEach((recovery, index) => {
+      if (!taskIds.has(recovery.taskId)) {
+        throw new ProtocolValidationError(
+          'invalid-field',
+          `AgentRuntimeSnapshot.recoveries[${index}].taskId must identify a projected task`,
+        )
+      }
     })
     if (snapshot.activeTask) {
       assertMatches(snapshot.activeTask.sessionId, binding.sessionId, 'AgentRuntimeSnapshot.activeTask.sessionId')
@@ -284,6 +294,9 @@ export const createAgentRuntimeInternal = (options: AgentRuntimeInternalOptions)
   const runtime: AgentRuntimeInternal = {
     async submit(input) {
       return (await requirePeer()).request('runtime.submit', input, context('runtime', 'submit'))
+    },
+    async compensate(targetTaskId) {
+      await (await requirePeer()).request('runtime.compensate', { targetTaskId }, context(targetTaskId, 'compensate'))
     },
     async pause(taskId) {
       await (await requirePeer()).request('runtime.pause', { taskId }, context(taskId, 'pause'))

@@ -904,7 +904,9 @@ export const projectCompensationRunReceipt = value => {
     branchId,
     callId: run.outerCallId,
     status: 'applied',
-    revision: `${run.compensationRunId}:${run.cursor}`,
+    // Runtime compares receipt revisions with the post-invocation Host
+    // observation. Compensation progress is a different revision domain and
+    // therefore belongs in the witness, not in InvocationResult.revision.
     witness: runWitness(run),
   })
 }

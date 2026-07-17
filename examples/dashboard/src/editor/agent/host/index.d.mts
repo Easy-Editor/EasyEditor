@@ -13,6 +13,7 @@ import type {
 } from '@easy-editor/agent-runtime'
 import type { EngineInstance } from '@easy-editor/core/instance'
 import type { HumanActivityLease } from '../activity/index.mjs'
+import type { DashboardInvocationActivity } from '../activity/invocation-activity.mjs'
 import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
 import type { ReceiptRecoveryResult } from '../persistence/receipt-ledger.mjs'
@@ -35,6 +36,7 @@ export interface DashboardAgentHostAuthority {
 
 export interface DashboardAgentHostOptions {
   readonly activityLease?: HumanActivityLease
+  readonly invocationActivity?: Pick<DashboardInvocationActivity, 'begin'>
   readonly enabled?: boolean
   readonly engine?: EngineInstance
   readonly authority?: DashboardAgentHostAuthority
@@ -80,6 +82,7 @@ export declare class DashboardAgentHostError extends Error {
 export declare class DashboardAgentHost implements AgentHost {
   constructor(options: {
     readonly activityLease: HumanActivityLease
+    readonly invocationActivity?: Pick<DashboardInvocationActivity, 'begin'>
     readonly engine: EngineInstance
     readonly authority: DashboardAgentHostAuthority
     readonly adapterGeneration?: number

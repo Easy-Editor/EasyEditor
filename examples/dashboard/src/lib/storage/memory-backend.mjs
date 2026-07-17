@@ -13,6 +13,7 @@ import {
   validateReceiptLineageReadRequest,
 } from './contracts.mjs'
 import { DASHBOARD_STORAGE_ERROR_CODE, DashboardStorageError, isDashboardStorageError } from './errors.mjs'
+import { advanceAgentSessionPersistenceRecord } from './lifecycle.mjs'
 import { DASHBOARD_STORAGE_STORE_NAMES } from './schema.mjs'
 
 const clone = value => (value === undefined ? undefined : structuredClone(value))
@@ -258,13 +259,9 @@ export class MemoryDashboardStorageBackend {
     this.#injectFault({ phase: 'after-cas', batch })
 
     if (result.status === 'committed') {
-      nextStores.get('agentSessions').set(sessionKey, {
-        schemaVersion: 1,
-        projectId: batch.projectId,
-        branchId: batch.branchId,
-        sessionId: batch.sessionId,
-        persistenceGeneration: result.persistenceGeneration,
-      })
+      nextStores
+        .get('agentSessions')
+        .set(sessionKey, advanceAgentSessionPersistenceRecord(currentSession, batch, result.persistenceGeneration))
       this.#injectFault({ phase: 'after-operation', operationIndex: 0, batch })
       for (const [index, record] of batch.records.entries()) {
         const storedRecord = {

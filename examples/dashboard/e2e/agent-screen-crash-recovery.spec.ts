@@ -206,8 +206,8 @@ const restartAndReplay = async (
     if (!host) throw new Error('Dashboard Agent Host is disabled after restart')
 
     const receipt = await host.queryReceipt({
-      projectId: setup.authority.projectId,
-      branchId: setup.authority.branchId,
+      schemaVersion: 1,
+      ...setup.authority,
       callId: setup.call.callId,
     })
     const mutationVersionBeforeReplay = document.mutationVersion
@@ -489,8 +489,8 @@ test('real module Worker crash after the durable Host commit auto-recovers witho
       const document = runtime.engine.project.currentDocument
       if (!document) throw new Error('Dashboard document is unavailable after Worker recovery')
       const receipt = await state.host.queryReceipt({
-        projectId: setup.authority.projectId,
-        branchId: setup.authority.branchId,
+        schemaVersion: 1,
+        ...setup.authority,
         callId: setup.call.callId,
       })
       const mutationVersionBeforeReplay = document.mutationVersion

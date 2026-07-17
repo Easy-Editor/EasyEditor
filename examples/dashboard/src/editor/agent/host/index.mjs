@@ -98,6 +98,51 @@ const freezeDto = value => {
   return Object.freeze(value)
 }
 
+const invocationTargetNodeIds = (capability, args) => {
+  if (capability !== 'screen.applyChangeSet') return []
+  const operations = readOwnDataValue(args, 'operations', undefined)
+  if (!Array.isArray(operations)) return []
+  const targetNodeIds = new Set()
+  for (let index = 0; index < Math.min(operations.length, 100); index += 1) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(operations, String(index))
+    if (!descriptor || !('value' in descriptor) || !isPlainRecord(descriptor.value)) continue
+    for (const field of ['nodeId', 'parentId']) {
+      const value = readOwnDataValue(descriptor.value, field, undefined)
+      if (typeof value === 'string' && value.length > 0) targetNodeIds.add(value)
+    }
+  }
+  return [...targetNodeIds].sort(compareCodeUnits)
+}
+
+const invocationTargets = (engine, targetNodeIds) => {
+  const document = engine.project.currentDocument
+  if (!document) return []
+  const targets = []
+  for (const nodeId of targetNodeIds) {
+    const node = document.getNode(nodeId)
+    if (!node) continue
+    let rect
+    try {
+      rect =
+        typeof node.getDashboardRect === 'function'
+          ? node.getDashboardRect()
+          : node.getExtraPropValue('$dashboard.rect')
+    } catch {
+      continue
+    }
+    const values = [rect?.x, rect?.y, rect?.width, rect?.height]
+    if (values.some(value => typeof value !== 'number' || !Number.isFinite(value))) continue
+    if (rect.width < 0 || rect.height < 0) continue
+    const title = node.title
+    targets.push({
+      nodeId,
+      label: typeof title === 'string' && title.length > 0 ? title : nodeId,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    })
+  }
+  return targets
+}
+
 const requireNonEmptyString = (value, label) => {
   if (typeof value !== 'string' || value.length === 0) {
     throw new DashboardAgentHostError(
@@ -629,7 +674,9 @@ export class DashboardAgentHost {
   #authority
   #compensationService
   #disposed = false
+  #engine
   #manifestCache
+  #invocationActivity
   #persistence
   #screenApplyChangeSet
   #snapshotService
@@ -641,6 +688,7 @@ export class DashboardAgentHost {
     authority,
     compensationService,
     engine,
+    invocationActivity,
     isTransactionCommittedError,
     isTransactionRollbackIncompleteError,
     now = Date.now,
@@ -671,7 +719,12 @@ export class DashboardAgentHost {
       throw new TypeError('screen writes require both Core transaction error predicates')
     }
     this.#activityLease = activityLease
+    if (invocationActivity !== undefined && typeof invocationActivity?.begin !== 'function') {
+      throw new TypeError('invocationActivity must expose begin')
+    }
+    this.#invocationActivity = invocationActivity
     this.#authority = normalizeAuthority(authority)
+    this.#engine = engine
     this.#persistence = persistence
     const coreProvider = createCoreProjectionProvider(createCoreAdapter(engine, adapterGeneration))
     const registry = new SnapshotProviderRegistry()
@@ -792,7 +845,34 @@ export class DashboardAgentHost {
     })
   }
 
+  #beginInvocationActivity(call, args) {
+    if (!this.#invocationActivity) return () => undefined
+    try {
+      const targetNodeIds = invocationTargetNodeIds(readOwnDataValue(call, 'capability'), args)
+      const finish = this.#invocationActivity.begin(
+        freezeDto({
+          callId: readOwnDataValue(call, 'callId'),
+          capability: readOwnDataValue(call, 'capability'),
+          taskId: readOwnDataValue(call, 'taskId'),
+          targetNodeIds,
+          targets: invocationTargets(this.#engine, targetNodeIds),
+        }),
+      )
+      if (typeof finish !== 'function') return () => undefined
+      return () => {
+        try {
+          finish()
+        } catch {
+          // UI activity observers cannot affect Host invocation authority.
+        }
+      }
+    } catch {
+      return () => undefined
+    }
+  }
+
   async invoke(call, context) {
+    let finishInvocationActivity = () => undefined
     try {
       this.#assertActive()
       assertExactKeys(
@@ -827,6 +907,7 @@ export class DashboardAgentHost {
       dashboardCapabilityRegistry.assertAvailable(capability)
       const args = readOwnDataValue(call, 'arguments')
       assertPlainRecord(args, 'semantic-call.arguments')
+      finishInvocationActivity = this.#beginInvocationActivity(call, args)
       if (capability === 'screen.applyChangeSet') {
         return boundaryClone(await this.#screenApplyChangeSet(call))
       }
@@ -874,14 +955,27 @@ export class DashboardAgentHost {
     } catch (error) {
       if (!isPlainRecord(call) || typeof readOwnDataValue(call, 'callId') !== 'string') throw error
       return this.#rejected(call, error)
+    } finally {
+      finishInvocationActivity()
     }
   }
 
   async queryReceipt(request) {
     this.#assertActive()
-    assertExactKeys(request, ['branchId', 'callId', 'projectId'], [], 'receipt-query')
+    assertExactKeys(
+      request,
+      ['branchId', 'callId', 'projectId', 'schemaVersion', 'sessionId', 'taskId'],
+      [],
+      'receipt-query',
+    )
+    if (readOwnDataValue(request, 'schemaVersion') !== 1) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+        'receipt-query-schema-version-is-unsupported',
+      )
+    }
     requireNonEmptyString(readOwnDataValue(request, 'callId'), 'receipt-query.callId')
-    assertAuthority(this.#authority, request, ['projectId', 'branchId'])
+    assertAuthority(this.#authority, request, AUTHORITY_FIELDS)
     const authority = {
       projectId: readOwnDataValue(request, 'projectId'),
       branchId: readOwnDataValue(request, 'branchId'),
@@ -957,6 +1051,7 @@ export const createDashboardAgentHost = (options = {}) => {
     authority: readOwnDataValue(options, 'authority'),
     compensationService: readOwnDataValue(options, 'compensationService', undefined),
     engine: readOwnDataValue(options, 'engine'),
+    invocationActivity: readOwnDataValue(options, 'invocationActivity', undefined),
     isTransactionCommittedError: readOwnDataValue(options, 'isTransactionCommittedError', undefined),
     isTransactionRollbackIncompleteError: readOwnDataValue(options, 'isTransactionRollbackIncompleteError', undefined),
     now: readOwnDataValue(options, 'now', Date.now),

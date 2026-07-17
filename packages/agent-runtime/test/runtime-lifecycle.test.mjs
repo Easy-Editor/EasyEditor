@@ -233,6 +233,61 @@ test('real module Worker runs happy lifecycle and disposes ports/listeners', asy
   assert.ok(phases.includes('EXECUTE') && phases.includes('CHECKPOINT'))
 })
 
+test('public runtime compensates through the Worker-owned command path', async () => {
+  const endpoints = createEndpointFactory([[]])
+  const host = new hostModule.FakeAgentHost()
+  const persistence = new persistenceModule.MemoryAgentPersistence()
+  await persistence.commit({
+    schemaVersion: 1,
+    ...binding,
+    batchId: 'seed-target',
+    expectedPersistenceGeneration: 0,
+    records: [
+      {
+        recordId: 'task:target-task',
+        kind: 'agent-runtime-task',
+        value: {
+          taskId: 'target-task',
+          sessionId: binding.sessionId,
+          phase: 'COMPLETED',
+          createdAt: 1,
+          updatedAt: 2,
+          repairAttempts: 0,
+          consecutiveYields: 0,
+          intent: { text: 'Create the original dashboard state' },
+          callIds: ['target-call'],
+          callIndex: [{ callId: 'target-call', capability: 'screen.applyChangeSet' }],
+          callIndexComplete: true,
+        },
+      },
+    ],
+  })
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host,
+    persistence,
+    clock: fixturesModule.createDeterministicClock(),
+    idFactory: fixturesModule.createDeterministicIdFactory('main-compensate-'),
+  })
+
+  await runtime.ready()
+  await runtime.compensate('target-task')
+
+  assert.equal(runtime.getSnapshot().phase, 'COMPLETED')
+  assert.equal(runtime.getSnapshot().activeTask.compensatesTaskId, 'target-task')
+  assert.equal(host.invocations.length, 1)
+  assert.equal(host.invocations[0].capability, 'task.compensate')
+  assert.equal(host.invocations[0].arguments.targetTaskId, 'target-task')
+  assert.equal(host.invocations[0].projectId, binding.projectId)
+  assert.equal(host.invocations[0].branchId, binding.branchId)
+  assert.equal(host.invocations[0].sessionId, binding.sessionId)
+  assert.equal(host.invocationContexts[0].compensationTarget.taskId, 'target-task')
+  await assert.rejects(runtime.compensate('target-task'), /already compensated/)
+  assert.equal(host.invocations.length, 1)
+  await runtime.dispose()
+})
+
 test("independent sessions on one project and branch cannot recover each other's durable receipt", async () => {
   const endpoints = createEndpointFactory([
     [
@@ -356,6 +411,119 @@ test('real module Worker pauses on an allowlisted persistence failure crossing R
     message: 'persistence operation failed: quota-exceeded',
     retryable: true,
   })
+  await runtime.dispose()
+})
+
+test('real Runtime keeps APPLIED_UNDURABLE locked until its own exact terminal receipt verification', async () => {
+  const endpoints = createEndpointFactory([
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call), complete] },
+    ],
+  ])
+  let revision = 'revision-0'
+  let receipt = null
+  const host = {
+    observations: [],
+    invocations: [],
+    receiptQueries: [],
+    async observe(request) {
+      this.observations.push(structuredClone(request))
+      return {
+        schemaVersion: 1,
+        revision,
+        providerGenerations: { recovery: 1 },
+        projection: { recovery: true },
+      }
+    },
+    async describeCapability(request) {
+      return { schemaVersion: 1, capability: request.capability, revision: 'schema-1', input: {} }
+    },
+    async invoke(value) {
+      this.invocations.push(structuredClone(value))
+      revision = 'revision-1'
+      return {
+        schemaVersion: 1,
+        callId: value.callId,
+        status: 'indeterminate',
+        failure: {
+          code: 'APPLIED_UNDURABLE',
+          message: 'Core applied but the durable commit failed',
+          retryable: false,
+        },
+      }
+    },
+    async queryReceipt(request) {
+      this.receiptQueries.push(structuredClone(request))
+      return structuredClone(receipt)
+    },
+  }
+  const runtime = runtimeModule.createAgentRuntimeInternal({
+    binding,
+    worker: endpoints.factory,
+    host,
+    persistence: new persistenceModule.MemoryAgentPersistence(),
+    clock: fixturesModule.createDeterministicClock(),
+    idFactory: fixturesModule.createDeterministicIdFactory('main-applied-undurable-'),
+  })
+
+  const task = await runtime.submit({ text: 'Recover through exact Runtime receipt verification' })
+  await runtime.waitForIdle()
+  assert.equal(runtime.getSnapshot().phase, 'PAUSED')
+  assert.equal(runtime.getSnapshot().activeTask.failure.code, 'APPLIED_UNDURABLE')
+  const lockedSnapshot = runtime.getSnapshot()
+  const lockedBytes = JSON.stringify(lockedSnapshot)
+  const assertRecoveryLocked = async operation => {
+    await assert.rejects(
+      operation(),
+      error => error.name === 'RpcRemoteError' && error.code === 'applied-undurable-recovery-locked',
+    )
+    assert.strictEqual(runtime.getSnapshot(), lockedSnapshot)
+    assert.equal(JSON.stringify(runtime.getSnapshot()), lockedBytes)
+    assert.equal(host.invocations.length, 1)
+  }
+
+  receipt = {
+    schemaVersion: 1,
+    projectId: binding.projectId,
+    branchId: binding.branchId,
+    callId: scopedCallId(),
+    status: 'indeterminate',
+    failure: {
+      code: 'INDETERMINATE_RECEIPT',
+      message: 'Receipt witnesses remain contradictory',
+      retryable: false,
+    },
+  }
+  await assertRecoveryLocked(() => runtime.resume(task.taskId))
+  receipt = null
+  await assertRecoveryLocked(() => runtime.resume(task.taskId))
+  await assertRecoveryLocked(() => runtime.cancel(task.taskId))
+  await assertRecoveryLocked(() => runtime.submit({ text: 'Must not supersede the recovery lock' }))
+  await assertRecoveryLocked(() => runtime.compensate(task.taskId))
+
+  receipt = {
+    schemaVersion: 1,
+    projectId: binding.projectId,
+    branchId: binding.branchId,
+    callId: scopedCallId(),
+    status: 'applied',
+    revision,
+  }
+  const resumeResults = await Promise.allSettled([runtime.resume(task.taskId), runtime.resume(task.taskId)])
+  assert.deepEqual(
+    resumeResults.map(result => result.status),
+    ['fulfilled', 'fulfilled'],
+  )
+  await runtime.waitForIdle()
+
+  assert.equal(runtime.getSnapshot().phase, 'COMPLETED')
+  assert.deepEqual(runtime.getSnapshot().recoveries, [])
+  assert.equal(host.invocations.length, 1)
+  assert.deepEqual(
+    host.receiptQueries.map(query => query.callId),
+    [scopedCallId(), scopedCallId(), scopedCallId(), scopedCallId()],
+  )
   await runtime.dispose()
 })
 
@@ -745,6 +913,7 @@ test('stale generation publishes are ignored and facade revisions remain strictl
     phase: 'IDLE',
     revision: 5,
     tasks: [],
+    recoveries: [],
   })
   const second = createControlledEndpoint({
     schemaVersion: 1,
@@ -753,6 +922,7 @@ test('stale generation publishes are ignored and facade revisions remain strictl
     phase: 'IDLE',
     revision: 0,
     tasks: [],
+    recoveries: [],
   })
   const endpoints = [first.endpoint, second.endpoint]
   const revisions = []
@@ -790,6 +960,7 @@ test('current generation rejects cross-binding snapshots without replacing the m
     phase: 'IDLE',
     revision: 1,
     tasks: [],
+    recoveries: [],
   })
   const runtime = runtimeModule.createAgentRuntimeInternal({
     binding,
@@ -803,9 +974,24 @@ test('current generation rejects cross-binding snapshots without replacing the m
     taskId: 'task-cross-binding',
     sessionId: binding.sessionId,
     phase: 'PAUSED',
+    compensationEligible: false,
     createdAt: 1,
     updatedAt: 2,
     repairAttempts: 0,
+    intent: { text: 'Task projection' },
+    sessionContext: {
+      schemaVersion: 1,
+      budget: { maxTurns: 1, maxTextBytes: 64, maxUnresolvedConstraints: 0 },
+      includedTaskIds: ['task-cross-binding'],
+      sourceJournalRange: { startPosition: 0, endPosition: 0 },
+      sourceHash: 'fnv1a32:1234abcd',
+      sourceTaskCount: 1,
+      omittedTaskCount: 0,
+      unresolvedConstraints: [],
+      omittedUnresolvedConstraintCount: 0,
+      excerpts: [{ taskId: 'task-cross-binding', phase: 'PAUSED', intentExcerpt: 'Task projection' }],
+      textBytes: 15,
+    },
   }
   const valid = runtime.getSnapshot()
   const invalidPublishes = [
@@ -868,9 +1054,24 @@ test('initialize rejects a snapshot outside the bound runtime before mirroring i
     taskId: 'task-invalid-initialize',
     sessionId: binding.sessionId,
     phase: 'PAUSED',
+    compensationEligible: false,
     createdAt: 1,
     updatedAt: 2,
     repairAttempts: 0,
+    intent: { text: 'Task projection' },
+    sessionContext: {
+      schemaVersion: 1,
+      budget: { maxTurns: 1, maxTextBytes: 64, maxUnresolvedConstraints: 0 },
+      includedTaskIds: ['task-invalid-initialize'],
+      sourceJournalRange: { startPosition: 0, endPosition: 0 },
+      sourceHash: 'fnv1a32:1234abcd',
+      sourceTaskCount: 1,
+      omittedTaskCount: 0,
+      unresolvedConstraints: [],
+      omittedUnresolvedConstraintCount: 0,
+      excerpts: [{ taskId: 'task-invalid-initialize', phase: 'PAUSED', intentExcerpt: 'Task projection' }],
+      textBytes: 15,
+    },
   }
   const valid = {
     schemaVersion: 1,
@@ -879,6 +1080,7 @@ test('initialize rejects a snapshot outside the bound runtime before mirroring i
     phase: 'IDLE',
     revision: 9,
     tasks: [],
+    recoveries: [],
   }
   const invalidInitializations = [
     { ...valid, binding: { ...binding, projectId: 'other-project' } },
@@ -914,6 +1116,7 @@ test('restart capability and disposed failures are asynchronous Promise rejectio
     phase: 'IDLE',
     revision: 1,
     tasks: [],
+    recoveries: [],
   }
   const controlled = createControlledEndpoint(snapshot)
   const factoryControlled = createControlledEndpoint(snapshot)
@@ -1083,15 +1286,39 @@ test('runtime snapshot validation rejects malformed nested DTOs before mirroring
     retryable: true,
     details: { attempt: 1 },
   }
+  const sessionContext = {
+    schemaVersion: 1,
+    budget: { maxTurns: 2, maxTextBytes: 128, maxUnresolvedConstraints: 1 },
+    includedTaskIds: ['task-1'],
+    sourceJournalRange: { startPosition: 0, endPosition: 0 },
+    sourceHash: 'fnv1a32:1234abcd',
+    sourceTaskCount: 1,
+    omittedTaskCount: 0,
+    unresolvedConstraints: [{ taskId: 'task-1', kind: 'question', summary: 'Continue?' }],
+    omittedUnresolvedConstraintCount: 0,
+    excerpts: [
+      {
+        taskId: 'task-1',
+        phase: 'WAITING_USER',
+        intentExcerpt: 'Do work',
+        acceptedBlueprintSummary: 'Plan',
+      },
+    ],
+    textBytes: 20,
+  }
   const task = {
     taskId: 'task-1',
     sessionId: 'session-1',
     parentTaskId: 'task-parent',
     supersedesTaskId: 'task-old',
     phase: 'WAITING_USER',
+    compensationEligible: false,
     createdAt: 1,
     updatedAt: 2,
     repairAttempts: 1,
+    intent: { text: 'Do work', metadata: { source: 'workspace' } },
+    acceptedBlueprint: { schemaVersion: 1, summary: 'Plan', unresolvedConstraints: [] },
+    sessionContext,
     question: {
       questionId: 'question-1',
       prompt: 'Continue?',
@@ -1107,6 +1334,16 @@ test('runtime snapshot validation rejects malformed nested DTOs before mirroring
     revision: 3,
     activeTask: task,
     tasks: [task],
+    recoveries: [
+      {
+        schemaVersion: 1,
+        kind: 'applied-undurable',
+        recoveryId: 'recovery-1',
+        taskId: task.taskId,
+        callId: 'call-1',
+        occurredAt: 2,
+      },
+    ],
     failure,
   }
 
@@ -1118,11 +1355,24 @@ test('runtime snapshot validation rejects malformed nested DTOs before mirroring
     { ...snapshot, phase: 'UNKNOWN' },
     { ...snapshot, revision: Number.POSITIVE_INFINITY },
     { ...snapshot, tasks: {} },
+    { ...snapshot, recoveries: {} },
+    { ...snapshot, recoveries: [{ ...snapshot.recoveries[0], unknown: true }] },
+    { ...snapshot, recoveries: [{ ...snapshot.recoveries[0], kind: 'unknown' }] },
+    { ...snapshot, recoveries: [{ ...snapshot.recoveries[0], occurredAt: Number.NaN }] },
     { ...snapshot, activeTask: { ...task, unknown: true } },
     { ...snapshot, activeTask: { ...task, phase: 'UNKNOWN' } },
+    { ...snapshot, activeTask: { ...task, compensationEligible: 'yes' } },
+    {
+      ...snapshot,
+      activeTask: Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'compensationEligible')),
+    },
     { ...snapshot, activeTask: { ...task, createdAt: 'now' } },
     { ...snapshot, activeTask: { ...task, updatedAt: Number.NaN } },
     { ...snapshot, activeTask: { ...task, repairAttempts: 'one' } },
+    { ...snapshot, activeTask: { ...task, intent: { text: '' } } },
+    { ...snapshot, activeTask: { ...task, acceptedBlueprint: { ...task.acceptedBlueprint, unknown: true } } },
+    { ...snapshot, activeTask: { ...task, sessionContext: { ...sessionContext, unknown: true } } },
+    { ...snapshot, activeTask: { ...task, sessionContext: { ...sessionContext, omittedTaskCount: 1 } } },
     { ...snapshot, activeTask: { ...task, parentTaskId: '' } },
     { ...snapshot, activeTask: { ...task, question: { ...task.question, unknown: true } } },
     { ...snapshot, activeTask: { ...task, question: { ...task.question, prompt: '' } } },
