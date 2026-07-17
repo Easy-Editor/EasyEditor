@@ -1,0 +1,684 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { createOnlineComponentSurfaceHost } from '../src/runtime/online-components/surface-host.mjs'
+import { ONLINE_COMPONENT_PROTOCOL_VERSION } from '../src/runtime/online-components/surface-protocol.mjs'
+
+const createMarkerStore = initialMarkers => {
+  const markers = new Map(initialMarkers)
+  const quarantined = new Map()
+  const events = []
+  return {
+    events,
+    markers,
+    quarantined,
+    read(key) {
+      events.push(['read', key])
+      return markers.get(key)
+    },
+    write(key, marker) {
+      events.push(['write', key, marker.revisionKey])
+      markers.set(key, marker)
+    },
+    clear(key, marker) {
+      events.push(['clear', key, marker.revisionKey])
+      assert.equal(markers.get(key), marker)
+      markers.delete(key)
+    },
+    quarantine(revisionKey, marker) {
+      events.push(['quarantine', revisionKey])
+      quarantined.set(revisionKey, marker)
+    },
+  }
+}
+
+const createFakePort = name => ({
+  name,
+  messages: [],
+  closed: false,
+  started: false,
+  onmessage: undefined,
+  postMessage(message) {
+    if (this.closed) throw new Error(`${name} is closed`)
+    this.messages.push(message)
+  },
+  start() {
+    this.started = true
+  },
+  close() {
+    this.closed = true
+  },
+  emit(message) {
+    this.onmessage?.({ data: message })
+  },
+})
+
+const createFakeEnvironment = () => {
+  const frames = []
+  const channels = []
+  const animationFrames = new Map()
+  const visibilityListeners = new Set()
+  let nextAnimationFrame = 1
+  let nextNonce = 1
+
+  const environment = {
+    frames,
+    channels,
+    animationFrames,
+    visibilityListeners,
+    createNonce() {
+      return `nonce-${String(nextNonce++).padStart(20, '0')}`
+    },
+    createMessageChannel() {
+      const channel = {
+        port1: createFakePort(`host-${channels.length + 1}`),
+        port2: createFakePort(`sandbox-${channels.length + 1}`),
+      }
+      channels.push(channel)
+      return channel
+    },
+    createSandboxFrame(options) {
+      const loadListeners = new Set()
+      const shells = new Map()
+      const frame = {
+        options,
+        loadListeners,
+        shells,
+        connections: [],
+        disposed: false,
+        onLoad(listener) {
+          loadListeners.add(listener)
+          return () => loadListeners.delete(listener)
+        },
+        postConnect(message, transferredPort) {
+          this.connections.push({ message, transferredPort })
+        },
+        createShell(input) {
+          const listenerCount = options.mode === 'editor' ? 5 : 1
+          const shell = {
+            input,
+            updates: [],
+            disposed: false,
+            update(next) {
+              this.updates.push(next)
+            },
+            dispatch(type, event = {}) {
+              return input.onEvent({ instanceId: input.instanceId, type, event })
+            },
+            dispose() {
+              this.disposed = true
+              shells.delete(input.instanceId)
+            },
+            getResourceCounts() {
+              return {
+                shellCount: this.disposed ? 0 : 1,
+                listenerCount: this.disposed ? 0 : listenerCount,
+              }
+            },
+          }
+          shells.set(input.instanceId, shell)
+          return shell
+        },
+        triggerLoad() {
+          for (const listener of [...loadListeners]) listener()
+        },
+        getResourceCounts() {
+          return {
+            iframeCount: this.disposed ? 0 : 1,
+            shellCount: [...shells.values()].reduce((count, shell) => count + shell.getResourceCounts().shellCount, 0),
+            listenerCount:
+              loadListeners.size +
+              [...shells.values()].reduce((count, shell) => count + shell.getResourceCounts().listenerCount, 0),
+          }
+        },
+        dispose() {
+          this.disposed = true
+          loadListeners.clear()
+          for (const shell of [...shells.values()]) shell.dispose()
+        },
+      }
+      frames.push(frame)
+      return frame
+    },
+    requestAnimationFrame(callback) {
+      const id = nextAnimationFrame++
+      animationFrames.set(id, callback)
+      return id
+    },
+    cancelAnimationFrame(id) {
+      animationFrames.delete(id)
+    },
+    subscribeVisibility(listener) {
+      visibilityListeners.add(listener)
+      return () => visibilityListeners.delete(listener)
+    },
+    flushAnimationFrame() {
+      const pending = [...animationFrames.entries()]
+      animationFrames.clear()
+      for (const [, callback] of pending) callback(16)
+    },
+    setVisible(visible) {
+      for (const listener of [...visibilityListeners]) listener(visible)
+    },
+    activeResourceCounts() {
+      return {
+        frames: frames.filter(frame => !frame.disposed).length,
+        ports: channels.flatMap(channel => [channel.port1, channel.port2]).filter(port => !port.closed).length,
+        shells: frames.reduce((count, frame) => count + frame.shells.size, 0),
+        visibilityListeners: visibilityListeners.size,
+        animationFrames: animationFrames.size,
+      }
+    },
+  }
+  return environment
+}
+
+const createInstance = (index, revisionKey = 'artifact-kpi@revision-1') => ({
+  instanceId: `node-${index}`,
+  revisionKey,
+  rect: { x: index * 10, y: index * 5, width: 160, height: 90 },
+  visible: true,
+  generatedZ: index,
+  payload: {
+    props: { title: `KPI ${index}` },
+    data: { value: index },
+    theme: { mode: 'dark' },
+    size: { width: 160, height: 90 },
+  },
+})
+
+const sandboxResources = (frame, instanceCount = frame.shells.size) => ({
+  instanceCount,
+  listenerCount: 1,
+  pendingTaskCount: 0,
+  objectUrlCount: 0,
+})
+
+const readyMessage = frame => ({
+  kind: 'online-component.ready',
+  protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+  nonce: frame.options.nonce,
+  surfaceId: frame.options.surfaceId,
+  generation: frame.options.generation,
+  resources: sandboxResources(frame, 0),
+})
+
+const acknowledgeLastBatch = (environment, frame = environment.frames.at(-1)) => {
+  const port = environment.channels.at(-1).port1
+  const batch = port.messages.at(-1)
+  port.emit({
+    kind: 'online-component.batch-applied',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: frame.options.nonce,
+    surfaceId: frame.options.surfaceId,
+    generation: frame.options.generation,
+    sequence: batch.sequence,
+    resources: sandboxResources(frame),
+  })
+  return batch
+}
+
+const makeReady = environment => {
+  const frame = environment.frames.at(-1)
+  frame.triggerLoad()
+  environment.channels.at(-1).port1.emit(readyMessage(frame))
+  environment.flushAnimationFrame()
+  return frame
+}
+
+test('default-off and safe-boot surfaces allocate zero resources', () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const disabled = createOnlineComponentSurfaceHost({
+    enabled: false,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore,
+  })
+  disabled.register(createInstance(1))
+  disabled.update('node-1', { payload: { title: 'ignored' } })
+  disabled.restart('ignored')
+  assert.deepEqual(environment.activeResourceCounts(), {
+    frames: 0,
+    ports: 0,
+    shells: 0,
+    visibilityListeners: 0,
+    animationFrames: 0,
+  })
+  assert.deepEqual(disabled.getDiagnostics(), {
+    state: 'disabled',
+    surfaceId: 'editor-surface',
+    mode: 'editor',
+    generation: 0,
+    iframeCount: 0,
+    portCount: 0,
+    shellCount: 0,
+    instanceCount: 0,
+    scheduledFrameCount: 0,
+    batchCount: 0,
+    pendingBatchCount: 0,
+    restartCount: 0,
+    faultCount: 0,
+    rejectedMessageCount: 0,
+    listenerCount: 0,
+    pendingActivationCount: 0,
+    quarantinedRevisionCount: 0,
+    sandboxInstanceCount: 0,
+    sandboxListenerCount: 0,
+    sandboxPendingTaskCount: 0,
+    objectUrlCount: 0,
+  })
+
+  const safeBoot = createOnlineComponentSurfaceHost({
+    enabled: true,
+    safeBoot: true,
+    mount: {},
+    mode: 'preview',
+    surfaceId: 'preview-surface',
+    activationId: 'tab-b',
+    environment,
+    markerStore,
+  })
+  assert.equal(safeBoot.register(createInstance(2)), false)
+  assert.equal(safeBoot.getDiagnostics().state, 'safe-boot')
+  assert.equal(environment.frames.length, 0)
+  assert.equal(environment.channels.length, 0)
+  assert.equal(environment.visibilityListeners.size, 0)
+})
+
+test('twenty instances share one iframe and one render batch per animation frame', () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const runtimeEvents = []
+  const selections = []
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore,
+    onSelection: event => selections.push(event),
+    onRuntimeEvent: event => runtimeEvents.push(event),
+  })
+
+  for (let index = 0; index < 20; index += 1) host.register(createInstance(index))
+  assert.equal(environment.frames.length, 1)
+  assert.equal(environment.channels.length, 1)
+  assert.equal(environment.frames[0].shells.size, 20)
+  assert.equal(markerStore.events.filter(event => event[0] === 'write').length, 1)
+
+  const frame = makeReady(environment)
+  const firstBatch = environment.channels[0].port1.messages.at(-1)
+  assert.equal(firstBatch.kind, 'online-component.render-batch')
+  assert.equal(firstBatch.updates.length, 20)
+  assert.equal(environment.channels[0].port1.messages.length, 1)
+  assert.equal(host.getDiagnostics().listenerCount, 103)
+  assert.equal(host.getDiagnostics().pendingBatchCount, 1)
+  assert.equal(host.getDiagnostics().sandboxInstanceCount, 0)
+  assert.equal(host.getDiagnostics().sandboxListenerCount, 1)
+  acknowledgeLastBatch(environment, frame)
+  assert.equal(markerStore.markers.size, 0)
+  assert.equal(host.getDiagnostics().pendingActivationCount, 0)
+  assert.equal(host.getDiagnostics().pendingBatchCount, 0)
+  assert.equal(host.getDiagnostics().sandboxInstanceCount, 20)
+  assert.equal(host.getDiagnostics().sandboxPendingTaskCount, 0)
+  assert.equal(host.getDiagnostics().objectUrlCount, 0)
+
+  for (let index = 0; index < 20; index += 1) {
+    host.update(`node-${index}`, {
+      rect: { x: index * 20, y: index * 10, width: 180, height: 100 },
+      payload: { props: { title: `Updated ${index}` } },
+    })
+  }
+  assert.equal(environment.animationFrames.size, 1)
+  environment.flushAnimationFrame()
+  assert.equal(environment.channels[0].port1.messages.length, 2)
+  assert.equal(environment.channels[0].port1.messages.at(-1).updates.length, 20)
+  assert.equal(host.getDiagnostics().batchCount, 2)
+
+  environment.frames[0].shells.get('node-1').dispatch('select', { button: 0, clientX: 1, clientY: 2 })
+  assert.equal(selections.length, 1)
+  assert.equal(runtimeEvents.length, 0)
+})
+
+test('out-of-order acknowledgements are rejected and reported object URL leaks quarantine activation', () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'preview',
+    surfaceId: 'preview-surface',
+    activationId: 'tab-b',
+    environment,
+    markerStore,
+  })
+  host.register(createInstance(1))
+  const frame = makeReady(environment)
+  const port = environment.channels[0].port1
+  const batch = port.messages.at(-1)
+
+  port.emit({
+    kind: 'online-component.batch-applied',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: frame.options.nonce,
+    surfaceId: frame.options.surfaceId,
+    generation: frame.options.generation,
+    sequence: batch.sequence + 1,
+    resources: sandboxResources(frame, 1),
+  })
+  assert.equal(host.getDiagnostics().rejectedMessageCount, 1)
+  assert.equal(host.getDiagnostics().pendingBatchCount, 1)
+
+  port.emit({
+    kind: 'online-component.batch-applied',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: frame.options.nonce,
+    surfaceId: frame.options.surfaceId,
+    generation: frame.options.generation,
+    sequence: batch.sequence,
+    resources: { ...sandboxResources(frame, 1), objectUrlCount: 1 },
+  })
+  assert.equal(host.getDiagnostics().state, 'quarantined')
+  assert.equal(host.getDiagnostics().faultCount, 1)
+  assert.equal(host.getDiagnostics().objectUrlCount, 0)
+  assert.equal(markerStore.markers.size, 1)
+  assert.equal(frame.disposed, true)
+})
+
+test('editor and preview allocate independent iframe, port, generation, and fault state', () => {
+  const editorEnvironment = createFakeEnvironment()
+  const previewEnvironment = createFakeEnvironment()
+  const editor = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment: editorEnvironment,
+    markerStore: createMarkerStore(),
+  })
+  const preview = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'preview',
+    surfaceId: 'preview-surface',
+    activationId: 'tab-b',
+    environment: previewEnvironment,
+    markerStore: createMarkerStore(),
+  })
+  editor.register(createInstance(1))
+  preview.register(createInstance(1))
+  const editorFrame = makeReady(editorEnvironment)
+  const previewFrame = makeReady(previewEnvironment)
+
+  editorEnvironment.channels[0].port1.emit({
+    kind: 'online-component.fault',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: editorFrame.options.nonce,
+    surfaceId: editorFrame.options.surfaceId,
+    generation: editorFrame.options.generation,
+    code: 'global-pollution',
+    instanceId: null,
+    resources: sandboxResources(editorFrame, 1),
+  })
+
+  assert.equal(editorEnvironment.frames.length, 1)
+  assert.equal(editorFrame.disposed, true)
+  assert.equal(editor.getDiagnostics().generation, 1)
+  assert.equal(editor.getDiagnostics().restartCount, 0)
+  assert.equal(editor.getDiagnostics().faultCount, 1)
+  assert.equal(editor.getDiagnostics().quarantinedRevisionCount, 1)
+  assert.equal(previewEnvironment.frames.length, 1)
+  assert.equal(preview.getDiagnostics().generation, 1)
+  assert.equal(preview.getDiagnostics().restartCount, 0)
+  assert.equal(previewFrame.disposed, false)
+})
+
+test('hidden surfaces pause and coalesce work until visible', () => {
+  const environment = createFakeEnvironment()
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'preview',
+    surfaceId: 'preview-surface',
+    activationId: 'tab-b',
+    environment,
+    markerStore: createMarkerStore(),
+  })
+  host.register(createInstance(1))
+  makeReady(environment)
+  acknowledgeLastBatch(environment)
+  const messageCount = environment.channels[0].port1.messages.length
+
+  environment.setVisible(false)
+  host.update('node-1', { payload: { props: { title: 'hidden-1' } } })
+  host.update('node-1', { payload: { props: { title: 'hidden-2' } } })
+  assert.equal(environment.animationFrames.size, 0)
+  assert.equal(environment.channels[0].port1.messages.length, messageCount)
+
+  environment.setVisible(true)
+  assert.equal(environment.animationFrames.size, 1)
+  environment.flushAnimationFrame()
+  assert.equal(environment.channels[0].port1.messages.length, messageCount + 1)
+  assert.deepEqual(environment.channels[0].port1.messages.at(-1).updates[0].payload, {
+    props: { title: 'hidden-2' },
+  })
+})
+
+test('revision changes and valid faults replace the entire iframe then deterministically rehydrate', () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore,
+  })
+  for (let index = 0; index < 3; index += 1) host.register(createInstance(index))
+  const firstFrame = makeReady(environment)
+  acknowledgeLastBatch(environment, firstFrame)
+  const firstChannel = environment.channels[0]
+
+  host.update('node-1', {
+    revisionKey: 'artifact-kpi@revision-2',
+    payload: { props: { title: 'new revision' } },
+  })
+  host.update('node-2', {
+    revisionKey: 'artifact-kpi@revision-2',
+    payload: { props: { title: 'same new revision' } },
+  })
+  assert.equal(firstFrame.disposed, false)
+  assert.equal(environment.animationFrames.size, 1)
+  environment.flushAnimationFrame()
+  assert.equal(firstFrame.disposed, true)
+  assert.equal(firstChannel.port1.closed, true)
+  assert.equal(firstChannel.port2.closed, true)
+  assert.equal(environment.frames.length, 2)
+  assert.equal(host.getDiagnostics().generation, 2)
+  assert.equal(host.getDiagnostics().restartCount, 1)
+  assert.equal(markerStore.markers.size, 2)
+
+  const secondFrame = makeReady(environment)
+  const rehydrate = environment.channels[1].port1.messages.at(-1)
+  assert.deepEqual(
+    rehydrate.updates.map(update => update.instanceId),
+    ['node-0', 'node-1', 'node-2'],
+  )
+  acknowledgeLastBatch(environment, secondFrame)
+  assert.equal(markerStore.markers.size, 0)
+
+  environment.channels[1].port1.emit({
+    kind: 'online-component.fault',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: 'nonce-forged-0000000000',
+    surfaceId: secondFrame.options.surfaceId,
+    generation: secondFrame.options.generation,
+    code: 'render-failed',
+    instanceId: 'node-1',
+    resources: sandboxResources(secondFrame, 3),
+  })
+  assert.equal(environment.frames.length, 2)
+  assert.equal(host.getDiagnostics().rejectedMessageCount, 1)
+
+  environment.channels[1].port1.emit({
+    kind: 'online-component.fault',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: secondFrame.options.nonce,
+    surfaceId: secondFrame.options.surfaceId,
+    generation: secondFrame.options.generation,
+    code: 'render-failed',
+    instanceId: 'node-1',
+    resources: sandboxResources(secondFrame, 3),
+  })
+  assert.equal(environment.frames.length, 3)
+  assert.equal(host.getDiagnostics().restartCount, 2)
+  assert.equal(host.getDiagnostics().quarantinedRevisionCount, 1)
+  assert.deepEqual([...environment.frames[2].shells.keys()], ['node-0'])
+})
+
+test('a faulted active revision is persisted as quarantined and cannot reactivate after reload', () => {
+  const markerStore = createMarkerStore()
+  const firstEnvironment = createFakeEnvironment()
+  const firstHost = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment: firstEnvironment,
+    markerStore,
+  })
+  firstHost.register(createInstance(1, 'artifact-bad@revision-1'))
+  const firstFrame = makeReady(firstEnvironment)
+  acknowledgeLastBatch(firstEnvironment, firstFrame)
+  assert.equal(markerStore.markers.size, 0)
+
+  firstEnvironment.channels[0].port1.emit({
+    kind: 'online-component.fault',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: firstFrame.options.nonce,
+    surfaceId: firstFrame.options.surfaceId,
+    generation: firstFrame.options.generation,
+    code: 'async-lifecycle',
+    instanceId: 'node-1',
+    resources: sandboxResources(firstFrame, 1),
+  })
+  assert.equal(firstHost.getDiagnostics().state, 'quarantined')
+  assert.equal(firstHost.getDiagnostics().faultCount, 1)
+  assert.equal(markerStore.markers.size, 1)
+  assert.equal(markerStore.quarantined.has('artifact-bad@revision-1'), true)
+  firstHost.dispose()
+
+  const reloadEnvironment = createFakeEnvironment()
+  const reloadedHost = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-reloaded',
+    environment: reloadEnvironment,
+    markerStore,
+  })
+  assert.equal(reloadedHost.register(createInstance(1, 'artifact-bad@revision-1')), false)
+  assert.equal(reloadedHost.getDiagnostics().state, 'quarantined')
+  assert.equal(reloadEnvironment.frames.length, 0)
+  assert.equal(reloadEnvironment.channels.length, 0)
+  assert.equal(reloadEnvironment.visibilityListeners.size, 0)
+})
+
+test('a stale activation marker quarantines the revision before frame, port, listener, or shell creation', () => {
+  const environment = createFakeEnvironment()
+  const markerKey = 'artifact-bad@revision-1::editor-surface'
+  const markerStore = createMarkerStore([
+    [
+      markerKey,
+      {
+        state: 'pending',
+        revisionKey: 'artifact-bad@revision-1',
+        surfaceId: 'editor-surface',
+        activationId: 'tab-a',
+        nonce: 'nonce-stale-0000000000',
+        startedAt: 1,
+      },
+    ],
+  ])
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore,
+  })
+
+  assert.equal(host.register(createInstance(1, 'artifact-bad@revision-1')), false)
+  assert.equal(markerStore.quarantined.has('artifact-bad@revision-1'), true)
+  assert.deepEqual(environment.activeResourceCounts(), {
+    frames: 0,
+    ports: 0,
+    shells: 0,
+    visibilityListeners: 0,
+    animationFrames: 0,
+  })
+  assert.equal(host.getDiagnostics().state, 'quarantined')
+})
+
+test('dispose cancels scheduling and releases registrations, frames, ports, shells, and listeners', () => {
+  const environment = createFakeEnvironment()
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'preview',
+    surfaceId: 'preview-surface',
+    activationId: 'tab-b',
+    environment,
+    markerStore: createMarkerStore(),
+  })
+  host.register(createInstance(1))
+  host.register(createInstance(2))
+  makeReady(environment)
+  host.update('node-1', { payload: { props: { title: 'pending frame' } } })
+  assert.equal(environment.animationFrames.size, 1)
+
+  host.dispose()
+  assert.deepEqual(environment.activeResourceCounts(), {
+    frames: 0,
+    ports: 0,
+    shells: 0,
+    visibilityListeners: 0,
+    animationFrames: 0,
+  })
+  assert.deepEqual(host.getDiagnostics(), {
+    state: 'disposed',
+    surfaceId: 'preview-surface',
+    mode: 'preview',
+    generation: 1,
+    iframeCount: 0,
+    portCount: 0,
+    shellCount: 0,
+    instanceCount: 0,
+    scheduledFrameCount: 0,
+    batchCount: 1,
+    pendingBatchCount: 0,
+    restartCount: 0,
+    faultCount: 0,
+    rejectedMessageCount: 0,
+    listenerCount: 0,
+    pendingActivationCount: 0,
+    quarantinedRevisionCount: 0,
+    sandboxInstanceCount: 0,
+    sandboxListenerCount: 0,
+    sandboxPendingTaskCount: 0,
+    objectUrlCount: 0,
+  })
+  assert.throws(() => host.register(createInstance(3)), /disposed/)
+})
