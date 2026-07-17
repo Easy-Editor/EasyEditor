@@ -33,7 +33,10 @@ const expectProtocolError = callback => {
   assert.throws(callback, error => error instanceof OnlineComponentProtocolError)
 }
 
-const runSandboxBatchInChromium = async (page, { source, surfaceId }) => {
+const runSandboxBatchInChromium = async (
+  page,
+  { removeAfterMount = false, source, surfaceId, waitForFaultAfterApply = false },
+) => {
   const browserIdentity = Object.freeze({
     nonce: `nonce-${surfaceId}-0123456789`,
     surfaceId,
@@ -41,7 +44,13 @@ const runSandboxBatchInChromium = async (page, { source, surfaceId }) => {
   })
   const sandboxDocument = createOnlineComponentSandboxDocument(browserIdentity)
   return page.evaluate(
-    async ({ identity: currentIdentity, sandboxDocument: currentDocument, source: currentSource }) => {
+    async ({
+      identity: currentIdentity,
+      removeAfterMount: shouldRemoveAfterMount,
+      sandboxDocument: currentDocument,
+      source: currentSource,
+      waitForFaultAfterApply: shouldWaitForFaultAfterApply,
+    }) => {
       const frame = document.createElement('iframe')
       frame.setAttribute('sandbox', 'allow-scripts')
       frame.srcdoc = currentDocument
@@ -98,11 +107,38 @@ const runSandboxBatchInChromium = async (page, { source, surfaceId }) => {
       await waitForMessage(
         message => message.kind === 'online-component.batch-applied' || message.kind === 'online-component.fault',
       )
+      if (shouldWaitForFaultAfterApply && messages.some(message => message.kind === 'online-component.batch-applied')) {
+        await waitForMessage(message => message.kind === 'online-component.fault')
+      }
+      if (
+        shouldRemoveAfterMount &&
+        messages.some(message => message.kind === 'online-component.batch-applied' && message.sequence === 1)
+      ) {
+        channel.port1.postMessage({
+          kind: 'online-component.render-batch',
+          protocolVersion: 1,
+          ...currentIdentity,
+          sequence: 2,
+          updates: [],
+          removals: ['node-1'],
+        })
+        await waitForMessage(
+          message =>
+            message.kind === 'online-component.fault' ||
+            (message.kind === 'online-component.batch-applied' && message.sequence === 2),
+        )
+      }
       channel.port1.close()
       frame.remove()
       return messages
     },
-    { identity: browserIdentity, sandboxDocument, source },
+    {
+      identity: browserIdentity,
+      removeAfterMount,
+      sandboxDocument,
+      source,
+      waitForFaultAfterApply,
+    },
   )
 }
 
@@ -253,22 +289,36 @@ test('sandbox document freezes the opaque-origin no-network boundary and per-ins
   assert.doesNotMatch(document, /controller/)
   assert.doesNotMatch(document, /unmount/)
   assert.match(document, /URL\.revokeObjectURL/)
-  assert.match(document, /liveObjectUrls\.add/)
-  assert.match(document, /liveObjectUrls\.delete/)
-  assert.match(document, /objectUrlCount: liveObjectUrls\.size/)
+  assert.match(document, /const ownKeys = Reflect\.ownKeys/)
+  assert.match(document, /const getPrototypeOf = Object\.getPrototypeOf/)
+  assert.match(document, /const maxRealmDepth = 3/)
+  assert.match(document, /const maxRealmObjects = 4096/)
+  assert.match(document, /const maxRealmDescriptors = 65536/)
+  assert.match(document, /const guardedObjects = discoverGuardedObjects\(\)/)
+  assert.match(document, /descriptor\.value/)
+  assert.doesNotMatch(document, /descriptor\.get\(\)/)
+  assert.doesNotMatch(document, /descriptor\.set\(\)/)
+  assert.match(document, /replaceDataProperty\(EventTarget\.prototype, 'addEventListener'/)
+  assert.match(document, /replaceDataProperty\(globalThis, 'setTimeout'/)
+  assert.match(document, /replaceDataProperty\(URL, 'createObjectURL'/)
+  assert.match(document, /componentResourceSnapshot/)
+  assert.match(document, /assertOwnedResourcesReleased/)
   assert.match(document, /pendingTaskCount/)
   assert.match(document, /captureRealm/)
   assert.match(document, /global-pollution/)
   assert.match(document, /const sameValue = Object\.is/)
-  assert.match(document, /!sameValue\(before\[valueIndex\], after\[valueIndex\]\)/)
+  assert.match(document, /const TrustedError = Error/)
+  assert.match(document, /const stringStartsWith = String\.prototype\.startsWith/)
+  assert.match(document, /!sameValue\(before\[1\], readDescriptorField\(descriptor, 'value'\)\)/)
   assert.doesNotMatch(document, /before\[valueIndex\] !== after\[valueIndex\]/)
+  assert.doesNotMatch(document, /instanceof Error/)
   assert.doesNotMatch(document, /unsafe-inline/)
   assert.doesNotMatch(document, /unsafe-eval/)
   assert.doesNotMatch(document, /allow-same-origin/)
   assert.doesNotMatch(document, /window\.parent\.document/)
 })
 
-test('Chromium realm checks accept intrinsic NaN while still faulting explicit global pollution', async t => {
+test('Chromium bounded realm checks accept clean code and fault mutations across reachable intrinsic families', async t => {
   const browser = await chromium.launch({ headless: true })
   t.after(() => browser.close())
   const page = await browser.newPage()
@@ -299,31 +349,247 @@ test('Chromium realm checks accept intrinsic NaN while still faulting explicit g
     },
   )
 
-  const pollutedMessages = await runSandboxBatchInChromium(page, {
-    surfaceId: 'polluted-surface',
-    source: 'Object.prototype.__g008Pollution__ = true; export default { mount() {}, update() {}, destroy() {} }',
+  const mutations = [
+    ['map', 'Map.prototype.__g008Pollution__ = true'],
+    ['set', 'Set.prototype.__g008Pollution__ = true'],
+    ['weak-map', 'WeakMap.prototype.__g008Pollution__ = true'],
+    ['weak-set', 'WeakSet.prototype.__g008Pollution__ = true'],
+    ['typed-array', 'Uint8Array.prototype.__g008Pollution__ = true'],
+    ['data-view', 'DataView.prototype.__g008Pollution__ = true'],
+    ['array-buffer', 'ArrayBuffer.prototype.__g008Pollution__ = true'],
+    ['date', 'Date.prototype.__g008Pollution__ = true'],
+    ['regexp', 'RegExp.prototype.__g008Pollution__ = true'],
+    ['error', 'TypeError.prototype.__g008Pollution__ = true'],
+    ['math-namespace', 'Math.__g008Pollution__ = true'],
+    ['intl-namespace', 'Intl.DateTimeFormat.prototype.__g008Pollution__ = true'],
+  ]
+  for (const [surfaceId, mutation] of mutations) {
+    const pollutedMessages = await runSandboxBatchInChromium(page, {
+      surfaceId,
+      source: `${mutation}; export default { mount() {}, update() {}, destroy() {} }`,
+    })
+    assert.equal(
+      pollutedMessages.some(message => message.kind === 'online-component.batch-applied'),
+      false,
+      mutation,
+    )
+    assert.deepEqual(
+      pollutedMessages.find(message => message.kind === 'online-component.fault'),
+      {
+        kind: 'online-component.fault',
+        protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+        nonce: `nonce-${surfaceId}-0123456789`,
+        surfaceId,
+        generation: 1,
+        code: 'global-pollution',
+        instanceId: 'node-1',
+        resources: {
+          instanceCount: 1,
+          listenerCount: 1,
+          pendingTaskCount: 0,
+          objectUrlCount: 0,
+        },
+      },
+      mutation,
+    )
+  }
+})
+
+test('Chromium fault reporting survives polluted error intrinsics and guards object listener dispatch', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  for (const [surfaceId, mutation] of [
+    ['fault-string-intrinsic', "String.prototype.startsWith = null; throw new Error('boom')"],
+    ['fault-error-constructor', "globalThis.Error = 1; throw { message: 'boom' }"],
+  ]) {
+    const messages = await runSandboxBatchInChromium(page, {
+      surfaceId,
+      source: `export default {
+        mount() { ${mutation} },
+        update() {},
+        destroy() {}
+      }`,
+    })
+    assert.deepEqual(
+      messages.find(message => message.kind === 'online-component.fault'),
+      {
+        kind: 'online-component.fault',
+        protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+        nonce: `nonce-${surfaceId}-0123456789`,
+        surfaceId,
+        generation: 1,
+        code: 'global-pollution',
+        instanceId: 'node-1',
+        resources: { instanceCount: 1, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+      },
+    )
+  }
+
+  for (const [surfaceId, getterBody, code] of [
+    ['listener-getter-throw', "throw new Error('getter-boom')", 'render-failed'],
+    [
+      'listener-getter-pollution',
+      "Map.prototype.__g008ListenerPollution__ = true; throw new Error('getter-boom')",
+      'global-pollution',
+    ],
+  ]) {
+    const messages = await runSandboxBatchInChromium(page, {
+      surfaceId,
+      waitForFaultAfterApply: true,
+      source: `export default {
+        mount() {
+          addEventListener('g008-listener', { get handleEvent() { ${getterBody} } }, { once: true })
+          setTimeout(() => dispatchEvent(new Event('g008-listener')), 0)
+        },
+        update() {},
+        destroy() {}
+      }`,
+    })
+    assert.deepEqual(
+      messages.find(message => message.kind === 'online-component.fault'),
+      {
+        kind: 'online-component.fault',
+        protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+        nonce: `nonce-${surfaceId}-0123456789`,
+        surfaceId,
+        generation: 1,
+        code,
+        instanceId: 'node-1',
+        resources: { instanceCount: 1, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+      },
+    )
+  }
+})
+
+test('Chromium resource ledger allows owned mounted resources, cleans destroy, and faults explicit leaks', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  const ownedSource = `
+    let interval
+    let listener
+    export default {
+      mount() {
+        listener = () => undefined
+        addEventListener('g008-owned', listener)
+        interval = setInterval(() => undefined, 60000)
+      },
+      update() {},
+      destroy() {
+        clearInterval(interval)
+        removeEventListener('g008-owned', listener)
+      }
+    }
+  `
+  const ownedMessages = await runSandboxBatchInChromium(page, {
+    removeAfterMount: true,
+    surfaceId: 'owned-resources',
+    source: ownedSource,
   })
-  assert.equal(
-    pollutedMessages.some(message => message.kind === 'online-component.batch-applied'),
-    false,
-  )
   assert.deepEqual(
-    pollutedMessages.find(message => message.kind === 'online-component.fault'),
+    ownedMessages
+      .filter(message => message.kind === 'online-component.batch-applied')
+      .map(message => message.resources),
+    [
+      { instanceCount: 1, listenerCount: 2, pendingTaskCount: 1, objectUrlCount: 0 },
+      { instanceCount: 0, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+    ],
+  )
+
+  const destroyLeakMessages = await runSandboxBatchInChromium(page, {
+    removeAfterMount: true,
+    surfaceId: 'destroy-leak',
+    source: ownedSource.replace(
+      "clearInterval(interval)\n        removeEventListener('g008-owned', listener)",
+      'void interval; void listener',
+    ),
+  })
+  assert.deepEqual(
+    destroyLeakMessages.find(message => message.kind === 'online-component.fault'),
     {
       kind: 'online-component.fault',
       protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
-      nonce: 'nonce-polluted-surface-0123456789',
-      surfaceId: 'polluted-surface',
+      nonce: 'nonce-destroy-leak-0123456789',
+      surfaceId: 'destroy-leak',
       generation: 1,
-      code: 'global-pollution',
+      code: 'resource-leak',
       instanceId: 'node-1',
-      resources: {
-        instanceCount: 1,
-        listenerCount: 1,
-        pendingTaskCount: 0,
-        objectUrlCount: 0,
-      },
+      resources: { instanceCount: 0, listenerCount: 2, pendingTaskCount: 1, objectUrlCount: 0 },
     },
+  )
+
+  const objectUrlLeakMessages = await runSandboxBatchInChromium(page, {
+    surfaceId: 'object-url-leak',
+    source: `export default {
+      mount() { URL.createObjectURL(new Blob(['leak'])) },
+      update() {},
+      destroy() {}
+    }`,
+  })
+  assert.deepEqual(
+    objectUrlLeakMessages.find(message => message.kind === 'online-component.fault'),
+    {
+      kind: 'online-component.fault',
+      protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+      nonce: 'nonce-object-url-leak-0123456789',
+      surfaceId: 'object-url-leak',
+      generation: 1,
+      code: 'resource-leak',
+      instanceId: 'node-1',
+      resources: { instanceCount: 1, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 1 },
+    },
+  )
+
+  const cleanObjectUrlMessages = await runSandboxBatchInChromium(page, {
+    surfaceId: 'object-url-clean',
+    source: `export default {
+      mount() {
+        const url = URL.createObjectURL(new Blob(['clean']))
+        URL.revokeObjectURL(url)
+      },
+      update() {},
+      destroy() {}
+    }`,
+  })
+  assert.equal(
+    cleanObjectUrlMessages.some(message => message.kind === 'online-component.fault'),
+    false,
+  )
+  assert.deepEqual(
+    cleanObjectUrlMessages.find(message => message.kind === 'online-component.batch-applied')?.resources,
+    { instanceCount: 1, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+  )
+
+  const timerAndFrameMessages = await runSandboxBatchInChromium(page, {
+    removeAfterMount: true,
+    surfaceId: 'timer-frame-ledgers',
+    source: `
+      let interval
+      let frame
+      export default {
+        mount() {
+          interval = setInterval(() => undefined, 60000)
+          frame = requestAnimationFrame(() => undefined)
+        },
+        update() {},
+        destroy() {
+          clearInterval(interval)
+          cancelAnimationFrame(frame)
+        }
+      }
+    `,
+  })
+  assert.deepEqual(
+    timerAndFrameMessages
+      .filter(message => message.kind === 'online-component.batch-applied')
+      .map(message => message.resources),
+    [
+      { instanceCount: 1, listenerCount: 1, pendingTaskCount: 2, objectUrlCount: 0 },
+      { instanceCount: 0, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+    ],
   )
 })
 
