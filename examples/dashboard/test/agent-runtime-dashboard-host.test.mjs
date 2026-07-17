@@ -291,6 +291,7 @@ const createHarness = async (t, options = {}) => {
   const host = createDashboardAgentHost({
     activityLease,
     authority,
+    artifactService: options.artifactService,
     compensationService:
       options.compensationService ??
       Object.freeze({
@@ -340,6 +341,119 @@ test('default-off Host composition is inert and production never boots an Agent 
   const productionSource = sources.join('\n')
   assert.doesNotMatch(productionSource, /\bcreateAgentRuntime\b|\bnew\s+Worker\b|\bAgentPersistence\b/)
   assert.doesNotMatch(productionSource, /\bMessageChannel\b|\bMessagePort\b/)
+})
+
+test('Host gates and routes online artifact create/revise plus receipt recovery through the injected service', async t => {
+  const calls = []
+  const receipt = {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    callId: 'artifact-receipt-1',
+    status: 'applied',
+    revision: 'revision-artifact-1',
+  }
+  const artifactService = {
+    async createOnline(call) {
+      calls.push(['createOnline', structuredClone(call)])
+      return {
+        schemaVersion: 1,
+        callId: call.callId,
+        status: 'applied',
+        revision: 'revision-artifact-create',
+        output: {
+          schemaVersion: 1,
+          kind: 'online-artifact-post-images',
+          componentName: 'GeneratedMaterialHost',
+          nodeId: 'generated-created',
+          artifactRef: {
+            artifactId: 'artifact-created',
+            sourceRevision: 'source-created',
+            logicalComponentId: 'logical-created',
+            sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+            target: { kind: 'online' },
+          },
+        },
+      }
+    },
+    async reviseOnline(call) {
+      calls.push(['reviseOnline', structuredClone(call)])
+      return {
+        schemaVersion: 1,
+        callId: call.callId,
+        status: 'applied',
+        revision: 'revision-artifact-revise',
+        output: {
+          schemaVersion: 1,
+          kind: 'online-artifact-post-images',
+          componentName: 'GeneratedMaterialHost',
+          nodeId: call.arguments.nodeId,
+          artifactRef: {
+            artifactId: 'artifact-created',
+            sourceRevision: 'source-revised',
+            logicalComponentId: 'logical-created',
+            sourceIntegrity: `sha256:${'b'.repeat(64)}`,
+            target: { kind: 'online' },
+          },
+        },
+      }
+    },
+    async queryReceipt(request) {
+      calls.push(['queryReceipt', structuredClone(request)])
+      return request.callId === receipt.callId ? receipt : null
+    },
+  }
+  const { rpc } = await createHarness(t, { artifactService })
+  const schema = await rpc.call('describeCapability', {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    capability: 'artifact.createOnline',
+  })
+  assert.equal(schema.revision, 'artifact.createOnline/1')
+
+  const create = semanticCall({
+    arguments: {
+      schemaVersion: 1,
+      documentId: 'page-1',
+      parentId: 'root-1',
+      position: { place: 'last' },
+      source: 'export default {}',
+      css: '',
+      safeManifest: { schemaVersion: 1 },
+      dependencies: [],
+    },
+    callId: 'artifact-create-1',
+    capability: 'artifact.createOnline',
+    expectedRevision: 'service-owned-fence',
+  })
+  const createResult = await rpc.call('invoke', invokeRequest(create))
+  assert.equal(createResult.status, 'applied')
+  assert.equal(createResult.output.nodeId, 'generated-created')
+  assert.deepEqual(calls[0], ['createOnline', create])
+
+  const revise = semanticCall({
+    arguments: {
+      schemaVersion: 1,
+      nodeId: 'generated-created',
+      source: 'export default { revised: true }',
+      css: '',
+      safeManifest: { schemaVersion: 1 },
+      dependencies: [],
+    },
+    callId: 'artifact-revise-1',
+    capability: 'artifact.reviseOnline',
+    expectedRevision: 'service-owned-fence-2',
+  })
+  const reviseResult = await rpc.call('invoke', invokeRequest(revise))
+  assert.equal(reviseResult.output.artifactRef.sourceRevision, 'source-revised')
+  assert.deepEqual(calls[1], ['reviseOnline', revise])
+
+  assert.deepEqual(await rpc.call('queryReceipt', receiptQuery(receipt.callId)), receipt)
+  assert.deepEqual(calls[2], [
+    'queryReceipt',
+    { projectId: authority.projectId, branchId: authority.branchId, callId: receipt.callId },
+  ])
 })
 
 test('actual MessageChannel observation owns full and delta DTOs without host leakage or aliasing', async t => {

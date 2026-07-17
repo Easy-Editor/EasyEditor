@@ -1,5 +1,5 @@
 export const DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION = 1
-export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/3'
+export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/4'
 export const DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON = 'not-yet-available'
 
 export const DASHBOARD_CAPABILITY_ERROR_CODE = Object.freeze({
@@ -206,7 +206,93 @@ const screenOperation = {
   ],
 }
 
+const onlineArtifactDependencyRequest = strictObject(
+  {
+    package: { type: 'string', minLength: 1, maxLength: 256 },
+    range: { type: 'string', minLength: 1, maxLength: 128 },
+  },
+  ['package', 'range'],
+)
+const onlineArtifactSourceFields = {
+  schemaVersion: { const: 1 },
+  source: { type: 'string', minLength: 1, maxLength: 262144 },
+  css: { type: 'string', maxLength: 131072 },
+  safeManifest: {
+    type: 'object',
+    required: ['schemaVersion'],
+    properties: { schemaVersion: { const: 1 } },
+    additionalProperties: jsonValue,
+  },
+  dependencies: {
+    type: 'array',
+    maxItems: 64,
+    uniqueItems: true,
+    items: onlineArtifactDependencyRequest,
+  },
+}
+const onlineArtifactRef = strictObject(
+  {
+    artifactId: nonEmptyString,
+    sourceRevision: nonEmptyString,
+    logicalComponentId: nonEmptyString,
+    sourceIntegrity: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+    target: strictObject({ kind: { const: 'online' } }, ['kind']),
+  },
+  ['artifactId', 'sourceRevision', 'logicalComponentId', 'sourceIntegrity', 'target'],
+)
+const onlineArtifactOutput = strictObject(
+  {
+    schemaVersion: { const: 1 },
+    kind: { const: 'online-artifact-post-images' },
+    componentName: { const: 'GeneratedMaterialHost' },
+    nodeId: nonEmptyString,
+    artifactRef: onlineArtifactRef,
+  },
+  ['schemaVersion', 'kind', 'componentName', 'nodeId', 'artifactRef'],
+)
+
 const availableDescriptors = [
+  {
+    schemaVersion: 1,
+    capability: 'artifact.createOnline',
+    revision: 'artifact.createOnline/1',
+    availability: 'available',
+    input: strictObject(
+      {
+        ...onlineArtifactSourceFields,
+        documentId: nonEmptyString,
+        parentId: nonEmptyString,
+        position: relativePosition,
+        props: { type: 'object', maxProperties: 512, additionalProperties: jsonValue },
+        rect: strictObject(
+          {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number', minimum: 0 },
+            height: { type: 'number', minimum: 0 },
+          },
+          ['x', 'y', 'width', 'height'],
+        ),
+      },
+      ['schemaVersion', 'documentId', 'parentId', 'position', 'source', 'css', 'safeManifest', 'dependencies'],
+    ),
+    output: onlineArtifactOutput,
+  },
+  {
+    schemaVersion: 1,
+    capability: 'artifact.reviseOnline',
+    revision: 'artifact.reviseOnline/1',
+    availability: 'available',
+    input: strictObject({ ...onlineArtifactSourceFields, nodeId: nonEmptyString }, [
+      'schemaVersion',
+      'nodeId',
+      'source',
+      'css',
+      'safeManifest',
+      'dependencies',
+    ]),
+    output: onlineArtifactOutput,
+  },
   {
     schemaVersion: 1,
     capability: 'material.describe',
@@ -407,12 +493,7 @@ const availableDescriptors = [
   },
 ]
 
-const futureCapabilityNames = [
-  'artifact.createOnline',
-  'artifact.promoteLocal',
-  'artifact.reviseOnline',
-  'project.checkpoint',
-]
+const futureCapabilityNames = ['artifact.promoteLocal', 'project.checkpoint']
 
 const unavailableDescriptors = futureCapabilityNames.map(capability => ({
   schemaVersion: 1,
@@ -436,7 +517,7 @@ export const DASHBOARD_CAPABILITY_NAMES = Object.freeze(
 )
 
 export const DASHBOARD_CAPABILITY_REGISTRY_HASH =
-  'sha256:ff263fbba1d0f171176ef6f118884881bcae29c3ea36265e4dc8cf4323419352'
+  'sha256:a3e29bd0f6e1d41ec6d83edae317b194ba9d7266db037c382d35a1993ad9e2e6'
 
 export const DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT = deepFreeze({
   schemaVersion: DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION,

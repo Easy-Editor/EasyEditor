@@ -415,6 +415,47 @@ test('committed receipt recovery is bound to full call semantics and returns the
   assert.equal(harness.coreCalls.filter(call => call.method === 'createOnline').length, 1)
 })
 
+test('artifact receipt query verifies prepared-hash lineage and ignores non-artifact durable receipts', async () => {
+  const harness = await createHarness()
+  await harness.service.createOnline(createCall())
+  const authorityQuery = {
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    callId: createCall().callId,
+  }
+  const recovered = await harness.service.queryReceipt(authorityQuery)
+  assert.equal(recovered.status, 'applied')
+  assert.equal(recovered.callId, createCall().callId)
+
+  const stored = harness.lineage.get(createCall().callId)
+  stored.receiptIntent.preImages.expectedRevision = 'tampered-revision'
+  const tampered = await harness.service.queryReceipt(authorityQuery)
+  assert.equal(tampered.status, 'indeterminate')
+  assert.equal(tampered.failure.code, ONLINE_ARTIFACT_FAILURE_CODE.indeterminateReceipt)
+
+  harness.lineage.set('screen-receipt', {
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    callId: 'screen-receipt',
+    receiptIntent: {
+      ...stored.receiptIntent,
+      callId: 'screen-receipt',
+      preImages: { kind: 'screen-pre-images' },
+    },
+    receipt: { ...stored.receipt, callId: 'screen-receipt' },
+    applyWitness: { ...stored.applyWitness, callId: 'screen-receipt' },
+    failureWitness: null,
+  })
+  assert.equal(
+    await harness.service.queryReceipt({
+      projectId: authority.projectId,
+      branchId: authority.branchId,
+      callId: 'screen-receipt',
+    }),
+    null,
+  )
+})
+
 test('forged Core post-state cannot be durably acknowledged as an applied online artifact', async () => {
   const mutators = [
     result => ({ ...result, revision: 'revision-0' }),

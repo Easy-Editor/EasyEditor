@@ -14,6 +14,7 @@ import type {
 import type { EngineInstance } from '@easy-editor/core/instance'
 import type { HumanActivityLease } from '../activity/index.mjs'
 import type { DashboardInvocationActivity } from '../activity/invocation-activity.mjs'
+import type { DashboardOnlineArtifactCapabilityService } from '../capabilities/artifact/index.mjs'
 import type { DashboardDataCapabilityService, DashboardDataResolver } from '../capabilities/data/index.mjs'
 import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
@@ -42,6 +43,7 @@ export interface DashboardAgentHostOptions {
   readonly engine?: EngineInstance
   readonly authority?: DashboardAgentHostAuthority
   readonly adapterGeneration?: number
+  readonly artifactService?: DashboardOnlineArtifactCapabilityService
   readonly compensationService?: DashboardTaskCompensationService
   readonly dataResolver?: DashboardDataResolver
   readonly dataService?: DashboardDataCapabilityService
@@ -89,6 +91,7 @@ export declare class DashboardAgentHost implements AgentHost {
     readonly engine: EngineInstance
     readonly authority: DashboardAgentHostAuthority
     readonly adapterGeneration?: number
+    readonly artifactService?: DashboardOnlineArtifactCapabilityService
     readonly compensationService?: DashboardTaskCompensationService
     readonly dataResolver?: DashboardDataResolver
     readonly dataService?: DashboardDataCapabilityService

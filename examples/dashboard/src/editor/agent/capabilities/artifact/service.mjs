@@ -11,6 +11,7 @@ import {
   failContract,
   freezeDto,
   jsonDataEqual,
+  optionalOwnDataValue,
   ownDataValue,
   requireLiteral,
   requireNonEmptyString,
@@ -808,8 +809,70 @@ const createService = options => {
     }
   }
 
+  const queryReceipt = async request => {
+    const recovery = await persistence.recoverDurableAgentReceipt(request)
+    if (recovery?.classification === 'missing' || recovery?.classification === 'indeterminate') return null
+    if (recovery?.classification !== 'committed' && recovery?.classification !== 'failed') return null
+    const rawPreImages = recovery?.receiptIntent?.preImages
+    if (
+      optionalOwnDataValue(rawPreImages, 'kind', 'OnlineArtifact.receiptQuery.preImages') !==
+      'online-artifact-pre-images'
+    ) {
+      return null
+    }
+    try {
+      const intent = createReceiptIntent(recovery.receiptIntent)
+      if (
+        intent.projectId !== request.projectId ||
+        intent.branchId !== request.branchId ||
+        intent.callId !== request.callId
+      ) {
+        return failContract('authority-mismatch', 'OnlineArtifact.receiptQuery')
+      }
+      const preImages = normalizeRecoveryPreImages(intent.preImages)
+      const output = normalizeRecoveryPostImages(intent.expectedPostImages)
+      if (preImages.nodeId !== output.nodeId) return failContract('node-mismatch', 'OnlineArtifact.receiptQuery')
+      const expectedHash = await hashJson(
+        preparedHashInput({
+          authority: request,
+          callId: request.callId,
+          baseRevision: intent.baseRevision,
+          preImages: intent.preImages,
+          expectedPostImages: intent.expectedPostImages,
+        }),
+      )
+      if (expectedHash !== intent.preparedHash) {
+        return failContract('prepared-hash-mismatch', 'OnlineArtifact.receiptQuery')
+      }
+      const receipt = createToolReceipt(recovery.receipt)
+      if (
+        receipt.projectId !== request.projectId ||
+        receipt.branchId !== request.branchId ||
+        receipt.callId !== request.callId
+      ) {
+        return failContract('receipt-authority-mismatch', 'OnlineArtifact.receiptQuery')
+      }
+      return receipt
+    } catch {
+      return createToolReceipt({
+        schemaVersion: 1,
+        projectId: request.projectId,
+        branchId: request.branchId,
+        callId: request.callId,
+        status: 'indeterminate',
+        failure: {
+          code: ONLINE_ARTIFACT_FAILURE_CODE.indeterminateReceipt,
+          message: 'The durable online artifact receipt failed integrity verification',
+          retryable: false,
+          details: { reason: 'invalid-artifact-recovery-evidence' },
+        },
+      })
+    }
+  }
+
   return Object.freeze({
     createOnline: value => invoke(value, 'artifact.createOnline'),
+    queryReceipt,
     reviseOnline: value => invoke(value, 'artifact.reviseOnline'),
   })
 }

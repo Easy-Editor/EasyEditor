@@ -11,6 +11,10 @@ import {
   createHumanActivityLease,
   installHumanActivityTracking,
 } from './agent/activity/index.mjs'
+import {
+  createDashboardOnlineArtifactCapabilityService,
+  createDashboardOnlineArtifactCoreAdapter,
+} from './agent/capabilities/artifact/index.mjs'
 import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
 import {
   type DashboardAgentHost,
@@ -22,6 +26,7 @@ import {
   type DashboardAgentSessionHostAuthority,
   createDashboardAgentSessionHost,
 } from './agent/host/session-host.mjs'
+import { createDashboardOnlineComponentDependencyResolver } from './agent/online-components/dependency-resolver.mjs'
 import { createDashboardAgentPersistencePort } from './agent/persistence/agent-persistence-port.mjs'
 import { createDashboardSameOriginDataResolver } from './data/contract.mjs'
 import {
@@ -140,6 +145,25 @@ const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): 
   const dataResolver = dashboardAgentRuntimeFeatureFlags.data
     ? createDashboardSameOriginDataResolver({ fetchImpl: window.fetch.bind(window) })
     : undefined
+  const artifactService =
+    dashboardAgentRuntimeFeatureFlags.runtime && dashboardAgentRuntimeFeatureFlags.online
+      ? createDashboardOnlineArtifactCapabilityService({
+          authority,
+          core: createDashboardOnlineArtifactCoreAdapter({
+            engine,
+            projectId: authority.projectId,
+            branchId: authority.branchId,
+            runAgentMutation: (callId, operation) => dashboardPersistence.runAgentMutation(callId, operation),
+            isTransactionCommittedError: error => error instanceof TransactionCommittedError,
+            isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
+          }),
+          persistence: dashboardPersistence,
+          resolver: createDashboardOnlineComponentDependencyResolver({ fetchImpl: window.fetch.bind(window) }),
+          crypto: window.crypto,
+          isTransactionCommittedError: error => error instanceof TransactionCommittedError,
+          isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
+        })
+      : undefined
   const host = createDashboardAgentHost({
     activityLease: dashboardHumanActivityLease,
     authority,
@@ -149,6 +173,7 @@ const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): 
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     persistence: dashboardPersistence,
+    ...(artifactService ? { artifactService } : {}),
     ...(dataResolver ? { dataResolver } : {}),
   })
   if (!host) throw new Error('Dashboard Agent Host could not be composed while enabled')

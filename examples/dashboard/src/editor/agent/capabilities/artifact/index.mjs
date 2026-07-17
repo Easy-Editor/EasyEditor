@@ -1,6 +1,7 @@
 export {
   GENERATED_MATERIAL_HOST_COMPONENT_NAME,
   ONLINE_ARTIFACT_CAPABILITIES,
+  isDashboardOnlineArtifactCapability,
   normalizeOnlineArtifactCall,
   normalizeOnlineArtifactCoreResult,
   normalizeOnlineArtifactPrepareResult,
@@ -12,3 +13,4 @@ export {
   classifyOnlineArtifactCoreFailure,
   createDashboardOnlineArtifactCapabilityService,
 } from './service.mjs'
+export { createDashboardOnlineArtifactCoreAdapter } from './core-adapter.mjs'

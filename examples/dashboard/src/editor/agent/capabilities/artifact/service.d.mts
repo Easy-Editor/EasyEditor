@@ -1,4 +1,4 @@
-import type { AgentRuntimeFailure } from '@easy-editor/agent-runtime'
+import type { AgentRuntimeFailure, ToolReceipt } from '@easy-editor/agent-runtime'
 import type {
   ArtifactCreateResultV1,
   ArtifactReadRequestV1,
@@ -147,6 +147,7 @@ export type OnlineArtifactInvocationResult =
 
 export interface DashboardOnlineArtifactCapabilityService {
   createOnline(call: OnlineArtifactCreateCall): Promise<OnlineArtifactInvocationResult>
+  queryReceipt(request: Readonly<{ projectId: string; branchId: string; callId: string }>): Promise<ToolReceipt | null>
   reviseOnline(call: OnlineArtifactReviseCall): Promise<OnlineArtifactInvocationResult>
 }
 

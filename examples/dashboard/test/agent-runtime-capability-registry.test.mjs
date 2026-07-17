@@ -69,7 +69,7 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
     DASHBOARD_CAPABILITY_DESCRIPTORS.map(descriptor => descriptor.capability),
     expectedCapabilityNames,
   )
-  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/3')
+  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/4')
   assert.equal(DASHBOARD_CAPABILITY_REGISTRY_HASH, registryHash(DASHBOARD_CAPABILITY_DESCRIPTORS))
   assert.match(DASHBOARD_CAPABILITY_REGISTRY_HASH, /^sha256:[a-f0-9]{64}$/)
   assert.equal(Object.isFrozen(DASHBOARD_CAPABILITY_DESCRIPTORS), true)
@@ -86,11 +86,13 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
   assert.equal(listDashboardCapabilities(), DASHBOARD_CAPABILITY_DESCRIPTORS)
 })
 
-test('Phase 5 publishes bounded data declarations beside the existing semantic capabilities', () => {
+test('registry publishes bounded data and online artifact declarations beside the existing semantic capabilities', () => {
   const available = DASHBOARD_CAPABILITY_DESCRIPTORS.filter(descriptor => descriptor.availability === 'available').map(
     descriptor => descriptor.capability,
   )
   assert.deepEqual(available, [
+    'artifact.createOnline',
+    'artifact.reviseOnline',
     'data.bind',
     'data.inspect',
     'data.preview',
@@ -184,6 +186,18 @@ test('describeCapability returns exact revisioned JSON schemas without availabil
   for (const output of [dataInspect.output, dataPreview.output]) {
     assert.deepEqual(output.properties.scope.required, ['kind', 'documentId'])
     assert.equal(output.properties.scope.properties.kind.const, 'page')
+  }
+
+  for (const capability of ['artifact.createOnline', 'artifact.reviseOnline']) {
+    const artifact = await describeDashboardCapability(describeRequest(capability))
+    assert.equal(artifact.revision, `${capability}/1`)
+    assert.equal(artifact.input.properties.source.maxLength, 262144)
+    assert.equal(artifact.input.properties.css.maxLength, 131072)
+    assert.equal(artifact.input.properties.dependencies.maxItems, 64)
+    assert.equal(artifact.input.properties.dependencies.items.additionalProperties, false)
+    assert.deepEqual(artifact.output.required, ['schemaVersion', 'kind', 'componentName', 'nodeId', 'artifactRef'])
+    assert.equal(artifact.output.properties.componentName.const, 'GeneratedMaterialHost')
+    assert.equal(artifact.output.properties.artifactRef.properties.target.properties.kind.const, 'online')
   }
 })
 

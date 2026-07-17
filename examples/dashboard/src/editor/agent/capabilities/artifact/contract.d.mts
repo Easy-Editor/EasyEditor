@@ -4,6 +4,9 @@ import type { JsonObject } from '../../persistence/contract.mjs'
 
 export declare const ONLINE_ARTIFACT_CAPABILITIES: readonly ['artifact.createOnline', 'artifact.reviseOnline']
 export type OnlineArtifactCapability = (typeof ONLINE_ARTIFACT_CAPABILITIES)[number]
+export declare const isDashboardOnlineArtifactCapability: (
+  capability: unknown,
+) => capability is OnlineArtifactCapability
 export declare const GENERATED_MATERIAL_HOST_COMPONENT_NAME: 'GeneratedMaterialHost'
 
 export interface OnlineArtifactAuthority {

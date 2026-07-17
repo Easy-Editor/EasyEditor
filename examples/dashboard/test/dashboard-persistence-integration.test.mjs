@@ -293,6 +293,53 @@ test('empty storage initializes one canonical full-project draft and an indexedd
   await runtime.dispose()
 })
 
+test('runtime exposes project-scoped artifact create/read proxies without widening durable authority', async () => {
+  const { runtime } = createRuntime()
+  await runtime.initialize(project())
+  const artifact = dashboardStorage.validateArtifactRecord({
+    schemaVersion: 1,
+    projectId: 'project-dashboard',
+    artifactId: 'artifact-runtime-proxy',
+    sourceRevision: 'revision-1',
+    logicalComponentId: 'logical-runtime-proxy',
+    sourceIntegrity: SHA_A,
+    source: 'export default {}',
+    css: '',
+    safeManifest: { schemaVersion: 1 },
+    lockedDependencies: [],
+    dependencyLockDigest: SHA_B,
+    diagnostics: [],
+    provenance: { source: 'agent-runtime-test' },
+    createdAt: 1_234,
+    supersedes: null,
+  })
+
+  const created = await runtime.createArtifact(artifact)
+  assert.equal(created.status, 'created')
+  assert.deepEqual(
+    await runtime.readArtifact({
+      schemaVersion: 1,
+      projectId: artifact.projectId,
+      artifactId: artifact.artifactId,
+      sourceRevision: artifact.sourceRevision,
+    }),
+    artifact,
+  )
+  assert.equal((await runtime.createArtifact(artifact)).status, 'reconciled')
+
+  await assert.rejects(
+    runtime.readArtifact({
+      schemaVersion: 1,
+      projectId: 'foreign-project',
+      artifactId: artifact.artifactId,
+      sourceRevision: artifact.sourceRevision,
+    }),
+    /does not match the active Dashboard persistence project/,
+  )
+  await assert.rejects(runtime.createArtifact({ ...artifact, projectId: 'foreign-project' }), /does not match/)
+  await runtime.dispose()
+})
+
 test('runtime subscriptions project pending, durable, failure, and disposal state without observer authority', async () => {
   const notifications = []
   const { runtime } = createRuntime()

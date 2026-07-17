@@ -1,4 +1,5 @@
 import { hashCanonicalJson } from '../../../lib/storage/index.mjs'
+import { isDashboardOnlineArtifactCapability } from '../capabilities/artifact/index.mjs'
 import {
   DashboardDataCapabilityError,
   createDashboardDataCapabilityService,
@@ -732,6 +733,7 @@ const createCoreAdapter = (engine, adapterGeneration) => ({
 export class DashboardAgentHost {
   #activityLease
   #authority
+  #artifactService
   #compensationService
   #dataService
   #disposed = false
@@ -747,6 +749,7 @@ export class DashboardAgentHost {
     activityLease,
     adapterGeneration = 1,
     authority,
+    artifactService,
     compensationService,
     dataResolver,
     dataService,
@@ -787,6 +790,14 @@ export class DashboardAgentHost {
     }
     this.#invocationActivity = invocationActivity
     this.#authority = normalizeAuthority(authority)
+    if (artifactService !== undefined) {
+      for (const method of ['createOnline', 'queryReceipt', 'reviseOnline']) {
+        if (typeof artifactService?.[method] !== 'function') {
+          throw new TypeError(`artifactService must expose ${method}`)
+        }
+      }
+      this.#artifactService = artifactService
+    } else this.#artifactService = null
     this.#engine = engine
     this.#persistence = persistence
     const coreProvider = createCoreProjectionProvider(createCoreAdapter(engine, adapterGeneration))
@@ -931,6 +942,12 @@ export class DashboardAgentHost {
         'data-service-is-unavailable',
       )
     }
+    if (isDashboardOnlineArtifactCapability(capability) && !this.#artifactService) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+        'artifact-service-is-unavailable',
+      )
+    }
     return boundaryClone(await dashboardCapabilityRegistry.describeCapability(request))
   }
 
@@ -1015,9 +1032,21 @@ export class DashboardAgentHost {
           'data-service-is-unavailable',
         )
       }
+      if (isDashboardOnlineArtifactCapability(capability) && !this.#artifactService) {
+        throw new DashboardAgentHostError(
+          DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+          'artifact-service-is-unavailable',
+        )
+      }
       const args = readOwnDataValue(call, 'arguments')
       assertPlainRecord(args, 'semantic-call.arguments')
       finishInvocationActivity = this.#beginInvocationActivity(call, args)
+      if (capability === 'artifact.createOnline') {
+        return boundaryClone(await this.#artifactService.createOnline(call))
+      }
+      if (capability === 'artifact.reviseOnline') {
+        return boundaryClone(await this.#artifactService.reviseOnline(call))
+      }
       if (capability === 'screen.applyChangeSet') {
         return boundaryClone(await this.#screenApplyChangeSet(call))
       }
@@ -1102,6 +1131,12 @@ export class DashboardAgentHost {
     if (compensationReceipt !== null) {
       return boundaryClone(normalizeToolReceipt(compensationReceipt, authority, 'task-compensation-recovery'))
     }
+    if (this.#artifactService) {
+      const artifactReceipt = await this.#artifactService.queryReceipt(authority)
+      if (artifactReceipt !== null) {
+        return boundaryClone(normalizeToolReceipt(artifactReceipt, authority, 'online-artifact-recovery'))
+      }
+    }
     return boundaryClone(await recoverDurableScreenReceipt(this.#persistence, authority))
   }
 
@@ -1123,6 +1158,7 @@ export const createDashboardAgentHost = (options = {}) => {
   return new DashboardAgentHost({
     activityLease: readOwnDataValue(options, 'activityLease', undefined),
     adapterGeneration: readOwnDataValue(options, 'adapterGeneration', 1),
+    artifactService: readOwnDataValue(options, 'artifactService', undefined),
     authority: readOwnDataValue(options, 'authority'),
     compensationService: readOwnDataValue(options, 'compensationService', undefined),
     dataResolver: readOwnDataValue(options, 'dataResolver', undefined),

@@ -1,4 +1,7 @@
 import {
+  type ArtifactCreateResultV1,
+  type ArtifactReadRequestV1,
+  type ArtifactRecordV1,
   type CanonicalActiveDocumentV1,
   type CanonicalWorkingDraftV1,
   DASHBOARD_STORAGE_ERROR_CODE,
@@ -751,6 +754,26 @@ export class DashboardPersistenceRuntime {
       this.#assertReady()
       this.#assertProject(request, 'Dashboard local grant list')
       return this.#enqueue(() => this.#coordinator.listLocalGrants(request))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  createArtifact(artifact: ArtifactRecordV1): Promise<ArtifactCreateResultV1> {
+    try {
+      this.#assertReady()
+      this.#assertProject(artifact, 'Dashboard artifact create')
+      return this.#enqueue(() => this.#coordinator.createArtifact(artifact))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  readArtifact(request: ArtifactReadRequestV1): Promise<ArtifactRecordV1 | null> {
+    try {
+      this.#assertReady()
+      this.#assertProject(request, 'Dashboard artifact read')
+      return this.#enqueue(() => this.#coordinator.readArtifact(request))
     } catch (error) {
       return Promise.reject(error)
     }

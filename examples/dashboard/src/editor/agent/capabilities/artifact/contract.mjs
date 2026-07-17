@@ -16,6 +16,7 @@ import {
 } from '../../persistence/contract.mjs'
 
 export const ONLINE_ARTIFACT_CAPABILITIES = Object.freeze(['artifact.createOnline', 'artifact.reviseOnline'])
+export const isDashboardOnlineArtifactCapability = capability => ONLINE_ARTIFACT_CAPABILITIES.includes(capability)
 export const GENERATED_MATERIAL_HOST_COMPONENT_NAME = 'GeneratedMaterialHost'
 
 const CALL_FIELDS = Object.freeze([
