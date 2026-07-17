@@ -69,7 +69,7 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
     DASHBOARD_CAPABILITY_DESCRIPTORS.map(descriptor => descriptor.capability),
     expectedCapabilityNames,
   )
-  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/2')
+  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/3')
   assert.equal(DASHBOARD_CAPABILITY_REGISTRY_HASH, registryHash(DASHBOARD_CAPABILITY_DESCRIPTORS))
   assert.match(DASHBOARD_CAPABILITY_REGISTRY_HASH, /^sha256:[a-f0-9]{64}$/)
   assert.equal(Object.isFrozen(DASHBOARD_CAPABILITY_DESCRIPTORS), true)
@@ -86,11 +86,15 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
   assert.equal(listDashboardCapabilities(), DASHBOARD_CAPABILITY_DESCRIPTORS)
 })
 
-test('Phase 3B publishes reads, semantic Screen writes, and task compensation only', () => {
+test('Phase 5 publishes bounded data declarations beside the existing semantic capabilities', () => {
   const available = DASHBOARD_CAPABILITY_DESCRIPTORS.filter(descriptor => descriptor.availability === 'available').map(
     descriptor => descriptor.capability,
   )
   assert.deepEqual(available, [
+    'data.bind',
+    'data.inspect',
+    'data.preview',
+    'data.upsert',
     'material.describe',
     'material.search',
     'screen.applyChangeSet',
@@ -156,6 +160,31 @@ test('describeCapability returns exact revisioned JSON schemas without availabil
   assert.equal(compensate.revision, 'task.compensate/1')
   assert.deepEqual(compensate.input.required, ['schemaVersion', 'targetTaskId'])
   assert.equal(compensate.input.additionalProperties, false)
+
+  const dataUpsert = await describeDashboardCapability(describeRequest('data.upsert'))
+  assert.equal(dataUpsert.revision, 'data.upsert/1')
+  assert.deepEqual(dataUpsert.input.required, ['schemaVersion', 'descriptor'])
+  const credentialed = dataUpsert.input.properties.descriptor.oneOf.find(
+    descriptor => descriptor.properties.kind.const === 'credentialed-http-json',
+  )
+  const publicHttp = dataUpsert.input.properties.descriptor.oneOf.find(
+    descriptor => descriptor.properties.kind.const === 'public-http-json',
+  )
+  assert.deepEqual(credentialed.required, ['schemaVersion', 'id', 'kind', 'providerId', 'credentialRef', 'request'])
+  assert.deepEqual(Object.keys(credentialed.properties.request.properties), ['url', 'method', 'body'])
+  assert.equal(credentialed.properties.request.additionalProperties, false)
+  assert.deepEqual(Object.keys(publicHttp.properties.request.properties), ['url', 'method'])
+  assert.equal(publicHttp.properties.request.properties.method.const, 'GET')
+  assert.equal(publicHttp.properties.request.additionalProperties, false)
+
+  const dataInspect = await describeDashboardCapability(describeRequest('data.inspect'))
+  const dataPreview = await describeDashboardCapability(describeRequest('data.preview'))
+  assert.deepEqual(dataInspect.output.required, ['schemaVersion', 'scope', 'sources'])
+  assert.deepEqual(dataPreview.output.required, ['schemaVersion', 'scope', 'source', 'preview'])
+  for (const output of [dataInspect.output, dataPreview.output]) {
+    assert.deepEqual(output.properties.scope.required, ['kind', 'documentId'])
+    assert.equal(output.properties.scope.properties.kind.const, 'page')
+  }
 })
 
 test('unknown names and malformed describe requests reject with typed stable errors', async () => {
@@ -195,9 +224,21 @@ test('unknown names and malformed describe requests reject with typed stable err
   }
 })
 
-test('catalog DTOs keep callbacks, credentials, engines, and secrets out of the registry boundary', async () => {
+test('catalog DTOs expose opaque credential references but no executable hooks, headers, engines, or secrets', async () => {
   const serializedCatalog = JSON.stringify(DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT)
-  for (const forbidden of ['callback', 'command', 'credential', 'engine', 'secret']) {
+  assert.match(serializedCatalog, /credentialRef/)
+  for (const forbidden of [
+    'callback',
+    'command',
+    'dataHandler',
+    'engine',
+    'errorHandler',
+    'headers',
+    'requestHandler',
+    'secret',
+    'shouldFetch',
+    'willFetch',
+  ]) {
     assert.doesNotMatch(serializedCatalog, new RegExp(forbidden, 'i'))
   }
 

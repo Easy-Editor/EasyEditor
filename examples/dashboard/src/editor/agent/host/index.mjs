@@ -1,4 +1,10 @@
 import { hashCanonicalJson } from '../../../lib/storage/index.mjs'
+import {
+  DashboardDataCapabilityError,
+  createDashboardDataCapabilityService,
+  createDashboardDataManifestCache,
+  isDashboardDataCapability,
+} from '../capabilities/data/index.mjs'
 import { DashboardCapabilityRegistryError, dashboardCapabilityRegistry } from '../capabilities/index.mjs'
 import {
   createDashboardScreenApplyChangeSetHandler,
@@ -26,6 +32,7 @@ export const DASHBOARD_AGENT_HOST_ERROR_CODE = Object.freeze({
 const CORE_PROVIDER_ID = 'dashboard.core'
 const OMIT = Symbol('omit')
 const AUTHORITY_FIELDS = Object.freeze(['branchId', 'projectId', 'sessionId', 'taskId'])
+const SAFE_ACTIVE_TARGET_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u
 
 const isObjectLike = value => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
@@ -99,6 +106,12 @@ const freezeDto = value => {
 }
 
 const invocationTargetNodeIds = (capability, args) => {
+  if (capability === 'data.bind') {
+    const nodeId = readOwnDataValue(args, 'nodeId', undefined)
+    return typeof nodeId === 'string' && nodeId.length <= 128 && SAFE_ACTIVE_TARGET_NODE_ID_PATTERN.test(nodeId)
+      ? [nodeId]
+      : []
+  }
   if (capability !== 'screen.applyChangeSet') return []
   const operations = readOwnDataValue(args, 'operations', undefined)
   if (!Array.isArray(operations)) return []
@@ -325,6 +338,7 @@ const assertAuthority = (expected, request, fields) => {
 
 const toFailureCode = error => {
   if (error instanceof DashboardAgentHostError) return error.code
+  if (error instanceof DashboardDataCapabilityError) return error.code
   if (error instanceof DashboardCapabilityRegistryError) {
     if (error.code === 'CAPABILITY_UNAVAILABLE') return DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable
     if (error.code === 'UNKNOWN_CAPABILITY') return DASHBOARD_AGENT_HOST_ERROR_CODE.unknownCapability
@@ -333,7 +347,11 @@ const toFailureCode = error => {
 }
 
 const toFailureReason = error => {
-  if (error instanceof DashboardAgentHostError || error instanceof DashboardCapabilityRegistryError) {
+  if (
+    error instanceof DashboardAgentHostError ||
+    error instanceof DashboardCapabilityRegistryError ||
+    error instanceof DashboardDataCapabilityError
+  ) {
     return error.reason
   }
   return 'request-rejected'
@@ -431,6 +449,48 @@ export class DashboardAgentHostError extends Error {
       details: this.details,
     }
   }
+}
+
+const recoverDurableScreenReceipt = async (persistence, authority) => {
+  const recovery = await persistence.recoverDurableAgentReceipt(authority)
+  assertPlainRecord(recovery, 'receipt-recovery')
+  const classification = readOwnDataValue(recovery, 'classification')
+  if (classification === 'missing') {
+    assertExactKeys(recovery, ['classification'], [], 'receipt-recovery')
+    return null
+  }
+  if (classification === 'indeterminate') {
+    assertExactKeys(recovery, ['classification', 'reason'], [], 'receipt-recovery')
+    const reason = requireNonEmptyString(readOwnDataValue(recovery, 'reason'), 'receipt-recovery.reason')
+    return indeterminateReceipt(authority, reason)
+  }
+  if (classification !== 'committed' && classification !== 'failed') {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'receipt-recovery-classification-is-invalid',
+    )
+  }
+  assertExactKeys(recovery, ['classification', 'receipt', 'receiptIntent'], [], 'receipt-recovery')
+  const receipt = normalizeToolReceipt(readOwnDataValue(recovery, 'receipt'), authority, 'receipt-recovery.receipt')
+  const verification = await verifyScreenReceiptIntentRecovery({
+    receiptIntent: readOwnDataValue(recovery, 'receiptIntent'),
+    receipt,
+    hashCanonicalJson,
+  })
+  if (verification.classification === 'indeterminate') {
+    return indeterminateReceipt(authority, verification.reason)
+  }
+  const status = readOwnDataValue(receipt, 'status')
+  if (
+    (classification === 'committed' && status !== 'applied') ||
+    (classification === 'failed' && status !== 'not-applied' && status !== 'rejected')
+  ) {
+    throw new DashboardAgentHostError(
+      DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
+      'receipt-recovery-status-does-not-match-classification',
+    )
+  }
+  return receipt
 }
 
 const readCoreProjection = snapshot => {
@@ -673,6 +733,7 @@ export class DashboardAgentHost {
   #activityLease
   #authority
   #compensationService
+  #dataService
   #disposed = false
   #engine
   #manifestCache
@@ -687,6 +748,8 @@ export class DashboardAgentHost {
     adapterGeneration = 1,
     authority,
     compensationService,
+    dataResolver,
+    dataService,
     engine,
     invocationActivity,
     isTransactionCommittedError,
@@ -750,6 +813,40 @@ export class DashboardAgentHost {
       isTransactionCommittedError,
       isTransactionRollbackIncompleteError,
     })
+    if (dataService !== undefined) {
+      for (const method of ['bind', 'inspect', 'preview', 'upsert']) {
+        if (typeof dataService?.[method] !== 'function') {
+          throw new TypeError(`dataService must expose ${method}`)
+        }
+      }
+      this.#dataService = dataService
+    } else if (dataResolver !== undefined) {
+      const dataScreenApplyChangeSet = createDashboardScreenApplyChangeSetHandler({
+        authority: this.#authority,
+        activityLease: this.#activityLease,
+        engine,
+        persistence: this.#persistence,
+        captureFullSnapshot: () => this.#captureFull(),
+        manifestCache: createDashboardDataManifestCache(this.#manifestCache),
+        hashCanonicalJson,
+        now,
+        isTransactionCommittedError,
+        isTransactionRollbackIncompleteError,
+      })
+      this.#dataService = createDashboardDataCapabilityService({
+        authority: this.#authority,
+        engine,
+        recoverInvocation: async recoveryAuthority => {
+          assertExactKeys(recoveryAuthority, ['branchId', 'callId', 'projectId'], [], 'data-recovery-authority')
+          assertAuthority(this.#authority, recoveryAuthority, ['projectId', 'branchId'])
+          requireNonEmptyString(readOwnDataValue(recoveryAuthority, 'callId'), 'data-recovery-authority.callId')
+          const receipt = await recoverDurableScreenReceipt(this.#persistence, recoveryAuthority)
+          return receipt === null ? null : invocationFromReceipt(receipt)
+        },
+        resolver: dataResolver,
+        screenApplyChangeSet: dataScreenApplyChangeSet,
+      })
+    } else this.#dataService = null
     this.#compensationService =
       compensationService ??
       createDashboardTaskCompensationService({
@@ -826,7 +923,14 @@ export class DashboardAgentHost {
     this.#assertActive()
     assertExactKeys(request, ['branchId', 'capability', 'projectId', 'schemaVersion'], [], 'capability-request')
     assertAuthority(this.#authority, request, ['projectId', 'branchId'])
-    dashboardCapabilityRegistry.assertAvailable(readOwnDataValue(request, 'capability'))
+    const capability = readOwnDataValue(request, 'capability')
+    dashboardCapabilityRegistry.assertAvailable(capability)
+    if (isDashboardDataCapability(capability) && !this.#dataService) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+        'data-service-is-unavailable',
+      )
+    }
     return boundaryClone(await dashboardCapabilityRegistry.describeCapability(request))
   }
 
@@ -905,12 +1009,20 @@ export class DashboardAgentHost {
       const invocationContext = normalizeInvokeContext(context, call)
       const capability = readOwnDataValue(call, 'capability')
       dashboardCapabilityRegistry.assertAvailable(capability)
+      if (isDashboardDataCapability(capability) && !this.#dataService) {
+        throw new DashboardAgentHostError(
+          DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+          'data-service-is-unavailable',
+        )
+      }
       const args = readOwnDataValue(call, 'arguments')
       assertPlainRecord(args, 'semantic-call.arguments')
       finishInvocationActivity = this.#beginInvocationActivity(call, args)
       if (capability === 'screen.applyChangeSet') {
         return boundaryClone(await this.#screenApplyChangeSet(call))
       }
+      if (capability === 'data.upsert') return boundaryClone(await this.#dataService.upsert(call))
+      if (capability === 'data.bind') return boundaryClone(await this.#dataService.bind(call))
       if (capability === 'task.compensate') {
         const receipt = await this.#compensationService.compensate({
           schemaVersion: 1,
@@ -939,6 +1051,8 @@ export class DashboardAgentHost {
       if (capability === 'screen.inspect') output = inspectScreen(snapshot, args)
       else if (capability === 'material.search') output = searchMaterials(snapshot, args)
       else if (capability === 'material.describe') output = await describeMaterial(snapshot, args, this.#manifestCache)
+      else if (capability === 'data.inspect') output = await this.#dataService.inspect(call)
+      else if (capability === 'data.preview') output = await this.#dataService.preview(call)
       else {
         throw new DashboardAgentHostError(
           DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
@@ -988,46 +1102,7 @@ export class DashboardAgentHost {
     if (compensationReceipt !== null) {
       return boundaryClone(normalizeToolReceipt(compensationReceipt, authority, 'task-compensation-recovery'))
     }
-    const recovery = await this.#persistence.recoverDurableAgentReceipt(authority)
-    assertPlainRecord(recovery, 'receipt-recovery')
-    const classification = readOwnDataValue(recovery, 'classification')
-    if (classification === 'missing') {
-      assertExactKeys(recovery, ['classification'], [], 'receipt-recovery')
-      return null
-    }
-    if (classification === 'indeterminate') {
-      assertExactKeys(recovery, ['classification', 'reason'], [], 'receipt-recovery')
-      requireNonEmptyString(readOwnDataValue(recovery, 'reason'), 'receipt-recovery.reason')
-      const reason = readOwnDataValue(recovery, 'reason')
-      return boundaryClone(indeterminateReceipt(authority, reason))
-    }
-    if (classification !== 'committed' && classification !== 'failed') {
-      throw new DashboardAgentHostError(
-        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
-        'receipt-recovery-classification-is-invalid',
-      )
-    }
-    assertExactKeys(recovery, ['classification', 'receipt', 'receiptIntent'], [], 'receipt-recovery')
-    const receipt = normalizeToolReceipt(readOwnDataValue(recovery, 'receipt'), authority, 'receipt-recovery.receipt')
-    const verification = await verifyScreenReceiptIntentRecovery({
-      receiptIntent: readOwnDataValue(recovery, 'receiptIntent'),
-      receipt,
-      hashCanonicalJson,
-    })
-    if (verification.classification === 'indeterminate') {
-      return boundaryClone(indeterminateReceipt(authority, verification.reason))
-    }
-    const status = readOwnDataValue(receipt, 'status')
-    if (
-      (classification === 'committed' && status !== 'applied') ||
-      (classification === 'failed' && status !== 'not-applied' && status !== 'rejected')
-    ) {
-      throw new DashboardAgentHostError(
-        DASHBOARD_AGENT_HOST_ERROR_CODE.invalidRequest,
-        'receipt-recovery-status-does-not-match-classification',
-      )
-    }
-    return boundaryClone(receipt)
+    return boundaryClone(await recoverDurableScreenReceipt(this.#persistence, authority))
   }
 
   dispose() {
@@ -1050,6 +1125,8 @@ export const createDashboardAgentHost = (options = {}) => {
     adapterGeneration: readOwnDataValue(options, 'adapterGeneration', 1),
     authority: readOwnDataValue(options, 'authority'),
     compensationService: readOwnDataValue(options, 'compensationService', undefined),
+    dataResolver: readOwnDataValue(options, 'dataResolver', undefined),
+    dataService: readOwnDataValue(options, 'dataService', undefined),
     engine: readOwnDataValue(options, 'engine'),
     invocationActivity: readOwnDataValue(options, 'invocationActivity', undefined),
     isTransactionCommittedError: readOwnDataValue(options, 'isTransactionCommittedError', undefined),

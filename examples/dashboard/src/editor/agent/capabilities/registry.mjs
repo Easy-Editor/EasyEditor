@@ -1,5 +1,5 @@
 export const DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION = 1
-export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/2'
+export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/3'
 export const DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON = 'not-yet-available'
 
 export const DASHBOARD_CAPABILITY_ERROR_CODE = Object.freeze({
@@ -24,10 +24,120 @@ const strictObject = (properties = {}, required = []) => ({
 })
 
 const nonEmptyString = { type: 'string', minLength: 1 }
+const safeDataId = { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+const safeDataReference = { type: 'string', minLength: 1, maxLength: 256, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
 const nullableNonEmptyString = { type: ['string', 'null'], minLength: 1 }
 const stringArray = { type: 'array', items: nonEmptyString, uniqueItems: true }
 const jsonValue = {}
 const operationId = { type: 'string', minLength: 1, maxLength: 256 }
+const safePath = { type: 'array', maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 128 } }
+const dataTransform = {
+  type: 'array',
+  maxItems: 32,
+  items: {
+    oneOf: [
+      strictObject({ op: { const: 'select' }, path: safePath }, ['op', 'path']),
+      strictObject(
+        {
+          op: { const: 'project' },
+          fields: { type: 'object', minProperties: 1, maxProperties: 128, additionalProperties: safePath },
+        },
+        ['op', 'fields'],
+      ),
+      strictObject(
+        {
+          op: { const: 'filter' },
+          path: safePath,
+          operator: { type: 'string', enum: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte'] },
+          value: { type: ['boolean', 'number', 'string', 'null'] },
+        },
+        ['op', 'path', 'operator', 'value'],
+      ),
+      strictObject({ op: { const: 'sort' }, path: safePath, direction: { type: 'string', enum: ['asc', 'desc'] } }, [
+        'op',
+        'path',
+      ]),
+      strictObject({ op: { const: 'take' }, count: { type: 'integer', minimum: 0, maximum: 500 } }, ['op', 'count']),
+      strictObject({ op: { const: 'limit' }, count: { type: 'integer', minimum: 0, maximum: 500 } }, ['op', 'count']),
+    ],
+  },
+}
+const publicDataRequest = strictObject(
+  {
+    url: { type: 'string', minLength: 1, maxLength: 2048 },
+    method: { const: 'GET' },
+  },
+  ['url', 'method'],
+)
+const credentialedDataRequest = strictObject(
+  {
+    url: { type: 'string', minLength: 1, maxLength: 2048 },
+    method: { type: 'string', enum: ['GET', 'POST'] },
+    body: jsonValue,
+  },
+  ['url', 'method'],
+)
+const safeDataDescriptor = {
+  oneOf: [
+    strictObject(
+      {
+        schemaVersion: { const: 1 },
+        id: safeDataId,
+        kind: { const: 'static' },
+        value: jsonValue,
+        transform: dataTransform,
+      },
+      ['schemaVersion', 'id', 'kind', 'value'],
+    ),
+    strictObject(
+      {
+        schemaVersion: { const: 1 },
+        id: safeDataId,
+        kind: { const: 'mock' },
+        fixture: jsonValue,
+        transform: dataTransform,
+      },
+      ['schemaVersion', 'id', 'kind', 'fixture'],
+    ),
+    strictObject(
+      {
+        schemaVersion: { const: 1 },
+        id: safeDataId,
+        kind: { const: 'public-http-json' },
+        request: publicDataRequest,
+        transform: dataTransform,
+      },
+      ['schemaVersion', 'id', 'kind', 'request'],
+    ),
+    strictObject(
+      {
+        schemaVersion: { const: 1 },
+        id: safeDataId,
+        kind: { const: 'credentialed-http-json' },
+        providerId: safeDataId,
+        credentialRef: safeDataReference,
+        request: credentialedDataRequest,
+        transform: dataTransform,
+      },
+      ['schemaVersion', 'id', 'kind', 'providerId', 'credentialRef', 'request'],
+    ),
+  ],
+}
+const dataSourceSummary = strictObject(
+  {
+    schemaVersion: { const: 1 },
+    id: safeDataId,
+    kind: { type: 'string', enum: ['static', 'mock', 'public-http-json', 'credentialed-http-json'] },
+    hasTransform: { type: 'boolean' },
+    providerId: safeDataId,
+    destination: strictObject({ url: nonEmptyString, method: { type: 'string', enum: ['GET', 'POST'] } }, [
+      'url',
+      'method',
+    ]),
+  },
+  ['schemaVersion', 'id', 'kind', 'hasTransform'],
+)
+const pageDataScope = strictObject({ kind: { const: 'page' }, documentId: nonEmptyString }, ['kind', 'documentId'])
 
 const relativePosition = {
   oneOf: [
@@ -224,16 +334,83 @@ const availableDescriptors = [
     ]),
     output: strictObject(),
   },
+  {
+    schemaVersion: 1,
+    capability: 'data.inspect',
+    revision: 'data.inspect/1',
+    availability: 'available',
+    input: strictObject({ schemaVersion: { const: 1 }, sourceId: safeDataId }, ['schemaVersion']),
+    output: strictObject(
+      {
+        schemaVersion: { const: 1 },
+        scope: pageDataScope,
+        sources: { type: 'array', maxItems: 100, items: dataSourceSummary },
+      },
+      ['schemaVersion', 'scope', 'sources'],
+    ),
+  },
+  {
+    schemaVersion: 1,
+    capability: 'data.preview',
+    revision: 'data.preview/1',
+    availability: 'available',
+    input: {
+      ...strictObject({ schemaVersion: { const: 1 }, sourceId: safeDataId, descriptor: safeDataDescriptor }, [
+        'schemaVersion',
+      ]),
+      oneOf: [{ required: ['sourceId'] }, { required: ['descriptor'] }],
+    },
+    output: strictObject(
+      {
+        schemaVersion: { const: 1 },
+        scope: pageDataScope,
+        source: dataSourceSummary,
+        preview: strictObject(
+          {
+            kind: { type: 'string', enum: ['rows', 'object', 'scalar'] },
+            rowCount: { type: 'integer', minimum: 0, maximum: 500 },
+            keys: { type: 'array', maxItems: 100, items: nonEmptyString },
+            sample: jsonValue,
+          },
+          ['kind', 'sample'],
+        ),
+      },
+      ['schemaVersion', 'scope', 'source', 'preview'],
+    ),
+  },
+  {
+    schemaVersion: 1,
+    capability: 'data.upsert',
+    revision: 'data.upsert/1',
+    availability: 'available',
+    input: strictObject({ schemaVersion: { const: 1 }, descriptor: safeDataDescriptor }, [
+      'schemaVersion',
+      'descriptor',
+    ]),
+    output: strictObject(),
+  },
+  {
+    schemaVersion: 1,
+    capability: 'data.bind',
+    revision: 'data.bind/1',
+    availability: 'available',
+    input: strictObject(
+      {
+        schemaVersion: { const: 1 },
+        nodeId: safeDataId,
+        field: { type: 'string', enum: ['text', 'data'] },
+        binding: strictObject({ sourceId: safeDataId, transform: dataTransform }, ['sourceId']),
+      },
+      ['schemaVersion', 'nodeId', 'field', 'binding'],
+    ),
+    output: strictObject(),
+  },
 ]
 
 const futureCapabilityNames = [
   'artifact.createOnline',
   'artifact.promoteLocal',
   'artifact.reviseOnline',
-  'data.bind',
-  'data.inspect',
-  'data.preview',
-  'data.upsert',
   'project.checkpoint',
 ]
 
@@ -259,7 +436,7 @@ export const DASHBOARD_CAPABILITY_NAMES = Object.freeze(
 )
 
 export const DASHBOARD_CAPABILITY_REGISTRY_HASH =
-  'sha256:508e0617c7acf53e6e25fea25eebe6fcec09625d2cdc30e3a501fef0d3e70417'
+  'sha256:ff263fbba1d0f171176ef6f118884881bcae29c3ea36265e4dc8cf4323419352'
 
 export const DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT = deepFreeze({
   schemaVersion: DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION,

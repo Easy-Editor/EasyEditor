@@ -5,6 +5,7 @@ interface RootProps {
   children?: React.ReactNode
   backgroundColor?: string
   backgroundImage?: string
+  dataSources?: unknown
 }
 
 const Root = (props: RootProps) => {

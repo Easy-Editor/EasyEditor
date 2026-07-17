@@ -67,6 +67,18 @@ export const dashboardConfigureAnnotations = defineConfigureAnnotationOverlay({
     valueSchema: { type: 'boolean' },
     verifyPaths: [['extra', 'condition']],
   },
+  dataSources: {
+    fieldId: 'dataSources',
+    access: 'read-only',
+    readPath: ['props', 'dataSources'],
+    verifyPaths: [['props', 'dataSources']],
+  },
+  dataBindings: {
+    fieldId: 'dataBindings',
+    access: 'read-only',
+    readPath: ['props', 'dataBindings'],
+    verifyPaths: [['props', 'dataBindings']],
+  },
   'root.image': {
     fieldId: 'root.image',
     access: 'read-write',

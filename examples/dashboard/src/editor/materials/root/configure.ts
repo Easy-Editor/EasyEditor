@@ -32,6 +32,11 @@ const configure: Configure = {
                   setter: 'ColorSetter',
                 },
                 {
+                  name: 'dataSources',
+                  title: '安全数据源',
+                  setter: 'JsonSetter',
+                },
+                {
                   name: '__image',
                   title: '图片地址',
                   setter: 'UploadSetter',

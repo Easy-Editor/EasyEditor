@@ -1,5 +1,6 @@
 import ColorSetter from './basic/color-setter'
 import NodeIdSetter from './basic/id-setter'
+import JsonSetter from './basic/json-setter'
 import NumberSetter from './basic/number-setter'
 import RectSetter from './basic/rect-setter'
 import StringSetter from './basic/string-setter'
@@ -15,6 +16,7 @@ import TabSetter from './group/tab-setter'
 export const setterMap = {
   CollapseSetter,
   ColorSetter,
+  JsonSetter,
   NodeIdSetter,
   NumberSetter,
   RectSetter,

@@ -1,4 +1,9 @@
 import { defaultRootSchema } from '@/editor/const'
+import {
+  composeDashboardRootSchema,
+  createDashboardDataRuntime,
+  resolveDashboardSafeDataFeatureFlag,
+} from '@/editor/data'
 import { dashboardExpressionEvaluator } from '@/editor/expression-policy'
 import { components } from '@/editor/materials'
 import { createDashboardPersistenceRuntime, selectDashboardActiveDocumentSchema } from '@/editor/persistence-runtime'
@@ -12,12 +17,25 @@ import {
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 import { useEffect, useState } from 'react'
 
+interface DashboardPreviewDocument {
+  readonly dataSourceEngine: ReturnType<typeof createDashboardDataRuntime>['dataSourceEngine']
+  readonly project: ProjectSchema
+  readonly schema: RootSchema
+}
+
 const Preview = () => {
-  const [schema, setSchema] = useState<RootSchema | null>(null)
+  const [document, setDocument] = useState<DashboardPreviewDocument | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
+    let projectId: string | null = null
+    const safeDataEnabled = resolveDashboardSafeDataFeatureFlag(import.meta.env)
+    const dataRuntime = createDashboardDataRuntime({
+      expressionEvaluator: dashboardExpressionEvaluator,
+      getProjectId: () => projectId,
+      safeDataEnabled,
+    })
     const persistence = createDashboardPersistenceRuntime({
       storage: window.localStorage,
       indexedDB: window.indexedDB,
@@ -43,7 +61,14 @@ const Preview = () => {
           validatedProject as unknown as Parameters<typeof selectDashboardActiveDocumentSchema>[0],
           draft.activeDocument,
         ) as unknown as RootSchema
-        if (active) setSchema(activeSchema)
+        projectId = draft.projectId
+        if (active) {
+          setDocument({
+            dataSourceEngine: dataRuntime.dataSourceEngine,
+            project: validatedProject,
+            schema: composeDashboardRootSchema(validatedProject, activeSchema, { safeDataEnabled }),
+          })
+        }
       } catch (cause) {
         console.error('[EasyEditor] Failed to load canonical Dashboard preview:', cause)
         if (active) setError('预览加载失败：无法读取已保存的大屏项目。')
@@ -52,6 +77,7 @@ const Preview = () => {
     void load()
     return () => {
       active = false
+      dataRuntime.dispose()
       void persistence.dispose().catch(cause => {
         console.error('[EasyEditor] Failed to dispose Dashboard preview persistence:', cause)
       })
@@ -64,11 +90,14 @@ const Preview = () => {
         <div className='flex h-full w-full items-center justify-center'>
           <div className='text-sm text-destructive'>{error}</div>
         </div>
-      ) : schema ? (
+      ) : document ? (
         <Renderer
-          schema={schema}
+          schema={document.schema}
           components={components}
           expressionEvaluator={dashboardExpressionEvaluator}
+          appHelper={{
+            dataSourceEngine: document.dataSourceEngine,
+          }}
           viewport={{ width: 1920, height: 1080 }}
         />
       ) : (

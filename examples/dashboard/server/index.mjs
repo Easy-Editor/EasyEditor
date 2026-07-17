@@ -4,6 +4,8 @@ import { createServer } from 'node:http'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { createEnvironmentDataProxyMiddleware } from './data/index.mjs'
+
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultDistDirectory = resolve(moduleDirectory, '..', 'dist')
 
@@ -80,10 +82,29 @@ const serveDashboard = async (request, response, distDirectory) => {
   }
 }
 
-export const createDashboardServer = ({ distDir = defaultDistDirectory } = {}) =>
-  createServer((request, response) => {
-    void serveDashboard(request, response, distDir)
+export const createDashboardServer = ({
+  distDir = defaultDistDirectory,
+  env = process.env,
+  dataProxyOptions = {},
+  dataProxyHandler,
+  dataProxyInboundTimeoutMs,
+  dataProxyPublicOrigins,
+} = {}) => {
+  const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
+    env,
+    handler: dataProxyHandler,
+    inboundTimeoutMs: dataProxyInboundTimeoutMs,
+    lookup: dataProxyOptions.lookup,
+    publicOrigins: dataProxyPublicOrigins,
+    transport: dataProxyOptions.transport,
   })
+  return createServer((request, response) => {
+    void (async () => {
+      if (await dataProxyMiddleware(request, response)) return
+      await serveDashboard(request, response, distDir)
+    })()
+  })
+}
 
 const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
 if (isMain) {

@@ -13,7 +13,19 @@ const configure: Configure = {
           type: 'group',
           key: 'basic',
           title: '基本',
-          items: [...generalBasicConfigure],
+          items: [
+            ...generalBasicConfigure,
+            {
+              name: 'text',
+              title: '文本',
+              setter: 'StringSetter',
+            },
+            {
+              name: 'dataBindings',
+              title: '数据绑定',
+              setter: 'JsonSetter',
+            },
+          ],
         },
         {
           type: 'group',

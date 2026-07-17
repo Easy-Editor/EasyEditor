@@ -23,6 +23,7 @@ import {
   createDashboardAgentSessionHost,
 } from './agent/host/session-host.mjs'
 import { createDashboardAgentPersistencePort } from './agent/persistence/agent-persistence-port.mjs'
+import { createDashboardSameOriginDataResolver } from './data/contract.mjs'
 import {
   type DashboardPersistenceInput,
   type DashboardPersistenceSaveResult,
@@ -136,6 +137,9 @@ export const disposeDashboardAgentActivity = () => {
 }
 
 const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost => {
+  const dataResolver = dashboardAgentRuntimeFeatureFlags.data
+    ? createDashboardSameOriginDataResolver({ fetchImpl: window.fetch.bind(window) })
+    : undefined
   const host = createDashboardAgentHost({
     activityLease: dashboardHumanActivityLease,
     authority,
@@ -145,6 +149,7 @@ const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): 
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     persistence: dashboardPersistence,
+    ...(dataResolver ? { dataResolver } : {}),
   })
   if (!host) throw new Error('Dashboard Agent Host could not be composed while enabled')
   return host

@@ -5,7 +5,7 @@ import snippets from './snippets'
 
 const meta: ComponentMetadata = {
   componentName: 'LineChart',
-  title: 'Lien Chart',
+  title: 'Line Chart',
   group: MaterialGroup.CHART,
   snippets,
   configure,

@@ -14,6 +14,7 @@ import type {
 import type { EngineInstance } from '@easy-editor/core/instance'
 import type { HumanActivityLease } from '../activity/index.mjs'
 import type { DashboardInvocationActivity } from '../activity/invocation-activity.mjs'
+import type { DashboardDataCapabilityService, DashboardDataResolver } from '../capabilities/data/index.mjs'
 import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
 import type { ReceiptRecoveryResult } from '../persistence/receipt-ledger.mjs'
@@ -42,6 +43,8 @@ export interface DashboardAgentHostOptions {
   readonly authority?: DashboardAgentHostAuthority
   readonly adapterGeneration?: number
   readonly compensationService?: DashboardTaskCompensationService
+  readonly dataResolver?: DashboardDataResolver
+  readonly dataService?: DashboardDataCapabilityService
   readonly isTransactionCommittedError?: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
   readonly now?: () => number
@@ -87,6 +90,8 @@ export declare class DashboardAgentHost implements AgentHost {
     readonly authority: DashboardAgentHostAuthority
     readonly adapterGeneration?: number
     readonly compensationService?: DashboardTaskCompensationService
+    readonly dataResolver?: DashboardDataResolver
+    readonly dataService?: DashboardDataCapabilityService
     readonly isTransactionCommittedError: (error: unknown) => boolean
     readonly isTransactionRollbackIncompleteError: (error: unknown) => boolean
     readonly now?: () => number

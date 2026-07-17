@@ -215,6 +215,15 @@ const createHarness = async (t, options = {}) => {
   const imageMeta = loadDashboardModule('src/editor/materials/basic/image/meta.ts').default
   engine.materials.createComponentMeta(rootMeta)
   engine.materials.createComponentMeta(imageMeta)
+  if (options.includeDataNodes) {
+    for (const path of [
+      'src/editor/materials/basic/text/meta.ts',
+      'src/editor/materials/chart/bar-chart/meta.ts',
+      'src/editor/materials/chart/line-chart/meta.ts',
+    ]) {
+      engine.materials.createComponentMeta(loadDashboardModule(path).default)
+    }
+  }
   engine.loadProject(
     {
       id: authority.projectId,
@@ -241,6 +250,34 @@ const createHarness = async (t, options = {}) => {
               $dashboard: { rect: { x: 20, y: 30, width: 640, height: 360 } },
               children: [],
             },
+            ...(options.includeDataNodes
+              ? [
+                  {
+                    id: 'text-1',
+                    componentName: 'Text',
+                    title: 'Live total',
+                    props: { text: 'Fallback' },
+                    $dashboard: { rect: { x: 680, y: 30, width: 300, height: 80 } },
+                    children: [],
+                  },
+                  {
+                    id: 'bar-1',
+                    componentName: 'BarChart',
+                    title: 'Live bars',
+                    props: { data: [] },
+                    $dashboard: { rect: { x: 20, y: 420, width: 640, height: 360 } },
+                    children: [],
+                  },
+                  {
+                    id: 'line-1',
+                    componentName: 'LineChart',
+                    title: 'Live lines',
+                    props: { data: [] },
+                    $dashboard: { rect: { x: 680, y: 420, width: 640, height: 360 } },
+                    children: [],
+                  },
+                ]
+              : []),
           ],
         },
       ],
@@ -260,6 +297,8 @@ const createHarness = async (t, options = {}) => {
         compensate: async () => assert.fail('unexpected compensation invocation'),
         query: async () => null,
       }),
+    dataResolver: options.dataResolver,
+    dataService: options.dataService,
     enabled: true,
     engine,
     invocationActivity: options.invocationActivity,
@@ -388,7 +427,7 @@ test('Host.observe normalizes hostile runtime ComponentMeta metadata without lea
   )
 })
 
-test('Host validates fixed authority and exposes the Phase-3B semantic write descriptions', async t => {
+test('Host validates fixed authority and exposes revisioned semantic capability descriptions', async t => {
   const { rpc } = await createHarness(t)
   const schema = await rpc.call('describeCapability', {
     schemaVersion: 1,
@@ -414,6 +453,17 @@ test('Host validates fixed authority and exposes the Phase-3B semantic write des
     capability: 'task.compensate',
   })
   assert.equal(compensate.revision, 'task.compensate/1')
+  await assert.rejects(
+    rpc.call('describeCapability', {
+      schemaVersion: 1,
+      projectId: authority.projectId,
+      branchId: authority.branchId,
+      capability: 'data.inspect',
+    }),
+    error =>
+      error.code === DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable &&
+      error.reason === 'data-service-is-unavailable',
+  )
   await assert.rejects(
     rpc.call('observe', { ...observeRequest(), projectId: 'foreign-project' }),
     error => error.code === DASHBOARD_AGENT_HOST_ERROR_CODE.authorityMismatch,
@@ -461,7 +511,7 @@ test('Host queryReceipt maps durable missing and indeterminate lineage without r
   })
 })
 
-test('Host invokes reads while future capabilities reject before effects', async t => {
+test('Host invokes reads while disabled data and future capabilities reject before effects', async t => {
   const { engine, rpc } = await createHarness(t)
   const full = await rpc.call('observe', observeRequest())
   const inspect = await rpc.call(
@@ -718,6 +768,184 @@ test('Host applies a semantic Screen ChangeSet once and strictly recovers its pr
   assert.equal(tampered.failure.details.reason, 'screen-prepared-hash-mismatch')
 })
 
+test('Host routes page-local data writes through Screen and recovers receipts before changed-schema validation', async t => {
+  const dataResolver = Object.freeze({
+    resolve: async () => assert.fail('writes must not resolve datasource payloads'),
+  })
+  const { engine, persistence, rpc } = await createHarness(t, { dataResolver, includeDataNodes: true })
+  const document = engine.project.currentDocument
+  assert.equal(document.history.isUndoable(), false)
+
+  const initial = await rpc.call('observe', observeRequest())
+  const upsertCall = semanticCall({
+    arguments: {
+      schemaVersion: 1,
+      descriptor: {
+        schemaVersion: 1,
+        id: 'live-total',
+        kind: 'static',
+        value: { total: 42 },
+      },
+    },
+    callId: 'data-upsert-1',
+    capability: 'data.upsert',
+    expectedRevision: initial.revision,
+  })
+  const upsert = await rpc.call('invoke', invokeRequest(upsertCall))
+  assert.equal(upsert.status, 'applied', JSON.stringify(upsert))
+  assert.deepEqual(document.getNode('root-1').getPropValue('dataSources'), {
+    schemaVersion: 1,
+    sources: [upsertCall.arguments.descriptor],
+  })
+  assert.equal(document.getNode('root-1').getExtraPropValue('dataSource'), undefined)
+  const afterUpsertMutation = document.mutationVersion
+  assert.equal(document.history.isUndoable(), true)
+
+  const replayedUpsert = await rpc.call('invoke', invokeRequest(upsertCall))
+  assert.equal(replayedUpsert.status, 'applied')
+  assert.equal(document.mutationVersion, afterUpsertMutation)
+  assert.equal((await rpc.call('queryReceipt', receiptQuery(upsertCall.callId))).status, 'applied')
+
+  const afterUpsert = await rpc.call('observe', observeRequest())
+  const bindCall = semanticCall({
+    arguments: {
+      schemaVersion: 1,
+      nodeId: 'text-1',
+      field: 'text',
+      binding: { sourceId: 'live-total', transform: [{ op: 'select', path: ['total'] }] },
+    },
+    callId: 'data-bind-1',
+    capability: 'data.bind',
+    expectedRevision: afterUpsert.revision,
+  })
+  const bind = await rpc.call('invoke', invokeRequest(bindCall))
+  assert.equal(bind.status, 'applied', JSON.stringify(bind))
+  assert.deepEqual(document.getNode('text-1').getPropValue('dataBindings'), {
+    schemaVersion: 1,
+    fields: { text: bindCall.arguments.binding },
+  })
+  const afterBindMutation = document.mutationVersion
+
+  const replayedBind = await rpc.call('invoke', invokeRequest(bindCall))
+  assert.equal(replayedBind.status, 'applied')
+  assert.equal(document.mutationVersion, afterBindMutation)
+  assert.equal((await rpc.call('queryReceipt', receiptQuery(bindCall.callId))).status, 'applied')
+
+  document.history.back()
+  assert.equal(document.getNode('text-1').getPropValue('dataBindings'), undefined)
+  assert.ok(document.getNode('root-1').getPropValue('dataSources'))
+  document.history.back()
+  assert.equal(document.getNode('root-1').getPropValue('dataSources'), undefined)
+  assert.equal(document.history.isUndoable(), false)
+
+  document.getNode('root-1').setExtraPropValue('dataSource', {
+    list: [{ id: upsertCall.arguments.descriptor.id, type: 'fetch' }],
+  })
+  assert.equal(document.exportRaw().dataSource.list[0].id, upsertCall.arguments.descriptor.id)
+  const removed = await engine.commands.execute({ type: 'removeNode', nodeId: 'text-1' })
+  assert.equal(removed.ok, true)
+  assert.equal(document.getNode('text-1'), null)
+  const damagedMutationVersion = document.mutationVersion
+
+  const recoveredBindAfterUndoAndDeletion = await rpc.call('invoke', invokeRequest(bindCall))
+  const recoveredUpsertAfterUndoAndLegacyConflict = await rpc.call('invoke', invokeRequest(upsertCall))
+  assert.equal(recoveredBindAfterUndoAndDeletion.status, 'applied')
+  assert.equal(recoveredUpsertAfterUndoAndLegacyConflict.status, 'applied')
+  assert.equal(document.mutationVersion, damagedMutationVersion)
+  assert.equal(document.getNode('text-1'), null)
+  assert.equal(document.getNode('root-1').getPropValue('dataSources'), undefined)
+
+  persistence.tamperReceiptIntent(bindCall.callId, intent => {
+    intent.expectedPostImages.images[0].value = { schemaVersion: 1, fields: {} }
+  })
+  const integrityFailureBeforeSchemaValidation = await rpc.call('invoke', invokeRequest(bindCall))
+  assert.equal(integrityFailureBeforeSchemaValidation.status, 'indeterminate')
+  assert.equal(integrityFailureBeforeSchemaValidation.failure.code, 'INDETERMINATE_RECEIPT')
+  assert.equal(integrityFailureBeforeSchemaValidation.failure.details.reason, 'screen-prepared-hash-mismatch')
+  assert.equal(document.mutationVersion, damagedMutationVersion)
+
+  const damaged = await rpc.call('observe', observeRequest())
+  const missingSource = await rpc.call(
+    'invoke',
+    invokeRequest(
+      semanticCall({
+        arguments: {
+          schemaVersion: 1,
+          nodeId: 'bar-1',
+          field: 'data',
+          binding: { sourceId: 'missing-source' },
+        },
+        callId: 'data-bind-missing-source',
+        capability: 'data.bind',
+        expectedRevision: damaged.revision,
+      }),
+    ),
+  )
+  assert.equal(missingSource.status, 'rejected')
+  assert.equal(missingSource.failure.code, 'DATA_SOURCE_NOT_FOUND')
+})
+
+test('Host projects only safe bounded data.bind node targets to invocation activity observers', async t => {
+  const events = []
+  const dataService = {
+    bind: async call => ({ schemaVersion: 1, callId: call.callId, status: 'applied' }),
+    inspect: async () => ({ schemaVersion: 1, scope: { kind: 'page', documentId: 'page-1' }, sources: [] }),
+    preview: async () => assert.fail('unexpected preview'),
+    upsert: async call => ({ schemaVersion: 1, callId: call.callId, status: 'applied' }),
+  }
+  const invocationActivity = {
+    begin(input) {
+      events.push({ phase: 'started', input: structuredClone(input) })
+      return () => events.push({ phase: 'finished', callId: input.callId })
+    },
+  }
+  const { host } = await createHarness(t, { dataService, includeDataNodes: true, invocationActivity })
+  const full = await host.observe(observeRequest())
+  const invokeBind = (callId, nodeId) =>
+    host.invoke(
+      semanticCall({
+        arguments: { schemaVersion: 1, nodeId, field: 'text', binding: { sourceId: 'source-1' } },
+        callId,
+        capability: 'data.bind',
+        expectedRevision: full.revision,
+      }),
+      invocationContext(),
+    )
+
+  assert.equal((await invokeBind('data-bind-target-safe', 'text-1')).status, 'applied')
+  assert.equal((await invokeBind('data-bind-target-unsafe', '../text-1')).status, 'applied')
+  assert.deepEqual(events, [
+    {
+      phase: 'started',
+      input: {
+        callId: 'data-bind-target-safe',
+        capability: 'data.bind',
+        taskId: authority.taskId,
+        targetNodeIds: ['text-1'],
+        targets: [
+          {
+            nodeId: 'text-1',
+            label: 'Live total',
+            rect: { x: 680, y: 30, width: 300, height: 80 },
+          },
+        ],
+      },
+    },
+    { phase: 'finished', callId: 'data-bind-target-safe' },
+    {
+      phase: 'started',
+      input: {
+        callId: 'data-bind-target-unsafe',
+        capability: 'data.bind',
+        taskId: authority.taskId,
+        targetNodeIds: [],
+        targets: [],
+      },
+    },
+    { phase: 'finished', callId: 'data-bind-target-unsafe' },
+  ])
+})
+
 test('Host projects active Screen targets without granting UI observers invocation authority', async t => {
   const events = []
   const invocationActivity = {
@@ -777,8 +1005,8 @@ test('Host projects active Screen targets without granting UI observers invocati
   ])
 })
 
-test('actual Root/Image manifests compile on demand and refresh with real Materials.version', async t => {
-  const { engine, rpc } = await createHarness(t)
+test('actual model-visible manifests expose data fields as read-only and refresh with real Materials.version', async t => {
+  const { engine, rpc } = await createHarness(t, { includeDataNodes: true })
   const full = await rpc.call('observe', observeRequest())
   const describe = componentName =>
     rpc.call(
@@ -792,7 +1020,9 @@ test('actual Root/Image manifests compile on demand and refresh with real Materi
         }),
       ),
     )
-  const [root, image] = await Promise.all([describe('Root'), describe('Image')])
+  const [root, image, text, bar, line] = await Promise.all(
+    ['Root', 'Image', 'Text', 'BarChart', 'LineChart'].map(describe),
+  )
 
   assert.equal(root.status, 'applied')
   assert.equal(image.status, 'applied')
@@ -800,7 +1030,15 @@ test('actual Root/Image manifests compile on demand and refresh with real Materi
   assert.equal(image.output.material.componentName, 'Image')
   assert.ok(root.output.material.fields.some(field => field.fieldId === 'root.image'))
   assert.ok(image.output.material.fields.some(field => field.fieldId === 'image.source'))
-  assert.doesNotMatch(JSON.stringify([root, image]), /setValue|getValue|MaterialView|credential|source-must-not-cross/)
+  assert.equal(root.output.material.fields.find(field => field.fieldId === 'dataSources')?.access, 'read-only')
+  for (const manifest of [text, bar, line]) {
+    assert.equal(manifest.status, 'applied')
+    assert.equal(manifest.output.material.fields.find(field => field.fieldId === 'dataBindings')?.access, 'read-only')
+  }
+  assert.doesNotMatch(
+    JSON.stringify([root, image, text, bar, line]),
+    /setValue|getValue|MaterialView|credential|source-must-not-cross/,
+  )
 
   const previousVersion = root.output.materialRegistryVersion
   engine.materials.refreshComponentMetasMap()
@@ -819,6 +1057,49 @@ test('actual Root/Image manifests compile on demand and refresh with real Materi
   )
   assert.equal(refreshed.status, 'applied')
   assert.notEqual(refreshed.output.materialRegistryVersion, previousVersion)
+})
+
+test('generic Screen writes cannot mutate reserved data fields while trusted data capabilities retain that path', async t => {
+  const { engine, rpc } = await createHarness(t, { includeDataNodes: true })
+  const full = await rpc.call('observe', observeRequest())
+  const before = structuredClone(engine.project.currentDocument.exportRaw())
+  const attempts = [
+    {
+      opId: 'direct-data-sources',
+      type: 'set',
+      nodeId: 'root-1',
+      fieldId: 'dataSources',
+      value: { schemaVersion: 1, sources: [] },
+    },
+    {
+      opId: 'direct-data-bindings',
+      type: 'set',
+      nodeId: 'text-1',
+      fieldId: 'dataBindings',
+      value: { schemaVersion: 1, fields: { text: { sourceId: 'source-1' } } },
+    },
+  ]
+
+  for (const [index, operation] of attempts.entries()) {
+    const result = await rpc.call(
+      'invoke',
+      invokeRequest(
+        semanticCall({
+          arguments: {
+            schemaVersion: 1,
+            documentId: engine.project.currentDocument.id,
+            operations: [operation],
+          },
+          callId: `direct-reserved-data-${index + 1}`,
+          capability: 'screen.applyChangeSet',
+          expectedRevision: full.revision,
+        }),
+      ),
+    )
+    assert.equal(result.status, 'rejected')
+    assert.equal(result.failure.code, 'UNSUPPORTED_FIELD')
+  }
+  assert.deepEqual(engine.project.currentDocument.exportRaw(), before)
 })
 
 test('direct Host validation rejects accessor-only keys without invoking getters or effects', async t => {

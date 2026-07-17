@@ -20,8 +20,18 @@ export const DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS = Object.freeze({
   Image: Object.freeze({
     __image: 'image.source',
   }),
+  BarChart: Object.freeze({
+    dataBindings: 'dataBindings',
+  }),
+  LineChart: Object.freeze({
+    dataBindings: 'dataBindings',
+  }),
   Root: Object.freeze({
     __image: 'root.image',
+    dataSources: 'dataSources',
+  }),
+  Text: Object.freeze({
+    dataBindings: 'dataBindings',
   }),
 })
 

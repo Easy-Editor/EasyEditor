@@ -145,28 +145,28 @@ test('built Core SettingField mutates only the visibility sidecar', async t => {
   assert.equal(Object.hasOwn(schema, 'condition'), false)
 })
 
-test('Phase 2 does not pretend Text or charts are material-ready', () => {
+test('Phase 5 exposes manual values and declarative data bindings without Agent-specific setters', () => {
   const cases = [
     {
       configurePath: 'src/editor/materials/basic/text/configure.ts',
-      forbiddenNames: ['text'],
+      expectedNames: ['text', 'dataBindings'],
     },
     {
       configurePath: 'src/editor/materials/chart/bar-chart/configure.ts',
-      forbiddenNames: ['data', 'config'],
+      expectedNames: ['data', 'xKey', 'series', 'dataBindings'],
     },
     {
       configurePath: 'src/editor/materials/chart/line-chart/configure.ts',
-      forbiddenNames: ['data', 'config'],
+      expectedNames: ['data', 'xKey', 'series', 'dataBindings'],
     },
   ]
 
-  for (const { configurePath, forbiddenNames } of cases) {
+  for (const { configurePath, expectedNames } of cases) {
     const configure = loadConfigureModule(configurePath).default
     const names = new Set(namedFields(configure).map(field => field.name))
 
-    for (const forbiddenName of forbiddenNames) {
-      assert.equal(names.has(forbiddenName), false, `${configurePath} must not expose ${forbiddenName} during Phase 2`)
+    for (const expectedName of expectedNames) {
+      assert.equal(names.has(expectedName), true, `${configurePath} must expose ${expectedName} during Phase 5`)
     }
   }
 })

@@ -45,7 +45,7 @@ export type DashboardCapabilityErrorCode =
   | 'UNKNOWN_CAPABILITY'
 
 export declare const DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION: 1
-export declare const DASHBOARD_CAPABILITY_REGISTRY_REVISION: 'dashboard-capability-registry/2'
+export declare const DASHBOARD_CAPABILITY_REGISTRY_REVISION: 'dashboard-capability-registry/3'
 export declare const DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON: 'not-yet-available'
 export declare const DASHBOARD_CAPABILITY_ERROR_CODE: Readonly<{
   invalidRequest: 'INVALID_CAPABILITY_REQUEST'

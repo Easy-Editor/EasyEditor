@@ -101,8 +101,11 @@ export declare const SAFE_MATERIAL_MANIFEST_SCHEMA_VERSION: 1
 export declare const DEFAULT_SAFE_MATERIAL_MANIFEST_LIMITS: Readonly<SafeMaterialManifestLimits>
 export declare const DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS: Readonly<{
   '*': Readonly<Record<string, string>>
+  BarChart: Readonly<Record<string, string>>
   Image: Readonly<Record<string, string>>
+  LineChart: Readonly<Record<string, string>>
   Root: Readonly<Record<string, string>>
+  Text: Readonly<Record<string, string>>
 }>
 export declare const DASHBOARD_MATERIAL_READINESS_REQUIREMENTS: Readonly<{
   BarChart: readonly ['props.data']

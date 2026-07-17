@@ -15,6 +15,11 @@ import {
   type DashboardObservedMutationAttribution,
 } from './agent/persistence/mutation-attribution.mjs'
 import { defaultRootSchema } from './const'
+import {
+  createDashboardDataRuntime,
+  createDashboardDataSourceRenderReducer,
+  dashboardDataSourceRenderStage,
+} from './data'
 import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
 import { pluginList } from './plugins'
@@ -35,12 +40,23 @@ import './overrides.css'
 export { composeDashboardAgentHost, dashboardAgentRuntimeFeatureFlags }
 export type { DashboardAgentHostAuthority } from './agent/host/index.mjs'
 
+const dashboardDataRuntime = createDashboardDataRuntime({
+  expressionEvaluator: dashboardExpressionEvaluator,
+  getProjectId: () => dashboardPersistence.getSnapshot().projectId,
+  safeDataEnabled: dashboardAgentRuntimeFeatureFlags.data,
+})
+const dashboardDataSourceRenderReducer = createDashboardDataSourceRenderReducer({
+  safeDataEnabled: dashboardAgentRuntimeFeatureFlags.data,
+})
+
 let releaseSimulatorReady: (() => void) | undefined
 let releasePersistenceListeners: Array<() => void> = []
 const dashboardEditorDisposers = new Set<() => void | Promise<void>>()
 let disposePromise: Promise<void> | undefined
 let editorDisposalStarted = false
 let lifecycleDisposalInstalled = false
+
+dashboardEditorDisposers.add(() => dashboardDataRuntime.dispose())
 
 export const registerDashboardEditorDisposer = (disposer: () => void | Promise<void>): (() => void) => {
   if (editorDisposalStarted) throw new Error('Dashboard editor disposal has already started')
@@ -284,6 +300,7 @@ export const loadDashboardEditorDraft = async (draft: CanonicalWorkingDraftV1): 
 const bootstrapDashboardEditor = async () => {
   try {
     await engine.plugins.registerPlugins([
+      dashboardDataRuntime.plugin,
       DashboardPlugin({
         group: {
           meta: Group,
@@ -297,6 +314,7 @@ const bootstrapDashboardEditor = async () => {
       HotkeyPlugin(),
       ...pluginList,
     ])
+    engine.designer.addPropsReducer(dashboardDataSourceRenderReducer, dashboardDataSourceRenderStage)
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
 
     await engine.init({

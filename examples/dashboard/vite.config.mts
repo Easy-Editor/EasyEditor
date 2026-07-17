@@ -1,69 +1,97 @@
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import federation from '@originjs/vite-plugin-federation'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { type UserConfig, defineConfig } from 'vite'
+import { type DataProxyMiddlewareOptions, createEnvironmentDataProxyMiddleware } from './server/data/index.mjs'
 
-const agentRuntimeE2EEnabled = process.env.VITE_E2E === '1'
+export interface DashboardViteConfigOptions {
+  env?: NodeJS.ProcessEnv
+  dataProxyOptions?: Pick<DataProxyMiddlewareOptions, 'lookup' | 'transport'>
+}
+
+const dashboardDirectory = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vite.dev/config/
-export default defineConfig({
-  define: {
-    __EASY_EDITOR_AGENT_RUNTIME_E2E__: JSON.stringify(agentRuntimeE2EEnabled),
-  },
-  plugins: [
-    react({
-      babel: {
-        exclude: 'node_modules/**',
-        babelrc: false,
-        presets: [
-          [
-            '@babel/preset-typescript',
-            {
-              allowDeclareFields: true,
-            },
-          ],
-        ],
-        plugins: [
-          [
-            '@babel/plugin-proposal-decorators',
-            {
-              version: '2023-11',
-            },
-          ],
-        ],
-      },
-    }),
-    federation({
-      name: 'dashboard',
-      filename: 'remoteEntry.json',
-      remotes: {
-        materials_audio: 'materials_audio@http://localhost:5001/remoteEntry.js',
-      },
-      shared: {
-        react: { requiredVersion: '^19.0.0' },
-        'react-dom': { requiredVersion: '^19.0.0' },
-      },
-    }),
-    tailwindcss(),
-  ],
-  resolve: {
-    alias: [
+export const createDashboardViteConfig = ({
+  env = process.env,
+  dataProxyOptions = {},
+}: DashboardViteConfigOptions = {}): UserConfig => {
+  const agentRuntimeE2EEnabled = env.VITE_E2E === '1'
+  const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
+    env,
+    lookup: dataProxyOptions.lookup,
+    transport: dataProxyOptions.transport,
+  })
+  return {
+    define: {
+      __EASY_EDITOR_AGENT_RUNTIME_E2E__: JSON.stringify(agentRuntimeE2EEnabled),
+    },
+    plugins: [
       {
-        find: '@/editor/agent/runtime-e2e/index.mjs',
-        replacement: path.resolve(
-          __dirname,
-          agentRuntimeE2EEnabled
-            ? './src/editor/agent/runtime-e2e/index.mjs'
-            : './src/editor/agent/runtime-e2e/disabled.mjs',
-        ),
+        name: 'easy-editor-data-proxy',
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            void dataProxyMiddleware(request, response, next)
+          })
+        },
       },
-      { find: '@', replacement: path.resolve(__dirname, './src') },
+      react({
+        babel: {
+          exclude: 'node_modules/**',
+          babelrc: false,
+          presets: [
+            [
+              '@babel/preset-typescript',
+              {
+                allowDeclareFields: true,
+              },
+            ],
+          ],
+          plugins: [
+            [
+              '@babel/plugin-proposal-decorators',
+              {
+                version: '2023-11',
+              },
+            ],
+          ],
+        },
+      }),
+      federation({
+        name: 'dashboard',
+        filename: 'remoteEntry.json',
+        remotes: {
+          materials_audio: 'materials_audio@http://localhost:5001/remoteEntry.js',
+        },
+        shared: {
+          react: { requiredVersion: '^19.0.0' },
+          'react-dom': { requiredVersion: '^19.0.0' },
+        },
+      }),
+      tailwindcss(),
     ],
-    // 确保使用相同的 React 实例，解决双 React 问题
-    dedupe: ['react', 'react-dom'],
-  },
-  build: {
-    target: 'esnext',
-  },
-})
+    resolve: {
+      alias: [
+        {
+          find: '@/editor/agent/runtime-e2e/index.mjs',
+          replacement: path.resolve(
+            dashboardDirectory,
+            agentRuntimeE2EEnabled
+              ? './src/editor/agent/runtime-e2e/index.mjs'
+              : './src/editor/agent/runtime-e2e/disabled.mjs',
+          ),
+        },
+        { find: '@', replacement: path.resolve(dashboardDirectory, './src') },
+      ],
+      // 确保使用相同的 React 实例，解决双 React 问题
+      dedupe: ['react', 'react-dom'],
+    },
+    build: {
+      target: 'esnext',
+    },
+  }
+}
+
+export default defineConfig(createDashboardViteConfig())
