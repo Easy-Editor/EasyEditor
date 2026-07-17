@@ -332,11 +332,13 @@ test('an exact FailureWitness returns the original failed receipt and any mismat
   })
 })
 
-test('Phase 5 lineage publishes data declarations through the approved semantic Screen write path', () => {
+test('Dashboard registry publishes active online-artifact and data capabilities through approved paths', () => {
   const available = DASHBOARD_CAPABILITY_DESCRIPTORS.filter(descriptor => descriptor.availability === 'available').map(
     descriptor => descriptor.capability,
   )
   assert.deepEqual(available, [
+    'artifact.createOnline',
+    'artifact.reviseOnline',
     'data.bind',
     'data.inspect',
     'data.preview',
@@ -348,7 +350,7 @@ test('Phase 5 lineage publishes data declarations through the approved semantic 
     'task.compensate',
   ])
 
-  for (const capability of ['artifact.createOnline', 'project.checkpoint']) {
+  for (const capability of ['artifact.promoteLocal', 'project.checkpoint']) {
     const descriptor = DASHBOARD_CAPABILITY_DESCRIPTORS.find(candidate => candidate.capability === capability)
     assert.equal(descriptor?.availability, 'unavailable')
     assert.equal(descriptor?.unavailableReason, DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON)

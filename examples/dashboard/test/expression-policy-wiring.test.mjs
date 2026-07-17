@@ -13,6 +13,10 @@ test('editor and direct preview explicitly share the side-effect-free expression
 
   assert.match(policy, /legacyTrustedExpressionEvaluator/)
   assert.doesNotMatch(policy, /createEngine|\.\/runtime/)
-  assert.match(editor, /appHelper:\s*\{\s*expressionEvaluator:\s*dashboardExpressionEvaluator\s*\}/)
+  assert.match(editor, /appHelper:\s*\{\s*expressionEvaluator:\s*dashboardExpressionEvaluator,/)
+  assert.match(
+    editor,
+    /\.\.\.\(dashboardOnlineComponentSurfaceBridge\s*\?\s*\{\s*\[DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY\]:\s*dashboardOnlineComponentSurfaceBridge\s*\}\s*:\s*\{\}\s*\)/,
+  )
   assert.match(preview, /expressionEvaluator=\{dashboardExpressionEvaluator\}/)
 })
