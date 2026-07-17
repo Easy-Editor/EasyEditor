@@ -9,6 +9,7 @@ import {
   deriveInsertedScreenNodeId,
 } from '../src/editor/agent/capabilities/screen/index.mjs'
 import { compileSafeMaterialManifest } from '../src/editor/agent/manifest/index.mjs'
+import { writeCanonicalNodeArtifactRef } from '../src/lib/storage/artifact-contracts.mjs'
 
 const CALL_ID = 'call-screen-a'
 const REGISTRY_VERSION = 7
@@ -592,6 +593,73 @@ test('Core-incompatible manifest paths and non-executable unset inverses fail cl
     /operations\[0\]/,
     /not-symmetric/,
   )
+})
+
+test('generic screen manifests cannot forge artifact bindings while unrelated literal extra fields remain writable', () => {
+  for (const protectedPath of [
+    ['extra', '$agent'],
+    ['extra', '$agent', 'artifactRef'],
+    ['extra', 'artifactRef'],
+    ['extra', 'artifactRef', 'target'],
+    ['extra', 'extra'],
+    ['extra', 'extra', 'artifactRef'],
+    ['extra', 'extra', 'artifactRef', 'target'],
+  ]) {
+    const unsafe = replaceTextManifest(manifest => {
+      manifest.fields.push({
+        access: 'read-write',
+        fieldId: `reserved-${protectedPath.join('-')}`,
+        valueSchema: { type: 'object' },
+        writeTargets: [{ path: protectedPath }],
+        unsetTargets: [{ path: protectedPath }],
+      })
+    })
+    expectCompileError(
+      () =>
+        compile([operation('reserved-binding', { type: 'set', nodeId: 'text-a', fieldId: 'props.text', value: 'x' })], {
+          manifests: unsafe,
+        }),
+      'INVALID_MANIFEST',
+      /path/,
+      /artifact-binding/,
+    )
+  }
+
+  const safe = replaceTextManifest(manifest => {
+    manifest.fields.push({
+      access: 'read-write',
+      fieldId: 'unrelated-extra-label',
+      valueSchema: { type: 'string' },
+      writeTargets: [{ path: ['extra', 'extra', 'displayLabel'] }],
+      unsetTargets: [{ path: ['extra', 'extra', 'displayLabel'] }],
+    })
+  })
+  const schema = createSchema()
+  schema.children[0].extra = { artifactRef: { retained: 'opaque-existing-binding' }, displayLabel: 'before' }
+  const unrelated = compile(
+    [
+      operation('unrelated-extra', {
+        type: 'set',
+        nodeId: 'text-a',
+        fieldId: 'unrelated-extra-label',
+        value: 'after',
+      }),
+    ],
+    { manifests: safe, document: { id: 'document-a', mutationVersion: 11, schema } },
+  )
+  assert.deepEqual(unrelated.commands[0].extras, { 'extra.displayLabel': 'after' })
+
+  const artifactRef = {
+    artifactId: 'artifact-kpi',
+    logicalComponentId: 'logical-kpi',
+    sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+    sourceRevision: 'revision-1',
+    target: { kind: 'online' },
+  }
+  assert.deepEqual(writeCanonicalNodeArtifactRef({ componentName: 'GeneratedMaterialHost' }, artifactRef), {
+    $agent: { schemaVersion: 1, artifactRef },
+    componentName: 'GeneratedMaterialHost',
+  })
 })
 
 test('untrusted manifest regex patterns are rejected before evaluating a long Agent string', () => {

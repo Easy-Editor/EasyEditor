@@ -1,3 +1,11 @@
+import {
+  cloneFrozenJson,
+  validateArtifactReadRequest,
+  validateArtifactRecord,
+  validateArtifactRootReadRequest,
+  validateArtifactRootRecord,
+  validateArtifactSweepRequest,
+} from './artifact-contracts.mjs'
 import { canonicalJsonStringify, hashCanonicalJson } from './canonical-json.mjs'
 import {
   assertStorageCompatibilityWritable,
@@ -580,6 +588,7 @@ const normalizeScope = value => {
 const scopeKey = scope => canonicalJsonStringify([scope.projectId, scope.branchId])
 const agentPersistenceScopeKey = scope =>
   canonicalJsonStringify(['agent-persistence', scope.projectId, scope.branchId, scope.sessionId])
+const artifactProjectScopeKey = projectId => canonicalJsonStringify(['artifact-project', projectId])
 
 const compensationRunRecordId = outerCallId => `compensation-run:${outerCallId}`
 const compensationTargetRecordId = targetTaskId => `compensation-target:${targetTaskId}`
@@ -762,6 +771,53 @@ const compareRoot = (left, right) =>
     [left.branchId, left.ownerType, left.ownerId, left.artifactId, left.sourceRevision].join('\u0000'),
     [right.branchId, right.ownerType, right.ownerId, right.artifactId, right.sourceRevision].join('\u0000'),
   )
+
+const artifactRootFenceFromRecords = roots =>
+  roots.map(root => ({
+    branchId: root.branchId,
+    ownerType: root.ownerType,
+    ownerId: root.ownerId,
+    artifactId: root.artifactId,
+    sourceRevision: root.sourceRevision,
+  }))
+
+const validateArtifactCreateResult = (value, artifact) => {
+  try {
+    assertExactFields(value, ['artifact', 'schemaVersion', 'status'], 'artifact-create-result')
+    if (value.schemaVersion !== 1 || (value.status !== 'created' && value.status !== 'reconciled')) {
+      throw validationFailure('artifact-create-result-status-is-invalid')
+    }
+    const stored = validateArtifactRecord(value.artifact)
+    if (!jsonEqual(stored, artifact)) throw validationFailure('artifact-create-result-authority-mismatch')
+    return cloneFrozenJson({ schemaVersion: 1, status: value.status, artifact: stored })
+  } catch (error) {
+    throw new DashboardStorageError(
+      DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+      'storage-backend-artifact-create-result-is-invalid',
+      { projectId: artifact.projectId, artifactId: artifact.artifactId, sourceRevision: artifact.sourceRevision },
+      { cause: error },
+    )
+  }
+}
+
+const validateArtifactRootMutationResult = (value, root, statuses, reason) => {
+  try {
+    assertExactFields(value, ['root', 'schemaVersion', 'status'], 'artifact-root-mutation-result')
+    if (value.schemaVersion !== 1 || !statuses.includes(value.status)) {
+      throw validationFailure('artifact-root-mutation-result-status-is-invalid')
+    }
+    const stored = validateArtifactRootRecord(value.root)
+    if (!jsonEqual(stored, root)) throw validationFailure('artifact-root-mutation-result-authority-mismatch')
+    return cloneFrozenJson({ schemaVersion: 1, status: value.status, root: stored })
+  } catch (error) {
+    throw new DashboardStorageError(
+      DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+      reason,
+      { projectId: root.projectId, branchId: root.branchId },
+      { cause: error },
+    )
+  }
+}
 
 const draftFenceFromRecords = (records, projectId) =>
   records
@@ -1889,6 +1945,103 @@ export class ProjectPersistenceCoordinator {
     }
   }
 
+  async createArtifact(value) {
+    this.#assertAccepting()
+    const artifact = validateArtifactRecord(value)
+    if (typeof this.#backend.createArtifact !== 'function') {
+      throw validationFailure('storage-backend-artifact-create-seam-is-required')
+    }
+    return this.#enqueue(artifactProjectScopeKey(artifact.projectId), async () =>
+      validateArtifactCreateResult(await this.#backend.createArtifact(artifact), artifact),
+    )
+  }
+
+  async readArtifact(value) {
+    this.#assertAccepting()
+    const request = validateArtifactReadRequest(value)
+    if (typeof this.#backend.readArtifact !== 'function') {
+      throw validationFailure('storage-backend-artifact-read-seam-is-required')
+    }
+    return this.#enqueue(artifactProjectScopeKey(request.projectId), async () => {
+      const stored = await this.#backend.readArtifact(request)
+      if (stored === null) return null
+      try {
+        const artifact = validateArtifactRecord(stored)
+        if (
+          artifact.projectId !== request.projectId ||
+          artifact.artifactId !== request.artifactId ||
+          artifact.sourceRevision !== request.sourceRevision
+        ) {
+          throw validationFailure('stored-artifact-authority-mismatch')
+        }
+        return cloneFrozenJson(artifact)
+      } catch (error) {
+        throw new DashboardStorageError(
+          DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+          'stored-artifact-contract-is-invalid',
+          { projectId: request.projectId, artifactId: request.artifactId, sourceRevision: request.sourceRevision },
+          { cause: error },
+        )
+      }
+    })
+  }
+
+  async createArtifactRoot(value) {
+    this.#assertAccepting()
+    const root = validateArtifactRootRecord(value)
+    if (typeof this.#backend.createArtifactRoot !== 'function') {
+      throw validationFailure('storage-backend-artifact-root-create-seam-is-required')
+    }
+    return this.#enqueue(scopeKey(root), async () =>
+      validateArtifactRootMutationResult(
+        await this.#backend.createArtifactRoot(root),
+        root,
+        ['created', 'reconciled'],
+        'storage-backend-artifact-root-create-result-is-invalid',
+      ),
+    )
+  }
+
+  async readArtifactRoot(value) {
+    this.#assertAccepting()
+    const request = validateArtifactRootReadRequest(value)
+    if (typeof this.#backend.readArtifactRoot !== 'function') {
+      throw validationFailure('storage-backend-artifact-root-read-seam-is-required')
+    }
+    return this.#enqueue(scopeKey(request), async () => {
+      const stored = await this.#backend.readArtifactRoot(request)
+      if (stored === null) return null
+      try {
+        const root = validateArtifactRootRecord(stored)
+        if (!jsonEqual(root, request)) throw validationFailure('stored-artifact-root-authority-mismatch')
+        return cloneFrozenJson(root)
+      } catch (error) {
+        throw new DashboardStorageError(
+          DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+          'stored-artifact-root-contract-is-invalid',
+          { projectId: request.projectId, branchId: request.branchId },
+          { cause: error },
+        )
+      }
+    })
+  }
+
+  async deleteArtifactRoot(value) {
+    this.#assertAccepting()
+    const root = validateArtifactRootReadRequest(value)
+    if (typeof this.#backend.deleteArtifactRoot !== 'function') {
+      throw validationFailure('storage-backend-artifact-root-delete-seam-is-required')
+    }
+    return this.#enqueue(scopeKey(root), async () =>
+      validateArtifactRootMutationResult(
+        await this.#backend.deleteArtifactRoot(root),
+        root,
+        ['deleted', 'absent'],
+        'storage-backend-artifact-root-delete-result-is-invalid',
+      ),
+    )
+  }
+
   async #readArtifactRootSnapshotNow(projectId) {
     const draftsBefore = await this.#backend.getAll('workingDrafts')
     const generationFence = draftFenceFromRecords(draftsBefore, projectId)
@@ -1969,15 +2122,87 @@ export class ProjectPersistenceCoordinator {
     const deletionCandidates = snapshot.artifacts.filter(
       artifact => !retainedKeys.has(canonicalJsonStringify([artifact.artifactId, artifact.sourceRevision])),
     )
-    return Object.freeze({
+    const artifactIdentityFence = structuredClone(snapshot.artifacts)
+    const rootFence = artifactRootFenceFromRecords(snapshot.roots)
+    return cloneFrozenJson({
       schemaVersion: 1,
       projectId: request.projectId,
       dryRun: true,
-      generationFence: structuredClone(snapshot.generationFence),
-      roots: structuredClone(snapshot.roots),
-      retainedArtifacts: structuredClone(retainedArtifacts),
-      missingArtifacts: structuredClone(missingArtifacts),
-      deletionCandidates: structuredClone(deletionCandidates),
+      generationFence: snapshot.generationFence,
+      artifactIdentityFence,
+      rootFence,
+      roots: snapshot.roots,
+      retainedArtifacts,
+      missingArtifacts,
+      deletionCandidates,
+    })
+  }
+
+  async sweepArtifactGc(value) {
+    this.#assertAccepting()
+    assertExactFields(
+      value,
+      [
+        'artifactIdentityFence',
+        'deletionCandidates',
+        'dryRun',
+        'generationFence',
+        'missingArtifacts',
+        'projectId',
+        'retainedArtifacts',
+        'rootFence',
+        'roots',
+        'schemaVersion',
+      ],
+      'artifact-gc-plan',
+    )
+    if (value.dryRun !== true) throw validationFailure('artifact-gc-sweep-requires-a-dry-run-plan')
+    for (const field of ['roots', 'retainedArtifacts', 'missingArtifacts']) {
+      if (!Array.isArray(value[field])) throw validationFailure(`artifact-gc-plan.${field}-must-be-an-array`)
+    }
+    const request = validateArtifactSweepRequest({
+      schemaVersion: value.schemaVersion,
+      projectId: value.projectId,
+      generationFence: value.generationFence,
+      artifactIdentityFence: value.artifactIdentityFence,
+      rootFence: value.rootFence,
+      deletionCandidates: value.deletionCandidates,
+    })
+    if (typeof this.#backend.sweepArtifacts !== 'function') {
+      throw validationFailure('storage-backend-artifact-gc-sweep-seam-is-required')
+    }
+    await this.flush()
+    const result = await this.#backend.sweepArtifacts(request)
+    try {
+      assertExactFields(result, ['deletedArtifacts', 'projectId', 'schemaVersion', 'status'], 'artifact-gc-result')
+      if (
+        result.schemaVersion !== 1 ||
+        result.status !== 'committed' ||
+        result.projectId !== request.projectId ||
+        !jsonEqual(result.deletedArtifacts, request.deletionCandidates)
+      ) {
+        throw validationFailure('artifact-gc-result-authority-mismatch')
+      }
+    } catch (error) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'storage-backend-artifact-gc-result-is-invalid',
+        { projectId: request.projectId },
+        { cause: error },
+      )
+    }
+    return cloneFrozenJson({
+      schemaVersion: 1,
+      projectId: request.projectId,
+      dryRun: false,
+      generationFence: request.generationFence,
+      artifactIdentityFence: request.artifactIdentityFence,
+      rootFence: request.rootFence,
+      roots: value.roots,
+      retainedArtifacts: value.retainedArtifacts,
+      missingArtifacts: value.missingArtifacts,
+      deletionCandidates: request.deletionCandidates,
+      deletedArtifacts: result.deletedArtifacts,
     })
   }
 

@@ -33,6 +33,11 @@ const CORE_MAX_PROPERTY_PATH_LENGTH = 256
 const CORE_MAX_UNSET_PATHS = 100
 const CORE_MAX_UNSET_TOTAL_LENGTH = 8192
 const RESERVED_NODE_EXTRA_KEYS = new Set(['children', 'componentName', 'id', 'props'])
+const RESERVED_ARTIFACT_BINDING_EXTRA_PATHS = Object.freeze([
+  Object.freeze(['$agent']),
+  Object.freeze(['artifactRef']),
+  Object.freeze(['extra', 'artifactRef']),
+])
 const MANIFEST_FIELD_KEYS = Object.freeze([
   'access',
   'fieldId',
@@ -133,6 +138,12 @@ const normalizeManifestTarget = (value, path, limits) => {
   if (relativePath.length === 0) return fail('INVALID_MANIFEST', 'write-target-must-address-a-field', `${path}.path`)
   if (manifestRoot === 'extra' && RESERVED_NODE_EXTRA_KEYS.has(relativePath[0])) {
     return fail('INVALID_MANIFEST', 'write-target-cannot-address-node-structure', `${path}.path[1]`)
+  }
+  if (
+    manifestRoot === 'extra' &&
+    RESERVED_ARTIFACT_BINDING_EXTRA_PATHS.some(reservedPath => pathsOverlap(relativePath, reservedPath))
+  ) {
+    return fail('INVALID_MANIFEST', 'write-target-cannot-address-artifact-binding', `${path}.path`)
   }
   const rawValuePath = optionalOwnDataValue(value, 'valuePath', path, 'INVALID_MANIFEST')
   const valuePath =

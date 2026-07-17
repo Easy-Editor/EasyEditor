@@ -1,4 +1,5 @@
 export * from './branch-switch.mjs'
+export * from './artifact-contracts.mjs'
 export * from './canonical-json.mjs'
 export * from './compatibility-marker.mjs'
 export * from './contracts.mjs'

@@ -69,6 +69,14 @@ const createHarness = (nodeCount = 3, options = {}) => {
 }
 
 const isFull = snapshot => Object.hasOwn(snapshot, 'projection')
+const digest = character => `sha256:${character.repeat(64)}`
+const onlineArtifactRef = (sourceRevision = 'revision-safe-id') => ({
+  artifactId: 'artifact-safe-id',
+  logicalComponentId: 'component-safe-id',
+  sourceIntegrity: digest('a'),
+  sourceRevision,
+  target: { kind: 'online' },
+})
 
 test('revision and full projection are stable across provider insertion and material Map order', async () => {
   const revisionInput = {
@@ -212,34 +220,31 @@ test('full snapshots positively project safe node state and finite artifact refe
   }
   Object.defineProperty(state.document.schema.props, 'backgroundImage', { enumerable: true, get: getter })
   state.document.schema.title = 'Projected root title'
-  state.document.schema.artifactRef = {
-    artifactId: 'artifact-safe-id',
-    logicalComponentId: 'component-safe-id',
-    sourceIntegrity: 'sha256-safe-source',
-    sourceRevision: 'revision-safe-id',
-    target: {
-      kind: 'local-material',
-      materialId: 'material-safe-id',
-      buildIntegrity: 'sha256-safe-build',
-      module: 'module-must-not-cross',
+  state.document.schema.$agent = {
+    schemaVersion: 1,
+    artifactRef: {
+      artifactId: 'artifact-safe-id',
+      logicalComponentId: 'component-safe-id',
+      sourceIntegrity: digest('a'),
+      sourceRevision: 'revision-safe-id',
+      target: {
+        kind: 'local-material',
+        materialId: 'material-safe-id',
+        materialVersion: '1.2.3',
+        buildIntegrity: digest('b'),
+      },
+      rollbackTo: {
+        artifactId: 'rollback-safe-id',
+        logicalComponentId: 'rollback-component-safe-id',
+        sourceIntegrity: digest('c'),
+        sourceRevision: 'rollback-revision-safe-id',
+      },
     },
-    rollbackTo: {
-      artifactId: 'rollback-safe-id',
-      logicalComponentId: 'rollback-component-safe-id',
-      sourceIntegrity: 'sha256-safe-rollback',
-      sourceRevision: 'rollback-revision-safe-id',
-      code: 'rollback-code-must-not-cross',
-    },
-    code: 'artifact-code-must-not-cross',
-    source: 'artifact-source-must-not-cross',
-    signingSeed: 'artifact-signing-seed-must-not-cross',
-    unknownArray,
   }
-  Object.defineProperty(state.document.schema.artifactRef.target, 'materialVersion', {
-    enumerable: true,
-    get: getter,
-  })
-  Object.defineProperty(state.document.schema.artifactRef, 'credentials', { enumerable: true, get: getter })
+  state.document.schema.artifactCode = 'artifact-code-must-not-cross'
+  state.document.schema.artifactSource = 'artifact-source-must-not-cross'
+  state.document.schema.artifactSigningSeed = 'artifact-signing-seed-must-not-cross'
+  Object.defineProperty(state.document.schema, 'artifactCredentials', { enumerable: true, get: getter })
   state.document.schema.deploymentEnvelope = nestedUnknown
   state.adapterGeneration = { secret: 'adapter-generation-secret' }
   state.document.id = { secret: 'document-id-secret' }
@@ -281,15 +286,16 @@ test('full snapshots positively project safe node state and finite artifact refe
     rollbackTo: {
       artifactId: 'rollback-safe-id',
       logicalComponentId: 'rollback-component-safe-id',
-      sourceIntegrity: 'sha256-safe-rollback',
+      sourceIntegrity: digest('c'),
       sourceRevision: 'rollback-revision-safe-id',
     },
-    sourceIntegrity: 'sha256-safe-source',
+    sourceIntegrity: digest('a'),
     sourceRevision: 'revision-safe-id',
     target: {
-      buildIntegrity: 'sha256-safe-build',
+      buildIntegrity: digest('b'),
       kind: 'local-material',
       materialId: 'material-safe-id',
+      materialVersion: '1.2.3',
     },
   })
   assert.equal(root.extra.title, 'Projected root title')
@@ -330,6 +336,71 @@ test('full snapshots positively project safe node state and finite artifact refe
     resync.projection['dashboard.core'].materials.summaries.find(summary => summary.componentName === 'Text').tags,
     ['basic', 'tail', 'later'],
   )
+})
+
+test('artifact snapshot reads canonical then legacy locations and fails closed on ambiguity', async () => {
+  const artifactRef = onlineArtifactRef()
+  const captureArtifactRef = async binding => {
+    const { service, state } = createHarness()
+    Object.assign(state.document.schema, binding)
+    const snapshot = await service.observe({ mode: 'full' })
+    return structuredClone(snapshot.projection['dashboard.core'].nodes['node-000'].extra.artifactRef)
+  }
+
+  assert.deepEqual(await captureArtifactRef({ $agent: { schemaVersion: 1, artifactRef } }), artifactRef)
+  assert.deepEqual(await captureArtifactRef({ artifactRef }), artifactRef)
+  assert.deepEqual(await captureArtifactRef({ extra: { artifactRef } }), artifactRef)
+  assert.deepEqual(
+    await captureArtifactRef({
+      $agent: { schemaVersion: 1, artifactRef },
+      artifactRef,
+      extra: { artifactRef, unrelated: 'preserved-outside-the-binding-view' },
+    }),
+    artifactRef,
+  )
+
+  const conflicting = createHarness()
+  conflicting.state.document.schema.$agent = { schemaVersion: 1, artifactRef }
+  conflicting.state.document.schema.artifactRef = onlineArtifactRef('revision-conflict')
+  await assert.rejects(
+    conflicting.service.observe({ mode: 'full' }),
+    error => error.code === 'integrity-mismatch' && error.reason === 'legacy-and-canonical-artifact-refs-conflict',
+  )
+
+  const unsupported = createHarness()
+  unsupported.state.document.schema.$agent = { schemaVersion: 2, artifactRef }
+  unsupported.state.document.schema.artifactRef = artifactRef
+  await assert.rejects(
+    unsupported.service.observe({ mode: 'full' }),
+    error => error.code === 'validation-failed' && error.reason === 'node-extra.$agent-schema-version-is-unsupported',
+  )
+
+  const conflictingLegacy = createHarness()
+  conflictingLegacy.state.document.schema.artifactRef = artifactRef
+  conflictingLegacy.state.document.schema.extra = { artifactRef: onlineArtifactRef('revision-conflict') }
+  await assert.rejects(
+    conflictingLegacy.service.observe({ mode: 'full' }),
+    error => error.code === 'integrity-mismatch' && error.reason === 'legacy-artifact-refs-conflict',
+  )
+})
+
+test('artifact snapshot never invokes an accessor-backed canonical binding or falls back to legacy', async () => {
+  const { service, state } = createHarness()
+  let getterInvocations = 0
+  Object.defineProperty(state.document.schema, '$agent', {
+    enumerable: true,
+    get() {
+      getterInvocations += 1
+      return { schemaVersion: 1, artifactRef: onlineArtifactRef() }
+    },
+  })
+  state.document.schema.artifactRef = onlineArtifactRef()
+
+  await assert.rejects(
+    service.observe({ mode: 'full' }),
+    error => error.code === 'validation-failed' && error.reason === 'accessor-values-are-not-json',
+  )
+  assert.equal(getterInvocations, 0)
 })
 
 test('JSON sanitization omits nested and array accessors without invoking getters', () => {

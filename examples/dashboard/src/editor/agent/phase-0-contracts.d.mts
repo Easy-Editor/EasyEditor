@@ -1,35 +1,28 @@
 export declare const GENERATED_MATERIAL_HOST_COMPONENT_NAME: 'GeneratedMaterialHost'
 
-export interface ArtifactSourceRevision {
-  readonly artifactId: string
-  readonly sourceRevision: string
-  readonly logicalComponentId: string
-  readonly sourceIntegrity: string
-}
+import type {
+  ArtifactRef,
+  ArtifactSourceRevision,
+  LocalMaterialArtifactRef,
+  OnlineArtifactRef,
+} from '../../lib/storage/artifact-contracts.mjs'
 
-export interface OnlineArtifactRef extends ArtifactSourceRevision {
-  readonly target: {
-    readonly kind: 'online'
-  }
-}
+export type { ArtifactRef, ArtifactSourceRevision, LocalMaterialArtifactRef, OnlineArtifactRef }
 
 export interface LocalMaterialTarget {
   readonly kind: 'local-material'
   readonly materialId: string
   readonly materialVersion: string
-  readonly buildIntegrity: string
+  readonly buildIntegrity: `sha256:${string}`
 }
-
-export interface LocalMaterialArtifactRef extends ArtifactSourceRevision {
-  readonly target: LocalMaterialTarget
-  readonly rollbackTo: ArtifactSourceRevision
-}
-
-export type ArtifactRef = OnlineArtifactRef | LocalMaterialArtifactRef
 
 export interface GeneratedNodeArtifactBinding<TArtifactRef extends ArtifactRef = ArtifactRef> {
   readonly componentName: typeof GENERATED_MATERIAL_HOST_COMPONENT_NAME
-  readonly artifactRef: TArtifactRef
+  readonly $agent: Readonly<{
+    readonly schemaVersion: 1
+    readonly artifactRef: TArtifactRef
+  }>
+  readonly extra?: Readonly<Record<string, unknown>>
 }
 
 export declare const promoteArtifactRef: (

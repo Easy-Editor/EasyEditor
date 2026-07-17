@@ -1,3 +1,13 @@
+import type {
+  ArtifactCreateResultV1,
+  ArtifactReadRequestV1,
+  ArtifactRecordV1,
+  ArtifactRootCreateResultV1,
+  ArtifactRootDeleteResultV1,
+  ArtifactRootRecordV1,
+  ArtifactSweepBackendResultV1,
+  ArtifactSweepRequestV1,
+} from './artifact-contracts.mjs'
 import type { JsonObject, JsonValue } from './canonical-json.mjs'
 import type { DashboardStorageStoreName } from './schema.mjs'
 
@@ -229,6 +239,12 @@ export interface DashboardStorageBackend {
   commitAgentPersistence(batch: DashboardAgentPersistenceBatchV1): Promise<DashboardAgentPersistenceCommitResultV1>
   putReceiptIntent(intent: DashboardReceiptIntentV1): Promise<DashboardReceiptIntentV1>
   readReceiptLineage(request: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult>
+  createArtifact(artifact: ArtifactRecordV1): Promise<ArtifactCreateResultV1>
+  readArtifact(request: ArtifactReadRequestV1): Promise<ArtifactRecordV1 | null>
+  createArtifactRoot(root: ArtifactRootRecordV1): Promise<ArtifactRootCreateResultV1>
+  readArtifactRoot(root: ArtifactRootRecordV1): Promise<ArtifactRootRecordV1 | null>
+  deleteArtifactRoot(root: ArtifactRootRecordV1): Promise<ArtifactRootDeleteResultV1>
+  sweepArtifacts(request: ArtifactSweepRequestV1): Promise<ArtifactSweepBackendResultV1>
   flush(): Promise<void>
   dispose(): Promise<void>
 }

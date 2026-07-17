@@ -1,3 +1,11 @@
+import {
+  normalizeArtifactRootFence,
+  validateArtifactReadRequest,
+  validateArtifactRecord,
+  validateArtifactRootReadRequest,
+  validateArtifactRootRecord,
+  validateArtifactSweepRequest,
+} from './artifact-contracts.mjs'
 import { canonicalJsonStringify, hashCanonicalJson } from './canonical-json.mjs'
 import {
   createAgentPersistenceCheckpointId,
@@ -13,7 +21,11 @@ import {
   validateReceiptLineageReadRequest,
 } from './contracts.mjs'
 import { DASHBOARD_STORAGE_ERROR_CODE, DashboardStorageError, isDashboardStorageError } from './errors.mjs'
-import { advanceAgentSessionPersistenceRecord } from './lifecycle.mjs'
+import {
+  advanceAgentSessionPersistenceRecord,
+  normalizeArtifactRootRecord,
+  normalizeStoredArtifactIdentity,
+} from './lifecycle.mjs'
 import { DASHBOARD_STORAGE_STORE_NAMES } from './schema.mjs'
 
 const clone = value => (value === undefined ? undefined : structuredClone(value))
@@ -62,6 +74,43 @@ const invalidateAgentProvenance = (records, batch, current) => {
       token: 'unknown',
     })
   }
+}
+
+const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
+const artifactIdentityKey = value => `${value.artifactId}\u0000${value.sourceRevision}`
+
+const projectArtifactGenerationFence = (records, projectId) =>
+  records
+    .filter(record => record?.projectId === projectId)
+    .map(record => {
+      if (
+        typeof record.branchId !== 'string' ||
+        record.branchId.length === 0 ||
+        !Number.isSafeInteger(record.draftGeneration) ||
+        record.draftGeneration < 0
+      ) {
+        throw new DashboardStorageError(
+          DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+          'stored-working-draft-generation-is-invalid',
+          { projectId },
+        )
+      }
+      return { branchId: record.branchId, draftGeneration: record.draftGeneration }
+    })
+    .sort((left, right) => compareText(left.branchId, right.branchId))
+
+const projectArtifactIdentityFence = (records, projectId) =>
+  records
+    .filter(record => record?.projectId === projectId)
+    .map(normalizeStoredArtifactIdentity)
+    .sort((left, right) => compareText(artifactIdentityKey(left), artifactIdentityKey(right)))
+
+const projectArtifactRootFence = (records, projectId) =>
+  normalizeArtifactRootFence(records.filter(record => record?.projectId === projectId).map(normalizeArtifactRootRecord))
+
+const assertArtifactSweepFence = (actual, expected, reason, projectId) => {
+  if (canonicalJsonStringify(actual) === canonicalJsonStringify(expected)) return
+  throw new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.generationConflict, reason, { projectId })
 }
 
 export class MemoryDashboardStorageBackend {
@@ -333,6 +382,141 @@ export class MemoryDashboardStorageBackend {
       failureWitness: get('failureWitnesses'),
       provenance,
     }
+  }
+
+  async createArtifact(value) {
+    this.#assertActive()
+    const artifact = validateArtifactRecord(value)
+    const key = encodeStorageKey([artifact.projectId, artifact.artifactId, artifact.sourceRevision])
+    const existing = this.#stores.get('artifacts').get(key)
+    if (existing !== undefined) {
+      if (canonicalJsonStringify(existing) !== canonicalJsonStringify(artifact)) {
+        throw new DashboardStorageError(
+          DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+          'artifact-revision-was-reused-with-different-bytes',
+          { projectId: artifact.projectId, artifactId: artifact.artifactId, sourceRevision: artifact.sourceRevision },
+        )
+      }
+      return clone({ schemaVersion: 1, status: 'reconciled', artifact: existing })
+    }
+    const nextStores = new Map([...this.#stores].map(([name, records]) => [name, new Map(records)]))
+    nextStores.get('artifacts').set(key, clone(artifact))
+    this.#stores = nextStores
+    return clone({ schemaVersion: 1, status: 'created', artifact })
+  }
+
+  async readArtifact(value) {
+    this.#assertActive()
+    const request = validateArtifactReadRequest(value)
+    const stored = this.#stores
+      .get('artifacts')
+      .get(encodeStorageKey([request.projectId, request.artifactId, request.sourceRevision]))
+    return stored === undefined ? null : clone(validateArtifactRecord(stored))
+  }
+
+  async createArtifactRoot(value) {
+    this.#assertActive()
+    const root = validateArtifactRootRecord(value)
+    const key = encodeStorageKey([
+      root.projectId,
+      root.branchId,
+      root.ownerType,
+      root.ownerId,
+      root.artifactId,
+      root.sourceRevision,
+    ])
+    const existing = this.#stores.get('artifactRefs').get(key)
+    if (existing !== undefined) {
+      if (canonicalJsonStringify(existing) !== canonicalJsonStringify(root)) {
+        throw new DashboardStorageError(
+          DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+          'artifact-root-identity-was-reused-with-different-bytes',
+          { projectId: root.projectId, branchId: root.branchId },
+        )
+      }
+      return clone({ schemaVersion: 1, status: 'reconciled', root: existing })
+    }
+    const nextStores = new Map([...this.#stores].map(([name, records]) => [name, new Map(records)]))
+    nextStores.get('artifactRefs').set(key, clone(root))
+    this.#stores = nextStores
+    return clone({ schemaVersion: 1, status: 'created', root })
+  }
+
+  async readArtifactRoot(value) {
+    this.#assertActive()
+    const request = validateArtifactRootReadRequest(value)
+    const stored = this.#stores
+      .get('artifactRefs')
+      .get(
+        encodeStorageKey([
+          request.projectId,
+          request.branchId,
+          request.ownerType,
+          request.ownerId,
+          request.artifactId,
+          request.sourceRevision,
+        ]),
+      )
+    return stored === undefined ? null : clone(validateArtifactRootRecord(stored))
+  }
+
+  async deleteArtifactRoot(value) {
+    this.#assertActive()
+    const root = validateArtifactRootReadRequest(value)
+    const key = encodeStorageKey([
+      root.projectId,
+      root.branchId,
+      root.ownerType,
+      root.ownerId,
+      root.artifactId,
+      root.sourceRevision,
+    ])
+    if (!this.#stores.get('artifactRefs').has(key)) {
+      return clone({ schemaVersion: 1, status: 'absent', root })
+    }
+    const nextStores = new Map([...this.#stores].map(([name, records]) => [name, new Map(records)]))
+    nextStores.get('artifactRefs').delete(key)
+    this.#stores = nextStores
+    return clone({ schemaVersion: 1, status: 'deleted', root })
+  }
+
+  async sweepArtifacts(value) {
+    this.#assertActive()
+    const request = validateArtifactSweepRequest(value)
+    const drafts = [...this.#stores.get('workingDrafts').values()]
+    const artifacts = [...this.#stores.get('artifacts').values()]
+    const roots = [...this.#stores.get('artifactRefs').values()]
+    assertArtifactSweepFence(
+      projectArtifactGenerationFence(drafts, request.projectId),
+      request.generationFence,
+      'artifact-gc-working-draft-fence-changed',
+      request.projectId,
+    )
+    assertArtifactSweepFence(
+      projectArtifactIdentityFence(artifacts, request.projectId),
+      request.artifactIdentityFence,
+      'artifact-gc-artifact-fence-changed',
+      request.projectId,
+    )
+    assertArtifactSweepFence(
+      projectArtifactRootFence(roots, request.projectId),
+      request.rootFence,
+      'artifact-gc-root-fence-changed',
+      request.projectId,
+    )
+    const nextStores = new Map([...this.#stores].map(([name, records]) => [name, new Map(records)]))
+    for (const artifact of request.deletionCandidates) {
+      nextStores
+        .get('artifacts')
+        .delete(encodeStorageKey([request.projectId, artifact.artifactId, artifact.sourceRevision]))
+    }
+    this.#stores = nextStores
+    return clone({
+      schemaVersion: 1,
+      status: 'committed',
+      projectId: request.projectId,
+      deletedArtifacts: request.deletionCandidates,
+    })
   }
 
   async flush() {

@@ -1,3 +1,11 @@
+import {
+  normalizeArtifactRootFence,
+  validateArtifactReadRequest,
+  validateArtifactRecord,
+  validateArtifactRootReadRequest,
+  validateArtifactRootRecord,
+  validateArtifactSweepRequest,
+} from './artifact-contracts.mjs'
 import { canonicalJsonStringify, hashCanonicalJson } from './canonical-json.mjs'
 import {
   createAgentPersistenceCheckpointId,
@@ -12,7 +20,11 @@ import {
   validateReceiptLineageReadRequest,
 } from './contracts.mjs'
 import { DASHBOARD_STORAGE_ERROR_CODE, DashboardStorageError, isDashboardStorageError } from './errors.mjs'
-import { advanceAgentSessionPersistenceRecord } from './lifecycle.mjs'
+import {
+  advanceAgentSessionPersistenceRecord,
+  normalizeArtifactRootRecord,
+  normalizeStoredArtifactIdentity,
+} from './lifecycle.mjs'
 import {
   DASHBOARD_STORAGE_DATABASE_NAME,
   DASHBOARD_STORAGE_DATABASE_VERSION,
@@ -176,6 +188,43 @@ const invalidatedProvenance = (record, batch) => ({
   draftGeneration: batch.draft.draftGeneration,
   token: 'unknown',
 })
+
+const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
+const artifactIdentityKey = value => `${value.artifactId}\u0000${value.sourceRevision}`
+
+const projectArtifactGenerationFence = (records, projectId) =>
+  records
+    .filter(record => record?.projectId === projectId)
+    .map(record => {
+      if (
+        typeof record.branchId !== 'string' ||
+        record.branchId.length === 0 ||
+        !Number.isSafeInteger(record.draftGeneration) ||
+        record.draftGeneration < 0
+      ) {
+        throw new DashboardStorageError(
+          DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+          'stored-working-draft-generation-is-invalid',
+          { projectId },
+        )
+      }
+      return { branchId: record.branchId, draftGeneration: record.draftGeneration }
+    })
+    .sort((left, right) => compareText(left.branchId, right.branchId))
+
+const projectArtifactIdentityFence = (records, projectId) =>
+  records
+    .filter(record => record?.projectId === projectId)
+    .map(normalizeStoredArtifactIdentity)
+    .sort((left, right) => compareText(artifactIdentityKey(left), artifactIdentityKey(right)))
+
+const projectArtifactRootFence = (records, projectId) =>
+  normalizeArtifactRootFence(records.filter(record => record?.projectId === projectId).map(normalizeArtifactRootRecord))
+
+const assertArtifactSweepFence = (actual, expected, reason, projectId) => {
+  if (canonicalJsonStringify(actual) === canonicalJsonStringify(expected)) return
+  throw new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.generationConflict, reason, { projectId })
+}
 
 export class IndexedDbDashboardStorageBackend {
   #databasePromise = null
@@ -612,6 +661,245 @@ export class IndexedDbDashboardStorageBackend {
           projectId: request.projectId,
           branchId: request.branchId,
         })
+      }
+    })
+  }
+
+  async createArtifact(value) {
+    this.#assertActive()
+    const artifact = validateArtifactRecord(value)
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      let writeError = null
+      try {
+        transaction = database.transaction(['artifacts'], 'readwrite')
+        completed = transactionCompletion(transaction)
+        const store = transaction.objectStore('artifacts')
+        const existing = await requestResult(
+          store.get([artifact.projectId, artifact.artifactId, artifact.sourceRevision]),
+        )
+        if (existing !== undefined) {
+          if (canonicalJsonStringify(existing) !== canonicalJsonStringify(artifact)) {
+            abortQuietly(transaction)
+            await completed.catch(() => undefined)
+            throw new DashboardStorageError(
+              DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+              'artifact-revision-was-reused-with-different-bytes',
+              {
+                projectId: artifact.projectId,
+                artifactId: artifact.artifactId,
+                sourceRevision: artifact.sourceRevision,
+              },
+            )
+          }
+          await completed
+          return clone({ schemaVersion: 1, status: 'reconciled', artifact: existing })
+        }
+        const request = store.add(artifact)
+        request.onerror = () => {
+          writeError = request.error
+        }
+        await completed
+        return clone({ schemaVersion: 1, status: 'created', artifact })
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(writeError ?? error, 'artifact-create', {
+          projectId: artifact.projectId,
+          artifactId: artifact.artifactId,
+          sourceRevision: artifact.sourceRevision,
+        })
+      }
+    })
+  }
+
+  async readArtifact(value) {
+    this.#assertActive()
+    const request = validateArtifactReadRequest(value)
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      try {
+        transaction = database.transaction(['artifacts'], 'readonly')
+        completed = transactionCompletion(transaction)
+        const stored = await requestResult(
+          transaction.objectStore('artifacts').get([request.projectId, request.artifactId, request.sourceRevision]),
+        )
+        await completed
+        return stored === undefined ? null : clone(validateArtifactRecord(stored))
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(error, 'artifact-read', {
+          projectId: request.projectId,
+          artifactId: request.artifactId,
+          sourceRevision: request.sourceRevision,
+        })
+      }
+    })
+  }
+
+  async createArtifactRoot(value) {
+    this.#assertActive()
+    const root = validateArtifactRootRecord(value)
+    const key = [root.projectId, root.branchId, root.ownerType, root.ownerId, root.artifactId, root.sourceRevision]
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      let writeError = null
+      try {
+        transaction = database.transaction(['artifactRefs'], 'readwrite')
+        completed = transactionCompletion(transaction)
+        const store = transaction.objectStore('artifactRefs')
+        const existing = await requestResult(store.get(key))
+        if (existing !== undefined) {
+          if (canonicalJsonStringify(existing) !== canonicalJsonStringify(root)) {
+            abortQuietly(transaction)
+            await completed.catch(() => undefined)
+            throw new DashboardStorageError(
+              DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+              'artifact-root-identity-was-reused-with-different-bytes',
+              { projectId: root.projectId, branchId: root.branchId },
+            )
+          }
+          await completed
+          return clone({ schemaVersion: 1, status: 'reconciled', root: existing })
+        }
+        const request = store.add(root)
+        request.onerror = () => {
+          writeError = request.error
+        }
+        await completed
+        return clone({ schemaVersion: 1, status: 'created', root })
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(writeError ?? error, 'artifact-root-create', {
+          projectId: root.projectId,
+          branchId: root.branchId,
+        })
+      }
+    })
+  }
+
+  async readArtifactRoot(value) {
+    this.#assertActive()
+    const root = validateArtifactRootReadRequest(value)
+    const key = [root.projectId, root.branchId, root.ownerType, root.ownerId, root.artifactId, root.sourceRevision]
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      try {
+        transaction = database.transaction(['artifactRefs'], 'readonly')
+        completed = transactionCompletion(transaction)
+        const stored = await requestResult(transaction.objectStore('artifactRefs').get(key))
+        await completed
+        return stored === undefined ? null : clone(validateArtifactRootRecord(stored))
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(error, 'artifact-root-read', {
+          projectId: root.projectId,
+          branchId: root.branchId,
+        })
+      }
+    })
+  }
+
+  async deleteArtifactRoot(value) {
+    this.#assertActive()
+    const root = validateArtifactRootReadRequest(value)
+    const key = [root.projectId, root.branchId, root.ownerType, root.ownerId, root.artifactId, root.sourceRevision]
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      let writeError = null
+      try {
+        transaction = database.transaction(['artifactRefs'], 'readwrite')
+        completed = transactionCompletion(transaction)
+        const store = transaction.objectStore('artifactRefs')
+        const existing = await requestResult(store.get(key))
+        if (existing === undefined) {
+          await completed
+          return clone({ schemaVersion: 1, status: 'absent', root })
+        }
+        const request = store.delete(key)
+        request.onerror = () => {
+          writeError = request.error
+        }
+        await completed
+        return clone({ schemaVersion: 1, status: 'deleted', root })
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(writeError ?? error, 'artifact-root-delete', {
+          projectId: root.projectId,
+          branchId: root.branchId,
+        })
+      }
+    })
+  }
+
+  async sweepArtifacts(value) {
+    this.#assertActive()
+    const request = validateArtifactSweepRequest(value)
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      let writeError = null
+      try {
+        transaction = database.transaction(['workingDrafts', 'artifacts', 'artifactRefs'], 'readwrite')
+        completed = transactionCompletion(transaction)
+        const workingDrafts = transaction.objectStore('workingDrafts')
+        const artifacts = transaction.objectStore('artifacts')
+        const artifactRefs = transaction.objectStore('artifactRefs')
+        const [storedDrafts, storedArtifacts, storedRoots] = await Promise.all([
+          requestResult(workingDrafts.getAll()),
+          requestResult(artifacts.getAll()),
+          requestResult(artifactRefs.getAll()),
+        ])
+        assertArtifactSweepFence(
+          projectArtifactGenerationFence(storedDrafts, request.projectId),
+          request.generationFence,
+          'artifact-gc-working-draft-fence-changed',
+          request.projectId,
+        )
+        assertArtifactSweepFence(
+          projectArtifactIdentityFence(storedArtifacts, request.projectId),
+          request.artifactIdentityFence,
+          'artifact-gc-artifact-fence-changed',
+          request.projectId,
+        )
+        assertArtifactSweepFence(
+          projectArtifactRootFence(storedRoots, request.projectId),
+          request.rootFence,
+          'artifact-gc-root-fence-changed',
+          request.projectId,
+        )
+        for (const artifact of request.deletionCandidates) {
+          const deletion = artifacts.delete([request.projectId, artifact.artifactId, artifact.sourceRevision])
+          deletion.onerror = () => {
+            writeError = deletion.error
+          }
+        }
+        await completed
+        return clone({
+          schemaVersion: 1,
+          status: 'committed',
+          projectId: request.projectId,
+          deletedArtifacts: request.deletionCandidates,
+        })
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(writeError ?? error, 'artifact-gc-sweep', { projectId: request.projectId })
       }
     })
   }

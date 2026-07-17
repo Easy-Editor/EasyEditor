@@ -241,9 +241,16 @@ export interface DashboardRetainedArtifactV1 extends DashboardArtifactIdentityV1
 
 export interface DashboardArtifactGcDryRunV1 extends DashboardArtifactRootEnumerationV1 {
   readonly dryRun: true
+  readonly artifactIdentityFence: readonly DashboardArtifactIdentityV1[]
+  readonly rootFence: readonly DashboardArtifactRootV1[]
   readonly retainedArtifacts: readonly DashboardRetainedArtifactV1[]
   readonly missingArtifacts: readonly DashboardRetainedArtifactV1[]
   readonly deletionCandidates: readonly DashboardArtifactIdentityV1[]
+}
+
+export interface DashboardArtifactGcSweepResultV1 extends Omit<DashboardArtifactGcDryRunV1, 'dryRun'> {
+  readonly dryRun: false
+  readonly deletedArtifacts: readonly DashboardArtifactIdentityV1[]
 }
 
 export declare const DASHBOARD_AGENT_SESSION_STATUSES: readonly DashboardAgentSessionStatus[]

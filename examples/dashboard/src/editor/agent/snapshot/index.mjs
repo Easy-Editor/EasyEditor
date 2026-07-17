@@ -1,13 +1,7 @@
+import { readCanonicalNodeArtifactRef } from '../../../lib/storage/artifact-contracts.mjs'
+
 const OMIT = Symbol('omit')
 const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
-const ARTIFACT_REVISION_ALLOWLIST = Object.freeze([
-  'artifactId',
-  'logicalComponentId',
-  'sourceIntegrity',
-  'sourceRevision',
-])
-const ARTIFACT_TARGET_ALLOWLIST = Object.freeze(['buildIntegrity', 'materialId', 'materialVersion'])
-const ARTIFACT_TARGET_KINDS = new Set(['local-material', 'online'])
 const DASHBOARD_RECT_KEYS = Object.freeze(['height', 'width', 'x', 'y'])
 
 export const compareCodeUnits = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
@@ -236,34 +230,30 @@ const projectStringArray = value => {
   return result
 }
 
-const projectStringFields = (value, keys) => {
-  if (!isPlainRecord(value)) return null
-  const result = Object.create(null)
-  for (const key of keys) {
-    const item = readOwnDataValue(value, key)
-    if (typeof item === 'string') result[key] = item
+const copyOwnDescriptor = (source, key, target) => {
+  const descriptor = isObjectLike(source) ? Reflect.getOwnPropertyDescriptor(source, key) : undefined
+  if (descriptor) Reflect.defineProperty(target, key, descriptor)
+  return descriptor
+}
+
+const createArtifactBindingView = node => {
+  const binding = {}
+  copyOwnDescriptor(node, '$agent', binding)
+  copyOwnDescriptor(node, 'artifactRef', binding)
+
+  const extraDescriptor = isObjectLike(node) ? Reflect.getOwnPropertyDescriptor(node, 'extra') : undefined
+  if (!extraDescriptor) return binding
+  if (!('value' in extraDescriptor)) {
+    Reflect.defineProperty(binding, 'extra', extraDescriptor)
+    return binding
   }
-  return result
-}
-
-const projectArtifactRevision = value => projectStringFields(value, ARTIFACT_REVISION_ALLOWLIST)
-
-const projectArtifactTarget = value => {
-  if (!isPlainRecord(value)) return null
-  const result = projectStringFields(value, ARTIFACT_TARGET_ALLOWLIST)
-  const kind = readOwnDataValue(value, 'kind')
-  if (ARTIFACT_TARGET_KINDS.has(kind)) result.kind = kind
-  return Object.keys(result).length ? result : null
-}
-
-const projectArtifactRef = value => {
-  if (!isPlainRecord(value)) return null
-  const result = projectArtifactRevision(value)
-  const target = projectArtifactTarget(readOwnDataValue(value, 'target'))
-  if (target) result.target = target
-  const rollbackTo = projectArtifactRevision(readOwnDataValue(value, 'rollbackTo'))
-  if (rollbackTo && Object.keys(rollbackTo).length) result.rollbackTo = rollbackTo
-  return Object.keys(result).length ? result : null
+  const extra = extraDescriptor.value
+  const artifactRefDescriptor = isObjectLike(extra) ? Reflect.getOwnPropertyDescriptor(extra, 'artifactRef') : undefined
+  if (!artifactRefDescriptor) return binding
+  const literalNestedExtra = {}
+  Reflect.defineProperty(literalNestedExtra, 'artifactRef', artifactRefDescriptor)
+  Reflect.defineProperty(binding, 'extra', { ...extraDescriptor, value: literalNestedExtra })
+  return binding
 }
 
 const projectDashboardState = value => {
@@ -284,7 +274,7 @@ const projectNodeExtra = node => {
   if (typeof title === 'string') result.title = title
   const dashboard = projectDashboardState(readOwnDataValue(node, '$dashboard'))
   if (dashboard) result.$dashboard = dashboard
-  const artifactRef = projectArtifactRef(readOwnDataValue(node, 'artifactRef'))
+  const artifactRef = readCanonicalNodeArtifactRef(createArtifactBindingView(node))
   if (artifactRef) result.artifactRef = artifactRef
   return result
 }

@@ -6,47 +6,59 @@ import {
   promoteGeneratedNodeArtifact,
 } from '../src/editor/agent/phase-0-contracts.mjs'
 
-test('promotion switches only the ArtifactRef target and preserves trusted proxy identity', () => {
+const digest = character => `sha256:${character.repeat(64)}`
+
+test('promotion canonicalizes the binding, switches only ArtifactRef target, and preserves trusted proxy identity', () => {
   const onlineArtifactRef = {
     artifactId: 'artifact-kpi',
     sourceRevision: 'revision-7',
     logicalComponentId: 'logical-kpi',
-    sourceIntegrity: 'sha256-source',
+    sourceIntegrity: digest('a'),
     target: { kind: 'online' },
   }
   const binding = {
-    componentName: GENERATED_MATERIAL_HOST_COMPONENT_NAME,
+    componentName: 'LegacyGeneratedMaterial',
+    $agent: { schemaVersion: 1, artifactRef: onlineArtifactRef },
     artifactRef: onlineArtifactRef,
+    extra: { artifactRef: onlineArtifactRef, title: 'KPI' },
   }
 
   const promoted = promoteGeneratedNodeArtifact(binding, {
     kind: 'local-material',
     materialId: 'material-kpi',
     materialVersion: '1.0.0',
-    buildIntegrity: 'sha256-build',
+    buildIntegrity: digest('b'),
   })
 
   assert.equal(promoted.componentName, 'GeneratedMaterialHost')
-  assert.notStrictEqual(promoted.artifactRef, onlineArtifactRef)
-  assert.deepEqual(promoted.artifactRef, {
-    artifactId: 'artifact-kpi',
-    sourceRevision: 'revision-7',
-    logicalComponentId: 'logical-kpi',
-    sourceIntegrity: 'sha256-source',
-    target: {
-      kind: 'local-material',
-      materialId: 'material-kpi',
-      materialVersion: '1.0.0',
-      buildIntegrity: 'sha256-build',
-    },
-    rollbackTo: {
+  assert.equal(promoted.componentName, GENERATED_MATERIAL_HOST_COMPONENT_NAME)
+  assert.equal(Object.hasOwn(promoted, 'artifactRef'), false)
+  assert.deepEqual(promoted.extra, { title: 'KPI' })
+  assert.equal(Object.hasOwn(promoted.extra, 'artifactRef'), false)
+  assert.notStrictEqual(promoted.$agent.artifactRef, onlineArtifactRef)
+  assert.deepEqual(promoted.$agent, {
+    schemaVersion: 1,
+    artifactRef: {
       artifactId: 'artifact-kpi',
       sourceRevision: 'revision-7',
       logicalComponentId: 'logical-kpi',
-      sourceIntegrity: 'sha256-source',
+      sourceIntegrity: digest('a'),
+      target: {
+        kind: 'local-material',
+        materialId: 'material-kpi',
+        materialVersion: '1.0.0',
+        buildIntegrity: digest('b'),
+      },
+      rollbackTo: {
+        artifactId: 'artifact-kpi',
+        sourceRevision: 'revision-7',
+        logicalComponentId: 'logical-kpi',
+        sourceIntegrity: digest('a'),
+      },
     },
   })
   assert.deepEqual(onlineArtifactRef.target, { kind: 'online' })
+  assert.equal(Object.isFrozen(promoted), true)
 })
 
 test('configure annotations are a JSON-only sidecar for callback-backed fields', () => {

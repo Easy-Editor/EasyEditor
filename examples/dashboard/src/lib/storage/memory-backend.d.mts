@@ -26,6 +26,12 @@ export declare class MemoryDashboardStorageBackend implements DashboardStorageBa
   commitAgentPersistence: DashboardStorageBackend['commitAgentPersistence']
   putReceiptIntent: DashboardStorageBackend['putReceiptIntent']
   readReceiptLineage: DashboardStorageBackend['readReceiptLineage']
+  createArtifact: DashboardStorageBackend['createArtifact']
+  readArtifact: DashboardStorageBackend['readArtifact']
+  createArtifactRoot: DashboardStorageBackend['createArtifactRoot']
+  readArtifactRoot: DashboardStorageBackend['readArtifactRoot']
+  deleteArtifactRoot: DashboardStorageBackend['deleteArtifactRoot']
+  sweepArtifacts: DashboardStorageBackend['sweepArtifacts']
   flush: DashboardStorageBackend['flush']
   dispose: DashboardStorageBackend['dispose']
 }

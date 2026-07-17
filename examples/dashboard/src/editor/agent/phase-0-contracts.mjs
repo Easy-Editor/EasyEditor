@@ -1,3 +1,9 @@
+import {
+  readCanonicalNodeArtifactRef,
+  validateArtifactRef,
+  writeCanonicalNodeArtifactRef,
+} from '../../lib/storage/artifact-contracts.mjs'
+
 export const GENERATED_MATERIAL_HOST_COMPONENT_NAME = 'GeneratedMaterialHost'
 
 const toSourceRevision = artifactRef => ({
@@ -7,16 +13,26 @@ const toSourceRevision = artifactRef => ({
   sourceIntegrity: artifactRef.sourceIntegrity,
 })
 
-export const promoteArtifactRef = (onlineArtifactRef, target) => ({
-  ...toSourceRevision(onlineArtifactRef),
-  target: { ...target },
-  rollbackTo: toSourceRevision(onlineArtifactRef),
-})
+export const promoteArtifactRef = (onlineArtifactRef, target) => {
+  const normalizedOnlineRef = validateArtifactRef(onlineArtifactRef)
+  if (normalizedOnlineRef.target.kind !== 'online') {
+    throw new TypeError('Only an online ArtifactRef can be promoted')
+  }
+  return validateArtifactRef({
+    ...toSourceRevision(normalizedOnlineRef),
+    target: { ...target },
+    rollbackTo: toSourceRevision(normalizedOnlineRef),
+  })
+}
 
-export const promoteGeneratedNodeArtifact = (binding, target) => ({
-  componentName: GENERATED_MATERIAL_HOST_COMPONENT_NAME,
-  artifactRef: promoteArtifactRef(binding.artifactRef, target),
-})
+export const promoteGeneratedNodeArtifact = (binding, target) => {
+  const artifactRef = readCanonicalNodeArtifactRef(binding)
+  if (artifactRef === null) throw new TypeError('Generated material binding requires an ArtifactRef')
+  return writeCanonicalNodeArtifactRef(
+    { ...binding, componentName: GENERATED_MATERIAL_HOST_COMPONENT_NAME },
+    promoteArtifactRef(artifactRef, target),
+  )
+}
 
 export const defineConfigureAnnotationOverlay = overlay => overlay
 

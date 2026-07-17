@@ -726,3 +726,131 @@ test('IndexedDB coordinator matches Phase 4 session, version, grant, restore, an
     'reconciled',
   )
 })
+
+test('IndexedDB immutable artifact/root APIs and atomic GC sweep match Memory semantics', async () => {
+  const indexedDB = createFactory()
+  const backend = new IndexedDbDashboardStorageBackend({ indexedDB })
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  const artifact = {
+    schemaVersion: 1,
+    projectId: 'project-1',
+    artifactId: 'artifact-live',
+    sourceRevision: 'revision-1',
+    logicalComponentId: 'logical-live',
+    sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+    source: 'export default { mount() {}, update() {}, destroy() {} }',
+    css: '',
+    safeManifest: { schemaVersion: 1 },
+    lockedDependencies: [],
+    dependencyLockDigest: `sha256:${'b'.repeat(64)}`,
+    diagnostics: [],
+    provenance: { actor: 'test' },
+    createdAt: 1,
+    supersedes: null,
+  }
+  const liveRoot = {
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'main',
+    ownerType: 'working-draft',
+    ownerId: 'main',
+    artifactId: 'artifact-live',
+    sourceRevision: 'revision-1',
+  }
+  const missingRoot = {
+    ...liveRoot,
+    ownerType: 'receipt-intent',
+    ownerId: 'call-missing',
+    artifactId: 'artifact-missing',
+    sourceRevision: 'revision-9',
+  }
+
+  assert.equal((await backend.createArtifact(artifact)).status, 'created')
+  assert.equal((await backend.createArtifact(artifact)).status, 'reconciled')
+  await assert.rejects(
+    backend.createArtifact({ ...artifact, css: ':host { display: none; }' }),
+    error =>
+      error.code === 'integrity-mismatch' && error.reason === 'artifact-revision-was-reused-with-different-bytes',
+  )
+  assert.equal((await backend.createArtifactRoot(liveRoot)).status, 'created')
+  assert.equal((await backend.createArtifactRoot(liveRoot)).status, 'reconciled')
+  await backend.createArtifactRoot(missingRoot)
+  await coordinator.createArtifact({
+    ...artifact,
+    artifactId: 'artifact-orphan',
+    sourceRevision: 'revision-2',
+    logicalComponentId: 'logical-orphan',
+    sourceIntegrity: `sha256:${'c'.repeat(64)}`,
+  })
+  await coordinator.commit({
+    schemaVersion: 1,
+    batchId: 'artifact-gc-draft-1',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 0,
+    activeDocument: null,
+    projectSchema: { value: 1 },
+    commitKind: 'manual-save',
+    updatedAt: 1,
+    operations: [],
+  })
+
+  const restartedBackend = new IndexedDbDashboardStorageBackend({ indexedDB })
+  assert.deepEqual(
+    await restartedBackend.readArtifact({
+      schemaVersion: 1,
+      projectId: 'project-1',
+      artifactId: 'artifact-live',
+      sourceRevision: 'revision-1',
+    }),
+    artifact,
+  )
+  assert.deepEqual(await restartedBackend.readArtifactRoot(liveRoot), liveRoot)
+
+  const plan = await coordinator.planArtifactGcDryRun({ schemaVersion: 1, projectId: 'project-1' })
+  assert.deepEqual(plan.missingArtifacts, [
+    { artifactId: 'artifact-missing', sourceRevision: 'revision-9', referenceCount: 1 },
+  ])
+  assert.deepEqual(plan.deletionCandidates, [{ artifactId: 'artifact-orphan', sourceRevision: 'revision-2' }])
+  const result = await coordinator.sweepArtifactGc(plan)
+  assert.deepEqual(result.deletedArtifacts, plan.deletionCandidates)
+  assert.equal(await backend.get('artifacts', ['project-1', 'artifact-orphan', 'revision-2']), undefined)
+  assert.deepEqual(await backend.readArtifactRoot(liveRoot), liveRoot)
+  assert.deepEqual(await backend.readArtifactRoot(missingRoot), missingRoot)
+  await restartedBackend.dispose()
+})
+
+test('IndexedDB GC transaction revalidates the root fence even with no deletion candidates', async () => {
+  const indexedDB = createFactory()
+  const backend = new IndexedDbDashboardStorageBackend({ indexedDB })
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  await coordinator.commit({
+    schemaVersion: 1,
+    batchId: 'artifact-gc-empty-draft-1',
+    projectId: 'project-1',
+    branchId: 'main',
+    expectedDraftGeneration: 0,
+    activeDocument: null,
+    projectSchema: { value: 1 },
+    commitKind: 'manual-save',
+    updatedAt: 1,
+    operations: [],
+  })
+  const plan = await coordinator.planArtifactGcDryRun({ schemaVersion: 1, projectId: 'project-1' })
+  assert.deepEqual(plan.deletionCandidates, [])
+
+  await backend.createArtifactRoot({
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'main',
+    ownerType: 'checkpoint',
+    ownerId: 'checkpoint-late',
+    artifactId: 'artifact-missing',
+    sourceRevision: 'revision-late',
+  })
+  await assert.rejects(
+    coordinator.sweepArtifactGc(plan),
+    error => error.code === 'generation-conflict' && error.reason === 'artifact-gc-root-fence-changed',
+  )
+  assert.equal((await backend.getAll('artifactRefs')).length, 1)
+})

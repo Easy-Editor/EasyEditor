@@ -1,3 +1,11 @@
+import type {
+  ArtifactCreateResultV1,
+  ArtifactReadRequestV1,
+  ArtifactRecordV1,
+  ArtifactRootCreateResultV1,
+  ArtifactRootDeleteResultV1,
+  ArtifactRootRecordV1,
+} from './artifact-contracts.mjs'
 import type { JsonObject } from './canonical-json.mjs'
 import type { StorageCompatibilityMarkerV1, StringStorageReader } from './compatibility-marker.mjs'
 import type {
@@ -31,6 +39,7 @@ import type {
   DashboardAgentSessionSaveV1,
   DashboardAgentSessionScopeV1,
   DashboardArtifactGcDryRunV1,
+  DashboardArtifactGcSweepResultV1,
   DashboardArtifactRootEnumerationV1,
   DashboardLocalGrantAuthorizeV1,
   DashboardLocalGrantCheckV1,
@@ -171,8 +180,14 @@ export declare class ProjectPersistenceCoordinator {
   checkLocalGrant(value: DashboardLocalGrantCheckV1): Promise<DashboardLocalGrantDecisionV1>
   revokeLocalGrant(value: DashboardLocalGrantRevokeV1): Promise<DashboardLocalGrantMutationResultV1>
   listLocalGrants(value: DashboardLocalGrantListV1): Promise<readonly DashboardLocalGrantRecordV1[]>
+  createArtifact(value: ArtifactRecordV1): Promise<ArtifactCreateResultV1>
+  readArtifact(value: ArtifactReadRequestV1): Promise<ArtifactRecordV1 | null>
+  createArtifactRoot(value: ArtifactRootRecordV1): Promise<ArtifactRootCreateResultV1>
+  readArtifactRoot(value: ArtifactRootRecordV1): Promise<ArtifactRootRecordV1 | null>
+  deleteArtifactRoot(value: ArtifactRootRecordV1): Promise<ArtifactRootDeleteResultV1>
   enumerateArtifactRoots(value: DashboardProjectListV1): Promise<DashboardArtifactRootEnumerationV1>
   planArtifactGcDryRun(value: DashboardProjectListV1): Promise<DashboardArtifactGcDryRunV1>
+  sweepArtifactGc(value: DashboardArtifactGcDryRunV1): Promise<DashboardArtifactGcSweepResultV1>
   recordReceiptIntent(value: DashboardReceiptIntentV1): Promise<DashboardReceiptIntentV1>
   readReceiptLineage(value: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult>
   readCompensationRun(value: DashboardCompensationRunReadRequestV1): Promise<JsonObject | null>
