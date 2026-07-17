@@ -52,6 +52,7 @@ export const createOnlineComponentSandboxDocument = identity => {
         const revokeObjectURL = URL.revokeObjectURL.bind(URL)
         const getOwnPropertyNames = Object.getOwnPropertyNames
         const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
+        const sameValue = Object.is
         const resolvePromise = Promise.resolve.bind(Promise)
         const monotonicNow = performance.now.bind(performance)
         const lifecycleBudgetMs = 50
@@ -204,7 +205,7 @@ export const createOnlineComponentSandboxDocument = identity => {
               const after = right[propertyIndex]
               if (before.length !== after.length) throw new Error('global-pollution')
               for (let valueIndex = 0; valueIndex < before.length; valueIndex += 1) {
-                if (before[valueIndex] !== after[valueIndex]) throw new Error('global-pollution')
+                if (!sameValue(before[valueIndex], after[valueIndex])) throw new Error('global-pollution')
               }
             }
           }

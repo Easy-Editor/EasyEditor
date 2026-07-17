@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { chromium } from '@playwright/test'
 import { createOnlineComponentActivationLifecycle } from '../src/runtime/online-components/activation-lifecycle.mjs'
 import { createOnlineComponentSandboxDocument } from '../src/runtime/online-components/sandbox-document.mjs'
 import {
@@ -30,6 +31,79 @@ const resources = Object.freeze({
 
 const expectProtocolError = callback => {
   assert.throws(callback, error => error instanceof OnlineComponentProtocolError)
+}
+
+const runSandboxBatchInChromium = async (page, { source, surfaceId }) => {
+  const browserIdentity = Object.freeze({
+    nonce: `nonce-${surfaceId}-0123456789`,
+    surfaceId,
+    generation: 1,
+  })
+  const sandboxDocument = createOnlineComponentSandboxDocument(browserIdentity)
+  return page.evaluate(
+    async ({ identity: currentIdentity, sandboxDocument: currentDocument, source: currentSource }) => {
+      const frame = document.createElement('iframe')
+      frame.setAttribute('sandbox', 'allow-scripts')
+      frame.srcdoc = currentDocument
+      const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }))
+      document.body.append(frame)
+      await loaded
+
+      const channel = new MessageChannel()
+      const messages = []
+      channel.port1.onmessage = event => messages.push(event.data)
+      channel.port1.start()
+      frame.contentWindow?.postMessage(
+        {
+          kind: 'online-component.connect',
+          protocolVersion: 1,
+          ...currentIdentity,
+        },
+        '*',
+        [channel.port2],
+      )
+
+      const waitForMessage = async predicate => {
+        const timeoutAt = performance.now() + 3_000
+        while (!messages.some(predicate)) {
+          if (performance.now() >= timeoutAt) throw new Error('sandbox browser regression timed out')
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      }
+      await waitForMessage(message => message.kind === 'online-component.ready')
+      channel.port1.postMessage({
+        kind: 'online-component.render-batch',
+        protocolVersion: 1,
+        ...currentIdentity,
+        sequence: 1,
+        updates: [
+          {
+            instanceId: 'node-1',
+            revisionKey: 'artifact-1@revision-1',
+            rect: { x: 0, y: 0, width: 100, height: 100 },
+            visible: true,
+            generatedZ: 1,
+            payload: {
+              artifact: { source: currentSource, css: '', dependencies: [] },
+              props: {},
+              data: null,
+              theme: {},
+              size: { width: 100, height: 100 },
+              assets: [],
+            },
+          },
+        ],
+        removals: [],
+      })
+      await waitForMessage(
+        message => message.kind === 'online-component.batch-applied' || message.kind === 'online-component.fault',
+      )
+      channel.port1.close()
+      frame.remove()
+      return messages
+    },
+    { identity: browserIdentity, sandboxDocument, source },
+  )
 }
 
 test('connect and sandbox messages require the exact version, nonce, surface, generation, and keys', () => {
@@ -185,10 +259,72 @@ test('sandbox document freezes the opaque-origin no-network boundary and per-ins
   assert.match(document, /pendingTaskCount/)
   assert.match(document, /captureRealm/)
   assert.match(document, /global-pollution/)
+  assert.match(document, /const sameValue = Object\.is/)
+  assert.match(document, /!sameValue\(before\[valueIndex\], after\[valueIndex\]\)/)
+  assert.doesNotMatch(document, /before\[valueIndex\] !== after\[valueIndex\]/)
   assert.doesNotMatch(document, /unsafe-inline/)
   assert.doesNotMatch(document, /unsafe-eval/)
   assert.doesNotMatch(document, /allow-same-origin/)
   assert.doesNotMatch(document, /window\.parent\.document/)
+})
+
+test('Chromium realm checks accept intrinsic NaN while still faulting explicit global pollution', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  const cleanMessages = await runSandboxBatchInChromium(page, {
+    surfaceId: 'clean-surface',
+    source: "export default { mount(root) { root.textContent = 'ok' }, update() {}, destroy() {} }",
+  })
+  assert.equal(
+    cleanMessages.some(message => message.kind === 'online-component.fault'),
+    false,
+  )
+  assert.deepEqual(
+    cleanMessages.find(message => message.kind === 'online-component.batch-applied'),
+    {
+      kind: 'online-component.batch-applied',
+      protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+      nonce: 'nonce-clean-surface-0123456789',
+      surfaceId: 'clean-surface',
+      generation: 1,
+      sequence: 1,
+      resources: {
+        instanceCount: 1,
+        listenerCount: 1,
+        pendingTaskCount: 0,
+        objectUrlCount: 0,
+      },
+    },
+  )
+
+  const pollutedMessages = await runSandboxBatchInChromium(page, {
+    surfaceId: 'polluted-surface',
+    source: 'Object.prototype.__g008Pollution__ = true; export default { mount() {}, update() {}, destroy() {} }',
+  })
+  assert.equal(
+    pollutedMessages.some(message => message.kind === 'online-component.batch-applied'),
+    false,
+  )
+  assert.deepEqual(
+    pollutedMessages.find(message => message.kind === 'online-component.fault'),
+    {
+      kind: 'online-component.fault',
+      protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+      nonce: 'nonce-polluted-surface-0123456789',
+      surfaceId: 'polluted-surface',
+      generation: 1,
+      code: 'global-pollution',
+      instanceId: 'node-1',
+      resources: {
+        instanceCount: 1,
+        listenerCount: 1,
+        pendingTaskCount: 0,
+        objectUrlCount: 0,
+      },
+    },
+  )
 })
 
 test('activation lifecycle writes pending before activation, clears only on rehydrate, and quarantines stale markers', () => {
