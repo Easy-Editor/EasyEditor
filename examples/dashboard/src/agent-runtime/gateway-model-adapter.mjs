@@ -1,7 +1,4 @@
-import type { ModelAdapter, ModelEvent, ModelTurnRequest } from '@easy-editor/agent-runtime/worker'
-
 export const DEFAULT_GATEWAY_MODEL_PATH = '/api/agent/model/stream'
-
 const DEFAULT_DEADLINE_MS = 60_000
 const DEFAULT_MAX_RESPONSE_BYTES = 1_100_000
 const DEFAULT_MAX_RESPONSE_LINES = 258
@@ -13,39 +10,12 @@ const MAX_MESSAGE_CHUNKS = 31
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SAME_ORIGIN_PATH = /^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,255}$/u
 const encoder = new TextEncoder()
-
 const SYSTEM_MESSAGE = [
   'Return only one JSON array of EasyEditor ModelEvent objects.',
   'Do not use Markdown or prose outside the JSON array.',
   'The following user messages are consecutive chunks of one exact ModelTurnRequest JSON document.',
 ].join(' ')
-
-export interface GatewayModelAdapterOptions {
-  readonly providerId: string
-  readonly model: string
-  readonly path?: string
-  readonly fetch?: typeof globalThis.fetch
-  readonly deadlineMs?: number
-  readonly maxResponseBytes?: number
-  readonly maxResponseLines?: number
-  readonly maxEvents?: number
-  readonly maxOutputBytes?: number
-}
-
-export type GatewayModelAdapterErrorCode =
-  | 'gateway-aborted'
-  | 'gateway-deadline'
-  | 'gateway-http'
-  | 'gateway-rate-limited'
-  | 'gateway-unavailable'
-  | 'invalid-config'
-  | 'invalid-correlation'
-  | 'invalid-gateway-stream'
-  | 'invalid-model-output'
-  | 'request-budget-exceeded'
-  | 'response-budget-exceeded'
-
-const ERROR_MESSAGES: Readonly<Record<GatewayModelAdapterErrorCode, string>> = Object.freeze({
+const ERROR_MESSAGES = Object.freeze({
   'gateway-aborted': 'The model gateway request was aborted',
   'gateway-deadline': 'The model gateway request exceeded its deadline',
   'gateway-http': 'The model gateway rejected the request',
@@ -58,42 +28,23 @@ const ERROR_MESSAGES: Readonly<Record<GatewayModelAdapterErrorCode, string>> = O
   'request-budget-exceeded': 'The model gateway request exceeded its budget',
   'response-budget-exceeded': 'The model gateway response exceeded its budget',
 })
-
 export class GatewayModelAdapterError extends Error {
-  readonly code: GatewayModelAdapterErrorCode
-
-  constructor(code: GatewayModelAdapterErrorCode) {
+  code
+  constructor(code) {
     super(ERROR_MESSAGES[code])
     this.name = 'GatewayModelAdapterError'
     this.code = code
   }
 }
-
-type ResolvedOptions = Readonly<{
-  providerId: string
-  model: string
-  path: string
-  fetch: typeof globalThis.fetch
-  deadlineMs: number
-  maxResponseBytes: number
-  maxResponseLines: number
-  maxEvents: number
-  maxOutputBytes: number
-}>
-
-type Correlation = Pick<ModelTurnRequest, 'sessionId' | 'taskId' | 'stepId' | 'modelRequestId'>
-
-function fail(code: GatewayModelAdapterErrorCode): never {
+function fail(code) {
   throw new GatewayModelAdapterError(code)
 }
-
-const positiveInteger = (value: number | undefined, fallback: number): number => {
+const positiveInteger = (value, fallback) => {
   const resolved = value ?? fallback
   if (!Number.isSafeInteger(resolved) || resolved < 1) fail('invalid-config')
   return resolved
 }
-
-const resolveOptions = (options: GatewayModelAdapterOptions): ResolvedOptions => {
+const resolveOptions = options => {
   if (!ID.test(options.providerId) || !ID.test(options.model)) fail('invalid-config')
   const path = options.path ?? DEFAULT_GATEWAY_MODEL_PATH
   if (!SAME_ORIGIN_PATH.test(path) || path.includes('?') || path.includes('#')) fail('invalid-config')
@@ -111,9 +62,8 @@ const resolveOptions = (options: GatewayModelAdapterOptions): ResolvedOptions =>
     maxOutputBytes: positiveInteger(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
   })
 }
-
-const chunksOf = (value: string): readonly string[] => {
-  const chunks: string[] = []
+const chunksOf = value => {
+  const chunks = []
   let chunk = ''
   for (const character of value) {
     if (chunk.length + character.length > MESSAGE_CHUNK_LENGTH) {
@@ -126,9 +76,8 @@ const chunksOf = (value: string): readonly string[] => {
   if (chunks.length < 1 || chunks.length > MAX_MESSAGE_CHUNKS) fail('request-budget-exceeded')
   return chunks
 }
-
-const gatewayBody = (request: ModelTurnRequest, options: ResolvedOptions) => {
-  let serialized: string
+const gatewayBody = (request, options) => {
+  let serialized
   try {
     serialized = JSON.stringify(request)
   } catch {
@@ -153,24 +102,19 @@ const gatewayBody = (request: ModelTurnRequest, options: ResolvedOptions) => {
     maxOutputTokens: 4_096,
   }
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-
-const exactKeys = (value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []) => {
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const exactKeys = (value, required, optional = []) => {
   const allowed = new Set([...required, ...optional])
   const keys = Object.keys(value)
   return required.every(key => Object.hasOwn(value, key)) && keys.every(key => allowed.has(key))
 }
-
-const assertCorrelation = (frame: Record<string, unknown>, expected: Correlation) => {
-  for (const key of ['sessionId', 'taskId', 'stepId', 'modelRequestId'] as const) {
+const assertCorrelation = (frame, expected) => {
+  for (const key of ['sessionId', 'taskId', 'stepId', 'modelRequestId']) {
     if (frame[key] !== expected[key]) fail('invalid-correlation')
   }
 }
-
-const parseFrame = (line: string, correlation: Correlation): Record<string, unknown> => {
-  let frame: unknown
+const parseFrame = (line, correlation) => {
+  let frame
   try {
     frame = JSON.parse(line)
   } catch {
@@ -203,15 +147,14 @@ const parseFrame = (line: string, correlation: Correlation): Record<string, unkn
   }
   fail('invalid-gateway-stream')
 }
-
-const waitWithSignal = <Value>(promise: Promise<Value>, signal: AbortSignal): Promise<Value> =>
+const waitWithSignal = (promise, signal) =>
   new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(signal.reason)
       return
     }
     let settled = false
-    const settle = (callback: () => void) => {
+    const settle = callback => {
       if (settled) return
       settled = true
       signal.removeEventListener('abort', onAbort)
@@ -224,15 +167,9 @@ const waitWithSignal = <Value>(promise: Promise<Value>, signal: AbortSignal): Pr
       error => settle(() => reject(error)),
     )
   })
-
-const readFrames = async (
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  correlation: Correlation,
-  options: ResolvedOptions,
-  signal: AbortSignal,
-) => {
+const readFrames = async (reader, correlation, options, signal) => {
   const decoder = new TextDecoder('utf-8', { fatal: true })
-  const frames: Record<string, unknown>[] = []
+  const frames = []
   let responseBytes = 0
   let buffer = ''
   try {
@@ -262,8 +199,7 @@ const readFrames = async (
   if (buffer.length > 0 || frames.length === 0) fail('invalid-gateway-stream')
   return frames
 }
-
-const modelEventsFrom = (frames: readonly Record<string, unknown>[], options: ResolvedOptions): readonly unknown[] => {
+const modelEventsFrom = (frames, options) => {
   if (frames[0]?.kind !== 'started') fail('invalid-gateway-stream')
   let terminal = false
   let output = ''
@@ -276,7 +212,7 @@ const modelEventsFrom = (frames: readonly Record<string, unknown>[], options: Re
     eventCount += 1
     if (eventCount > options.maxEvents) fail('response-budget-exceeded')
     if (frame.kind === 'delta') {
-      const delta = frame.delta as string
+      const delta = frame.delta
       outputBytes += encoder.encode(delta).byteLength
       if (outputBytes > options.maxOutputBytes) fail('response-budget-exceeded')
       output += delta
@@ -291,7 +227,7 @@ const modelEventsFrom = (frames: readonly Record<string, unknown>[], options: Re
   }
   if (remoteError) fail('gateway-unavailable')
   if (!terminal || output.length === 0) fail('invalid-gateway-stream')
-  let parsed: unknown
+  let parsed
   try {
     parsed = JSON.parse(output)
   } catch {
@@ -300,8 +236,7 @@ const modelEventsFrom = (frames: readonly Record<string, unknown>[], options: Re
   if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > options.maxEvents) fail('invalid-model-output')
   return parsed
 }
-
-const createDeadline = (source: AbortSignal, timeoutMs: number) => {
+const createDeadline = (source, timeoutMs) => {
   const controller = new AbortController()
   let deadlineExceeded = false
   const onAbort = () => controller.abort(source.reason)
@@ -320,23 +255,19 @@ const createDeadline = (source: AbortSignal, timeoutMs: number) => {
     },
   }
 }
-
-const statusFailure = (status: number): never => {
+const statusFailure = status => {
   if (status === 429) return fail('gateway-rate-limited')
   if (status >= 500) return fail('gateway-unavailable')
   return fail('gateway-http')
 }
-
-export class GatewayModelAdapter implements ModelAdapter {
-  readonly #options: ResolvedOptions
-
-  constructor(options: GatewayModelAdapterOptions) {
+export class GatewayModelAdapter {
+  #options
+  constructor(options) {
     this.#options = resolveOptions(options)
   }
-
-  async *run(request: ModelTurnRequest, signal: AbortSignal): AsyncIterable<ModelEvent> {
+  async *run(request, signal) {
     const deadline = createDeadline(signal, this.#options.deadlineMs)
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let reader
     let streamComplete = false
     try {
       const response = await waitWithSignal(
@@ -369,7 +300,7 @@ export class GatewayModelAdapter implements ModelAdapter {
       }
       const frames = await readFrames(reader, correlation, this.#options, deadline.signal)
       streamComplete = true
-      for (const event of modelEventsFrom(frames, this.#options)) yield event as ModelEvent
+      for (const event of modelEventsFrom(frames, this.#options)) yield event
     } catch (error) {
       if (signal.aborted) throw new DOMException(ERROR_MESSAGES['gateway-aborted'], 'AbortError')
       if (deadline.deadlineExceeded()) throw new GatewayModelAdapterError('gateway-deadline')

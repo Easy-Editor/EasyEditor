@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+export * from './vite-adapter.mjs'
+
 export const MODEL_GATEWAY_PATH: '/api/agent/model/stream'
 export const MODEL_GATEWAY_SCHEMA_VERSION: 1
 export const MODEL_GATEWAY_MAX_BODY_BYTES: number

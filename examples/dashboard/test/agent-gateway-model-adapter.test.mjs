@@ -5,7 +5,7 @@ import {
   DEFAULT_GATEWAY_MODEL_PATH,
   GatewayModelAdapter,
   GatewayModelAdapterError,
-} from '../src/agent-runtime/gateway-model-adapter.ts'
+} from '../src/agent-runtime/gateway-model-adapter.mjs'
 
 const encoder = new TextEncoder()
 const correlation = {

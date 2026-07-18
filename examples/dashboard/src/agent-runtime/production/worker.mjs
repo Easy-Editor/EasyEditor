@@ -1,5 +1,5 @@
 import { startAgentWorker } from '@easy-editor/agent-runtime/worker'
-import { GatewayModelAdapter } from '../gateway-model-adapter.ts'
+import { GatewayModelAdapter } from '../gateway-model-adapter.mjs'
 import { PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION, parseProductionAgentWorkerStartMessage } from './protocol.mjs'
 
 let started = false

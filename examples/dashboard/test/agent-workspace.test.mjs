@@ -1,5 +1,4 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -24,7 +23,7 @@ const loadTranspiledTypeScriptTests = async () => {
   const outputDirectory = await mkdtemp(join(testDirectory, '.agent-workspace-tests-'))
 
   try {
-    await writeFile(join(outputDirectory, 'package.json'), '{"type":"commonjs"}\n')
+    await writeFile(join(outputDirectory, 'package.json'), '{"type":"module"}\n')
 
     for (const fileName of sourceFileNames) {
       const source = await readFile(join(workspaceDirectory, fileName), 'utf8')
@@ -33,7 +32,7 @@ const loadTranspiledTypeScriptTests = async () => {
         reportDiagnostics: true,
         compilerOptions: {
           esModuleInterop: true,
-          module: typescript.ModuleKind.CommonJS,
+          module: typescript.ModuleKind.ESNext,
           rewriteRelativeImportExtensions: true,
           target: typescript.ScriptTarget.ES2022,
         },
@@ -53,9 +52,8 @@ const loadTranspiledTypeScriptTests = async () => {
       await writeFile(join(outputDirectory, fileName.replace(/\.ts$/, '.js')), result.outputText)
     }
 
-    const require = createRequire(import.meta.url)
     for (const fileName of testFileNames) {
-      require(join(outputDirectory, fileName.replace(/\.ts$/, '.js')))
+      await import(pathToFileURL(join(outputDirectory, fileName.replace(/\.ts$/, '.js'))).href)
     }
   } finally {
     await rm(outputDirectory, { force: true, recursive: true })

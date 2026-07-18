@@ -12,6 +12,7 @@ export * from './contract.mjs'
 export * from './handler.mjs'
 export * from './node-adapter.mjs'
 export * from './openai-provider.mjs'
+export * from './vite-adapter.mjs'
 
 export const AGENT_MODEL_GATEWAY_ENABLED_ENV = 'EASY_EDITOR_AGENT_GATEWAY_ENABLED'
 export const AGENT_MODEL_GATEWAY_CONFIG_ENV = 'EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON'

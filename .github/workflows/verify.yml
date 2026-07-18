@@ -156,7 +156,7 @@ jobs:
       - name: Verify Dashboard runtime boundaries
         run: |
           pnpm --dir examples/dashboard lint
-          pnpm --dir examples/dashboard test
+          NODE_OPTIONS=--experimental-global-webcrypto pnpm --dir examples/dashboard test
           pnpm --dir examples/dashboard build:deps
           pnpm --dir examples/dashboard exec tsc --project tsconfig.app.json --noEmit
           pnpm --dir examples/dashboard build:only

@@ -5,7 +5,11 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { type UserConfig, defineConfig } from 'vite'
 import { type DataProxyMiddlewareOptions, createEnvironmentDataProxyMiddleware } from './server/data/index.mjs'
-import { type ModelGatewayMiddlewareOptions, createEnvironmentModelGatewayMiddleware } from './server/gateway/index.mjs'
+import {
+  type ModelGatewayMiddlewareOptions,
+  createEnvironmentModelGatewayMiddleware,
+  createModelGatewayVitePlugin,
+} from './server/gateway/index.mjs'
 import {
   type OnlineComponentDependencyMiddlewareOptions,
   createEnvironmentOnlineComponentDependencyMiddleware,
@@ -57,14 +61,7 @@ export const createDashboardViteConfig = ({
       __EASY_EDITOR_AGENT_RUNTIME_E2E__: JSON.stringify(agentRuntimeE2EEnabled),
     },
     plugins: [
-      {
-        name: 'easy-editor-agent-model-gateway',
-        configureServer(server) {
-          server.middlewares.use((request, response, next) => {
-            void agentModelGatewayMiddleware(request, response, next)
-          })
-        },
-      },
+      createModelGatewayVitePlugin(agentModelGatewayMiddleware),
       {
         name: 'easy-editor-material-promotion',
         configureServer(server) {

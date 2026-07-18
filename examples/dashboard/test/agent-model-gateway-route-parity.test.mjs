@@ -5,9 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { MODEL_GATEWAY_PATH } from '../server/gateway/index.mjs'
+import {
+  MODEL_GATEWAY_PATH,
+  MODEL_GATEWAY_VITE_PLUGIN_NAME,
+  createEnvironmentModelGatewayMiddleware,
+  createModelGatewayVitePlugin,
+} from '../server/gateway/index.mjs'
 import { createDashboardServer } from '../server/index.mjs'
-import { createDashboardViteConfig } from '../vite.config.mts'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -24,19 +28,20 @@ const originFor = server => {
 }
 
 const registerViteGatewayMiddleware = ({ env, handler }) => {
-  const config = createDashboardViteConfig({ env, agentModelGatewayOptions: { handler } })
-  const plugin = config.plugins.find(candidate => candidate?.name === 'easy-editor-agent-model-gateway')
-  assert.ok(plugin && typeof plugin.configureServer === 'function')
-  let middleware
+  const gatewayMiddleware = createEnvironmentModelGatewayMiddleware({ env, handler })
+  const plugin = createModelGatewayVitePlugin(gatewayMiddleware)
+  assert.equal(plugin.name, MODEL_GATEWAY_VITE_PLUGIN_NAME)
+  assert.equal(typeof plugin.configureServer, 'function')
+  let registeredMiddleware
   plugin.configureServer({
     middlewares: {
       use(value) {
-        middleware = value
+        registeredMiddleware = value
       },
     },
   })
-  assert.equal(typeof middleware, 'function')
-  return middleware
+  assert.equal(typeof registeredMiddleware, 'function')
+  return registeredMiddleware
 }
 
 const createViteServer = ({ env, handler }) => {
