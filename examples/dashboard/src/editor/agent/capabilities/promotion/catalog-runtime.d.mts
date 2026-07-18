@@ -1,6 +1,7 @@
 import type { Snippet } from '@easy-editor/core'
 import type { ArtifactReadRequestV1, ArtifactRecordV1 } from '../../../../lib/storage/artifact-contracts.mjs'
 import type { DashboardLocalMaterialCatalogClient, LocalMaterialCatalogItemV1 } from './catalog-client.mjs'
+import type { DashboardMaterialGcRuntime } from './material-gc-runtime.mjs'
 
 export type LocalMaterialCatalogAvailability = 'available' | 'unavailable'
 export type LocalMaterialCatalogUnavailableReason =
@@ -59,5 +60,6 @@ export declare const createDashboardLocalMaterialCatalogRuntime: {
     readonly client: Pick<DashboardLocalMaterialCatalogClient, 'listMaterials'>
     readonly persistence: DashboardLocalMaterialCatalogPersistencePort
     readonly hashBytes?: (bytes: Uint8Array) => ArrayBuffer | ArrayBufferView | Promise<ArrayBuffer | ArrayBufferView>
+    readonly withMaterialAdmission?: DashboardMaterialGcRuntime['withMaterialAdmission']
   }): DashboardLocalMaterialCatalogRuntime
 }

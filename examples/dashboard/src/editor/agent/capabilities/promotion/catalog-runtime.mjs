@@ -6,6 +6,7 @@ import {
 } from './catalog-client.mjs'
 
 const SOURCE_IDENTITY_FIELDS = Object.freeze(['artifactId', 'sourceRevision', 'logicalComponentId', 'sourceIntegrity'])
+const MATERIAL_ADMISSION_REASON = 'catalog-ready'
 
 const freezeSnapshot = ({ status, projectId = null, materials = [], failure = null }) =>
   Object.freeze({
@@ -56,6 +57,25 @@ const currentScope = getPersistenceSnapshot => {
     projectId: typeof snapshot?.projectId === 'string' && snapshot.projectId ? snapshot.projectId : null,
     signature: persistenceSignature(snapshot),
   }
+}
+
+const materialIdentityKey = ref => `${ref.materialId}\0${ref.materialVersion}\0${ref.buildIntegrity}`
+
+const compareMaterialIdentity = (left, right) => {
+  const leftKey = materialIdentityKey(left)
+  const rightKey = materialIdentityKey(right)
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+}
+
+const collectValidatedMaterialRefs = materials => {
+  const refs = new Map()
+  for (const material of materials) {
+    if (material.availability !== 'available') continue
+    const { materialId, materialVersion, buildIntegrity } = material.artifactRef.target
+    const ref = Object.freeze({ materialId, materialVersion, buildIntegrity })
+    refs.set(materialIdentityKey(ref), ref)
+  }
+  return Object.freeze([...refs.values()].sort(compareMaterialIdentity))
 }
 
 const validateLocalArtifactPresence = async ({ material, projectId, readArtifact, hashBytes }) => {
@@ -116,6 +136,12 @@ export const createDashboardLocalMaterialCatalogRuntime = options => {
   const subscribePersistence = requireMethod(options?.persistence, 'subscribe', 'persistence')
   const hashBytes = options?.hashBytes
   if (hashBytes !== undefined && typeof hashBytes !== 'function') throw new TypeError('hashBytes must be a function')
+  const withMaterialAdmission = Object.hasOwn(options ?? {}, 'withMaterialAdmission')
+    ? options.withMaterialAdmission
+    : undefined
+  if (withMaterialAdmission !== undefined && typeof withMaterialAdmission !== 'function') {
+    throw new TypeError('withMaterialAdmission must be a function')
+  }
 
   const listeners = new Set()
   let disposed = false
@@ -176,10 +202,55 @@ export const createDashboardLocalMaterialCatalogRuntime = options => {
         )
       }
       const latestScope = currentScope(getPersistenceSnapshot)
-      if (disposed || generation !== runGeneration || latestScope.projectId !== scope.projectId || !latestScope.ready) {
+      if (
+        disposed ||
+        generation !== runGeneration ||
+        latestScope.signature !== scope.signature ||
+        latestScope.projectId !== scope.projectId ||
+        !latestScope.ready
+      ) {
         return snapshot
       }
-      publish(freezeSnapshot({ status: 'ready', projectId: scope.projectId, materials }))
+      const readySnapshot = freezeSnapshot({ status: 'ready', projectId: scope.projectId, materials })
+      if (withMaterialAdmission === undefined) {
+        publish(readySnapshot)
+      } else {
+        let operationOpen = true
+        let operationInvocations = 0
+        const operation = () => {
+          if (!operationOpen) return snapshot
+          operationInvocations += 1
+          return snapshot
+        }
+        try {
+          const admissionResult = withMaterialAdmission(
+            Object.freeze({
+              schemaVersion: 1,
+              projectId: scope.projectId,
+              materialRefs: collectValidatedMaterialRefs(materials),
+              reason: MATERIAL_ADMISSION_REASON,
+            }),
+            operation,
+          )
+          if (admissionResult && typeof admissionResult.then === 'function') await admissionResult
+        } finally {
+          operationOpen = false
+        }
+        if (operationInvocations !== 1) {
+          throw new TypeError('withMaterialAdmission must invoke the catalog operation exactly once')
+        }
+        const admittedScope = currentScope(getPersistenceSnapshot)
+        if (
+          disposed ||
+          generation !== runGeneration ||
+          admittedScope.signature !== scope.signature ||
+          admittedScope.projectId !== scope.projectId ||
+          !admittedScope.ready
+        ) {
+          return snapshot
+        }
+        publish(readySnapshot)
+      }
     } catch (error) {
       if (disposed || generation !== runGeneration || error?.code === 'aborted') return snapshot
       const status =

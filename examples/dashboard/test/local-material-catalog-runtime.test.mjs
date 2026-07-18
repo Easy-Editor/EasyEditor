@@ -99,6 +99,14 @@ const waitFor = async assertion => {
   throw lastError
 }
 
+const deferred = () => {
+  let resolve
+  const promise = new Promise(resolvePromise => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 const createPersistence = ({ artifacts = new Map(), initialSnapshot } = {}) => {
   const listeners = new Set()
   let snapshot =
@@ -339,8 +347,15 @@ test('catalog client rejects declared and streamed responses over one MiB', asyn
 })
 
 test('catalog runtime is inert while flags are off and never performs a request', async () => {
-  const effects = { fetch: 0, getSnapshot: 0, subscribe: 0, readArtifact: 0, hashBytes: 0 }
-  const runtime = createDashboardLocalMaterialCatalogRuntime({ enabled: false })
+  const effects = { fetch: 0, getSnapshot: 0, subscribe: 0, readArtifact: 0, hashBytes: 0, admission: 0 }
+  const disabledOptions = { enabled: false }
+  Object.defineProperty(disabledOptions, 'withMaterialAdmission', {
+    get() {
+      effects.admission += 1
+      throw new Error('disabled catalog must not read admission authority')
+    },
+  })
+  const runtime = createDashboardLocalMaterialCatalogRuntime(disabledOptions)
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(Object.isFrozen(runtime), true)
   assert.deepEqual(runtime.getSnapshot(), {
@@ -358,7 +373,7 @@ test('catalog runtime is inert while flags are off and never performs a request'
   assert.deepEqual(await runtime.refresh(), runtime.getSnapshot())
   unsubscribe()
   runtime.dispose()
-  assert.deepEqual(effects, { fetch: 0, getSnapshot: 0, subscribe: 0, readArtifact: 0, hashBytes: 0 })
+  assert.deepEqual(effects, { fetch: 0, getSnapshot: 0, subscribe: 0, readArtifact: 0, hashBytes: 0, admission: 0 })
 
   const instrumented = createDashboardLocalMaterialCatalogRuntime({
     enabled: false,
@@ -372,7 +387,246 @@ test('catalog runtime is inert while flags are off and never performs a request'
   })
   await instrumented.refresh()
   instrumented.dispose()
-  assert.deepEqual(effects, { fetch: 0, getSnapshot: 0, subscribe: 0, readArtifact: 0, hashBytes: 0 })
+  assert.deepEqual(effects, { fetch: 0, getSnapshot: 0, subscribe: 0, readArtifact: 0, hashBytes: 0, admission: 0 })
+})
+
+test('catalog runtime publishes ready only after one admission callback completes with every validated identity', async () => {
+  const persistence = createPersistence({
+    artifacts: new Map([
+      ['project-a:artifact-a:revision-a', artifactRecord('a')],
+      ['project-a:artifact-c:revision-c', artifactRecord('c')],
+    ]),
+  })
+  const admissionGate = deferred()
+  const admissions = []
+  const events = []
+  const runtime = createDashboardLocalMaterialCatalogRuntime({
+    enabled: true,
+    client: {
+      async listMaterials() {
+        return normalizeLocalMaterialCatalogList({
+          schemaVersion: 1,
+          materials: [catalogItem('a'), catalogItem('b'), catalogItem('c')],
+        })
+      },
+    },
+    persistence,
+    hashBytes: digestBytes,
+    async withMaterialAdmission(input, operation) {
+      admissions.push(structuredClone(input))
+      events.push('admission-started')
+      await admissionGate.promise
+      events.push('admission-acknowledged')
+      return operation(Object.freeze({ status: 'admitted' }))
+    },
+  })
+  runtime.subscribe(() => {
+    if (runtime.getSnapshot().status === 'ready') events.push('ready-published')
+  })
+
+  await waitFor(() => assert.equal(admissions.length, 1))
+  assert.equal(runtime.getSnapshot().status, 'loading')
+  assert.deepEqual(events, ['admission-started'])
+  assert.deepEqual(admissions, [
+    {
+      schemaVersion: 1,
+      projectId: 'project-a',
+      materialRefs: [artifactRef('a').target, artifactRef('c').target].map(({ kind: _kind, ...identity }) => identity),
+      reason: 'catalog-ready',
+    },
+  ])
+  assert.equal(
+    new Set(admissions[0].materialRefs.map(ref => `${ref.materialId}\0${ref.materialVersion}\0${ref.buildIntegrity}`))
+      .size,
+    admissions[0].materialRefs.length,
+  )
+
+  admissionGate.resolve()
+  await waitFor(() => assert.equal(runtime.getSnapshot().status, 'ready'))
+  assert.deepEqual(events, ['admission-started', 'admission-acknowledged', 'ready-published'])
+  assert.deepEqual(
+    runtime.getSnapshot().materials.map(material => [material.artifactRef.target.materialId, material.availability]),
+    [
+      ['material-a', 'available'],
+      ['material-b', 'unavailable'],
+      ['material-c', 'available'],
+    ],
+  )
+  runtime.dispose()
+})
+
+test('catalog runtime admission rejection fail-closes without ever publishing a ready snapshot', async () => {
+  const persistence = createPersistence({
+    artifacts: new Map([['project-a:artifact-a:revision-a', artifactRecord('a')]]),
+  })
+  const observedStatuses = []
+  const rejection = Object.assign(new Error('durable admission rejected'), {
+    code: 'admission-rejected',
+    retryable: true,
+  })
+  const runtime = createDashboardLocalMaterialCatalogRuntime({
+    enabled: true,
+    client: {
+      async listMaterials() {
+        return normalizeLocalMaterialCatalogList({ schemaVersion: 1, materials: [catalogItem('a')] })
+      },
+    },
+    persistence,
+    hashBytes: digestBytes,
+    async withMaterialAdmission() {
+      throw rejection
+    },
+  })
+  runtime.subscribe(() => observedStatuses.push(runtime.getSnapshot().status))
+
+  await waitFor(() => assert.equal(runtime.getSnapshot().status, 'fail-closed'))
+  assert.equal(observedStatuses.includes('ready'), false)
+  assert.deepEqual(runtime.getSnapshot().materials, [])
+  assert.deepEqual(runtime.getSnapshot().failure, {
+    code: 'admission-rejected',
+    message: 'durable admission rejected',
+    retryable: true,
+  })
+  runtime.dispose()
+})
+
+test('catalog runtime fail-closes without transient ready publication when admission invokes its operation twice', async () => {
+  const persistence = createPersistence({
+    artifacts: new Map([['project-a:artifact-a:revision-a', artifactRecord('a')]]),
+  })
+  const observedStatuses = []
+  const runtime = createDashboardLocalMaterialCatalogRuntime({
+    enabled: true,
+    client: {
+      async listMaterials() {
+        return normalizeLocalMaterialCatalogList({ schemaVersion: 1, materials: [catalogItem('a')] })
+      },
+    },
+    persistence,
+    hashBytes: digestBytes,
+    withMaterialAdmission(_input, operation) {
+      operation(Object.freeze({ status: 'admitted' }))
+      operation(Object.freeze({ status: 'admitted' }))
+    },
+  })
+  runtime.subscribe(() => observedStatuses.push(runtime.getSnapshot().status))
+
+  await waitFor(() => assert.equal(runtime.getSnapshot().status, 'fail-closed'))
+  assert.equal(observedStatuses.includes('ready'), false)
+  assert.match(runtime.getSnapshot().failure.message, /exactly once/u)
+  runtime.dispose()
+})
+
+test('catalog runtime permanently ignores operation calls arriving after admission returns or rejects', async () => {
+  for (const outcome of ['returned', 'rejected']) {
+    let lateOperation = null
+    const observedStatuses = []
+    const runtime = createDashboardLocalMaterialCatalogRuntime({
+      enabled: true,
+      client: {
+        async listMaterials() {
+          return normalizeLocalMaterialCatalogList({ schemaVersion: 1, materials: [catalogItem('a')] })
+        },
+      },
+      persistence: createPersistence({
+        artifacts: new Map([['project-a:artifact-a:revision-a', artifactRecord('a')]]),
+      }),
+      hashBytes: digestBytes,
+      withMaterialAdmission(_input, operation) {
+        lateOperation = operation
+        if (outcome === 'rejected') return Promise.reject(new Error('admission wrapper rejected'))
+      },
+    })
+    runtime.subscribe(() => observedStatuses.push(runtime.getSnapshot().status))
+
+    await waitFor(() => assert.equal(runtime.getSnapshot().status, 'fail-closed'))
+    assert.equal(typeof lateOperation, 'function')
+    const failedSnapshot = runtime.getSnapshot()
+    lateOperation(Object.freeze({ status: 'admitted' }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.strictEqual(runtime.getSnapshot(), failedSnapshot, outcome)
+    assert.equal(observedStatuses.includes('ready'), false, outcome)
+    runtime.dispose()
+  }
+})
+
+test('catalog runtime cannot publish a stale scope after its admission acknowledgement', async () => {
+  const persistence = createPersistence({
+    artifacts: new Map([['project-a:artifact-a:revision-a', artifactRecord('a')]]),
+  })
+  const admissions = []
+  const readyPublications = []
+  const runtime = createDashboardLocalMaterialCatalogRuntime({
+    enabled: true,
+    client: {
+      async listMaterials() {
+        return normalizeLocalMaterialCatalogList({ schemaVersion: 1, materials: [catalogItem('a')] })
+      },
+    },
+    persistence,
+    hashBytes: digestBytes,
+    withMaterialAdmission(input, operation) {
+      const gate = deferred()
+      const completed = deferred()
+      const entry = { input: structuredClone(input), gate, completed }
+      admissions.push(entry)
+      return gate.promise
+        .then(() => operation(Object.freeze({ status: 'admitted' })))
+        .finally(() => completed.resolve())
+    },
+  })
+  runtime.subscribe(() => {
+    if (runtime.getSnapshot().status === 'ready') readyPublications.push(runtime.getSnapshot())
+  })
+
+  await waitFor(() => assert.equal(admissions.length, 1))
+  persistence.setSnapshot({
+    state: 'ready',
+    projectId: 'project-a',
+    branchId: 'branch-restored',
+    draftGeneration: 1,
+  })
+  await waitFor(() => assert.equal(admissions.length, 2))
+
+  admissions[0].gate.resolve()
+  await admissions[0].completed.promise
+  assert.equal(runtime.getSnapshot().status, 'loading')
+  assert.equal(readyPublications.length, 0)
+
+  admissions[1].gate.resolve()
+  await waitFor(() => assert.equal(runtime.getSnapshot().status, 'ready'))
+  assert.equal(readyPublications.length, 1)
+  runtime.dispose()
+})
+
+test('catalog runtime without an own admission option preserves ready behavior without consulting getters', async () => {
+  let inheritedGetterReads = 0
+  const options = Object.assign(
+    Object.create({
+      get withMaterialAdmission() {
+        inheritedGetterReads += 1
+        throw new Error('an omitted admission option must not be consulted')
+      },
+    }),
+    {
+      enabled: true,
+      client: {
+        async listMaterials() {
+          return normalizeLocalMaterialCatalogList({ schemaVersion: 1, materials: [catalogItem('a')] })
+        },
+      },
+      persistence: createPersistence({
+        artifacts: new Map([['project-a:artifact-a:revision-a', artifactRecord('a')]]),
+      }),
+      hashBytes: digestBytes,
+    },
+  )
+  const runtime = createDashboardLocalMaterialCatalogRuntime(options)
+
+  await waitFor(() => assert.equal(runtime.getSnapshot().status, 'ready'))
+  assert.equal(inheritedGetterReads, 0)
+  assert.equal(runtime.getSnapshot().materials[0].availability, 'available')
+  runtime.dispose()
 })
 
 test('catalog runtime verifies local IndexedDB source identity and integrity before enabling a snippet', async () => {
