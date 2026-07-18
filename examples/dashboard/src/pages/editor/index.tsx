@@ -46,7 +46,7 @@ const AppLayout = () => {
 
     let mounted = true
     const integration = startDashboardAgentWorkspacePageIntegration({
-      enabled: true,
+      enabled: agentEnabled,
       e2eEnabled: import.meta.env.VITE_E2E === '1',
       storage: window.sessionStorage,
       registerEditorDisposer: registerDashboardEditorDisposer,

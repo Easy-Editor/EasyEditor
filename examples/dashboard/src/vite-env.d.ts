@@ -7,6 +7,12 @@ import type { DashboardAgentWorkspaceE2EProbeState } from './pages/editor/AgentW
 declare global {
   const __EASY_EDITOR_AGENT_RUNTIME_E2E__: boolean
 
+  interface ImportMetaEnv {
+    readonly VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID?: string
+    readonly VITE_DASHBOARD_AGENT_MODEL?: string
+    readonly VITE_DASHBOARD_AGENT_MODEL_PATH?: string
+  }
+
   interface Window {
     readonly __EASY_EDITOR_E2E__?: Readonly<{
       getAgentWorkspaceState: () => DashboardAgentWorkspaceE2EProbeState | null

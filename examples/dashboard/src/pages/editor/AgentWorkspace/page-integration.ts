@@ -1,5 +1,9 @@
 import type { AgentWorkerEndpoint } from '@easy-editor/agent-runtime'
 import type {
+  ProductionAgentGrantAuthority,
+  ProductionAgentModelConfig,
+} from '../../../agent-runtime/production/index.mjs'
+import type {
   AgentRuntimeE2ERecovery,
   AgentRuntimeE2EScriptedModelStep,
 } from '../../../editor/agent/runtime-e2e/index.mjs'
@@ -36,6 +40,14 @@ type AgentRuntimeE2ESurface = Readonly<{
   >
 }>
 
+type AgentRuntimeProductionSurface = Readonly<{
+  readProductionAgentModelConfig(source?: Readonly<Record<string, unknown>>): Readonly<ProductionAgentModelConfig>
+  createProductionAgentGrantAuthority(config: ProductionAgentModelConfig): Readonly<ProductionAgentGrantAuthority>
+  loadProductionAgentWorkerEndpointFactory(): Promise<
+    (options: Readonly<{ config: ProductionAgentModelConfig }>) => AgentWorkerEndpoint
+  >
+}>
+
 const E2E_GRANT_AUTHORITY = Object.freeze({
   userId: 'dashboard-e2e-user',
   policyVersion: 'dashboard-e2e-policy-v1',
@@ -53,10 +65,12 @@ export interface DashboardAgentWorkspacePageIntegrationOptions {
   readonly enabled: boolean
   readonly e2eEnabled: boolean
   readonly storage: StorageReader
+  readonly environment?: Readonly<Record<string, unknown>>
   readonly createComposition?: (
     options: DashboardAgentWorkspaceCompositionOptions,
   ) => Promise<DashboardAgentWorkspaceComposition>
   readonly loadE2E?: () => Promise<AgentRuntimeE2ESurface>
+  readonly loadProduction?: () => Promise<AgentRuntimeProductionSurface>
   readonly registerEditorDisposer: (disposer: () => Promise<void>) => () => void
   readonly registerE2EProbe: (probe: () => DashboardAgentWorkspaceE2EProbeState) => () => void
   readonly onReady: (composition: DashboardAgentWorkspaceComposition) => void
@@ -70,7 +84,17 @@ export interface DashboardAgentWorkspacePageIntegration {
 
 const loadDefaultE2ESurface = (): Promise<AgentRuntimeE2ESurface> => import('@/editor/agent/runtime-e2e/index.mjs')
 
-type AgentRuntimeE2ECompositionOptions = Readonly<{
+const loadDefaultProductionSurface = (): Promise<AgentRuntimeProductionSurface> =>
+  import('../../../agent-runtime/production/index.mjs')
+
+const productionModelEnvironment = (): Readonly<Record<string, unknown>> =>
+  Object.freeze({
+    VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID: import.meta.env.VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID,
+    VITE_DASHBOARD_AGENT_MODEL: import.meta.env.VITE_DASHBOARD_AGENT_MODEL,
+    VITE_DASHBOARD_AGENT_MODEL_PATH: import.meta.env.VITE_DASHBOARD_AGENT_MODEL_PATH,
+  })
+
+type AgentRuntimeWorkerCompositionOptions = Readonly<{
   workerFactory: () => AgentWorkerEndpoint
   recoveryBridge?: DashboardAgentWorkspaceRecoveryBridge
   grantAuthority: DashboardAgentWorkspaceCompositionOptions['grantAuthority']
@@ -78,7 +102,7 @@ type AgentRuntimeE2ECompositionOptions = Readonly<{
 
 const loadE2ECompositionOptions: (
   options: DashboardAgentWorkspacePageIntegrationOptions,
-) => Promise<AgentRuntimeE2ECompositionOptions | undefined> = AGENT_RUNTIME_E2E_BUILD_ENABLED
+) => Promise<AgentRuntimeWorkerCompositionOptions | undefined> = AGENT_RUNTIME_E2E_BUILD_ENABLED
   ? async options => {
       if (!options.e2eEnabled) return undefined
       const surface = await (options.loadE2E ?? loadDefaultE2ESurface)()
@@ -98,6 +122,24 @@ const loadE2ECompositionOptions: (
       })
     }
   : async () => undefined
+
+const loadProductionCompositionOptions = async (
+  options: DashboardAgentWorkspacePageIntegrationOptions,
+): Promise<AgentRuntimeWorkerCompositionOptions | undefined> => {
+  if (options.e2eEnabled) return undefined
+  const surface = await (options.loadProduction ?? loadDefaultProductionSurface)()
+  const config = surface.readProductionAgentModelConfig(options.environment ?? productionModelEnvironment())
+  const createEndpoint = await surface.loadProductionAgentWorkerEndpointFactory()
+  return Object.freeze({
+    workerFactory: () => createEndpoint({ config }),
+    grantAuthority: surface.createProductionAgentGrantAuthority(config),
+  })
+}
+
+const loadCompositionOptions = (
+  options: DashboardAgentWorkspacePageIntegrationOptions,
+): Promise<AgentRuntimeWorkerCompositionOptions | undefined> =>
+  options.e2eEnabled ? loadE2ECompositionOptions(options) : loadProductionCompositionOptions(options)
 
 const report = (onError: (error: unknown) => void, error: unknown): void => {
   try {
@@ -138,11 +180,11 @@ export const startDashboardAgentWorkspacePageIntegration = (
   ready = (async () => {
     let composition: DashboardAgentWorkspaceComposition | undefined
     try {
-      const e2eCompositionOptions = await loadE2ECompositionOptions(options)
+      const workerCompositionOptions = await loadCompositionOptions(options)
       if (disposed) return null
       composition = await (options.createComposition ?? createDashboardAgentWorkspaceComposition)({
         enabled: true,
-        ...(e2eCompositionOptions ?? {}),
+        ...(workerCompositionOptions ?? {}),
       })
       if (disposed) return composition
       const liveComposition = composition

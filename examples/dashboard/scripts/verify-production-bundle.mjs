@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url'
 const dashboardRoot = fileURLToPath(new URL('..', import.meta.url))
 const outputRoot = join(dashboardRoot, 'dist')
 const forbiddenMarkers = Object.freeze([
+  '@easy-editor/agent-runtime/testing',
   'AgentRuntimeE2E',
+  'ScriptedModelAdapter',
   'ScriptedModel',
   'dashboard-e2e-scripted-worker',
   'e2e-recoveries',
@@ -36,7 +38,9 @@ if (process.env.VITE_E2E === '1') {
     if (markers.length > 0) violations.push(`${relative(outputRoot, path)}: ${markers.join(', ')}`)
   }
   if (violations.length > 0) {
-    throw new Error(`Production bundle contains Agent Runtime E2E code:\n${violations.join('\n')}`)
+    throw new Error(`Production bundle contains Agent Runtime testing or E2E code:\n${violations.join('\n')}`)
   }
-  process.stdout.write('Verified production bundle excludes the Agent Runtime E2E stack.\n')
+  process.stdout.write(
+    'Verified production bundle excludes Agent Runtime testing/E2E code while allowing the production Gateway Worker.\n',
+  )
 }

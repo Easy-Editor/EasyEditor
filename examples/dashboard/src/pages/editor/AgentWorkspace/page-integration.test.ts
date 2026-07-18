@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { AgentWorkerEndpoint } from '@easy-editor/agent-runtime'
+import type { ProductionAgentModelConfig } from '../../../agent-runtime/production/index.mjs'
 import type {
   DashboardAgentWorkspaceComposition,
   DashboardAgentWorkspaceCompositionOptions,
@@ -32,22 +33,95 @@ const deferred = <Value>() => {
   return { promise, resolve }
 }
 
-test('production composition receives no scripted Worker fallback and editor disposal waits for it', async () => {
+const productionConfig: Readonly<ProductionAgentModelConfig> = Object.freeze({
+  providerId: 'provider-1',
+  model: 'model-1',
+  path: '/api/agent/model/stream',
+})
+
+const productionGrantAuthority = Object.freeze({
+  userId: 'dashboard-browser-session' as const,
+  policyVersion: 'dashboard-agent-gateway/1' as const,
+  providerId: 'provider-1',
+  providerFingerprint: 'same-origin:["/api/agent/model/stream","provider-1","model-1"]',
+  providerLabel: 'provider-1 / model-1',
+})
+
+const productionLoader =
+  (endpoint: AgentWorkerEndpoint, events: string[] = []) =>
+  async () => ({
+    readProductionAgentModelConfig(source: Readonly<Record<string, unknown>> = {}) {
+      events.push('production:read-config')
+      assert.equal(source.VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID, 'provider-1')
+      return productionConfig
+    },
+    createProductionAgentGrantAuthority(config: ProductionAgentModelConfig) {
+      events.push('production:create-grant')
+      assert.equal(config, productionConfig)
+      return productionGrantAuthority
+    },
+    async loadProductionAgentWorkerEndpointFactory() {
+      events.push('production:load-worker')
+      return (options: Readonly<{ config: ProductionAgentModelConfig }>) => {
+        assert.equal(options.config, productionConfig)
+        return endpoint
+      }
+    },
+  })
+
+test('default-off integration imports no Worker surface and allocates no page resources', async () => {
+  const integration = startDashboardAgentWorkspacePageIntegration({
+    enabled: false,
+    e2eEnabled: false,
+    storage: { getItem: () => null },
+    createComposition: async () => {
+      throw new Error('composition must remain uncreated')
+    },
+    loadE2E: async () => {
+      throw new Error('E2E surface must remain unloaded')
+    },
+    loadProduction: async () => {
+      throw new Error('production surface must remain unloaded')
+    },
+    registerEditorDisposer: () => assert.fail('default-off must not register a disposer'),
+    registerE2EProbe: () => assert.fail('default-off must not register a probe'),
+    onReady: () => assert.fail('default-off must not publish a composition'),
+    onError: error => assert.fail(error instanceof Error ? error : String(error)),
+  })
+
+  assert.equal(await integration.ready, null)
+  await integration.dispose()
+})
+
+test('production composition dynamically selects the Gateway Worker without a scripted fallback', async () => {
   const events: string[] = []
   let editorDisposer: (() => Promise<void>) | undefined
+  const endpoint: AgentWorkerEndpoint = {
+    port: {} as MessagePort,
+    onFault: () => () => undefined,
+    terminate: () => events.push('endpoint:terminate'),
+  }
   const integration = startDashboardAgentWorkspacePageIntegration({
     enabled: true,
     e2eEnabled: false,
     storage: { getItem: () => null },
+    environment: {
+      VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID: 'provider-1',
+      VITE_DASHBOARD_AGENT_MODEL: 'model-1',
+      VITE_DASHBOARD_AGENT_MODEL_PATH: '/api/agent/model/stream',
+      VITE_DASHBOARD_AGENT_PROVIDER_SECRET: 'must-not-cross-the-production-surface',
+    },
     createComposition: async (options: DashboardAgentWorkspaceCompositionOptions) => {
-      assert.equal(options.grantAuthority, undefined)
+      assert.deepEqual(options.grantAuthority, productionGrantAuthority)
       assert.equal(options.recoveryBridge, undefined)
-      events.push(`composition:create:${options.workerFactory ? 'worker' : 'unavailable'}`)
+      assert.equal(options.workerFactory?.(), endpoint)
+      events.push('composition:create:worker')
       return composition(events)
     },
     loadE2E: async () => {
       throw new Error('production must not load the scripted E2E surface')
     },
+    loadProduction: productionLoader(endpoint, events),
     registerEditorDisposer(disposer) {
       editorDisposer = disposer
       return () => events.push('editor-disposer:release')
@@ -65,7 +139,10 @@ test('production composition receives no scripted Worker fallback and editor dis
   events.push('editor:dispose-activity')
 
   assert.deepEqual(events, [
-    'composition:create:unavailable',
+    'production:read-config',
+    'production:load-worker',
+    'production:create-grant',
+    'composition:create:worker',
     'composition:ready',
     'editor-disposer:release',
     'composition:dispose',
@@ -156,6 +233,9 @@ test('E2E composition dynamically reads one script, creates the module Worker en
         }
       },
     }),
+    loadProduction: async () => {
+      throw new Error('E2E selection must not load the production Worker surface')
+    },
     registerEditorDisposer: () => () => events.push('editor-disposer:release'),
     registerE2EProbe(nextProbe) {
       probe = nextProbe
@@ -217,6 +297,9 @@ test('an empty E2E recovery fixture leaves the production recovery bridge unshad
         }
       },
     }),
+    loadProduction: async () => {
+      throw new Error('E2E selection must not load the production Worker surface')
+    },
     registerEditorDisposer: () => () => undefined,
     registerE2EProbe: () => () => undefined,
     onReady: () => undefined,
@@ -231,6 +314,11 @@ test('disposal during composition bootstrap owns the late resource once and prop
   const pending = deferred<DashboardAgentWorkspaceComposition>()
   const compositionStarted = deferred<void>()
   let disposeCalls = 0
+  const endpoint: AgentWorkerEndpoint = {
+    port: {} as MessagePort,
+    onFault: () => () => undefined,
+    terminate: () => undefined,
+  }
   const integration = startDashboardAgentWorkspacePageIntegration({
     enabled: true,
     e2eEnabled: false,
@@ -239,6 +327,8 @@ test('disposal during composition bootstrap owns the late resource once and prop
       compositionStarted.resolve()
       return pending.promise
     },
+    environment: { VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID: 'provider-1' },
+    loadProduction: productionLoader(endpoint),
     registerEditorDisposer: () => () => undefined,
     registerE2EProbe: () => () => undefined,
     onReady: () => assert.fail('a disposed integration must not publish its late composition'),
