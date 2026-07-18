@@ -1,12 +1,19 @@
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
+import { LOCAL_MATERIAL_E2E_AUTH_CONFIG } from './fixtures/local-material-promotion-lifecycle'
 
 const appPort = process.env.DASHBOARD_ONLINE_E2E_PORT ?? '4198'
 const appUrl = `http://127.0.0.1:${appPort}`
 const dashboardRoot = new URL('..', import.meta.url).pathname
+const dataRoot = join(tmpdir(), `easy-editor-online-e2e-${process.pid}-${randomUUID()}`)
+process.env.DASHBOARD_ONLINE_E2E_DATA_ROOT = dataRoot
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'generated-material-host-online.spec.ts',
+  testMatch: ['generated-material-host-online.spec.ts', 'generated-material-host-durable-lifecycle.spec.ts'],
+  globalTeardown: './fixtures/online-components-global-teardown.ts',
   expect: { timeout: 15_000 },
   forbidOnly: true,
   failOnFlakyTests: true,
@@ -29,8 +36,12 @@ export default defineConfig({
     command: `pnpm dev --host 127.0.0.1 --port ${appPort} --strictPort`,
     cwd: dashboardRoot,
     env: {
+      EASY_EDITOR_DASHBOARD_DATA_DIR: dataRoot,
+      EASY_EDITOR_MATERIAL_PROMOTION_CONFIG_JSON: JSON.stringify(LOCAL_MATERIAL_E2E_AUTH_CONFIG),
+      EASY_EDITOR_MATERIAL_PROMOTION_ENABLED: '1',
       VITE_DASHBOARD_AGENT_DATA: '1',
       VITE_DASHBOARD_AGENT_ONLINE: '1',
+      VITE_DASHBOARD_AGENT_PROMOTION: '1',
       VITE_DASHBOARD_AGENT_RUNTIME: '1',
       VITE_E2E: '1',
     },

@@ -332,12 +332,13 @@ test('an exact FailureWitness returns the original failed receipt and any mismat
   })
 })
 
-test('Dashboard registry publishes active online-artifact and data capabilities through approved paths', () => {
+test('Dashboard registry publishes active artifact, promotion, and data capabilities through approved paths', () => {
   const available = DASHBOARD_CAPABILITY_DESCRIPTORS.filter(descriptor => descriptor.availability === 'available').map(
     descriptor => descriptor.capability,
   )
   assert.deepEqual(available, [
     'artifact.createOnline',
+    'artifact.promoteLocal',
     'artifact.reviseOnline',
     'data.bind',
     'data.inspect',
@@ -350,7 +351,7 @@ test('Dashboard registry publishes active online-artifact and data capabilities 
     'task.compensate',
   ])
 
-  for (const capability of ['artifact.promoteLocal', 'project.checkpoint']) {
+  for (const capability of ['project.checkpoint']) {
     const descriptor = DASHBOARD_CAPABILITY_DESCRIPTORS.find(candidate => candidate.capability === capability)
     assert.equal(descriptor?.availability, 'unavailable')
     assert.equal(descriptor?.unavailableReason, DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON)

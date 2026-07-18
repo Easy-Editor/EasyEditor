@@ -78,8 +78,12 @@ export interface GeneratedMaterialSeed {
   readonly instanceIds: readonly string[]
 }
 
-export const seedGeneratedMaterialProject = async (page: Page): Promise<GeneratedMaterialSeed> => {
+export const seedGeneratedMaterialProject = async (
+  page: Page,
+  options: Readonly<{ instanceIds?: readonly string[] }> = {},
+): Promise<GeneratedMaterialSeed> => {
   await page.goto('/logo.svg')
+  const instanceIds = options.instanceIds ?? GENERATED_MATERIAL_INSTANCE_IDS
 
   return page.evaluate(
     async fixture => {
@@ -302,7 +306,7 @@ export const seedGeneratedMaterialProject = async (page: Page): Promise<Generate
       sourceRevision: GENERATED_MATERIAL_SOURCE_REVISION,
       revisedSourceRevision: GENERATED_MATERIAL_REVISED_SOURCE_REVISION,
       logicalComponentId: GENERATED_MATERIAL_LOGICAL_COMPONENT_ID,
-      instanceIds: GENERATED_MATERIAL_INSTANCE_IDS,
+      instanceIds,
       ordinaryId: GENERATED_MATERIAL_ORDINARY_ID,
       ordinaryText: GENERATED_MATERIAL_ORDINARY_TEXT,
       resolvedDataSourceId: 'g008-resolved-data',
