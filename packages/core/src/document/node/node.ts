@@ -517,7 +517,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   hide(flag = true) {
     this.setExtraProp('hidden', flag)
-    this.emitter.emit(NODE_EVENT.VISIBLE_CHANGE, flag)
+    this.emitter.emit(NODE_EVENT.VISIBLE_CHANGE, !flag)
   }
 
   get hidden() {
