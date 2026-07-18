@@ -8,9 +8,20 @@ import {
 
 const hashBytes = async bytes => new Uint8Array(createHash('sha256').update(bytes).digest())
 const source = 'export default { mount() {}, update() {}, destroy() {} }'
+const revisedSource = 'export default { mount() { return "revised" }, update() {}, destroy() {} }'
 const dependencySource = 'export default Object.freeze({ value: 1 })'
+const artifactCss = ':host { display: block; }'
 const hexDigest = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const sriDigest = value => `sha256-${createHash('sha256').update(value).digest('base64')}`
+
+const runtimeRevisionKey = sourceValue => {
+  const projection = {
+    source: sourceValue,
+    css: artifactCss,
+    dependencies: [{ specifier: '@customer/chart', source: dependencySource }],
+  }
+  return `artifact-${createHash('sha256').update(JSON.stringify(projection)).digest('hex')}`
+}
 
 const ref = (revision = 'revision-1') => ({
   artifactId: 'artifact-kpi',
@@ -19,6 +30,8 @@ const ref = (revision = 'revision-1') => ({
   sourceRevision: revision,
   target: { kind: 'online' },
 })
+
+const refForSource = (revision, sourceValue) => ({ ...ref(revision), sourceIntegrity: hexDigest(sourceValue) })
 
 const localMaterialRef = (revision = 'revision-local') => {
   const sourceRevision = {
@@ -67,7 +80,7 @@ const artifact = (artifactRef = ref(), overrides = {}) => ({
   sourceIntegrity: artifactRef.sourceIntegrity,
   sourceRevision: artifactRef.sourceRevision,
   source,
-  css: ':host { display: block; }',
+  css: artifactCss,
   safeManifest: { schemaVersion: 1 },
   lockedDependencies: [lockedDependency()],
   dependencyLockDigest: `sha256:${'d'.repeat(64)}`,
@@ -230,23 +243,84 @@ test('only GeneratedMaterialHost nodes can carry runtime artifact authority', as
 })
 
 test('twenty canonical instances share one host and receive only verified sandbox artifact projections', async () => {
-  const harness = createController()
+  let hashes = 0
+  const harness = createController({
+    options: {
+      hashBytes: async bytes => {
+        hashes += 1
+        return hashBytes(bytes)
+      },
+    },
+  })
   await Promise.all(
     Array.from({ length: 20 }, (_, index) => harness.controller.register(registration(`node-${index}`))),
   )
 
-  assert.equal(harness.reads(), 20)
+  assert.equal(harness.reads(), 1)
+  assert.equal(hashes, 3)
   assert.equal(harness.hosts.calls.length, 1)
   assert.equal(harness.hosts.hosts[0].instances.size, 20)
   assert.equal(harness.hosts.hosts[0].getDiagnostics().iframeCount, 1)
   const projected = harness.hosts.hosts[0].instances.get('node-0').payload.artifact
   assert.deepEqual(projected, {
     source,
-    css: ':host { display: block; }',
+    css: artifactCss,
     dependencies: [{ specifier: '@customer/chart', source: dependencySource }],
   })
   assert.doesNotMatch(JSON.stringify(projected), /finalUrl|integrity|base64|bytes|Engine|Document|Core/)
   assert.equal(harness.storage.values.size, 0)
+})
+
+test('geometry, visibility, and context updates reuse the verified immutable projection', async () => {
+  let hashes = 0
+  const harness = createController({
+    options: {
+      hashBytes: async bytes => {
+        hashes += 1
+        return hashBytes(bytes)
+      },
+    },
+  })
+  await harness.controller.register(registration('node'))
+  await harness.controller.update('node', { rect: { x: 9, y: 8, width: 640, height: 360 } })
+  await harness.controller.update('node', { visible: false })
+  await harness.controller.update('node', {
+    payload: { props: { title: 'updated' }, data: { value: 2 } },
+  })
+
+  assert.equal(harness.reads(), 1)
+  assert.equal(hashes, 3)
+  assert.equal(harness.hosts.hosts[0].updates.length, 3)
+})
+
+test('a rejected verification is evicted so a corrected immutable read can retry', async () => {
+  const hosts = createHostFactory()
+  let reads = 0
+  let hashes = 0
+  const controller = createOnlineComponentSurfaceController({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'retry-surface',
+    featureEnabled: true,
+    safeBoot: false,
+    markerStore: createStorage(),
+    hashBytes: async bytes => {
+      hashes += 1
+      return hashBytes(bytes)
+    },
+    createSurfaceHost: hosts.factory,
+    surfaceHostOptions: { mode: 'editor', mount: {} },
+    readArtifact: async artifactRef => {
+      reads += 1
+      return reads === 1 ? artifact(artifactRef, { source: `${source}\n// corrupt` }) : artifact(artifactRef)
+    },
+  })
+
+  await assert.rejects(controller.register(registration('retry')), /source digest/i)
+  assert.equal(await controller.update('retry', { visible: false }), true)
+  assert.equal(reads, 2)
+  assert.equal(hashes, 4)
+  assert.equal(hosts.calls.length, 1)
 })
 
 test('local-material promotion keeps the immutable artifact on the same sandbox projection path', async () => {
@@ -415,23 +489,75 @@ test('last-write-wins drops a late old revision update', async () => {
   assert.equal(instance.payload.artifact.source, source)
 })
 
-test('pending activation reload quarantines before reads or host creation until explicitly cleared', async () => {
+test('pending and quarantined markers isolate only their matching immutable revision', async t => {
+  for (const markerState of ['pending', 'quarantined']) {
+    await t.test(markerState, async () => {
+      const key = createOnlineComponentSurfaceMarkerStorageKey({
+        projectId: 'project-a',
+        branchId: 'main',
+        surfaceId: 'editor-surface',
+      })
+      const badRef = refForSource('revision-bad', revisedSource)
+      const badRevisionKey = runtimeRevisionKey(revisedSource)
+      const marker = {
+        state: 'pending',
+        revisionKey: badRevisionKey,
+        surfaceId: 'editor-surface',
+        activationId: 'project-a:main:editor-surface',
+        nonce: 'nonce-00000000000000000001',
+        startedAt: 1,
+      }
+      const storage = createStorage({
+        [key]: JSON.stringify({
+          schemaVersion: 1,
+          pending: markerState === 'pending' ? { [`${badRevisionKey}::editor-surface`]: marker } : {},
+          quarantined: markerState === 'quarantined' ? { [badRevisionKey]: marker } : {},
+        }),
+      })
+      const hosts = createHostFactory()
+      let reads = 0
+      const controller = createOnlineComponentSurfaceController({
+        projectId: 'project-a',
+        branchId: 'main',
+        surfaceId: 'editor-surface',
+        featureEnabled: true,
+        safeBoot: false,
+        markerStore: storage,
+        hashBytes,
+        createSurfaceHost: hosts.factory,
+        surfaceHostOptions: { mode: 'editor', mount: {} },
+        readArtifact: async artifactRef => {
+          reads += 1
+          return artifactRef.sourceRevision === badRef.sourceRevision
+            ? artifact(artifactRef, { source: revisedSource })
+            : artifact(artifactRef)
+        },
+      })
+
+      assert.equal(controller.getDiagnostics().state, 'idle')
+      assert.equal(await controller.register(registration('bad', badRef)), false)
+      assert.equal(await controller.register(registration('good')), true)
+      assert.equal(await controller.update('bad', { node: node(ref()) }), true)
+      assert.equal(reads, 2)
+      assert.equal(hosts.calls.length, 1)
+      assert.deepEqual([...hosts.hosts[0].instances.keys()].sort(), ['bad', 'good'])
+      assert.equal(controller.clearQuarantine(), false)
+      assert.deepEqual(JSON.parse(storage.values.get(key)), {
+        schemaVersion: 1,
+        pending: {},
+        quarantined: { [badRevisionKey]: marker },
+      })
+    })
+  }
+})
+
+test('a corrupt marker record fails closed until explicitly cleared', async () => {
   const key = createOnlineComponentSurfaceMarkerStorageKey({
     projectId: 'project-a',
     branchId: 'main',
     surfaceId: 'editor-surface',
   })
-  const marker = {
-    state: 'pending',
-    revisionKey: 'revision-stale',
-    surfaceId: 'editor-surface',
-    activationId: 'project-a:main:editor-surface',
-    nonce: 'nonce-00000000000000000001',
-    startedAt: 1,
-  }
-  const storage = createStorage({
-    [key]: JSON.stringify({ schemaVersion: 1, pending: { stale: marker }, quarantined: {} }),
-  })
+  const storage = createStorage({ [key]: '{not-json' })
   const hosts = createHostFactory()
   let reads = 0
   const controller = createOnlineComponentSurfaceController({
@@ -455,10 +581,82 @@ test('pending activation reload quarantines before reads or host creation until 
   assert.equal(reads, 0)
   assert.equal(hosts.calls.length, 0)
   assert.equal(controller.clearQuarantine(), true)
-  assert.equal(storage.values.has(key), false)
   assert.equal(await controller.register(registration('active')), true)
   assert.equal(reads, 1)
-  assert.equal(hosts.calls.length, 1)
+})
+
+test('malformed marker keys and foreign surface identities fail closed without prototype mutation', async t => {
+  const key = createOnlineComponentSurfaceMarkerStorageKey({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'editor-surface',
+  })
+  const revisionKey = runtimeRevisionKey(revisedSource)
+  const marker = {
+    state: 'pending',
+    revisionKey,
+    surfaceId: 'editor-surface',
+    activationId: 'project-a:main:editor-surface',
+    nonce: 'nonce-00000000000000000001',
+    startedAt: 1,
+  }
+  const foreignMarker = {
+    ...marker,
+    surfaceId: 'preview-surface',
+    activationId: 'project-a:main:preview-surface',
+  }
+  const cases = [
+    ['non-canonical pending key', JSON.stringify({ schemaVersion: 1, pending: { alias: marker }, quarantined: {} })],
+    [
+      '__proto__ pending key',
+      JSON.stringify({
+        schemaVersion: 1,
+        pending: Object.fromEntries([['__proto__', marker]]),
+        quarantined: {},
+      }),
+    ],
+    [
+      'foreign surface identity',
+      JSON.stringify({
+        schemaVersion: 1,
+        pending: { [`${revisionKey}::preview-surface`]: foreignMarker },
+        quarantined: {},
+      }),
+    ],
+    ['malformed pending map', JSON.stringify({ schemaVersion: 1, pending: [], quarantined: {} })],
+  ]
+
+  for (const [name, serialized] of cases) {
+    await t.test(name, async () => {
+      const storage = createStorage({ [key]: serialized })
+      const hosts = createHostFactory()
+      let reads = 0
+      const prototypeRevision = Object.prototype.revisionKey
+      const controller = createOnlineComponentSurfaceController({
+        projectId: 'project-a',
+        branchId: 'main',
+        surfaceId: 'editor-surface',
+        featureEnabled: true,
+        safeBoot: false,
+        markerStore: storage,
+        hashBytes,
+        createSurfaceHost: hosts.factory,
+        surfaceHostOptions: { mode: 'editor', mount: {} },
+        readArtifact: async artifactRef => {
+          reads += 1
+          return artifact(artifactRef)
+        },
+      })
+
+      assert.equal(controller.getDiagnostics().state, 'quarantined')
+      assert.equal(await controller.register(registration('blocked')), false)
+      assert.equal(reads, 0)
+      assert.equal(hosts.calls.length, 0)
+      assert.equal(Object.prototype.revisionKey, prototypeRevision)
+      assert.equal(controller.clearQuarantine(), true)
+      assert.equal(await controller.register(registration('recovered')), true)
+    })
+  }
 })
 
 test('dispose cancels pending work, disposes the one host, and reports zero resources', async () => {

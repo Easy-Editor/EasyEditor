@@ -487,15 +487,17 @@ export const createOnlineComponentSurfaceHost = options => {
   }
 
   const scheduleWork = () => {
-    if (disposed || !surfaceVisible || scheduledFrame !== undefined) return
+    if (disposed || !surfaceVisible) return
     if (pendingRestartReason) {
       scheduledWork = 'restart'
+    } else if (scheduledFrame !== undefined) {
+      return
     } else if (ready && (dirtyInstances.size > 0 || removedInstances.size > 0)) {
       scheduledWork = 'batch'
     } else {
       return
     }
-    scheduledFrame = environment.requestAnimationFrame(flushScheduledWork)
+    if (scheduledFrame === undefined) scheduledFrame = environment.requestAnimationFrame(flushScheduledWork)
   }
 
   const flushBatch = () => {
@@ -653,6 +655,8 @@ export const createOnlineComponentSurfaceHost = options => {
 
     clearFrameResources()
     if (activeInstances().length === 0) {
+      visibilityCleanup?.()
+      visibilityCleanup = undefined
       state = 'quarantined'
       return
     }

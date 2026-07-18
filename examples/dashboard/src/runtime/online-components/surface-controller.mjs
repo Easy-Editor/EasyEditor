@@ -42,21 +42,69 @@ const assertHashBytes = hashBytes => {
   return hashBytes
 }
 
-const emptyMarkerRecord = () => ({ schemaVersion: MARKER_SCHEMA_VERSION, pending: {}, quarantined: {} })
+const emptyMarkerMap = () => Object.create(null)
+const emptyMarkerRecord = () => ({
+  schemaVersion: MARKER_SCHEMA_VERSION,
+  pending: emptyMarkerMap(),
+  quarantined: emptyMarkerMap(),
+})
 
-const parseMarkerRecord = serialized => {
+const normalizeActivationMarker = (value, name, identity) => {
+  const marker = assertPlainObject(value, name)
+  const fields = Object.keys(marker).sort()
+  const expected = ['activationId', 'nonce', 'revisionKey', 'startedAt', 'state', 'surfaceId']
+  if (fields.length !== expected.length || fields.some((field, index) => field !== expected[index])) {
+    throw new TypeError(`${name} fields are invalid`)
+  }
+  if (marker.state !== 'pending') throw new TypeError(`${name}.state is invalid`)
+  assertIdentifier(marker.revisionKey, `${name}.revisionKey`)
+  assertIdentifier(marker.surfaceId, `${name}.surfaceId`)
+  assertIdentifier(marker.activationId, `${name}.activationId`)
+  assertIdentifier(marker.nonce, `${name}.nonce`)
+  if (!Number.isFinite(marker.startedAt)) throw new TypeError(`${name}.startedAt is invalid`)
+  if (marker.surfaceId !== identity.surfaceId || marker.activationId !== identity.activationId) {
+    throw new TypeError(`${name} is outside surface identity`)
+  }
+  return cloneFrozenJson(marker)
+}
+
+const normalizeMarkerMap = (value, name, identity, expectedKey) => {
+  const source = assertPlainObject(value, name)
+  const normalized = emptyMarkerMap()
+  for (const [key, candidate] of Object.entries(source)) {
+    const marker = normalizeActivationMarker(candidate, `${name}.${key}`, identity)
+    if (key !== expectedKey(marker)) throw new TypeError(`${name}.${key} key is invalid`)
+    normalized[key] = marker
+  }
+  return normalized
+}
+
+const parseMarkerRecord = (serialized, identity) => {
   if (serialized === null) return { record: emptyMarkerRecord(), corrupt: false }
   try {
     const value = JSON.parse(serialized)
     assertPlainObject(value, 'activation marker record')
+    const fields = Object.keys(value).sort()
+    const expected = ['pending', 'quarantined', 'schemaVersion']
+    if (fields.length !== expected.length || fields.some((field, index) => field !== expected[index])) {
+      throw new TypeError('activation marker record fields are invalid')
+    }
     if (value.schemaVersion !== MARKER_SCHEMA_VERSION) throw new TypeError('activation marker schema is unsupported')
-    assertPlainObject(value.pending, 'activation marker pending map')
-    assertPlainObject(value.quarantined, 'activation marker quarantine map')
     return {
       record: {
         schemaVersion: MARKER_SCHEMA_VERSION,
-        pending: { ...value.pending },
-        quarantined: { ...value.quarantined },
+        pending: normalizeMarkerMap(
+          value.pending,
+          'activation marker pending map',
+          identity,
+          marker => `${marker.revisionKey}::${marker.surfaceId}`,
+        ),
+        quarantined: normalizeMarkerMap(
+          value.quarantined,
+          'activation marker quarantine map',
+          identity,
+          marker => marker.revisionKey,
+        ),
       },
       corrupt: false,
     }
@@ -155,10 +203,9 @@ export const createBrowserOnlineComponentHashBytes = (crypto = globalThis.crypto
   return async bytes => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
 }
 
-const createPersistentMarkerAdapter = ({ storage, storageKey }) => {
-  let parsed = parseMarkerRecord(storage.getItem(storageKey))
+const createPersistentMarkerAdapter = ({ storage, storageKey, surfaceId, activationId }) => {
+  const parsed = parseMarkerRecord(storage.getItem(storageKey), { surfaceId, activationId })
   let record = parsed.record
-  const startupQuarantine = parsed.corrupt || hasEntries(record.pending) || hasEntries(record.quarantined)
 
   const persist = () => {
     if (!hasEntries(record.pending) && !hasEntries(record.quarantined)) {
@@ -169,25 +216,29 @@ const createPersistentMarkerAdapter = ({ storage, storageKey }) => {
   }
 
   if (hasEntries(record.pending)) {
+    const quarantined = Object.assign(emptyMarkerMap(), record.quarantined)
+    for (const marker of Object.values(record.pending)) quarantined[marker.revisionKey] = marker
     record = {
       schemaVersion: MARKER_SCHEMA_VERSION,
       pending: {},
-      quarantined: { ...record.quarantined, ...record.pending },
+      quarantined,
     }
     persist()
   }
 
   const reset = () => {
     record = emptyMarkerRecord()
-    parsed = { record, corrupt: false }
     storage.removeItem(storageKey)
   }
 
   return {
-    startupQuarantine,
+    failClosed: parsed.corrupt,
+    isRevisionQuarantined: revisionKey => Object.hasOwn(record.quarantined, revisionKey),
     reset,
     store: Object.freeze({
-      read: key => record.pending[key],
+      read: key =>
+        record.pending[key] ??
+        Object.values(record.quarantined).find(marker => `${marker.revisionKey}::${marker.surfaceId}` === key),
       write: (key, marker) => {
         record.pending[key] = cloneFrozenJson(marker)
         persist()
@@ -264,6 +315,7 @@ export const createOnlineComponentSurfaceController = options => {
 
   let state = featureEnabled ? (safeBoot ? 'safe-boot' : 'idle') : 'disabled'
   let markerAdapter
+  let failClosed = false
   let readArtifact
   let hashBytes
   if (state === 'idle') {
@@ -274,17 +326,20 @@ export const createOnlineComponentSurfaceController = options => {
     markerAdapter = createPersistentMarkerAdapter({
       storage,
       storageKey: createOnlineComponentSurfaceMarkerStorageKey({ projectId, branchId, surfaceId }),
+      surfaceId,
+      activationId,
     })
-    if (markerAdapter.startupQuarantine) state = 'quarantined'
+    failClosed = markerAdapter.failClosed
+    if (failClosed) state = 'quarantined'
   }
 
   const instances = new Map()
+  const artifactProjections = new Map()
   let host
   let disposed = false
   let faultCount = 0
 
-  const materializeArtifact = async artifactReference => {
-    const normalizedRef = validateArtifactRef(artifactReference)
+  const verifyArtifact = async normalizedRef => {
     const rawArtifact = await readArtifact(normalizedRef)
     if (rawArtifact === null || rawArtifact === undefined) throw new Error('artifact could not be read')
     const record = validateArtifactRecord(rawArtifact)
@@ -321,6 +376,19 @@ export const createOnlineComponentSurfaceController = options => {
     return Object.freeze({ projection, revisionKey: `artifact-${hashHex(revisionHash)}` })
   }
 
+  const materializeArtifact = artifactReference => {
+    const normalizedRef = validateArtifactRef(artifactReference)
+    const cacheKey = JSON.stringify(normalizedRef)
+    const cached = artifactProjections.get(cacheKey)
+    if (cached) return cached
+    const pending = verifyArtifact(normalizedRef).catch(error => {
+      if (artifactProjections.get(cacheKey) === pending) artifactProjections.delete(cacheKey)
+      throw error
+    })
+    artifactProjections.set(cacheKey, pending)
+    return pending
+  }
+
   const ensureHost = () => {
     if (host) return host
     host = createSurfaceHost({
@@ -345,6 +413,12 @@ export const createOnlineComponentSurfaceController = options => {
     try {
       const materialized = await materializeArtifact(record.input.artifactRef)
       if (disposed || instances.get(record.input.instanceId) !== record) return false
+      if (markerAdapter.isRevisionQuarantined(materialized.revisionKey)) {
+        if (![...instances.values()].some(candidate => candidate !== record && candidate.registered)) {
+          state = 'quarantined'
+        }
+        return false
+      }
       const update = normalizeRenderUpdate({
         instanceId: record.input.instanceId,
         revisionKey: materialized.revisionKey,
@@ -378,7 +452,7 @@ export const createOnlineComponentSurfaceController = options => {
   }
 
   const register = async input => {
-    if (disposed || state === 'disabled' || state === 'safe-boot' || state === 'quarantined') {
+    if (disposed || state === 'disabled' || state === 'safe-boot' || failClosed) {
       return false
     }
     const normalized = normalizeRegistration(input, projectId)
@@ -389,7 +463,7 @@ export const createOnlineComponentSurfaceController = options => {
   }
 
   const update = async (instanceId, patch) => {
-    if (disposed || state === 'disabled' || state === 'safe-boot' || state === 'quarantined') {
+    if (disposed || state === 'disabled' || state === 'safe-boot' || failClosed) {
       return false
     }
     assertIdentifier(instanceId, 'instanceId')
@@ -414,8 +488,9 @@ export const createOnlineComponentSurfaceController = options => {
   }
 
   const clearQuarantine = () => {
-    if (disposed || state !== 'quarantined' || !markerAdapter) return false
+    if (disposed || !failClosed || !markerAdapter) return false
     markerAdapter.reset()
+    failClosed = false
     state = 'idle'
     return true
   }
@@ -424,6 +499,7 @@ export const createOnlineComponentSurfaceController = options => {
     if (disposed) return
     disposed = true
     instances.clear()
+    artifactProjections.clear()
     host?.dispose()
     state = 'disposed'
   }

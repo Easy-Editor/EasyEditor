@@ -539,6 +539,120 @@ test('hidden surfaces pause and coalesce work until visible', () => {
   })
 })
 
+test('a revision restart supersedes an already scheduled batch without leaking it to the old frame', () => {
+  const environment = createFakeEnvironment()
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore: createMarkerStore(),
+  })
+  host.register(createInstance(1))
+  const firstFrame = makeReady(environment)
+  acknowledgeLastBatch(environment, firstFrame)
+  const firstChannel = environment.channels[0]
+  const firstGenerationMessageCount = firstChannel.port1.messages.length
+
+  host.update('node-1', {
+    rect: { x: 70, y: 35, width: 180, height: 100 },
+  })
+  host.update('node-1', {
+    revisionKey: 'artifact-kpi@revision-2',
+    payload: { props: { title: 'new revision wins' } },
+  })
+  assert.equal(environment.animationFrames.size, 1)
+
+  environment.flushAnimationFrame()
+
+  assert.equal(firstFrame.disposed, true)
+  assert.equal(firstChannel.port1.closed, true)
+  assert.equal(firstChannel.port2.closed, true)
+  assert.equal(firstChannel.port1.messages.length, firstGenerationMessageCount)
+  assert.equal(environment.frames.length, 2)
+  assert.equal(host.getDiagnostics().generation, 2)
+  assert.equal(host.getDiagnostics().restartCount, 1)
+
+  const secondFrame = makeReady(environment)
+  const rehydrate = environment.channels[1].port1.messages.at(-1)
+  assert.equal(rehydrate.updates.length, 1)
+  assert.equal(rehydrate.updates[0].revisionKey, 'artifact-kpi@revision-2')
+  assert.deepEqual(rehydrate.updates[0].rect, { x: 70, y: 35, width: 180, height: 100 })
+  assert.deepEqual(rehydrate.updates[0].payload, { props: { title: 'new revision wins' } })
+  acknowledgeLastBatch(environment, secondFrame)
+})
+
+test('a second frame load after rehydrate quarantines the active revision and releases every resource', () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const revisionKey = 'artifact-reload@revision-1'
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore,
+  })
+  host.register(createInstance(1, revisionKey))
+  const frame = makeReady(environment)
+  acknowledgeLastBatch(environment, frame)
+  assert.equal(markerStore.markers.size, 0)
+  assert.equal(host.getDiagnostics().state, 'ready')
+  assert.deepEqual(environment.activeResourceCounts(), {
+    frames: 1,
+    ports: 2,
+    shells: 1,
+    visibilityListeners: 1,
+    animationFrames: 0,
+  })
+
+  frame.triggerLoad()
+
+  assert.equal(environment.frames.length, 1)
+  assert.equal(frame.disposed, true)
+  assert.equal(frame.loadListeners.size, 0)
+  assert.equal(frame.shells.size, 0)
+  assert.equal(environment.channels[0].port1.onmessage, undefined)
+  assert.equal(environment.channels[0].port1.closed, true)
+  assert.equal(environment.channels[0].port2.closed, true)
+  assert.equal(markerStore.markers.size, 1)
+  assert.equal(markerStore.quarantined.has(revisionKey), true)
+  assert.deepEqual(environment.activeResourceCounts(), {
+    frames: 0,
+    ports: 0,
+    shells: 0,
+    visibilityListeners: 0,
+    animationFrames: 0,
+  })
+  assert.deepEqual(host.getDiagnostics(), {
+    state: 'quarantined',
+    surfaceId: 'editor-surface',
+    mode: 'editor',
+    generation: 1,
+    iframeCount: 0,
+    portCount: 0,
+    shellCount: 0,
+    instanceCount: 1,
+    scheduledFrameCount: 0,
+    batchCount: 1,
+    pendingBatchCount: 0,
+    restartCount: 0,
+    faultCount: 1,
+    rejectedMessageCount: 0,
+    listenerCount: 0,
+    pendingActivationCount: 0,
+    quarantinedRevisionCount: 1,
+    sandboxInstanceCount: 0,
+    sandboxListenerCount: 0,
+    sandboxPendingTaskCount: 0,
+    objectUrlCount: 0,
+  })
+})
+
 test('revision changes and valid faults replace the entire iframe then deterministically rehydrate', () => {
   const environment = createFakeEnvironment()
   const markerStore = createMarkerStore()
