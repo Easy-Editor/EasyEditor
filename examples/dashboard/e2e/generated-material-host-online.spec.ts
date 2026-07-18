@@ -92,6 +92,17 @@ const expectNoSurfaceResources = async (page: Page) => {
   await expect(page.locator('[data-online-component-shell]')).toHaveCount(0)
 }
 
+const waitForMutationQuiescence = async (page: Page): Promise<void> => {
+  const snapshot = await page.evaluate(async () => {
+    const runtime = await import('/src/editor/runtime.ts')
+    await runtime.dashboardMaterialGcRuntime.waitForIdle()
+    const gate = runtime.dashboardMutationQuiescenceGate
+    if (!gate) throw new Error('G009 Dashboard mutation quiescence gate is unavailable')
+    return gate.getSnapshot()
+  })
+  expect(snapshot.inputBlocked).toBe(false)
+}
+
 const installRuntimeEventRecorder = async (page: Page) => {
   await page.evaluate(eventName => {
     const target = window as Window & { __G008_RUNTIME_EVENTS__?: unknown[] }
@@ -478,6 +489,7 @@ test('20 GeneratedMaterialHost instances preserve context, independent surfaces,
   await expect(editorPrimary).toHaveAttribute('data-source-revision', GENERATED_MATERIAL_SOURCE_REVISION)
 
   const ordinaryMaterial = page.getByText(GENERATED_MATERIAL_ORDINARY_TEXT, { exact: true })
+  await waitForMutationQuiescence(page)
   await ordinaryMaterial.click()
   await expect
     .poll(() =>

@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
-import { LOCAL_MATERIAL_E2E_AUTH_CONFIG } from './fixtures/local-material-promotion-lifecycle'
+import {
+  LOCAL_MATERIAL_E2E_AUTH_CONFIG,
+  LOCAL_MATERIAL_E2E_COOKIE_NAME,
+  LOCAL_MATERIAL_E2E_SESSION_TOKEN,
+} from './fixtures/local-material-promotion-lifecycle'
 
 const appPort = process.env.DASHBOARD_ONLINE_E2E_PORT ?? '4198'
 const appUrl = `http://127.0.0.1:${appPort}`
@@ -24,6 +28,21 @@ export default defineConfig({
   use: {
     baseURL: appUrl,
     screenshot: 'only-on-failure',
+    storageState: {
+      cookies: [
+        {
+          name: LOCAL_MATERIAL_E2E_COOKIE_NAME,
+          value: LOCAL_MATERIAL_E2E_SESSION_TOKEN,
+          domain: '127.0.0.1',
+          path: '/',
+          expires: -1,
+          httpOnly: true,
+          secure: false,
+          sameSite: 'Strict',
+        },
+      ],
+      origins: [],
+    },
     trace: 'retain-on-failure',
   },
   projects: [

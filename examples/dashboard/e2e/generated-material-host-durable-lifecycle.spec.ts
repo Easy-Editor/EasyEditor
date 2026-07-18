@@ -10,11 +10,7 @@ import {
   GENERATED_MATERIAL_SOURCE_REVISION,
   seedGeneratedMaterialProject,
 } from './fixtures/generated-material-host'
-import {
-  LOCAL_MATERIAL_E2E_COOKIE_NAME,
-  LOCAL_MATERIAL_E2E_GRANT_AUTHORITY,
-  LOCAL_MATERIAL_E2E_SESSION_TOKEN,
-} from './fixtures/local-material-promotion-lifecycle'
+import { LOCAL_MATERIAL_E2E_GRANT_AUTHORITY } from './fixtures/local-material-promotion-lifecycle'
 
 const WORKSPACE_TEST_ID = 'agent-workspace'
 const EDITOR_SURFACE_ID = 'dashboard-editor-online'
@@ -318,6 +314,14 @@ const compareRootFence = (left: MaterialRootFence, right: MaterialRootFence) =>
     .localeCompare([right.branchId, right.ownerType, right.ownerId, right.artifactId, right.sourceRevision].join('\0'))
 
 const openDurableMaterialCard = async (page: Page, material: MaterialIdentity): Promise<Locator> => {
+  const quiescenceSnapshot = await page.evaluate(async () => {
+    const runtime = await import('/src/editor/runtime.ts')
+    await runtime.dashboardMaterialGcRuntime.waitForIdle()
+    const gate = runtime.dashboardMutationQuiescenceGate
+    if (!gate) throw new Error('G009 Dashboard mutation quiescence gate is unavailable')
+    return gate.getSnapshot()
+  })
+  expect(quiescenceSnapshot.inputBlocked).toBe(false)
   await page.getByRole('button', { name: '组件', exact: true }).click()
   await expect(page.getByText('Components', { exact: true })).toBeVisible()
   const durableMaterials = page.getByRole('button', { name: /本地耐久物料/u })
@@ -361,21 +365,9 @@ const dragDurableMaterialIntoCanvas = async (page: Page, card: Locator): Promise
 }
 
 test('real promotion remains durable across editor/preview reload and Workspace named-version restore', async ({
-  baseURL,
   context,
   page,
 }) => {
-  if (!baseURL) throw new Error('G009 Playwright baseURL is unavailable')
-  await context.addCookies([
-    {
-      name: LOCAL_MATERIAL_E2E_COOKIE_NAME,
-      value: LOCAL_MATERIAL_E2E_SESSION_TOKEN,
-      url: baseURL,
-      httpOnly: true,
-      sameSite: 'Strict',
-      secure: false,
-    },
-  ])
   const editorErrors = recordBrowserErrors(page)
   const seed = await seedGeneratedMaterialProject(page, { instanceIds: [GENERATED_MATERIAL_PRIMARY_ID] })
 
