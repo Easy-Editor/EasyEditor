@@ -28,6 +28,10 @@ export interface DashboardOnlineComponentSurfaceBridge {
     attached: boolean
     instanceCount: number
     scheduledFrameCount: number
+    resizeObserverCount: number
+    mutationObserverCount: number
+    listenerCount: number
+    observedElementCount: number
   }>
 }
 
@@ -35,6 +39,9 @@ export interface DashboardOnlineComponentSurfaceBridgeOptions {
   readonly requestAnimationFrame?: (callback: FrameRequestCallback) => number
   readonly cancelAnimationFrame?: (handle: number) => void
   readonly getComputedStyle?: (element: Element) => CSSStyleDeclaration
+  readonly ResizeObserver?: typeof ResizeObserver
+  readonly MutationObserver?: typeof MutationObserver
+  readonly eventTarget?: Pick<Window, 'addEventListener' | 'removeEventListener'>
   readonly onError?: (error: unknown) => void
 }
 

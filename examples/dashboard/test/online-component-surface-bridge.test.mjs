@@ -55,6 +55,91 @@ const createMount = () => ({
   },
 })
 
+const createInvalidationHarness = () => {
+  const resizeObservers = []
+  const mutationObservers = []
+  const listeners = new Map()
+
+  class FakeResizeObserver {
+    constructor(callback) {
+      this.callback = callback
+      this.observed = new Set()
+      this.disconnected = false
+      resizeObservers.push(this)
+    }
+
+    observe(target) {
+      this.observed.add(target)
+    }
+
+    unobserve(target) {
+      this.observed.delete(target)
+    }
+
+    disconnect() {
+      this.disconnected = true
+      this.observed.clear()
+    }
+
+    trigger() {
+      this.callback(
+        [...this.observed].map(target => ({ target })),
+        this,
+      )
+    }
+  }
+
+  class FakeMutationObserver {
+    constructor(callback) {
+      this.callback = callback
+      this.disconnected = false
+      this.observations = []
+      mutationObservers.push(this)
+    }
+
+    observe(target, options) {
+      this.target = target
+      this.options = options
+      this.observations.push({ target, options })
+    }
+
+    disconnect() {
+      this.disconnected = true
+    }
+
+    trigger(records) {
+      this.callback(records, this)
+    }
+  }
+
+  const eventTarget = {
+    addEventListener(type, callback, capture = false) {
+      const entries = listeners.get(type) ?? []
+      entries.push({ callback, capture })
+      listeners.set(type, entries)
+    },
+    removeEventListener(type, callback, capture = false) {
+      const entries = listeners.get(type) ?? []
+      listeners.set(
+        type,
+        entries.filter(entry => entry.callback !== callback || entry.capture !== capture),
+      )
+    },
+    emit(type) {
+      for (const entry of listeners.get(type) ?? []) entry.callback({ type })
+    },
+    listenerCount: () => [...listeners.values()].reduce((count, entries) => count + entries.length, 0),
+  }
+
+  return {
+    ResizeObserver: FakeResizeObserver,
+    MutationObserver: FakeMutationObserver,
+    eventTarget,
+    resizeObservers,
+    mutationObservers,
+  }
+}
+
 const createCancelableController = () => {
   const events = []
   const pending = []
@@ -258,6 +343,140 @@ test('disabled production composition performs no DOM query, controller construc
   assert.equal(controllers, 0)
 })
 
+test('surface discovery without MutationObserver is one-shot when the public mount is absent', () => {
+  const frames = createFrames()
+  let queries = 0
+  let controllers = 0
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge: {
+      attach() {
+        throw new Error('an absent mount cannot attach the bridge')
+      },
+    },
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: {
+      documentElement: {},
+      querySelector() {
+        queries += 1
+        return null
+      },
+    },
+    ...frames,
+    MutationObserver: false,
+    createController() {
+      controllers += 1
+      throw new Error('an absent mount cannot create a controller')
+    },
+  })
+
+  assert.equal(queries, 1)
+  assert.equal(controllers, 0)
+  assert.equal(frames.size(), 0)
+  assert.deepEqual(handle.getDiagnostics(), { state: 'discovering', controllerCreated: false })
+  frames.flush()
+  assert.equal(queries, 1)
+  assert.equal(frames.size(), 0)
+
+  handle.dispose()
+  assert.equal(frames.size(), 0)
+  assert.deepEqual(handle.getDiagnostics(), { state: 'disposed', controllerCreated: false })
+})
+
+test('surface discovery keeps mount identity live and replaces controllers only when the public mount changes', () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const mountA = { id: 'mount-a' }
+  const mountB = { id: 'mount-b' }
+  const mountC = { id: 'mount-c' }
+  let currentMount = mountA
+  const events = []
+  const bridge = {
+    attach({ controller, mount }) {
+      events.push(`attach:${mount.id}`)
+      assert.equal(controller.mount, mount)
+      return () => {
+        events.push(`release:${mount.id}`)
+        return true
+      }
+    },
+  }
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge,
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: { documentElement: {}, querySelector: () => currentMount },
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    MutationObserver: invalidations.MutationObserver,
+    createController: options => {
+      const controller = {
+        mount: options.surfaceHostOptions.mount,
+        dispose() {
+          events.push(`dispose:${this.mount.id}`)
+        },
+      }
+      events.push(`create:${controller.mount.id}`)
+      return controller
+    },
+  })
+  const observer = invalidations.mutationObservers[0]
+  assert.deepEqual(events, ['create:mount-a', 'attach:mount-a'])
+  assert.deepEqual(handle.getDiagnostics(), { state: 'active', controllerCreated: true })
+  assert.equal(observer.disconnected, false)
+
+  observer.trigger([{ type: 'childList', target: {} }])
+  observer.trigger([{ type: 'childList', target: {} }])
+  assert.equal(frames.size(), 1)
+  frames.flush()
+  assert.deepEqual(events, ['create:mount-a', 'attach:mount-a'])
+
+  currentMount = mountB
+  observer.trigger([{ type: 'childList', target: {} }])
+  observer.trigger([{ type: 'childList', target: {} }])
+  assert.equal(frames.size(), 1)
+  frames.flush()
+  assert.deepEqual(events, [
+    'create:mount-a',
+    'attach:mount-a',
+    'release:mount-a',
+    'dispose:mount-a',
+    'create:mount-b',
+    'attach:mount-b',
+  ])
+
+  currentMount = null
+  observer.trigger([{ type: 'childList', target: {} }])
+  frames.flush()
+  assert.deepEqual(events.slice(-2), ['release:mount-b', 'dispose:mount-b'])
+  assert.deepEqual(handle.getDiagnostics(), { state: 'discovering', controllerCreated: false })
+  assert.equal(observer.disconnected, false)
+
+  currentMount = mountC
+  observer.trigger([{ type: 'childList', target: {} }])
+  frames.flush()
+  assert.deepEqual(events.slice(-2), ['create:mount-c', 'attach:mount-c'])
+  assert.deepEqual(handle.getDiagnostics(), { state: 'active', controllerCreated: true })
+
+  observer.trigger([{ type: 'childList', target: {} }])
+  assert.equal(frames.size(), 1)
+  handle.dispose()
+  assert.equal(frames.size(), 0)
+  assert.equal(observer.disconnected, true)
+  assert.deepEqual(events.slice(-2), ['release:mount-c', 'dispose:mount-c'])
+  assert.deepEqual(handle.getDiagnostics(), { state: 'disposed', controllerCreated: false })
+})
+
 test('twenty bindings share one animation-frame sampler and one mount measurement per frame', async () => {
   const frames = createFrames()
   const mount = createMount()
@@ -290,8 +509,395 @@ test('twenty bindings share one animation-frame sampler and one mount measuremen
   assert.equal(mount.reads, 1)
   assert.ok(registrations.every(input => !Object.hasOwn(input.payload.props, 'onClick')))
   assert.deepEqual(registrations[0].rect, { x: 20, y: 20, width: 100, height: 50 })
+  assert.deepEqual(
+    registrations.map(input => input.generatedZ),
+    Array.from({ length: 20 }, (_, index) => index),
+    'non-DOM bindings retain deterministic connection-order fallback',
+  )
+  assert.equal(frames.size(), 1, 'twenty pending settlements must coalesce into one follow-up frame')
+  frames.flush()
+  assert.equal(frames.size(), 0, 'a stable surface must not retain an animation frame')
   for (const binding of bindings) binding.dispose()
   assert.equal(frames.size(), 0)
+})
+
+test('twenty bindings batch resize, scroll, and external mutations into one invalidation frame', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const root = createElement({ left: 100, top: 50, width: 500, height: 250 })
+  const mount = createMount()
+  const overlayChild = { overlay: true }
+  mount.parentElement = root
+  mount.isConnected = true
+  mount.contains = target => target?.overlay === true
+  const controller = {
+    register: () => Promise.resolve(true),
+    update: () => Promise.resolve(true),
+    unregister: () => true,
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    ...invalidations,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  bridge.attach({ controller, projectId: 'project-a', mount })
+  const bindings = Array.from({ length: 20 }, (_, index) =>
+    bridge.connect({
+      instanceId: `node-${index}`,
+      node,
+      props: { title: `node-${index}` },
+      element: createElement({ left: 110 + index, top: 60, width: 50, height: 25 }),
+    }),
+  )
+  assert.deepEqual(bridge.getDiagnostics(), {
+    attached: true,
+    instanceCount: 20,
+    scheduledFrameCount: 1,
+    resizeObserverCount: 1,
+    mutationObserverCount: 1,
+    listenerCount: 2,
+    observedElementCount: 21,
+  })
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(frames.size(), 0)
+
+  mount.reads = 0
+  root.reads = 0
+  invalidations.resizeObservers[0].trigger()
+  invalidations.eventTarget.emit('scroll')
+  invalidations.eventTarget.emit('resize')
+  invalidations.mutationObservers[0].trigger([{ type: 'attributes', target: root }])
+  assert.equal(frames.size(), 1)
+  frames.flush()
+  assert.equal(mount.reads, 1)
+  assert.equal(root.reads, 0, 'non-clipping ancestors do not add layout reads')
+  assert.equal(frames.size(), 0)
+
+  invalidations.mutationObservers[0].trigger([{ type: 'attributes', target: overlayChild }])
+  invalidations.mutationObservers[0].trigger([{ type: 'childList', target: mount }])
+  assert.equal(frames.size(), 0, 'overlay-owned DOM mutations must not feed back into layout sampling')
+  invalidations.mutationObservers[0].trigger([{ type: 'attributes', target: mount }])
+  assert.equal(frames.size(), 1, 'mount visibility mutations remain external invalidations')
+  frames.flush()
+  assert.equal(frames.size(), 0)
+
+  for (const binding of bindings) binding.dispose()
+  assert.deepEqual(bridge.getDiagnostics(), {
+    attached: true,
+    instanceCount: 0,
+    scheduledFrameCount: 0,
+    resizeObserverCount: 0,
+    mutationObserverCount: 0,
+    listenerCount: 0,
+    observedElementCount: 0,
+  })
+  assert.equal(invalidations.eventTarget.listenerCount(), 0)
+})
+
+test('generated z-order follows keyed DOM order and recomputes after reorder without reconnecting', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const root = createElement({ left: 100, top: 50, width: 500, height: 250 })
+  const mount = createMount()
+  mount.parentElement = root
+  mount.isConnected = true
+  mount.contains = () => false
+
+  const documentOrder = []
+  const createOrderedElement = (id, rect) => {
+    const element = { ...createElement(rect), id }
+    element.compareDocumentPosition = other => {
+      const ownIndex = documentOrder.indexOf(element)
+      const otherIndex = documentOrder.indexOf(other)
+      if (ownIndex < 0 || otherIndex < 0) return 0x01
+      if (ownIndex < otherIndex) return 0x04
+      if (ownIndex > otherIndex) return 0x02
+      return 0
+    }
+    return element
+  }
+  const firstElement = createOrderedElement('first', { left: 110, top: 60, width: 50, height: 25 })
+  const secondElement = createOrderedElement('second', { left: 170, top: 60, width: 50, height: 25 })
+  documentOrder.push(firstElement, secondElement)
+
+  const registrations = []
+  const updates = []
+  const unregistered = []
+  const controller = {
+    register(input) {
+      registrations.push(input)
+      return Promise.resolve(true)
+    },
+    update(instanceId, patch) {
+      updates.push({ instanceId, ...patch })
+      return Promise.resolve(true)
+    },
+    unregister(instanceId) {
+      unregistered.push(instanceId)
+      return true
+    },
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    ...invalidations,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  bridge.attach({ controller, projectId: 'project-a', mount })
+
+  const secondBinding = bridge.connect({
+    instanceId: 'second',
+    node,
+    props: { title: 'second' },
+    element: secondElement,
+  })
+  const firstBinding = bridge.connect({
+    instanceId: 'first',
+    node,
+    props: { title: 'first' },
+    element: firstElement,
+  })
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.deepEqual(
+    Object.fromEntries(registrations.map(input => [input.instanceId, input.generatedZ])),
+    { second: 1, first: 0 },
+    'initial z-order follows the DOM rather than connection order',
+  )
+
+  documentOrder.splice(0, documentOrder.length, secondElement, firstElement)
+  invalidations.mutationObservers[0].trigger([{ type: 'childList', target: root }])
+  assert.equal(frames.size(), 1)
+  frames.flush()
+  await Promise.resolve()
+  assert.deepEqual(Object.fromEntries(updates.slice(-2).map(input => [input.instanceId, input.generatedZ])), {
+    second: 0,
+    first: 1,
+  })
+  assert.equal(registrations.length, 2)
+  assert.deepEqual(unregistered, [])
+
+  frames.flush()
+  documentOrder.splice(0, documentOrder.length, firstElement, secondElement)
+  assert.equal(
+    firstBinding.update({ node, props: { title: 'first' }, element: firstElement }),
+    true,
+    'normal binding updates invalidate document-order sampling',
+  )
+  frames.flush()
+  await Promise.resolve()
+  assert.deepEqual(Object.fromEntries(updates.slice(-2).map(input => [input.instanceId, input.generatedZ])), {
+    second: 1,
+    first: 0,
+  })
+  assert.equal(registrations.length, 2)
+  assert.deepEqual(unregistered, [])
+
+  firstBinding.dispose()
+  secondBinding.dispose()
+  assert.deepEqual(unregistered, ['first', 'second'])
+})
+
+test('visibility is invalidated by clipping, hidden state, scrolling, resize, and viewport mutation', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const root = createElement({ left: 100, top: 50, width: 500, height: 250 })
+  const mount = createMount()
+  mount.parentElement = root
+  mount.isConnected = true
+  mount.contains = () => false
+  const element = createElement({ left: 110, top: 60, width: 50, height: 25 })
+  const styles = new Map([
+    [root, { display: 'block', visibility: 'visible', overflow: 'hidden' }],
+    [mount, { display: 'block', visibility: 'visible' }],
+    [element, { display: 'block', visibility: 'visible' }],
+  ])
+  const patches = []
+  const controller = {
+    register(input) {
+      patches.push(input)
+      return Promise.resolve(true)
+    },
+    update(_instanceId, patch) {
+      patches.push(patch)
+      return Promise.resolve(true)
+    },
+    unregister: () => true,
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    ...invalidations,
+    getComputedStyle: target => styles.get(target),
+  })
+  bridge.attach({ controller, projectId: 'project-a', mount })
+  const binding = bridge.connect({ instanceId: 'node', node, props: { title: 'visible' }, element })
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, true)
+
+  binding.update({ node: { ...node, hidden: true }, props: { title: 'hidden by schema' }, element })
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, false, 'the trusted node hidden state must override visible DOM geometry')
+
+  binding.update({ node, props: { title: 'visible' }, element })
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, true)
+
+  element.rect = { left: 700, top: 60, width: 50, height: 25 }
+  invalidations.eventTarget.emit('scroll')
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, false, 'the element must intersect the overlay mount')
+
+  element.rect = { left: 300, top: 60, width: 50, height: 25 }
+  root.rect = { left: 100, top: 50, width: 100, height: 250 }
+  invalidations.mutationObservers[0].trigger([{ type: 'attributes', target: root }])
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, false, 'the element must also intersect the stable viewport clip')
+
+  root.rect = { left: 100, top: 50, width: 500, height: 250 }
+  styles.set(element, { display: 'none', visibility: 'visible' })
+  invalidations.eventTarget.emit('resize')
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, false)
+
+  styles.set(element, { display: 'block', visibility: 'visible' })
+  invalidations.resizeObservers[0].trigger()
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, true)
+  assert.equal(frames.size(), 0)
+  binding.dispose()
+})
+
+test('overflow clipping ancestors outside the immediate surface parent constrain visibility and are observed', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const documentRoot = createElement({ left: 0, top: 0, width: 1000, height: 800 })
+  const outerClip = createElement({ left: 100, top: 50, width: 100, height: 250 })
+  const immediateParent = createElement({ left: 100, top: 50, width: 500, height: 250 })
+  immediateParent.parentElement = outerClip
+  outerClip.parentElement = documentRoot
+  const mount = createMount()
+  mount.parentElement = immediateParent
+  mount.isConnected = true
+  mount.contains = () => false
+  const element = createElement({ left: 300, top: 60, width: 50, height: 25 })
+  const styles = new Map([
+    [documentRoot, { display: 'block', visibility: 'visible', overflow: 'visible' }],
+    [outerClip, { display: 'block', visibility: 'visible', overflow: 'hidden' }],
+    [immediateParent, { display: 'block', visibility: 'visible', overflow: 'visible' }],
+    [mount, { display: 'block', visibility: 'visible', overflow: 'hidden' }],
+    [element, { display: 'block', visibility: 'visible' }],
+  ])
+  const patches = []
+  const controller = {
+    register(input) {
+      patches.push(input)
+      return Promise.resolve(true)
+    },
+    update(_instanceId, patch) {
+      patches.push(patch)
+      return Promise.resolve(true)
+    },
+    unregister: () => true,
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    ...invalidations,
+    getComputedStyle: target => styles.get(target),
+  })
+  bridge.attach({ controller, projectId: 'project-a', mount })
+  const binding = bridge.connect({ instanceId: 'node', node, props: { title: 'clipped' }, element })
+  assert.equal(invalidations.resizeObservers[0].observed.has(outerClip), true)
+  assert.equal(invalidations.resizeObservers[0].observed.has(immediateParent), false)
+  assert.deepEqual(
+    invalidations.mutationObservers[0].observations.map(observation => observation.target),
+    [immediateParent, outerClip, documentRoot],
+  )
+  assert.equal(bridge.getDiagnostics().observedElementCount, 3)
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, false)
+
+  element.rect = { left: 120, top: 60, width: 50, height: 25 }
+  invalidations.resizeObservers[0].trigger()
+  invalidations.mutationObservers[0].trigger([{ type: 'attributes', target: outerClip }])
+  assert.equal(frames.size(), 1)
+  frames.flush()
+  await Promise.resolve()
+  frames.flush()
+  assert.equal(patches.at(-1).visible, true)
+  binding.dispose()
+})
+
+test('detach and last-binding disposal release invalidation resources and reconnect cleanly', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const root = createElement({ left: 100, top: 50, width: 500, height: 250 })
+  const mount = createMount()
+  mount.parentElement = root
+  mount.isConnected = true
+  mount.contains = () => false
+  const controller = {
+    register: () => Promise.resolve(true),
+    update: () => Promise.resolve(true),
+    unregister: () => true,
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    ...invalidations,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  const detach = bridge.attach({ controller, projectId: 'project-a', mount })
+  const binding = bridge.connect({
+    instanceId: 'node',
+    node,
+    props: { title: 'node' },
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  assert.equal(detach(), true)
+  assert.equal(frames.size(), 0)
+  assert.equal(invalidations.resizeObservers[0].disconnected, true)
+  assert.equal(invalidations.mutationObservers[0].disconnected, true)
+  assert.equal(invalidations.eventTarget.listenerCount(), 0)
+  assert.deepEqual(bridge.getDiagnostics(), {
+    attached: false,
+    instanceCount: 1,
+    scheduledFrameCount: 0,
+    resizeObserverCount: 0,
+    mutationObserverCount: 0,
+    listenerCount: 0,
+    observedElementCount: 0,
+  })
+
+  bridge.attach({ controller, projectId: 'project-a', mount })
+  assert.equal(invalidations.resizeObservers.length, 2)
+  assert.equal(invalidations.mutationObservers.length, 2)
+  assert.equal(invalidations.eventTarget.listenerCount(), 2)
+  frames.flush()
+  await Promise.resolve()
+  binding.dispose()
+  assert.equal(frames.size(), 0)
+  assert.equal(invalidations.resizeObservers[1].disconnected, true)
+  assert.equal(invalidations.mutationObservers[1].disconnected, true)
+  assert.equal(invalidations.eventTarget.listenerCount(), 0)
+  assert.equal(bridge.getDiagnostics().attached, true)
+  assert.equal(bridge.getDiagnostics().observedElementCount, 0)
 })
 
 test('editor and preview bridge composition produce identical resolved context payloads', async () => {
@@ -387,13 +993,19 @@ test('pending register retains dirty state and dispatches only the latest props 
   element.rect = { left: 130, top: 70, width: 60, height: 30 }
   binding.update({ node, props: { title: 'final' }, element })
   frames.flush()
+  assert.equal(updates.length, 0)
+  assert.equal(frames.size(), 0, 'dirty state waits without polling while registration is pending')
   resolveRegister(true)
   await Promise.resolve()
+  assert.equal(frames.size(), 1, 'pending settlement invalidates the latest dirty snapshot once')
   frames.flush()
   await Promise.resolve()
   assert.equal(updates.length, 1)
   assert.equal(updates[0].payload.props.title, 'final')
   assert.deepEqual(updates[0].rect, { x: 60, y: 40, width: 120, height: 60 })
+  assert.equal(frames.size(), 1)
+  frames.flush()
+  assert.equal(frames.size(), 0)
   binding.dispose()
 })
 
@@ -433,7 +1045,7 @@ test('same-ID reconnect cancels stale registration before old resolve or reject 
     await flushPromiseJobs()
     assert.deepEqual(model.events, ['register:first', 'unregister:first', 'register:replacement'])
     assert.equal(model.records.get('node'), model.pending[1])
-    assert.equal(errors.length, outcome === 'reject' ? 1 : 0)
+    assert.equal(errors.length, 0, 'stale settlements cannot report into the replacement lifecycle')
 
     model.pending[1].resolve(true)
     await flushPromiseJobs()
@@ -446,6 +1058,108 @@ test('same-ID reconnect cancels stale registration before old resolve or reject 
     ])
     assert.equal(model.records.size, 0)
   }
+})
+
+test('stale true registration cannot unregister a same-ID replacement', async () => {
+  const frames = createFrames()
+  const events = []
+  const pending = []
+  const records = new Map()
+  const controller = {
+    register(input) {
+      let resolve
+      const operation = new Promise(operationResolve => {
+        resolve = operationResolve
+      })
+      const record = { input, resolve }
+      records.set(input.instanceId, record)
+      pending.push(record)
+      events.push(`register:${input.payload.props.title}`)
+      return operation
+    },
+    update: () => Promise.resolve(true),
+    unregister(instanceId) {
+      events.push(`unregister:${records.get(instanceId)?.input.payload.props.title ?? 'missing'}`)
+      return records.delete(instanceId)
+    },
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  bridge.attach({ controller, projectId: 'project-a', mount: createMount() })
+  const first = bridge.connect({
+    instanceId: 'node',
+    node,
+    props: { title: 'first' },
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  frames.flush()
+  first.dispose()
+  const replacement = bridge.connect({
+    instanceId: 'node',
+    node,
+    props: { title: 'replacement' },
+    element: createElement({ left: 130, top: 70, width: 60, height: 30 }),
+  })
+  frames.flush()
+  pending[0].resolve(true)
+  await flushPromiseJobs()
+  assert.deepEqual(events, ['register:first', 'unregister:first', 'register:replacement'])
+  assert.equal(records.get('node'), pending[1])
+  pending[1].resolve(true)
+  await flushPromiseJobs()
+  replacement.dispose()
+  assert.deepEqual(events, ['register:first', 'unregister:first', 'register:replacement', 'unregister:replacement'])
+})
+
+test('pending completion from a detached attachment cannot mutate a same-controller reattachment', async () => {
+  const frames = createFrames()
+  const pending = []
+  const updates = []
+  const controller = {
+    register(input) {
+      let resolve
+      const operation = new Promise(operationResolve => {
+        resolve = operationResolve
+      })
+      pending.push({ input, resolve })
+      return operation
+    },
+    update(_instanceId, patch) {
+      updates.push(patch)
+      return Promise.resolve(true)
+    },
+    unregister: () => true,
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  const mount = createMount()
+  const element = createElement({ left: 110, top: 60, width: 50, height: 25 })
+  const detach = bridge.attach({ controller, projectId: 'project-a', mount })
+  const binding = bridge.connect({ instanceId: 'node', node, props: { title: 'initial' }, element })
+  frames.flush()
+  assert.equal(detach(), true)
+  bridge.attach({ controller, projectId: 'project-a', mount })
+  frames.flush()
+  assert.equal(pending.length, 2)
+
+  pending[0].resolve(true)
+  await flushPromiseJobs()
+  assert.equal(frames.size(), 0)
+  binding.update({ node, props: { title: 'latest' }, element })
+  frames.flush()
+  assert.equal(updates.length, 0, 'the new attachment remains pending after the stale completion')
+
+  pending[1].resolve(true)
+  await flushPromiseJobs()
+  frames.flush()
+  await flushPromiseJobs()
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].payload.props.title, 'latest')
+  binding.dispose()
 })
 
 test('surface detach cancels controller-owned pending registrations', async () => {
@@ -472,6 +1186,76 @@ test('surface detach cancels controller-owned pending registrations', async () =
   assert.deepEqual(model.events, ['register:pending', 'unregister:pending'])
 
   binding.dispose()
+})
+
+test('throwing unregister cannot interrupt frame, observer, listener, or remaining binding cleanup', () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const errors = []
+  const unregistered = []
+  const root = createElement({ left: 100, top: 50, width: 500, height: 250 })
+  const mount = createMount()
+  mount.parentElement = root
+  mount.isConnected = true
+  mount.contains = () => false
+  const controller = {
+    register: () => Promise.resolve(true),
+    update: () => Promise.resolve(true),
+    unregister(instanceId) {
+      unregistered.push(instanceId)
+      throw new Error(`unregister failed: ${instanceId}`)
+    },
+  }
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    ...invalidations,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    onError: error => errors.push(error),
+  })
+  const detach = bridge.attach({ controller, projectId: 'project-a', mount })
+  const first = bridge.connect({
+    instanceId: 'first',
+    node,
+    props: { title: 'first' },
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  first.dispose()
+  assert.equal(frames.size(), 0)
+  assert.equal(invalidations.eventTarget.listenerCount(), 0)
+
+  bridge.connect({
+    instanceId: 'second',
+    node,
+    props: { title: 'second' },
+    element: createElement({ left: 120, top: 60, width: 50, height: 25 }),
+  })
+  bridge.connect({
+    instanceId: 'third',
+    node,
+    props: { title: 'third' },
+    element: createElement({ left: 130, top: 60, width: 50, height: 25 }),
+  })
+  assert.equal(detach(), true)
+  assert.deepEqual(unregistered, ['first', 'second', 'third'])
+  assert.equal(errors.length, 3)
+  assert.deepEqual(bridge.getDiagnostics(), {
+    attached: false,
+    instanceCount: 2,
+    scheduledFrameCount: 0,
+    resizeObserverCount: 0,
+    mutationObserverCount: 0,
+    listenerCount: 0,
+    observedElementCount: 0,
+  })
+  assert.equal(invalidations.eventTarget.listenerCount(), 0)
+  assert.equal(
+    invalidations.resizeObservers.every(observer => observer.disconnected),
+    true,
+  )
+  assert.equal(
+    invalidations.mutationObservers.every(observer => observer.disconnected),
+    true,
+  )
 })
 
 test('safe-boot composition preserves bindings but performs zero artifact reads and creates no host or iframe', async () => {

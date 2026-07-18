@@ -81,11 +81,90 @@ export const dispatchDashboardOnlineComponentRuntimeEvent = (
   return target.dispatchEvent(new CustomEventClass(DASHBOARD_ONLINE_COMPONENT_RUNTIME_EVENT, { detail }))
 }
 
-const createMeasurementContext = mount => {
+const isLayoutVisible = style =>
+  style?.display !== 'none' && style?.visibility !== 'hidden' && style?.visibility !== 'collapse'
+
+const hasPositiveArea = rect => rect.width > 0 && rect.height > 0
+
+const CLIPPING_OVERFLOW_VALUES = new Set(['auto', 'clip', 'hidden', 'scroll'])
+const DOCUMENT_POSITION_DISCONNECTED = 0x01
+const DOCUMENT_POSITION_PRECEDING = 0x02
+const DOCUMENT_POSITION_FOLLOWING = 0x04
+
+const clipsAxis = (style, axis) => {
+  const value = axis === 'x' ? (style?.overflowX ?? style?.overflow) : (style?.overflowY ?? style?.overflow)
+  return CLIPPING_OVERFLOW_VALUES.has(value)
+}
+
+const getRectEnd = (rect, axis) =>
+  axis === 'x' ? (rect.right ?? rect.left + rect.width) : (rect.bottom ?? rect.top + rect.height)
+
+const intersectsAxis = (first, second, axis) => {
+  const start = axis === 'x' ? 'left' : 'top'
+  return Math.min(getRectEnd(first, axis), getRectEnd(second, axis)) > Math.max(first[start], second[start])
+}
+
+const createClipDescriptor = (element, getComputedStyle) => {
+  const style = getComputedStyle?.(element)
+  const clipX = clipsAxis(style, 'x')
+  const clipY = clipsAxis(style, 'y')
+  return clipX || clipY ? { element, clipX, clipY, style } : undefined
+}
+
+const collectSurfaceAncestors = mount => {
+  const ancestors = []
+  const seen = new Set([mount])
+  let current = mount.parentElement
+  while (current && !seen.has(current)) {
+    ancestors.push(current)
+    seen.add(current)
+    current = current.parentElement
+  }
+  return ancestors
+}
+
+const compareBindingDocumentOrder = (first, second) => {
+  if (first === second) return 0
+  if (
+    first.element?.isConnected !== false &&
+    second.element?.isConnected !== false &&
+    typeof first.element?.compareDocumentPosition === 'function'
+  ) {
+    try {
+      const position = first.element.compareDocumentPosition(second.element)
+      if ((position & DOCUMENT_POSITION_DISCONNECTED) === 0) {
+        if ((position & DOCUMENT_POSITION_FOLLOWING) !== 0) return -1
+        if ((position & DOCUMENT_POSITION_PRECEDING) !== 0) return 1
+      }
+    } catch {
+      // Non-DOM test doubles and cross-document nodes retain deterministic connection order.
+    }
+  }
+  return first.connectionOrder - second.connectionOrder
+}
+
+const createMeasurementContext = (mount, clipAncestors, getComputedStyle) => {
   const mountRect = mount.getBoundingClientRect()
+  const clipRects = clipAncestors.map(clip => ({ ...clip, rect: clip.element.getBoundingClientRect() }))
   const scaleX = mount.clientWidth > 0 && mountRect.width > 0 ? mountRect.width / mount.clientWidth : 1
   const scaleY = mount.clientHeight > 0 && mountRect.height > 0 ? mountRect.height / mount.clientHeight : 1
-  return { mountRect, scaleX, scaleY }
+  return {
+    mountRect,
+    clipRects,
+    scaleX,
+    scaleY,
+    surfaceVisible:
+      mount.isConnected !== false &&
+      hasPositiveArea(mountRect) &&
+      isLayoutVisible(getComputedStyle?.(mount)) &&
+      clipRects.every(
+        clip =>
+          clip.element.isConnected !== false &&
+          isLayoutVisible(clip.style) &&
+          (!clip.clipX || clip.rect.width > 0) &&
+          (!clip.clipY || clip.rect.height > 0),
+      ),
+  }
 }
 
 const measureBinding = (binding, context, getComputedStyle) => {
@@ -99,11 +178,18 @@ const measureBinding = (binding, context, getComputedStyle) => {
       height: elementRect.height / context.scaleY,
     }),
     visible:
+      context.surfaceVisible &&
+      binding.node?.hidden !== true &&
       binding.element.isConnected !== false &&
-      style?.display !== 'none' &&
-      style?.visibility !== 'hidden' &&
-      elementRect.width > 0 &&
-      elementRect.height > 0,
+      isLayoutVisible(style) &&
+      hasPositiveArea(elementRect) &&
+      intersectsAxis(elementRect, context.mountRect, 'x') &&
+      intersectsAxis(elementRect, context.mountRect, 'y') &&
+      context.clipRects.every(
+        clip =>
+          (!clip.clipX || intersectsAxis(elementRect, clip.rect, 'x')) &&
+          (!clip.clipY || intersectsAxis(elementRect, clip.rect, 'y')),
+      ),
   })
 }
 
@@ -111,6 +197,9 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
   const requestFrame = options.requestAnimationFrame ?? globalThis.requestAnimationFrame?.bind(globalThis)
   const cancelFrame = options.cancelAnimationFrame ?? globalThis.cancelAnimationFrame?.bind(globalThis)
   const getComputedStyle = options.getComputedStyle ?? globalThis.getComputedStyle?.bind(globalThis)
+  const ResizeObserverClass = options.ResizeObserver ?? globalThis.ResizeObserver
+  const MutationObserverClass = options.MutationObserver ?? globalThis.MutationObserver
+  const eventTarget = options.eventTarget ?? globalThis.window
   const onError = options.onError ?? (() => undefined)
   if (typeof requestFrame !== 'function' || typeof cancelFrame !== 'function') {
     throw new TypeError('surface bridge animation frame functions are required')
@@ -121,8 +210,14 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
   let controller
   let projectId
   let mount
+  let attachmentToken
+  let surfaceAncestors = []
+  let clipAncestors = []
   let frame
-  let nextGeneratedZ = 0
+  let resizeObserver
+  let mutationObserver
+  let listenerCount = 0
+  let nextConnectionOrder = 0
 
   const report = error => {
     try {
@@ -132,9 +227,126 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     }
   }
 
+  const safely = action => {
+    try {
+      action()
+    } catch (error) {
+      report(error)
+    }
+  }
+
+  const cancelScheduledFrame = () => {
+    if (frame === undefined) return
+    const scheduledFrame = frame
+    frame = undefined
+    safely(() => cancelFrame(scheduledFrame))
+  }
+
+  const safelyUnregister = (ownedController, instanceId) => {
+    if (typeof ownedController?.unregister !== 'function') return
+    safely(() => ownedController.unregister(instanceId))
+  }
+
   const schedule = () => {
     if (frame !== undefined || !controller || !mount || bindings.size === 0) return
     frame = requestFrame(flush)
+  }
+
+  const isObservedByAnotherBinding = (element, ignoredBinding) => {
+    for (const binding of bindings.values()) {
+      if (binding !== ignoredBinding && binding.element === element) return true
+    }
+    return false
+  }
+
+  const sameElements = (first, second) =>
+    first.length === second.length && first.every((element, index) => element === second[index])
+
+  const isBindingElement = element => {
+    for (const binding of bindings.values()) {
+      if (binding.element === element) return true
+    }
+    return false
+  }
+
+  const refreshSurfaceTopology = () => {
+    if (!mount) return
+    const nextAncestors = collectSurfaceAncestors(mount)
+    const nextClipAncestors = nextAncestors
+      .map(element => createClipDescriptor(element, getComputedStyle))
+      .filter(Boolean)
+
+    if (resizeObserver) {
+      for (const clip of clipAncestors) {
+        if (
+          !nextClipAncestors.some(next => next.element === clip.element) &&
+          clip.element !== mount &&
+          !isBindingElement(clip.element)
+        ) {
+          resizeObserver.unobserve(clip.element)
+        }
+      }
+      for (const clip of nextClipAncestors) resizeObserver.observe(clip.element)
+    }
+
+    if (mutationObserver && !sameElements(surfaceAncestors, nextAncestors)) {
+      mutationObserver.disconnect()
+      const [surfaceParent, ...outerAncestors] = nextAncestors
+      if (surfaceParent) {
+        mutationObserver.observe(surfaceParent, { attributes: true, childList: true, subtree: true })
+        for (const ancestor of outerAncestors) {
+          mutationObserver.observe(ancestor, { attributes: true, childList: true })
+        }
+      }
+    }
+    surfaceAncestors = nextAncestors
+    clipAncestors = nextClipAncestors
+  }
+
+  const refreshGeneratedZ = () => {
+    const orderedBindings = [...bindings.values()].sort(compareBindingDocumentOrder)
+    for (const [generatedZ, binding] of orderedBindings.entries()) binding.generatedZ = generatedZ
+  }
+
+  const stopInvalidationSources = () => {
+    const activeResizeObserver = resizeObserver
+    resizeObserver = undefined
+    const activeMutationObserver = mutationObserver
+    mutationObserver = undefined
+    const activeListenerCount = listenerCount
+    listenerCount = 0
+    surfaceAncestors = []
+    clipAncestors = []
+    if (activeResizeObserver) safely(() => activeResizeObserver.disconnect())
+    if (activeMutationObserver) safely(() => activeMutationObserver.disconnect())
+    if (activeListenerCount > 0) {
+      safely(() => eventTarget.removeEventListener('resize', schedule))
+      safely(() => eventTarget.removeEventListener('scroll', schedule, true))
+    }
+  }
+
+  const startInvalidationSources = () => {
+    if (!controller || !mount || bindings.size === 0 || resizeObserver || mutationObserver || listenerCount > 0) return
+    if (typeof ResizeObserverClass === 'function') {
+      resizeObserver = new ResizeObserverClass(schedule)
+      resizeObserver.observe(mount)
+      for (const binding of bindings.values()) resizeObserver.observe(binding.element)
+    }
+    if (typeof MutationObserverClass === 'function') {
+      mutationObserver = new MutationObserverClass(records => {
+        const hasExternalMutation = records.some(record => {
+          if (record.target === mount) return record.type !== 'childList'
+          return typeof mount.contains !== 'function' || !mount.contains(record.target)
+        })
+        if (hasExternalMutation) schedule()
+      })
+    }
+    refreshSurfaceTopology()
+    if (typeof eventTarget?.addEventListener === 'function' && typeof eventTarget?.removeEventListener === 'function') {
+      eventTarget.addEventListener('resize', schedule)
+      eventTarget.addEventListener('scroll', schedule, true)
+      listenerCount = 2
+    }
   }
 
   const applyBinding = (binding, measurement) => {
@@ -155,6 +367,12 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     const pendingToken = Object.freeze({})
     binding.pendingToken = pendingToken
     const activeController = controller
+    const activeAttachmentToken = attachmentToken
+    const isCurrentOperation = () =>
+      binding.pendingToken === pendingToken &&
+      attachmentToken === activeAttachmentToken &&
+      controller === activeController &&
+      bindings.get(binding.instanceId) === binding
     let operation
     try {
       operation = binding.registered
@@ -175,6 +393,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
             payload,
           })
     } catch (error) {
+      if (!isCurrentOperation()) return
       binding.pending = false
       binding.pendingToken = undefined
       report(error)
@@ -182,22 +401,16 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     }
     void Promise.resolve(operation).then(
       applied => {
-        if (binding.pendingToken === pendingToken) {
-          binding.pending = false
-          binding.pendingToken = undefined
-        }
-        if (controller !== activeController || bindings.get(binding.instanceId) !== binding) {
-          if (applied) activeController.unregister(binding.instanceId)
-          return
-        }
+        if (!isCurrentOperation()) return
+        binding.pending = false
+        binding.pendingToken = undefined
         binding.registered ||= applied === true
         schedule()
       },
       error => {
-        if (binding.pendingToken === pendingToken) {
-          binding.pending = false
-          binding.pendingToken = undefined
-        }
+        if (!isCurrentOperation()) return
+        binding.pending = false
+        binding.pendingToken = undefined
         report(error)
         schedule()
       },
@@ -207,11 +420,12 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
   function flush() {
     frame = undefined
     if (!controller || !mount) return
-    const measurementContext = createMeasurementContext(mount)
+    refreshSurfaceTopology()
+    refreshGeneratedZ()
+    const measurementContext = createMeasurementContext(mount, clipAncestors, getComputedStyle)
     for (const binding of bindings.values()) {
       applyBinding(binding, measureBinding(binding, measurementContext, getComputedStyle))
     }
-    schedule()
   }
 
   const attach = input => {
@@ -224,31 +438,42 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     projectId = assertIdentifier(value.projectId, 'projectId')
     controller = value.controller
     mount = value.mount
+    attachmentToken = Object.freeze({})
     for (const binding of bindings.values()) {
       binding.registered = false
       binding.pending = false
       binding.pendingToken = undefined
       binding.lastAttempt = undefined
     }
+    startInvalidationSources()
     schedule()
-    return () => detach(value.controller)
+    const attachedToken = attachmentToken
+    return () => detach(value.controller, attachedToken)
   }
 
-  const detach = expectedController => {
-    if (!controller || (expectedController && controller !== expectedController)) return false
-    if (frame !== undefined) cancelFrame(frame)
-    frame = undefined
+  const detach = (expectedController, expectedAttachmentToken) => {
+    if (
+      !controller ||
+      (expectedController && controller !== expectedController) ||
+      (expectedAttachmentToken && attachmentToken !== expectedAttachmentToken)
+    ) {
+      return false
+    }
     const previous = controller
+    const previousBindings = [...bindings.values()]
+    attachmentToken = undefined
     controller = undefined
     projectId = undefined
     mount = undefined
-    for (const binding of bindings.values()) {
-      previous.unregister(binding.instanceId)
+    cancelScheduledFrame()
+    stopInvalidationSources()
+    for (const binding of previousBindings) {
       binding.registered = false
       binding.pending = false
       binding.pendingToken = undefined
       binding.lastAttempt = undefined
     }
+    for (const binding of previousBindings) safelyUnregister(previous, binding.instanceId)
     return true
   }
 
@@ -264,12 +489,15 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
       node: value.node,
       context: resolveDashboardOnlineComponentContext(value.props ?? {}),
       element: value.element,
-      generatedZ: nextGeneratedZ++,
+      connectionOrder: nextConnectionOrder++,
+      generatedZ: 0,
       registered: false,
       pending: false,
       pendingToken: undefined,
     }
     bindings.set(instanceId, binding)
+    if (bindings.size === 1) startInvalidationSources()
+    else resizeObserver?.observe(binding.element)
     schedule()
 
     let active = true
@@ -281,21 +509,33 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
           throw new TypeError('binding node must be GeneratedMaterialHost')
         }
         if (typeof next.element?.getBoundingClientRect !== 'function') throw new TypeError('binding element is invalid')
+        const previousElement = binding.element
         binding.node = next.node
         binding.context = resolveDashboardOnlineComponentContext(next.props ?? {})
         binding.element = next.element
+        if (resizeObserver && previousElement !== next.element) {
+          if (!isObservedByAnotherBinding(previousElement, binding)) resizeObserver.unobserve(previousElement)
+          resizeObserver.observe(next.element)
+        }
         schedule()
         return true
       },
       dispose: () => {
         if (!active) return false
         active = false
+        const activeController = controller
         bindings.delete(instanceId)
-        controller?.unregister(instanceId)
-        if (bindings.size === 0 && frame !== undefined) {
-          cancelFrame(frame)
-          frame = undefined
+        binding.registered = false
+        binding.pending = false
+        binding.pendingToken = undefined
+        binding.lastAttempt = undefined
+        if (bindings.size === 0) {
+          cancelScheduledFrame()
+          stopInvalidationSources()
+        } else if (resizeObserver && !isObservedByAnotherBinding(binding.element, binding)) {
+          safely(() => resizeObserver.unobserve(binding.element))
         }
+        safelyUnregister(activeController, instanceId)
         return true
       },
     })
@@ -310,6 +550,17 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
         attached: controller !== undefined,
         instanceCount: bindings.size,
         scheduledFrameCount: frame === undefined ? 0 : 1,
+        resizeObserverCount: resizeObserver ? 1 : 0,
+        mutationObserverCount: mutationObserver ? 1 : 0,
+        listenerCount,
+        observedElementCount:
+          resizeObserver === undefined
+            ? 0
+            : new Set([
+                mount,
+                ...[...bindings.values()].map(binding => binding.element),
+                ...clipAncestors.map(clip => clip.element),
+              ]).size,
       }),
   })
 }
@@ -350,6 +601,7 @@ export const startDashboardOnlineComponentSurface = options => {
   let state = 'discovering'
   let controller
   let releaseBridge
+  let currentMount
   let observer
   let frame
   let disposed = false
@@ -362,49 +614,73 @@ export const startDashboardOnlineComponentSurface = options => {
   }
 
   const scheduleDiscovery = () => {
-    if (frame !== undefined || disposed || controller) return
+    if (frame !== undefined || disposed) return
     frame = requestFrame(() => {
       frame = undefined
       discover()
     })
   }
 
-  const discover = () => {
-    if (disposed || controller) return
-    const mount = document.querySelector(selector)
-    if (mount) {
-      stopDiscovery()
-      controller = createController({
-        projectId,
-        branchId,
-        surfaceId,
-        featureEnabled: true,
-        safeBoot: options.safeBoot === true,
-        markerStore: options.markerStore,
-        readArtifact: artifactRef =>
-          options.persistence.readArtifact({
-            schemaVersion: 1,
-            projectId,
-            artifactId: artifactRef.artifactId,
-            sourceRevision: artifactRef.sourceRevision,
-          }),
-        surfaceHostOptions: {
-          mode,
-          mount,
-          ...(options.onSelection ? { onSelection: options.onSelection } : {}),
-          ...(options.onRuntimeEvent ? { onRuntimeEvent: options.onRuntimeEvent } : {}),
-          ...(options.bindTrustedShell ? { bindTrustedShell: options.bindTrustedShell } : {}),
-        },
-      })
-      releaseBridge = bridge.attach({ controller, projectId, mount })
-      state = options.safeBoot === true ? 'safe-boot' : 'active'
-      return
+  const releaseCurrentSurface = () => {
+    const previousRelease = releaseBridge
+    const previousController = controller
+    releaseBridge = undefined
+    controller = undefined
+    currentMount = undefined
+    try {
+      previousRelease?.()
+    } finally {
+      previousController?.dispose()
     }
-    scheduleDiscovery()
+  }
+
+  const activate = mount => {
+    const nextController = createController({
+      projectId,
+      branchId,
+      surfaceId,
+      featureEnabled: true,
+      safeBoot: options.safeBoot === true,
+      markerStore: options.markerStore,
+      readArtifact: artifactRef =>
+        options.persistence.readArtifact({
+          schemaVersion: 1,
+          projectId,
+          artifactId: artifactRef.artifactId,
+          sourceRevision: artifactRef.sourceRevision,
+        }),
+      surfaceHostOptions: {
+        mode,
+        mount,
+        ...(options.onSelection ? { onSelection: options.onSelection } : {}),
+        ...(options.onRuntimeEvent ? { onRuntimeEvent: options.onRuntimeEvent } : {}),
+        ...(options.bindTrustedShell ? { bindTrustedShell: options.bindTrustedShell } : {}),
+      },
+    })
+    let nextRelease
+    try {
+      nextRelease = bridge.attach({ controller: nextController, projectId, mount })
+    } catch (error) {
+      nextController.dispose()
+      throw error
+    }
+    controller = nextController
+    releaseBridge = nextRelease
+    currentMount = mount
+    state = options.safeBoot === true ? 'safe-boot' : 'active'
+  }
+
+  const discover = () => {
+    if (disposed) return
+    const nextMount = document.querySelector(selector)
+    if (nextMount === currentMount) return
+    if (currentMount || controller || releaseBridge) releaseCurrentSurface()
+    state = 'discovering'
+    if (nextMount) activate(nextMount)
   }
 
   if (typeof MutationObserverClass === 'function') {
-    observer = new MutationObserverClass(discover)
+    observer = new MutationObserverClass(scheduleDiscovery)
     observer.observe(document.documentElement, { childList: true, subtree: true })
   }
   discover()
@@ -414,10 +690,7 @@ export const startDashboardOnlineComponentSurface = options => {
       if (disposed) return
       disposed = true
       stopDiscovery()
-      releaseBridge?.()
-      releaseBridge = undefined
-      controller?.dispose()
-      controller = undefined
+      releaseCurrentSurface()
       state = 'disposed'
     },
     getDiagnostics: () => Object.freeze({ state, controllerCreated: controller !== undefined }),
