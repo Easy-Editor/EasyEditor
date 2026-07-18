@@ -195,7 +195,7 @@ const fail = (): never => {
   throw new TypeError('Worker telemetry event is invalid')
 }
 
-const isExactDataRecord = (value: unknown, allowed: ReadonlySet<string>): value is Record<string, unknown> => {
+const isEnumerableDataRecord = (value: unknown): value is Record<string, unknown> => {
   if (
     !value ||
     typeof value !== 'object' ||
@@ -206,11 +206,14 @@ const isExactDataRecord = (value: unknown, allowed: ReadonlySet<string>): value 
   }
   const record = value as Record<string, unknown>
   return Reflect.ownKeys(record).every(key => {
-    if (typeof key !== 'string' || !allowed.has(key)) return false
+    if (typeof key !== 'string') return false
     const descriptor = Object.getOwnPropertyDescriptor(record, key)
     return descriptor?.enumerable === true && Object.hasOwn(descriptor, 'value')
   })
 }
+
+const isExactDataRecord = (value: unknown, allowed: ReadonlySet<string>): value is Record<string, unknown> =>
+  isEnumerableDataRecord(value) && Reflect.ownKeys(value).every(key => typeof key === 'string' && allowed.has(key))
 
 const requireIdentifier = (value: unknown, maximumLength = 256): string => {
   if (
@@ -283,14 +286,7 @@ const validateDispositionPair = (
 }
 
 export const createWorkerTelemetryEvent = (input: unknown): WorkerTelemetryEvent => {
-  if (
-    !input ||
-    typeof input !== 'object' ||
-    Array.isArray(input) ||
-    Object.getPrototypeOf(input) !== Object.prototype
-  ) {
-    fail()
-  }
+  if (!isEnumerableDataRecord(input)) fail()
   const candidate = input as Record<string, unknown>
   if (candidate.schemaVersion !== WORKER_TELEMETRY_SCHEMA_VERSION || !eventTypes.has(candidate.eventType as string)) {
     fail()

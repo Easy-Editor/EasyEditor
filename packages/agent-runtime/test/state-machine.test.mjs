@@ -716,6 +716,30 @@ test('telemetry event validation rejects raw payload fields, invalid enums, iden
   }
 })
 
+test('telemetry event validation rejects discriminant accessors without evaluating them', () => {
+  const base = {
+    schemaVersion: 1,
+    eventType: 'task.started',
+    timestampMs: 1,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId: 'task-1',
+  }
+  for (const field of ['schemaVersion', 'eventType']) {
+    let reads = 0
+    const hostile = { ...base }
+    Object.defineProperty(hostile, field, {
+      enumerable: true,
+      get() {
+        reads += 1
+        return base[field]
+      },
+    })
+    assert.throws(() => createWorkerTelemetryEvent(hostile), /telemetry event is invalid/i)
+    assert.equal(reads, 0)
+  }
+})
+
 test('telemetry ledger rejects duplicate and reparented task, step, model, call, change-set, and artifact lineage', () => {
   const ledger = createWorkerTelemetryLedger({ capacity: 32 })
   const taskStarted = taskId => ({
