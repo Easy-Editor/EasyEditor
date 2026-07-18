@@ -1473,10 +1473,12 @@ export const createFileMaterialRegistry = async (options = {}) => {
           return publishPromotionInternal(request.promotionId, options.signal)
         }, options.signal),
       ).catch(error => throwFailure(error)),
-    readMaterial: identityValue =>
+    readMaterial: (identityValue, options = {}) =>
       enqueue(async () => {
+        throwIfAborted(options.signal)
         const identity = validateMaterialIdentity(identityValue)
-        await scanRegistry()
+        await scanRegistry(options.signal)
+        throwIfAborted(options.signal)
         return cloneJson(materialIndex.get(identityKey(identity)) ?? null)
       }).catch(error => throwFailure(error)),
     listMaterials: (filterValue, options = {}) =>

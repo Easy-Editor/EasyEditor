@@ -10,6 +10,8 @@ import { createMaterialPromotionCoordinator } from './coordinator.mjs'
 import { createEasypackTrustedWrapperAuthor } from './easypack-author.mjs'
 import { createFileMaterialRegistry } from './file-material-registry.mjs'
 import {
+  MATERIAL_CATALOG_LIST_ROUTE,
+  MATERIAL_CATALOG_READ_ROUTE,
   MATERIAL_PROMOTION_AVAILABILITY_ROUTE,
   MATERIAL_PROMOTION_MAX_INBOUND_BYTES,
   MATERIAL_PROMOTION_QUERY_ROUTE,
@@ -18,12 +20,22 @@ import {
   createMaterialPromotionHandler,
 } from './handler.mjs'
 import { createNodeMaterialPromotionMiddleware } from './node-adapter.mjs'
-import { unavailablePromotion } from './promotion-error.mjs'
+import { runPromotionPhase, throwIfPromotionAborted, unavailablePromotion } from './promotion-error.mjs'
 
 export { createMaterialPromotionCoordinator } from './coordinator.mjs'
 export { createEasypackTrustedWrapperAuthor } from './easypack-author.mjs'
 export { createFileMaterialRegistry } from './file-material-registry.mjs'
 export {
+  MATERIAL_CATALOG_COMPONENT_NAME,
+  MATERIAL_CATALOG_SCHEMA_VERSION,
+  createMaterialCatalogItem,
+  createMaterialCatalogListResponse,
+  validateMaterialCatalogItem,
+  validateMaterialCatalogListResponse,
+} from '../../shared/material-catalog-contract.mjs'
+export {
+  MATERIAL_CATALOG_LIST_ROUTE,
+  MATERIAL_CATALOG_READ_ROUTE,
   MATERIAL_PROMOTION_AVAILABILITY_ROUTE,
   MATERIAL_PROMOTION_MAX_INBOUND_BYTES,
   MATERIAL_PROMOTION_QUERY_ROUTE,
@@ -137,26 +149,27 @@ export const createEnvironmentMaterialPromotionHandler = (options = {}) => {
     return initializedCoordinator
   }
 
+  const runWithInitializedCoordinator = async (method, input, { recover = false } = {}) => {
+    const signal = input?.signal
+    throwIfPromotionAborted(signal)
+    let coordinator
+    try {
+      coordinator = await runPromotionPhase(() => initialize({ recover }), signal)
+    } catch (error) {
+      throwIfPromotionAborted(signal)
+      if (error?.code === 'promotion-aborted') throw error
+      throw unavailablePromotion()
+    }
+    throwIfPromotionAborted(signal)
+    return coordinator[method](input)
+  }
+
   return createMaterialPromotionHandler({
     coordinator: Object.freeze({
-      async promote(input) {
-        let coordinator
-        try {
-          coordinator = await initialize({ recover: true })
-        } catch {
-          throw unavailablePromotion()
-        }
-        return coordinator.promote(input)
-      },
-      async query(input) {
-        let coordinator
-        try {
-          coordinator = await initialize()
-        } catch {
-          throw unavailablePromotion()
-        }
-        return coordinator.query(input)
-      },
+      promote: input => runWithInitializedCoordinator('promote', input, { recover: true }),
+      query: input => runWithInitializedCoordinator('query', input),
+      listCatalog: input => runWithInitializedCoordinator('listCatalog', input),
+      readCatalog: input => runWithInitializedCoordinator('readCatalog', input),
     }),
     checkAvailability:
       typeof author.checkAvailability === 'function'

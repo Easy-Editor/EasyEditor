@@ -10,6 +10,8 @@ import { normalizePromotionHeaders } from './request-contract.mjs'
 export const MATERIAL_PROMOTION_ROUTE = '/api/materials/promote'
 export const MATERIAL_PROMOTION_QUERY_ROUTE = '/api/materials/promotion/query'
 export const MATERIAL_PROMOTION_AVAILABILITY_ROUTE = '/api/materials/promotion/availability'
+export const MATERIAL_CATALOG_LIST_ROUTE = '/api/materials/catalog/list'
+export const MATERIAL_CATALOG_READ_ROUTE = '/api/materials/catalog/read'
 export const MATERIAL_PROMOTION_MAX_INBOUND_BYTES = 3 * 1024 * 1024
 
 const parseJsonBody = request => {
@@ -59,6 +61,8 @@ const parseTransportRequest = request => {
   const value = parseJsonBody(request)
   if (request.path === MATERIAL_PROMOTION_ROUTE) return { operation: 'promote', headers, value }
   if (request.path === MATERIAL_PROMOTION_QUERY_ROUTE) return { operation: 'query', headers, value }
+  if (request.path === MATERIAL_CATALOG_LIST_ROUTE) return { operation: 'listCatalog', headers, value }
+  if (request.path === MATERIAL_CATALOG_READ_ROUTE) return { operation: 'readCatalog', headers, value }
   throw invalidPromotionRequest(404)
 }
 
@@ -90,7 +94,12 @@ export const createMaterialPromotionHandler = ({ coordinator, checkAvailability 
           }
         }
         const input = { headers, request: value, signal: request.signal }
-        const body = operation === 'promote' ? await coordinator.promote(input) : await coordinator.query(input)
+        let body
+        if (operation === 'promote') body = await coordinator.promote(input)
+        else if (operation === 'query') body = await coordinator.query(input)
+        else if (operation === 'listCatalog') body = await coordinator.listCatalog?.(input)
+        else body = await coordinator.readCatalog?.(input)
+        if (body === undefined) throw unavailablePromotion()
         return { status: 200, body }
       } catch (error) {
         return createPromotionErrorEnvelope(normalizePromotionError(error))
@@ -106,6 +115,12 @@ export const createDisabledMaterialPromotionHandler = () =>
         throw unavailablePromotion()
       },
       async query() {
+        throw unavailablePromotion()
+      },
+      async listCatalog() {
+        throw unavailablePromotion()
+      },
+      async readCatalog() {
         throw unavailablePromotion()
       },
     }),

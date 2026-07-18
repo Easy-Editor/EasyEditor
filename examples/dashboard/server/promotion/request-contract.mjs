@@ -17,6 +17,14 @@ const requestFields = Object.freeze([
   'taskId',
 ])
 const queryFields = Object.freeze(['projectId', 'promotionId', 'schemaVersion'])
+const catalogListFields = Object.freeze(['projectId', 'schemaVersion'])
+const catalogReadFields = Object.freeze([
+  'buildIntegrity',
+  'materialId',
+  'materialVersion',
+  'projectId',
+  'schemaVersion',
+])
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u
 const digestPattern = /^sha256:[\da-f]{64}$/u
 
@@ -125,5 +133,26 @@ export const validateMaterialPromotionQuery = value => {
     schemaVersion: 1,
     projectId: requireIdentifier(value.projectId),
     promotionId: requireDigest(value.promotionId),
+  })
+}
+
+export const validateMaterialCatalogList = value => {
+  assertExactFields(value, catalogListFields)
+  if (value.schemaVersion !== 1) throw invalidPromotionRequest()
+  return Object.freeze({
+    schemaVersion: 1,
+    projectId: requireIdentifier(value.projectId),
+  })
+}
+
+export const validateMaterialCatalogRead = value => {
+  assertExactFields(value, catalogReadFields)
+  if (value.schemaVersion !== 1) throw invalidPromotionRequest()
+  return Object.freeze({
+    schemaVersion: 1,
+    projectId: requireIdentifier(value.projectId),
+    materialId: requireIdentifier(value.materialId),
+    materialVersion: requireIdentifier(value.materialVersion),
+    buildIntegrity: requireDigest(value.buildIntegrity),
   })
 }

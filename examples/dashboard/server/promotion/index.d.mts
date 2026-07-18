@@ -1,11 +1,29 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import type { MaterialCatalogItemV1, MaterialCatalogListResponseV1 } from '../../shared/material-catalog-contract.mjs'
 import type {
   MaterialIdentityV1,
   MaterialPromotionBindingV1,
   MaterialPromotionRequestV1,
 } from '../../shared/material-promotion-contract.mjs'
 import type { ArtifactRecordV1, ArtifactSourceRevision } from '../../src/lib/storage/artifact-contracts.mjs'
+
+export type {
+  MaterialCatalogArtifactRefV1,
+  MaterialCatalogArtifactSourceRevisionV1,
+  MaterialCatalogItemV1,
+  MaterialCatalogListResponseV1,
+  MaterialCatalogLocalTargetV1,
+  MaterialCatalogRegistryRecord,
+} from '../../shared/material-catalog-contract.mjs'
+export {
+  MATERIAL_CATALOG_COMPONENT_NAME,
+  MATERIAL_CATALOG_SCHEMA_VERSION,
+  createMaterialCatalogItem,
+  createMaterialCatalogListResponse,
+  validateMaterialCatalogItem,
+  validateMaterialCatalogListResponse,
+} from '../../shared/material-catalog-contract.mjs'
 
 export type Sha256Digest = `sha256:${string}`
 export type MaybePromise<T> = T | PromiseLike<T>
@@ -36,6 +54,17 @@ export interface MaterialPromotionQueryV1 {
   readonly schemaVersion: 1
   readonly projectId: string
   readonly promotionId: Sha256Digest
+}
+
+export interface MaterialCatalogListRequestV1 {
+  readonly schemaVersion: 1
+  readonly projectId: string
+}
+
+export interface MaterialCatalogReadRequestV1 extends MaterialCatalogListRequestV1 {
+  readonly materialId: string
+  readonly materialVersion: string
+  readonly buildIntegrity: Sha256Digest
 }
 
 export interface MaterialPromotionActiveResultV1 {
@@ -75,7 +104,11 @@ export interface MaterialPromotionErrorBodyV1 {
 
 export interface MaterialPromotionSuccessTransportResult {
   readonly status: 200
-  readonly body: MaterialPromotionActiveResultV1 | MaterialPromotionAvailabilityV1
+  readonly body:
+    | MaterialPromotionActiveResultV1
+    | MaterialPromotionAvailabilityV1
+    | MaterialCatalogItemV1
+    | MaterialCatalogListResponseV1
 }
 
 export interface MaterialPromotionErrorTransportResult {
@@ -214,7 +247,10 @@ export interface MaterialPromotionRegistry {
     request: MaterialPromotionQueryV1,
     options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialPromotionRecordV1 | null>
-  readMaterial?(identity: MaterialIdentityV1): MaybePromise<ActiveMaterialPromotionRecordV1 | null>
+  readMaterial?(
+    identity: MaterialIdentityV1,
+    options?: MaterialPromotionPhaseOptions,
+  ): MaybePromise<ActiveMaterialPromotionRecordV1 | null>
   listMaterials?(
     filter: Readonly<{ projectId: string }>,
     options?: MaterialPromotionPhaseOptions,
@@ -239,7 +275,10 @@ export interface FileMaterialRegistry extends MaterialPromotionRegistry {
     request: MaterialPromotionQueryV1,
     options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialPromotionRecordV1 | null>
-  readMaterial(identity: MaterialIdentityV1): MaybePromise<ActiveMaterialPromotionRecordV1 | null>
+  readMaterial(
+    identity: MaterialIdentityV1,
+    options?: MaterialPromotionPhaseOptions,
+  ): MaybePromise<ActiveMaterialPromotionRecordV1 | null>
   listMaterials(
     filter: Readonly<{ projectId: string }>,
     options?: MaterialPromotionPhaseOptions,
@@ -273,6 +312,20 @@ export interface MaterialPromotionCoordinator {
       signal?: AbortSignal
     }>,
   ): Promise<MaterialPromotionActiveResultV1>
+  listCatalog(
+    input: Readonly<{
+      headers: Readonly<Record<string, string>>
+      request: MaterialCatalogListRequestV1
+      signal?: AbortSignal
+    }>,
+  ): Promise<Readonly<MaterialCatalogListResponseV1>>
+  readCatalog(
+    input: Readonly<{
+      headers: Readonly<Record<string, string>>
+      request: MaterialCatalogReadRequestV1
+      signal?: AbortSignal
+    }>,
+  ): Promise<Readonly<MaterialCatalogItemV1>>
 }
 
 export interface MaterialPromotionCoordinatorOptions {
@@ -358,6 +411,8 @@ export type MaterialPromotionMiddleware = (
 export declare const MATERIAL_PROMOTION_ROUTE: '/api/materials/promote'
 export declare const MATERIAL_PROMOTION_QUERY_ROUTE: '/api/materials/promotion/query'
 export declare const MATERIAL_PROMOTION_AVAILABILITY_ROUTE: '/api/materials/promotion/availability'
+export declare const MATERIAL_CATALOG_LIST_ROUTE: '/api/materials/catalog/list'
+export declare const MATERIAL_CATALOG_READ_ROUTE: '/api/materials/catalog/read'
 export declare const MATERIAL_PROMOTION_MAX_INBOUND_BYTES: number
 export declare const MATERIAL_PROMOTION_ENABLED_ENV: 'EASY_EDITOR_MATERIAL_PROMOTION_ENABLED'
 export declare const MATERIAL_PROMOTION_CONFIG_ENV: 'EASY_EDITOR_MATERIAL_PROMOTION_CONFIG_JSON'

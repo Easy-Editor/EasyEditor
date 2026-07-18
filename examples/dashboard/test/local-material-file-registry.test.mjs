@@ -311,6 +311,46 @@ test('read and list refresh across independently created registry instances', as
   )
 })
 
+test('readMaterial propagates pre-abort and an abort during registry refresh', async t => {
+  let pauseRefresh = false
+  let refreshPaused = false
+  let enterRefresh
+  let releaseRefresh
+  const refreshEntered = new Promise(resolvePromise => {
+    enterRefresh = resolvePromise
+  })
+  const refreshGate = new Promise(resolvePromise => {
+    releaseRefresh = resolvePromise
+  })
+  const fileSystem = {
+    ...nodeFileSystem,
+    async readdir(path, ...args) {
+      if (pauseRefresh && !refreshPaused && basename(path) === 'promotions') {
+        refreshPaused = true
+        enterRefresh()
+        await refreshGate
+      }
+      return nodeFileSystem.readdir(path, ...args)
+    },
+  }
+  const { registry } = await createFixture(t, { fileSystem })
+
+  const preAborted = new AbortController()
+  preAborted.abort()
+  await assert.rejects(
+    registry.readMaterial(materialIdentity(), { signal: preAborted.signal }),
+    assertRegistryError('promotion-aborted'),
+  )
+
+  pauseRefresh = true
+  const inFlight = new AbortController()
+  const readPromise = registry.readMaterial(materialIdentity(), { signal: inFlight.signal })
+  await refreshEntered
+  inFlight.abort()
+  releaseRefresh()
+  await assert.rejects(readPromise, assertRegistryError('promotion-aborted'))
+})
+
 test('read and list retry a concurrent GC rename but still surface stable record corruption', async t => {
   const exercise = async (nestedTest, operation, racePoint) => {
     const { buildDirectory, registry, rootDir } = await createFixture(nestedTest)

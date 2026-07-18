@@ -1,5 +1,14 @@
+import {
+  createMaterialCatalogItem,
+  createMaterialCatalogListResponse,
+} from '../../shared/material-catalog-contract.mjs'
 import { promotionError, runPromotionPhase, throwIfPromotionAborted } from './promotion-error.mjs'
-import { validateMaterialPromotionCall, validateMaterialPromotionQuery } from './request-contract.mjs'
+import {
+  validateMaterialCatalogList,
+  validateMaterialCatalogRead,
+  validateMaterialPromotionCall,
+  validateMaterialPromotionQuery,
+} from './request-contract.mjs'
 
 const requireMethod = (value, method, label) => {
   if (!value || typeof value[method] !== 'function') {
@@ -40,6 +49,11 @@ const activeResponse = (material, promotionId, rollbackTo) =>
     buildIntegrity: material.buildIntegrity,
     rollbackTo: Object.freeze(rollbackTo),
   })
+
+const unavailableCatalog = () => promotionError('promotion-unavailable', 503, 'Local material promotion is unavailable')
+
+const authorizeCatalogRequest = (authorizePrincipal, headers, request, signal) =>
+  runPromotionPhase(() => authorizePrincipal({ headers, projectId: request.projectId, signal }), signal)
 
 export const createMaterialPromotionCoordinator = ({ authorizePrincipal, author, registry } = {}) => {
   if (typeof authorizePrincipal !== 'function') throw new TypeError('authorizePrincipal must be a function')
@@ -101,6 +115,44 @@ export const createMaterialPromotionCoordinator = ({ authorizePrincipal, author,
         throw promotionError('promotion-state-unknown', 409, 'Promotion state is not active', true)
       }
       return activeResponse(record, request.promotionId, record.sourceRevision)
+    },
+    async listCatalog({ headers, request: requestValue, signal } = {}) {
+      throwIfPromotionAborted(signal)
+      const request = validateMaterialCatalogList(requestValue)
+      await authorizeCatalogRequest(authorizePrincipal, headers, request, signal)
+      throwIfPromotionAborted(signal)
+      if (typeof registry.listMaterials !== 'function') throw unavailableCatalog()
+      const records = await runPromotionPhase(
+        () => registry.listMaterials({ projectId: request.projectId }, { signal }),
+        signal,
+      )
+      throwIfPromotionAborted(signal)
+      if (!Array.isArray(records)) throw new TypeError('registry.listMaterials must return an array')
+      return createMaterialCatalogListResponse(records.filter(record => record?.projectId === request.projectId))
+    },
+    async readCatalog({ headers, request: requestValue, signal } = {}) {
+      throwIfPromotionAborted(signal)
+      const request = validateMaterialCatalogRead(requestValue)
+      await authorizeCatalogRequest(authorizePrincipal, headers, request, signal)
+      throwIfPromotionAborted(signal)
+      if (typeof registry.readMaterial !== 'function') throw unavailableCatalog()
+      const record = await runPromotionPhase(
+        () =>
+          registry.readMaterial(
+            {
+              materialId: request.materialId,
+              materialVersion: request.materialVersion,
+              buildIntegrity: request.buildIntegrity,
+            },
+            { signal },
+          ),
+        signal,
+      )
+      throwIfPromotionAborted(signal)
+      if (!record || record.projectId !== request.projectId) {
+        throw promotionError('material-not-found', 404, 'Material was not found')
+      }
+      return createMaterialCatalogItem(record)
     },
   })
 }
