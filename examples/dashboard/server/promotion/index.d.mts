@@ -131,6 +131,7 @@ export interface MaterialPromotionTransportRequest {
 
 export interface MaterialPromotionHandler {
   handle(request: MaterialPromotionTransportRequest): Promise<MaterialPromotionTransportResult>
+  close?(): Promise<void>
 }
 
 export interface MaterialPromotionPhaseOptions {
@@ -186,6 +187,7 @@ export type EasypackRuntimeLoader = (
 
 export interface MaterialPromotionAuthor {
   checkAvailability?(options?: MaterialPromotionPhaseOptions): MaybePromise<MaterialPromotionAvailabilityV1>
+  recoverPromotionWorkspaces?(options?: MaterialPromotionPhaseOptions): MaybePromise<readonly string[]>
   authorPromotion(
     input: Readonly<{
       principal: MaterialPromotionPrincipal
@@ -194,10 +196,13 @@ export interface MaterialPromotionAuthor {
     }>,
   ): MaybePromise<Readonly<MaterialPromotionRequestV1>>
   releasePromotion?(promotion: Pick<MaterialPromotionRequestV1, 'buildDirectory'>): MaybePromise<void>
+  dispose?(): MaybePromise<void>
 }
 
 export interface EasypackTrustedWrapperAuthor extends MaterialPromotionAuthor {
   checkAvailability(options?: MaterialPromotionPhaseOptions): MaybePromise<MaterialPromotionAvailabilityV1>
+  recoverPromotionWorkspaces(options?: MaterialPromotionPhaseOptions): Promise<readonly string[]>
+  dispose(): Promise<void>
 }
 
 export type MaterialPromotionRecordV1 = MaterialPromotionBindingV1 & Readonly<{ state: 'manifest-staged' | 'active' }>
@@ -334,11 +339,18 @@ export interface MaterialPromotionCoordinatorOptions {
   readonly registry: MaterialPromotionRegistry
 }
 
+export interface EasypackWorkspaceLeaseOptions {
+  readonly heartbeatMs?: number
+  readonly staleAfterMs?: number
+  readonly now?: () => number
+}
+
 export interface EasypackTrustedWrapperAuthorOptions {
   readonly workspaceRoot: string
   readonly nodeVersion?: string
   readonly loadEasypack?: EasypackRuntimeLoader
   readonly now?: () => number
+  readonly workspaceLease?: EasypackWorkspaceLeaseOptions
 }
 
 export interface FileMaterialRegistryLeaseOptions {
@@ -402,11 +414,10 @@ export interface NodeMaterialPromotionMiddlewareOptions {
   readonly operationTimeoutMs?: number
 }
 
-export type MaterialPromotionMiddleware = (
-  request: IncomingMessage,
-  response: ServerResponse,
-  next?: () => void,
-) => Promise<boolean>
+export interface MaterialPromotionMiddleware {
+  (request: IncomingMessage, response: ServerResponse, next?: () => void): Promise<boolean>
+  readonly close?: () => Promise<void>
+}
 
 export declare const MATERIAL_PROMOTION_ROUTE: '/api/materials/promote'
 export declare const MATERIAL_PROMOTION_QUERY_ROUTE: '/api/materials/promotion/query'

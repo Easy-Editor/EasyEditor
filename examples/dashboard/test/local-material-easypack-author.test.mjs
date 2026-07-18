@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { fork } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { hostname, tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { createEasypackTrustedWrapperAuthor } from '../server/promotion/easypack-author.mjs'
 import { canonicalJsonStringify } from '../src/lib/storage/canonical-json.mjs'
 
+const childFixturePath = fileURLToPath(new URL('./fixtures/local-material-author-child.mjs', import.meta.url))
+
 const sha256 = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const sha256Sri = value => `sha256-${createHash('sha256').update(value).digest('base64')}`
 const digest = character => `sha256:${character.repeat(64)}`
+const delay = milliseconds => new Promise(resolvePromise => setTimeout(resolvePromise, milliseconds))
 
 const rawSource = `
 globalThis.__easyEditorRawPromotionSourceExecuted = true
@@ -107,9 +111,141 @@ const isInside = (root, candidate) => {
   )
 }
 
+const waitForMessage = (child, predicate, timeoutMs = 5_000) =>
+  new Promise((resolve, reject) => {
+    const stdout = []
+    const stderr = []
+    child.stdout?.on('data', chunk => stdout.push(chunk))
+    child.stderr?.on('data', chunk => stderr.push(chunk))
+    const cleanup = () => {
+      clearTimeout(timer)
+      child.off('message', onMessage)
+      child.off('exit', onExit)
+      child.off('error', onError)
+    }
+    const onMessage = message => {
+      if (!predicate(message)) return
+      cleanup()
+      resolve(message)
+    }
+    const onExit = (code, signal) => {
+      cleanup()
+      reject(
+        new Error(
+          `author child exited before expected message (code=${code}, signal=${signal})\n${Buffer.concat(stdout).toString()}${Buffer.concat(stderr).toString()}`,
+        ),
+      )
+    }
+    const onError = error => {
+      cleanup()
+      reject(error)
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(
+        new Error(
+          `timed out waiting for author child\n${Buffer.concat(stdout).toString()}${Buffer.concat(stderr).toString()}`,
+        ),
+      )
+    }, timeoutMs)
+    child.on('message', onMessage)
+    child.once('exit', onExit)
+    child.once('error', onError)
+  })
+
+const waitForExit = child =>
+  child.exitCode !== null || child.signalCode !== null
+    ? Promise.resolve({ code: child.exitCode, signal: child.signalCode })
+    : new Promise((resolvePromise, reject) => {
+        child.once('error', reject)
+        child.once('exit', (code, signal) => resolvePromise({ code, signal }))
+      })
+
+const startAuthorChild = (children, workspaceRoot, config = {}) => {
+  const child = fork(childFixturePath, [], {
+    env: {
+      ...process.env,
+      EASY_EDITOR_AUTHOR_CHILD_CONFIG: JSON.stringify({ workspaceRoot, ...config }),
+    },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  })
+  children.add(child)
+  child.once('exit', () => children.delete(child))
+  return child
+}
+
+const killAuthorChild = async child => {
+  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  const exit = await waitForExit(child)
+  assert.equal(exit.signal, 'SIGKILL')
+}
+
+const workspaceNamePattern =
+  /^promotion-v2-([\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12})-([\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12})-([A-Za-z0-9]{6})$/u
+const workspaceMarkerName = '.easy-editor-workspace-owner.json'
+const hostKey = value => createHash('sha256').update(value).digest('hex').slice(0, 16)
+const processLeasePath = (workspaceRoot, instanceToken) =>
+  join(workspaceRoot, `.promotion-process-v1-${instanceToken}.lease.json`)
+
+const createFastAuthor = ({ workspaceRoot, clock }) =>
+  createEasypackTrustedWrapperAuthor({
+    workspaceRoot,
+    nodeVersion: '20.0.0',
+    workspaceLease: { heartbeatMs: 20, staleAfterMs: 100, now: () => clock.value },
+    async loadEasypack() {
+      return {
+        async buildEasypack({ rootDir }) {
+          const output = 'export default Object.freeze({ componentName: "GeneratedMaterialHost" })\n'
+          await mkdir(join(rootDir, 'dist'))
+          await writeFile(join(rootDir, 'dist/index.esm.js'), output)
+          return { artifacts: [{ path: 'dist/index.esm.js' }] }
+        },
+      }
+    },
+  })
+
+const readWorkspaceOwner = async buildDirectory =>
+  JSON.parse(await readFile(join(buildDirectory, workspaceMarkerName), 'utf8'))
+
+const rewriteWorkspaceOwner = async ({ buildDirectory, instanceToken, ownerHostname, pid, createdAt }) => {
+  const match = workspaceNamePattern.exec(basename(buildDirectory))
+  assert.ok(match)
+  const workspaceName = `promotion-v2-${instanceToken}-${match[2]}-${match[3]}`
+  const rewrittenDirectory = join(dirname(buildDirectory), workspaceName)
+  await rename(buildDirectory, rewrittenDirectory)
+  const marker = await readWorkspaceOwner(rewrittenDirectory)
+  await writeFile(
+    join(rewrittenDirectory, workspaceMarkerName),
+    `${JSON.stringify({
+      ...marker,
+      hostname: ownerHostname,
+      hostnameKey: hostKey(ownerHostname),
+      pid,
+      instanceToken,
+      workspaceName,
+      createdAt,
+    })}\n`,
+  )
+  return rewrittenDirectory
+}
+
+const writeProcessLease = async ({ workspaceRoot, instanceToken, ownerHostname, pid, heartbeatAt }) => {
+  await writeFile(
+    processLeasePath(workspaceRoot, instanceToken),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      kind: 'easy-editor-easypack-process-lease',
+      hostname: ownerHostname,
+      hostnameKey: hostKey(ownerHostname),
+      pid,
+      instanceToken,
+      heartbeatAt,
+    })}\n`,
+  )
+}
+
 test('Node below 20 returns typed unavailable without eagerly loading Easypack', async t => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'easy-editor-author-node18-'))
-  t.after(() => rm(workspaceRoot, { recursive: true, force: true }))
   let loadCalls = 0
   const author = createEasypackTrustedWrapperAuthor({
     workspaceRoot,
@@ -118,6 +254,10 @@ test('Node below 20 returns typed unavailable without eagerly loading Easypack',
       loadCalls += 1
       throw new Error('Node 18 must never import the Node 20 Easypack package')
     },
+  })
+  t.after(async () => {
+    await author.dispose()
+    await rm(workspaceRoot, { recursive: true, force: true })
   })
 
   assert.equal(loadCalls, 0, 'constructing the optional promotion author must not import Easypack')
@@ -137,9 +277,261 @@ test('Node below 20 returns typed unavailable without eagerly loading Easypack',
   assert.equal(loadCalls, 0, 'the unavailable path must not evaluate or import Easypack')
 })
 
+test('restart recovery reclaims SIGKILL workspaces without deleting live owners or following symlinks', async t => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'easy-editor-author-recovery-'))
+  const workspaceRoot = join(fixtureRoot, 'workspaces')
+  const children = new Set()
+  let loadCalls = 0
+  const restartedAuthor = createEasypackTrustedWrapperAuthor({
+    workspaceRoot,
+    nodeVersion: '18.20.8',
+    async loadEasypack() {
+      loadCalls += 1
+      throw new Error('workspace recovery must not import Easypack')
+    },
+  })
+  t.after(async () => {
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await waitForExit(child).catch(() => undefined)
+    }
+    await restartedAuthor.dispose()
+    await rm(fixtureRoot, { recursive: true, force: true })
+  })
+
+  const liveChild = startAuthorChild(children, workspaceRoot)
+  const liveWorkspace = await waitForMessage(liveChild, message => message?.type === 'workspace-ready')
+  assert.match(basename(liveWorkspace.buildDirectory), /^promotion-v2-/u)
+  await access(join(liveWorkspace.buildDirectory, '.easy-editor-workspace-owner.json'))
+  assert.deepEqual(await restartedAuthor.recoverPromotionWorkspaces(), [])
+  await access(liveWorkspace.buildDirectory)
+  await unlink(join(liveWorkspace.buildDirectory, '.easy-editor-workspace-owner.json'))
+  assert.deepEqual(await restartedAuthor.recoverPromotionWorkspaces(), [])
+  await access(liveWorkspace.buildDirectory)
+
+  await killAuthorChild(liveChild)
+  const recoveryChildren = [
+    startAuthorChild(children, workspaceRoot, { action: 'recover' }),
+    startAuthorChild(children, workspaceRoot, { action: 'recover' }),
+  ]
+  const recoveryMessages = await Promise.all(
+    recoveryChildren.map(child => waitForMessage(child, message => message?.type === 'recovered')),
+  )
+  await Promise.all(recoveryChildren.map(waitForExit))
+  assert.deepEqual(recoveryMessages.flatMap(message => message.recovered).sort(), [
+    basename(liveWorkspace.buildDirectory),
+  ])
+  await assert.rejects(access(liveWorkspace.buildDirectory), error => error?.code === 'ENOENT')
+  assert.deepEqual(await restartedAuthor.recoverPromotionWorkspaces(), [])
+
+  const preMarkerChild = startAuthorChild(children, workspaceRoot)
+  const preMarkerWorkspace = await waitForMessage(preMarkerChild, message => message?.type === 'workspace-ready')
+  await killAuthorChild(preMarkerChild)
+  await unlink(join(preMarkerWorkspace.buildDirectory, '.easy-editor-workspace-owner.json'))
+  assert.deepEqual(await restartedAuthor.recoverPromotionWorkspaces(), [basename(preMarkerWorkspace.buildDirectory)])
+  await assert.rejects(access(preMarkerWorkspace.buildDirectory), error => error?.code === 'ENOENT')
+
+  const externalDirectory = join(fixtureRoot, 'external-directory')
+  await mkdir(externalDirectory)
+  await writeFile(join(externalDirectory, 'sentinel.txt'), 'do not delete')
+  const symlinkChild = startAuthorChild(children, workspaceRoot)
+  const symlinkWorkspace = await waitForMessage(symlinkChild, message => message?.type === 'workspace-ready')
+  await killAuthorChild(symlinkChild)
+  await rm(symlinkWorkspace.buildDirectory, { recursive: true })
+  await symlink(externalDirectory, symlinkWorkspace.buildDirectory, 'dir')
+  assert.deepEqual(await restartedAuthor.recoverPromotionWorkspaces(), [])
+  assert.equal(await readFile(join(externalDirectory, 'sentinel.txt'), 'utf8'), 'do not delete')
+  await unlink(symlinkWorkspace.buildDirectory)
+
+  const externalMarker = join(fixtureRoot, 'external-marker.json')
+  await writeFile(externalMarker, '{"mustRemain":true}\n')
+  const markerSymlinkChild = startAuthorChild(children, workspaceRoot)
+  const markerSymlinkWorkspace = await waitForMessage(
+    markerSymlinkChild,
+    message => message?.type === 'workspace-ready',
+  )
+  await killAuthorChild(markerSymlinkChild)
+  const markerPath = join(markerSymlinkWorkspace.buildDirectory, '.easy-editor-workspace-owner.json')
+  await unlink(markerPath)
+  await symlink(externalMarker, markerPath)
+  assert.deepEqual(await restartedAuthor.recoverPromotionWorkspaces(), [
+    basename(markerSymlinkWorkspace.buildDirectory),
+  ])
+  assert.equal(await readFile(externalMarker, 'utf8'), '{"mustRemain":true}\n')
+  assert.equal(loadCalls, 0)
+})
+
+test('process leases distinguish incarnations and bound foreign or missing-owner retention', async t => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'easy-editor-author-incarnations-'))
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }))
+
+  await t.test(
+    'same PID with an old instance token is reclaimed immediately, including recovery quarantine',
+    async t => {
+      const workspaceRoot = join(fixtureRoot, 'same-pid')
+      const clock = { value: 1_000 }
+      const author = createFastAuthor({ workspaceRoot, clock })
+      t.after(() => author.dispose())
+      const currentHostname = hostname()
+
+      const staleBuild = await author.authorPromotion({
+        principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
+        request: promotionRequest(),
+      })
+      const staleToken = randomUUID()
+      const staleDirectory = await rewriteWorkspaceOwner({
+        buildDirectory: staleBuild.buildDirectory,
+        instanceToken: staleToken,
+        ownerHostname: currentHostname,
+        pid: process.pid,
+        createdAt: clock.value,
+      })
+      await writeProcessLease({
+        workspaceRoot,
+        instanceToken: staleToken,
+        ownerHostname: currentHostname,
+        pid: process.pid,
+        heartbeatAt: clock.value,
+      })
+      assert.deepEqual(await author.recoverPromotionWorkspaces(), [basename(staleDirectory)])
+      await assert.rejects(access(staleDirectory), error => error?.code === 'ENOENT')
+      await assert.rejects(access(processLeasePath(workspaceRoot, staleToken)), error => error?.code === 'ENOENT')
+      await author.releasePromotion(staleBuild)
+
+      const quarantineBuild = await author.authorPromotion({
+        principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
+        request: promotionRequest(),
+      })
+      const oldRecoveryToken = randomUUID()
+      const quarantineName = `.promotion-recovery-v2-${oldRecoveryToken}-${randomUUID()}-${basename(quarantineBuild.buildDirectory)}`
+      const quarantineDirectory = join(workspaceRoot, quarantineName)
+      await rename(quarantineBuild.buildDirectory, quarantineDirectory)
+      await writeProcessLease({
+        workspaceRoot,
+        instanceToken: oldRecoveryToken,
+        ownerHostname: currentHostname,
+        pid: process.pid,
+        heartbeatAt: clock.value,
+      })
+      assert.deepEqual(await author.recoverPromotionWorkspaces(), [quarantineName])
+      await assert.rejects(access(quarantineDirectory), error => error?.code === 'ENOENT')
+      await author.releasePromotion(quarantineBuild)
+    },
+  )
+
+  await t.test('fresh foreign owner is retained and the same owner is auditably reclaimable after TTL', async t => {
+    const workspaceRoot = join(fixtureRoot, 'foreign-owner')
+    const clock = { value: 2_000 }
+    const author = createFastAuthor({ workspaceRoot, clock })
+    t.after(() => author.dispose())
+    const foreignToken = randomUUID()
+    const foreignHostname = 'restarted-container.example.test'
+    const build = await author.authorPromotion({
+      principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
+      request: promotionRequest(),
+    })
+    const foreignDirectory = await rewriteWorkspaceOwner({
+      buildDirectory: build.buildDirectory,
+      instanceToken: foreignToken,
+      ownerHostname: foreignHostname,
+      pid: 1,
+      createdAt: clock.value,
+    })
+    await writeProcessLease({
+      workspaceRoot,
+      instanceToken: foreignToken,
+      ownerHostname: foreignHostname,
+      pid: 1,
+      heartbeatAt: clock.value,
+    })
+
+    assert.deepEqual(await author.recoverPromotionWorkspaces(), [])
+    await access(foreignDirectory)
+    await unlink(processLeasePath(workspaceRoot, foreignToken))
+    assert.deepEqual(await author.recoverPromotionWorkspaces(), [])
+    await access(foreignDirectory)
+    clock.value += 101
+    assert.deepEqual(await author.recoverPromotionWorkspaces(), [basename(foreignDirectory)])
+    await assert.rejects(access(foreignDirectory), error => error?.code === 'ENOENT')
+    await assert.rejects(access(processLeasePath(workspaceRoot, foreignToken)), error => error?.code === 'ENOENT')
+    await author.releasePromotion(build)
+  })
+
+  await t.test('multiple authors in one process share an incarnation and never reap each other', async t => {
+    const workspaceRoot = join(fixtureRoot, 'same-process')
+    const clock = { value: 3_000 }
+    const firstAuthor = createFastAuthor({ workspaceRoot, clock })
+    const secondAuthor = createFastAuthor({ workspaceRoot, clock })
+    t.after(async () => {
+      await Promise.all([firstAuthor.dispose(), secondAuthor.dispose()])
+    })
+    const first = await firstAuthor.authorPromotion({
+      principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
+      request: promotionRequest(),
+    })
+    const second = await secondAuthor.authorPromotion({
+      principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
+      request: promotionRequest(),
+    })
+    const [firstMarker, secondMarker] = await Promise.all([
+      readWorkspaceOwner(first.buildDirectory),
+      readWorkspaceOwner(second.buildDirectory),
+    ])
+    assert.equal(firstMarker.instanceToken, secondMarker.instanceToken)
+    assert.notEqual(firstMarker.workspaceToken, secondMarker.workspaceToken)
+    assert.deepEqual(await firstAuthor.recoverPromotionWorkspaces(), [])
+    const leaseEntries = (await readdir(workspaceRoot)).filter(name =>
+      /^\.promotion-process-v1-.*\.lease\.json$/u.test(name),
+    )
+    assert.equal(leaseEntries.length, 1)
+    await firstAuthor.releasePromotion(second)
+    await secondAuthor.releasePromotion(first)
+  })
+})
+
+test('shared author disposal drains one heartbeat, releases the final lease, and never recreates the root', async t => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'easy-editor-author-dispose-'))
+  const workspaceRoot = join(fixtureRoot, 'workspaces')
+  const clock = { value: 4_000 }
+  const firstAuthor = createFastAuthor({ workspaceRoot, clock })
+  const secondAuthor = createFastAuthor({ workspaceRoot, clock })
+  t.after(async () => {
+    await Promise.all([firstAuthor.dispose(), secondAuthor.dispose()])
+    await rm(fixtureRoot, { recursive: true, force: true })
+  })
+
+  await mkdir(workspaceRoot)
+  await Promise.all([firstAuthor.recoverPromotionWorkspaces(), secondAuthor.recoverPromotionWorkspaces()])
+  await delay(45)
+  const leaseEntries = (await readdir(workspaceRoot)).filter(name =>
+    /^\.promotion-process-v1-.*\.lease\.json$/u.test(name),
+  )
+  const transientEntries = (await readdir(workspaceRoot)).filter(name =>
+    /^\.promotion-process-v1-.*\.lease\.tmp$/u.test(name),
+  )
+  assert.equal(leaseEntries.length, 1, 'parallel authors share one durable process lease')
+  assert.equal(transientEntries.length <= 1, true, 'at most one atomic heartbeat write may be in flight')
+
+  const build = await secondAuthor.authorPromotion({
+    principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
+    request: promotionRequest(),
+  })
+  const instanceToken = (await readWorkspaceOwner(build.buildDirectory)).instanceToken
+  await firstAuthor.dispose()
+  await firstAuthor.dispose()
+  await secondAuthor.dispose()
+  await access(build.buildDirectory)
+  await access(processLeasePath(workspaceRoot, instanceToken))
+
+  await secondAuthor.releasePromotion(build)
+  await assert.rejects(access(processLeasePath(workspaceRoot, instanceToken)), error => error?.code === 'ENOENT')
+  await rm(workspaceRoot, { recursive: true })
+  await delay(85)
+  await assert.rejects(access(workspaceRoot), error => error?.code === 'ENOENT')
+})
+
 test('Node 20 author builds only a fixed trusted sandbox-proxy wrapper in a confined workspace', async t => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'easy-editor-author-node20-'))
-  t.after(() => rm(workspaceRoot, { recursive: true, force: true }))
   const buildCalls = []
   const wrapperSources = []
   let loadCalls = 0
@@ -203,13 +595,21 @@ test('Node 20 author builds only a fixed trusted sandbox-proxy wrapper in a conf
     loadEasypack,
     now: () => 123,
   })
+  const authored = []
+  t.after(async () => {
+    for (const promotion of authored) await author.releasePromotion(promotion).catch(() => undefined)
+    await author.dispose()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  })
   globalThis.__easyEditorRawPromotionSourceExecuted = undefined
   const input = {
     principal: { tenantId: 'tenant-from-server', userId: 'user-from-server' },
     request: promotionRequest(),
   }
   const first = await author.authorPromotion(input)
+  authored.push(first)
   const second = await author.authorPromotion(input)
+  authored.push(second)
 
   assert.equal(globalThis.__easyEditorRawPromotionSourceExecuted, undefined)
   assert.equal(loadCalls > 0, true)
@@ -264,14 +664,15 @@ test('default Node 20 loader lazily materializes compiled Easypack from a clean 
     if (error?.code !== 'ENOENT') throw error
     hadDist = false
   }
+  const author = createEasypackTrustedWrapperAuthor({ workspaceRoot, nodeVersion: process.versions.node })
   t.after(async () => {
+    await author?.dispose()
     await rm(workspaceRoot, { recursive: true, force: true })
     await rm(distDirectory, { recursive: true, force: true })
     if (hadDist) await rename(backupDirectory, distDirectory)
   })
 
   await assert.rejects(access(join(distDirectory, 'index.js')), error => error?.code === 'ENOENT')
-  const author = createEasypackTrustedWrapperAuthor({ workspaceRoot, nodeVersion: process.versions.node })
   const result = await author.authorPromotion({
     principal: { tenantId: 'trusted-tenant', userId: 'trusted-user' },
     request: promotionRequest(),

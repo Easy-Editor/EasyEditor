@@ -754,7 +754,9 @@ test('availability rejects Node 18 without importing or building Easypack', asyn
 test('availability stays side-effect free and authoritative query does not run registry recovery', async t => {
   let createRegistryCalls = 0
   let recoveryCalls = 0
+  let workspaceRecoveryCalls = 0
   let queryCalls = 0
+  const initializationOrder = []
   const registry = {
     async stagePromotion() {
       throw new Error('query must not stage a promotion')
@@ -767,6 +769,7 @@ test('availability stays side-effect free and authoritative query does not run r
       return null
     },
     async recoverPendingPromotions() {
+      initializationOrder.push('registry-recovery')
       recoveryCalls += 1
       return []
     },
@@ -774,6 +777,11 @@ test('availability stays side-effect free and authoritative query does not run r
   const middleware = createEnvironmentMaterialPromotionMiddleware({
     env: { EASY_EDITOR_MATERIAL_PROMOTION_ENABLED: '1' },
     author: {
+      async recoverPromotionWorkspaces() {
+        initializationOrder.push('workspace-recovery')
+        workspaceRecoveryCalls += 1
+        return []
+      },
       async checkAvailability() {
         return { schemaVersion: 1, available: true, reason: 'ready', minimumNodeMajor: 20 }
       },
@@ -785,6 +793,7 @@ test('availability stays side-effect free and authoritative query does not run r
       return { tenantId: 'trusted-tenant', userId: 'trusted-user' }
     },
     async createRegistry() {
+      initializationOrder.push('registry-create')
       createRegistryCalls += 1
       return registry
     },
@@ -801,6 +810,7 @@ test('availability stays side-effect free and authoritative query does not run r
   })
   assert.equal(availability.status, 200)
   assert.equal(createRegistryCalls, 0)
+  assert.equal(workspaceRecoveryCalls, 0)
 
   const request = promotionRequest()
   const query = await requestOverHttp(
@@ -815,8 +825,76 @@ test('availability stays side-effect free and authoritative query does not run r
   assert.equal(query.status, 404)
   assert.equal((await query.json()).error.code, 'promotion-not-found')
   assert.equal(createRegistryCalls, 1)
+  assert.equal(workspaceRecoveryCalls, 1)
   assert.equal(queryCalls, 1)
   assert.equal(recoveryCalls, 0)
+  assert.deepEqual(initializationOrder, ['workspace-recovery', 'registry-create'])
+
+  const repeatedQuery = await requestOverHttp(
+    origin,
+    {
+      schemaVersion: 1,
+      projectId: request.projectId,
+      promotionId: request.promotionId,
+    },
+    { path: MATERIAL_PROMOTION_QUERY_ROUTE },
+  )
+  assert.equal(repeatedQuery.status, 404)
+  assert.equal(createRegistryCalls, 1)
+  assert.equal(workspaceRecoveryCalls, 1)
+})
+
+test('environment middleware owns one idempotent author shutdown bound to the production server lifecycle', async () => {
+  let disposeCalls = 0
+  const author = {
+    async recoverPromotionWorkspaces() {
+      return []
+    },
+    async checkAvailability() {
+      return { schemaVersion: 1, available: true, reason: 'ready', minimumNodeMajor: 20 }
+    },
+    async authorPromotion() {
+      throw new Error('shutdown lifecycle test must not author a promotion')
+    },
+    async dispose() {
+      disposeCalls += 1
+    },
+  }
+  const registry = {
+    async stagePromotion() {
+      throw new Error('shutdown lifecycle test must not stage a promotion')
+    },
+    async publishPromotion() {
+      throw new Error('shutdown lifecycle test must not publish a promotion')
+    },
+    async queryPromotion() {
+      return null
+    },
+  }
+  const middleware = createEnvironmentMaterialPromotionMiddleware({
+    env: { EASY_EDITOR_MATERIAL_PROMOTION_ENABLED: '1' },
+    author,
+    registry,
+    async authorizePrincipal() {
+      return { tenantId: 'trusted-tenant', userId: 'trusted-user' }
+    },
+  })
+  const server = createServer((request, response) => {
+    void middleware(request, response, () => response.writeHead(404).end())
+  })
+  await listen(server)
+
+  const request = promotionRequest()
+  const response = await requestOverHttp(
+    originFor(server),
+    { schemaVersion: 1, projectId: request.projectId, promotionId: request.promotionId },
+    { path: MATERIAL_PROMOTION_QUERY_ROUTE },
+  )
+  assert.equal(response.status, 404)
+  await close(server)
+  await middleware.close?.()
+  await middleware.close?.()
+  assert.equal(disposeCalls, 1)
 })
 
 test('Vite contract middleware and production server use the same promotion handler and DTOs', async t => {

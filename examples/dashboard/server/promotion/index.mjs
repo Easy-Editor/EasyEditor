@@ -120,9 +120,14 @@ export const createEnvironmentMaterialPromotionHandler = (options = {}) => {
   let initializedRegistry
   let initialization
   let recovery
+  let workspaceRecovery
   const initialize = async ({ recover = false } = {}) => {
     if (!initializedCoordinator) {
       initialization ??= (async () => {
+        if (typeof author.recoverPromotionWorkspaces === 'function') {
+          workspaceRecovery ??= author.recoverPromotionWorkspaces()
+          await workspaceRecovery
+        }
         const registry =
           options.registry ??
           (await (options.createRegistry ?? createFileMaterialRegistry)({
@@ -164,7 +169,7 @@ export const createEnvironmentMaterialPromotionHandler = (options = {}) => {
     return coordinator[method](input)
   }
 
-  return createMaterialPromotionHandler({
+  const handler = createMaterialPromotionHandler({
     coordinator: Object.freeze({
       promote: input => runWithInitializedCoordinator('promote', input, { recover: true }),
       query: input => runWithInitializedCoordinator('query', input),
@@ -176,12 +181,21 @@ export const createEnvironmentMaterialPromotionHandler = (options = {}) => {
         ? options => author.checkAvailability(options)
         : async () => ({ schemaVersion: 1, available: true, reason: 'ready', minimumNodeMajor: 20 }),
   })
+  let closeTask
+  return Object.freeze({
+    handle: request => handler.handle(request),
+    close() {
+      closeTask ??= Promise.resolve().then(() => author.dispose?.())
+      return closeTask
+    },
+  })
 }
 
 export const createEnvironmentMaterialPromotionMiddleware = (options = {}) => {
   const env = options.env ?? process.env
-  return createNodeMaterialPromotionMiddleware({
-    handler: options.handler ?? createEnvironmentMaterialPromotionHandler({ ...options, env }),
+  const handler = options.handler ?? createEnvironmentMaterialPromotionHandler({ ...options, env })
+  const nodeMiddleware = createNodeMaterialPromotionMiddleware({
+    handler,
     inboundTimeoutMs: options.inboundTimeoutMs,
     operationTimeoutMs: options.operationTimeoutMs,
     publicOrigins:
@@ -190,4 +204,22 @@ export const createEnvironmentMaterialPromotionMiddleware = (options = {}) => {
         .map(value => value.trim())
         .filter(Boolean),
   })
+  const boundServers = new WeakSet()
+  let closeTask
+  const close = () => {
+    closeTask ??= Promise.resolve().then(() => handler.close?.())
+    return closeTask
+  }
+  const middleware = async (request, response, next) => {
+    const server = request?.socket?.server
+    if (server && typeof server.once === 'function' && !boundServers.has(server)) {
+      boundServers.add(server)
+      server.once('close', () => {
+        void close().catch(() => undefined)
+      })
+    }
+    return nodeMiddleware(request, response, next)
+  }
+  Object.defineProperty(middleware, 'close', { value: close })
+  return Object.freeze(middleware)
 }
