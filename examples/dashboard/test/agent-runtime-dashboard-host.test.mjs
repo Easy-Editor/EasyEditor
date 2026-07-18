@@ -299,6 +299,9 @@ const createHarness = async (t, options = {}) => {
     Object.freeze({ generation: 0, isActive: () => false, waitUntilIdle: async () => ({ generation: 0 }) })
   const host = createDashboardAgentHost({
     activityLease,
+    ...(options.admitMaterialRefsUnderSharedMutation === undefined
+      ? {}
+      : { admitMaterialRefsUnderSharedMutation: options.admitMaterialRefsUnderSharedMutation }),
     authority,
     artifactService: options.artifactService,
     compensationService:
@@ -333,7 +336,7 @@ const createHarness = async (t, options = {}) => {
 test('default-off Host composition is inert and production never boots an Agent Runtime or Worker', () => {
   let getterInvocations = 0
   const options = { enabled: false }
-  for (const key of ['authority', 'engine']) {
+  for (const key of ['admitMaterialRefsUnderSharedMutation', 'authority', 'engine']) {
     Object.defineProperty(options, key, {
       enumerable: true,
       get() {
@@ -1462,6 +1465,132 @@ test('Host invocation waits behind GC exclusive ownership and resumes with one s
     'service:data-upsert-gated',
     'activity-finish:data-upsert-gated',
   ])
+  assert.equal(gate.getSnapshot().sharedCount, 0)
+})
+
+test('Host keeps semantic material admission and its Core effect under one existing shared lease', async t => {
+  const gate = createDashboardMutationQuiescenceGate()
+  t.after(() => gate.dispose())
+  const events = []
+  let coreMutationCalls = 0
+  const admitMaterialRefsUnderSharedMutation = async input => {
+    events.push(['admit', structuredClone(input)])
+    assert.equal(gate.getSnapshot().sharedCount, 1, 'Host must already own the one shared mutation lease')
+  }
+  const promotionService = {
+    async promoteLocal(call) {
+      events.push(['semantic', call.callId])
+      await admitMaterialRefsUnderSharedMutation({
+        schemaVersion: 1,
+        projectId: call.projectId,
+        materialRefs: [
+          {
+            materialId: 'material-hosted-local',
+            materialVersion: '1.0.0',
+            buildIntegrity: `sha256:${'b'.repeat(64)}`,
+          },
+        ],
+        unresolvedPromotionIds: [`sha256:${'c'.repeat(64)}`],
+        reason: 'promotion-activation',
+      })
+      events.push(['core', call.callId])
+      assert.equal(gate.getSnapshot().sharedCount, 1, 'Host must already own the one shared mutation lease')
+      coreMutationCalls += 1
+      return { schemaVersion: 1, callId: call.callId, status: 'applied', revision: 'promotion-revision-1' }
+    },
+    async queryReceipt() {
+      return null
+    },
+    async resumePending() {
+      return { schemaVersion: 1, results: [] }
+    },
+  }
+  const { host } = await createHarness(t, {
+    admitMaterialRefsUnderSharedMutation,
+    mutationGate: gate,
+    promotionAvailability: async () => ({ available: true }),
+    promotionService,
+  })
+  const result = await host.invoke(
+    semanticCall({
+      arguments: { schemaVersion: 1, nodeId: 'generated-local-1' },
+      callId: 'promotion-admit-hosted-local',
+      capability: 'artifact.promoteLocal',
+      expectedRevision: 'promotion-base-revision',
+    }),
+    invocationContext(),
+  )
+
+  assert.equal(result.status, 'applied', JSON.stringify(result))
+  assert.deepEqual(
+    events.map(event => event[0]),
+    ['semantic', 'admit', 'core'],
+  )
+  assert.equal(coreMutationCalls, 1)
+  assert.equal(gate.getSnapshot().sharedCount, 0)
+})
+
+test('Host admission rejection reaches no semantic Core effect and releases its shared lease', async t => {
+  const gate = createDashboardMutationQuiescenceGate()
+  t.after(() => gate.dispose())
+  const events = []
+  let coreMutationCalls = 0
+  const rejection = new Error('durable admission rejected')
+  const admitMaterialRefsUnderSharedMutation = async () => {
+    events.push('admit')
+    assert.equal(gate.getSnapshot().sharedCount, 1)
+    throw rejection
+  }
+  const promotionService = {
+    async promoteLocal(call) {
+      events.push('semantic')
+      try {
+        await admitMaterialRefsUnderSharedMutation()
+      } catch {
+        return {
+          schemaVersion: 1,
+          callId: call.callId,
+          status: 'not-applied',
+          revision: call.expectedRevision,
+          failure: {
+            code: 'MATERIAL_ADMISSION_FAILED',
+            message: 'Material admission failed',
+            retryable: false,
+            details: { stage: 'material-admission' },
+          },
+        }
+      }
+      coreMutationCalls += 1
+      assert.fail('Core must remain behind material admission')
+    },
+    async queryReceipt() {
+      return null
+    },
+    async resumePending() {
+      return { schemaVersion: 1, results: [] }
+    },
+  }
+  const { host } = await createHarness(t, {
+    admitMaterialRefsUnderSharedMutation,
+    mutationGate: gate,
+    promotionAvailability: async () => ({ available: true }),
+    promotionService,
+  })
+
+  const result = await host.invoke(
+    semanticCall({
+      arguments: { schemaVersion: 1, nodeId: 'generated-local-1' },
+      callId: 'promotion-admission-rejected',
+      capability: 'artifact.promoteLocal',
+      expectedRevision: 'promotion-base-revision',
+    }),
+    invocationContext(),
+  )
+
+  assert.equal(result.status, 'not-applied', JSON.stringify(result))
+  assert.equal(result.failure.code, 'MATERIAL_ADMISSION_FAILED')
+  assert.deepEqual(events, ['semantic', 'admit'])
+  assert.equal(coreMutationCalls, 0)
   assert.equal(gate.getSnapshot().sharedCount, 0)
 })
 

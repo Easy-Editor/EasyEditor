@@ -189,6 +189,9 @@ export const dashboardLocalMaterialCatalogRuntime = createDashboardLocalMaterial
     dashboardAgentRuntimeFeatureFlags.promotion,
   client: createDashboardSameOriginLocalMaterialCatalogClient({ fetchImpl: window.fetch.bind(window) }),
   persistence: dashboardPersistence,
+  ...(dashboardMaterialGcAdmissionPort
+    ? { withMaterialAdmission: dashboardMaterialGcAdmissionPort.withMaterialAdmission }
+    : {}),
 })
 
 export const captureDashboardPersistenceInput = (): DashboardPersistenceInput => {
@@ -270,6 +273,12 @@ const createBoundDashboardAgentHost = (
             persistence: dashboardPersistence,
           }),
           crypto: window.crypto,
+          ...(dashboardMaterialGcAdmissionPort
+            ? {
+                admitMaterialRefsUnderSharedMutation:
+                  dashboardMaterialGcAdmissionPort.admitMaterialRefsUnderSharedMutation,
+              }
+            : {}),
           ...(grantIdentity ? { grantIdentity } : {}),
           onPromotionApplied: async () => {
             await dashboardLocalMaterialCatalogRuntime.refresh()
@@ -286,6 +295,11 @@ const createBoundDashboardAgentHost = (
     engine,
     invocationActivity: dashboardInvocationActivity,
     ...(dashboardMutationQuiescenceGate ? { mutationGate: dashboardMutationQuiescenceGate } : {}),
+    ...(dashboardMaterialGcAdmissionPort
+      ? {
+          admitMaterialRefsUnderSharedMutation: dashboardMaterialGcAdmissionPort.admitMaterialRefsUnderSharedMutation,
+        }
+      : {}),
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     persistence: dashboardPersistence,

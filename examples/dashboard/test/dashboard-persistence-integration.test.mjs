@@ -1544,7 +1544,74 @@ test('real Engine exact attribution preserves unrelated Agent provenance across 
   assert.ok(afterInsert.records.every(recordValue => recordValue.token === 'human'))
 })
 
-test('preview opens synchronously but navigates only after the durable save settles', async () => {
+test('material admission reads the canonical roots before the first project exposure and fails closed', async () => {
+  const { withDashboardMaterialAdmissionBeforeExposure } = loadPersistenceRuntime()
+  const materialRef = {
+    materialId: 'material-boundary',
+    materialVersion: '1.0.0',
+    buildIntegrity: `sha256:${'b'.repeat(64)}`,
+  }
+  const unresolvedPromotionId = `sha256:${'c'.repeat(64)}`
+  const events = []
+  const result = await withDashboardMaterialAdmissionBeforeExposure({
+    projectId: 'project-boundary',
+    reason: 'editor-startup',
+    async readMaterialGcSnapshot(projectId) {
+      events.push(`snapshot:${projectId}`)
+      return {
+        schemaVersion: 1,
+        projectId,
+        materialRefs: [materialRef],
+        unresolvedPromotionIds: [unresolvedPromotionId],
+      }
+    },
+    async withMaterialAdmission(input, operation) {
+      events.push(['admit', structuredClone(input)])
+      return operation({ status: 'admitted' })
+    },
+    operation() {
+      events.push('expose')
+      return 'loaded'
+    },
+  })
+
+  assert.equal(result, 'loaded')
+  assert.deepEqual(events, [
+    'snapshot:project-boundary',
+    [
+      'admit',
+      {
+        schemaVersion: 1,
+        projectId: 'project-boundary',
+        materialRefs: [materialRef],
+        unresolvedPromotionIds: [unresolvedPromotionId],
+        reason: 'editor-startup',
+      },
+    ],
+    'expose',
+  ])
+
+  let exposureCalls = 0
+  await assert.rejects(
+    withDashboardMaterialAdmissionBeforeExposure({
+      projectId: 'project-boundary',
+      reason: 'editor-draft-restore',
+      async readMaterialGcSnapshot(projectId) {
+        return { schemaVersion: 1, projectId, materialRefs: [materialRef], unresolvedPromotionIds: [] }
+      },
+      async withMaterialAdmission() {
+        throw new Error('admission rejected')
+      },
+      operation() {
+        exposureCalls += 1
+      },
+    }),
+    /admission rejected/,
+  )
+  assert.equal(exposureCalls, 0)
+})
+
+test('preview opens synchronously but navigates exactly once after save and optional admission settle', async () => {
   const { openDashboardPreviewAfterSave } = loadPersistenceRuntime()
   const events = []
   let releaseSave
@@ -1570,13 +1637,18 @@ test('preview opens synchronously but navigates only after the durable save sett
       await save
       events.push('persist:end')
     },
+    beforeNavigate: async (handle, url) => {
+      events.push('admit:start')
+      handle.navigate(url)
+      events.push('admit:end')
+    },
     previewUrl: '/preview',
   })
 
   assert.deepEqual(events, ['open', 'persist:start'])
   releaseSave()
   assert.equal((await opening).status, 'opened')
-  assert.deepEqual(events, ['open', 'persist:start', 'persist:end', 'navigate:/preview'])
+  assert.deepEqual(events, ['open', 'persist:start', 'persist:end', 'admit:start', 'navigate:/preview', 'admit:end'])
 
   const failureEvents = []
   const failure = await openDashboardPreviewAfterSave({
@@ -1591,6 +1663,24 @@ test('preview opens synchronously but navigates only after the durable save sett
   })
   assert.equal(failure.status, 'failed')
   assert.deepEqual(failureEvents, ['failure:当前更改尚未保存，无法打开预览。'])
+
+  const admissionFailureEvents = []
+  const admissionFailure = await openDashboardPreviewAfterSave({
+    openWindow: () => ({
+      navigate: url => admissionFailureEvents.push(`navigate:${url}`),
+      showFailure: message => admissionFailureEvents.push(`failure:${message}`),
+    }),
+    persist: async () => {
+      admissionFailureEvents.push('persist')
+    },
+    beforeNavigate: async () => {
+      admissionFailureEvents.push('admit')
+      throw new Error('admission failed')
+    },
+    previewUrl: '/preview',
+  })
+  assert.equal(admissionFailure.status, 'failed')
+  assert.deepEqual(admissionFailureEvents, ['persist', 'admit', 'failure:当前更改尚未保存，无法打开预览。'])
 })
 
 test('explicit disposal flushes the latest pending autosave and rejects new work', async () => {

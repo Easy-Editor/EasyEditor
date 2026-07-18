@@ -31,12 +31,14 @@ import {
 } from './data'
 import { dashboardExpressionEvaluator } from './expression-policy'
 import { Group, componentMetaMap } from './materials'
+import { withDashboardMaterialAdmissionBeforeExposure } from './persistence-runtime'
 import { pluginList } from './plugins'
 import type { RemotePackageLoadFailure, RemotePackageLoadResult } from './remote/remote-load-batch.js'
 import {
   captureDashboardPersistenceInput,
   composeDashboardAgentHost,
   dashboardAgentRuntimeFeatureFlags,
+  dashboardMaterialGcAdmissionPort,
   dashboardMaterialGcRuntime,
   dashboardPersistence,
   disposeDashboardAgentActivity,
@@ -223,7 +225,7 @@ const createInitialProjectSchema = async () => {
     engine.trustPolicy,
   ) as ProjectSchema
   await loadRemoteMaterialsFromComponentsMap(schema.componentsMap)
-  return { activeDocument: draft.activeDocument, schema }
+  return { activeDocument: draft.activeDocument, projectId: draft.projectId, schema }
 }
 
 const scheduleDashboardAutosave = () => {
@@ -310,6 +312,29 @@ const restoreActiveDocument = (
   engine.project.open(document)
 }
 
+const loadDashboardProjectAfterMaterialAdmission = async (input: {
+  readonly activeDocument: CanonicalWorkingDraftV1['activeDocument']
+  readonly projectId: string
+  readonly reason: 'editor-draft-restore' | 'editor-startup'
+  readonly schema: ProjectSchema
+}): Promise<void> => {
+  const loadProject = () => {
+    engine.loadProject(input.schema, true)
+    restoreActiveDocument(input.activeDocument)
+  }
+  if (!dashboardMaterialGcAdmissionPort) {
+    loadProject()
+    return
+  }
+  await withDashboardMaterialAdmissionBeforeExposure({
+    projectId: input.projectId,
+    reason: input.reason,
+    readMaterialGcSnapshot: projectId => dashboardPersistence.readMaterialGcSnapshot(projectId),
+    withMaterialAdmission: dashboardMaterialGcAdmissionPort.withMaterialAdmission,
+    operation: loadProject,
+  })
+}
+
 /**
  * Loads a canonical, already-durable draft into the editor. Validation and
  * remote material discovery happen before the project swap so a rejected
@@ -321,8 +346,12 @@ export const loadDashboardEditorDraft = async (draft: CanonicalWorkingDraftV1): 
     engine.trustPolicy,
   ) as ProjectSchema
   await loadRemoteMaterialsFromComponentsMap(schema.componentsMap)
-  engine.loadProject(schema, true)
-  restoreActiveDocument(draft.activeDocument)
+  await loadDashboardProjectAfterMaterialAdmission({
+    activeDocument: draft.activeDocument,
+    projectId: draft.projectId,
+    reason: 'editor-draft-restore',
+    schema,
+  })
 }
 
 const bootstrapDashboardEditor = async () => {
@@ -397,8 +426,12 @@ const bootstrapDashboardEditor = async () => {
       })
       registerDashboardEditorDisposer(() => surface.dispose())
     }
-    engine.loadProject(initialProject.schema, true)
-    restoreActiveDocument(initialProject.activeDocument)
+    await loadDashboardProjectAfterMaterialAdmission({
+      activeDocument: initialProject.activeDocument,
+      projectId: initialProject.projectId,
+      reason: 'editor-startup',
+      schema: initialProject.schema,
+    })
     installPersistenceListeners()
     dashboardMaterialGcRuntime.trigger('startup')
 

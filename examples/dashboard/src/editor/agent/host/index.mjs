@@ -751,6 +751,7 @@ export class DashboardAgentHost {
 
   constructor({
     activityLease,
+    admitMaterialRefsUnderSharedMutation,
     adapterGeneration = 1,
     authority,
     artifactService,
@@ -875,6 +876,7 @@ export class DashboardAgentHost {
       activityLease: this.#activityLease,
       engine,
       persistence: this.#persistence,
+      ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
       captureFullSnapshot: () => this.#captureFull(),
       manifestCache: this.#manifestCache,
       hashCanonicalJson,
@@ -895,6 +897,7 @@ export class DashboardAgentHost {
         activityLease: this.#activityLease,
         engine,
         persistence: this.#persistence,
+        ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
         captureFullSnapshot: () => this.#captureFull(),
         manifestCache: createDashboardDataManifestCache(this.#manifestCache),
         hashCanonicalJson,
@@ -923,6 +926,7 @@ export class DashboardAgentHost {
         activityLease: this.#activityLease,
         engine,
         persistence: this.#persistence,
+        ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
         captureFullSnapshot: () => this.#captureFull(),
         manifestCache: this.#manifestCache,
         hashCanonicalJson,
@@ -1260,6 +1264,7 @@ export const createDashboardAgentHost = (options = {}) => {
   if (readOwnDataValue(options, 'enabled', false) !== true) return null
   return new DashboardAgentHost({
     activityLease: readOwnDataValue(options, 'activityLease', undefined),
+    admitMaterialRefsUnderSharedMutation: readOwnDataValue(options, 'admitMaterialRefsUnderSharedMutation', undefined),
     adapterGeneration: readOwnDataValue(options, 'adapterGeneration', 1),
     artifactService: readOwnDataValue(options, 'artifactService', undefined),
     authority: readOwnDataValue(options, 'authority'),

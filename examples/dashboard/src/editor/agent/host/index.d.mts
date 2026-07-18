@@ -17,7 +17,10 @@ import type { DashboardInvocationActivity } from '../activity/invocation-activit
 import type { DashboardMutationQuiescenceGate } from '../activity/mutation-quiescence-gate.mjs'
 import type { DashboardOnlineArtifactCapabilityService } from '../capabilities/artifact/index.mjs'
 import type { DashboardDataCapabilityService, DashboardDataResolver } from '../capabilities/data/index.mjs'
-import type { DashboardLocalMaterialPromotionCapabilityService } from '../capabilities/promotion/index.mjs'
+import type {
+  DashboardLocalMaterialPromotionCapabilityService,
+  DashboardMaterialGcRuntime,
+} from '../capabilities/promotion/index.mjs'
 import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
 import type { ReceiptRecoveryResult } from '../persistence/receipt-ledger.mjs'
@@ -40,6 +43,7 @@ export interface DashboardAgentHostAuthority {
 
 export interface DashboardAgentHostOptions {
   readonly activityLease?: HumanActivityLease
+  readonly admitMaterialRefsUnderSharedMutation?: DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation']
   readonly invocationActivity?: Pick<DashboardInvocationActivity, 'begin'>
   readonly mutationGate?: Pick<DashboardMutationQuiescenceGate, 'acquireShared'>
   readonly enabled?: boolean
@@ -96,6 +100,7 @@ export declare class DashboardAgentHostError extends Error {
 export declare class DashboardAgentHost implements AgentHost {
   constructor(options: {
     readonly activityLease: HumanActivityLease
+    readonly admitMaterialRefsUnderSharedMutation?: DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation']
     readonly invocationActivity?: Pick<DashboardInvocationActivity, 'begin'>
     readonly mutationGate?: Pick<DashboardMutationQuiescenceGate, 'acquireShared'>
     readonly engine: EngineInstance

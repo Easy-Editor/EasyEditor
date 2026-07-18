@@ -809,7 +809,7 @@ test('Dashboard bootstrap orders plugin registration, engine init, remote load, 
   const remoteIndex = bootstrap.indexOf('await remoteResources.loadAllRemoteResources()')
   const setterFallbackIndex = bootstrap.indexOf('registerMissingLocalSetters()', remoteIndex)
   const persistenceIndex = bootstrap.indexOf('const initialProject = await createInitialProjectSchema()')
-  const projectIndex = bootstrap.indexOf('engine.loadProject(initialProject.schema, true)')
+  const projectIndex = bootstrap.indexOf('await loadDashboardProjectAfterMaterialAdmission({', persistenceIndex)
 
   assert.ok(registerIndex >= 0 && registerIndex < initIndex)
   assert.ok(initIndex < remoteIndex)
@@ -832,6 +832,41 @@ test('Dashboard bootstrap orders plugin registration, engine init, remote load, 
   assert.match(bootstrap, /for \(const \[type, setter\] of Object\.entries\(setterMap\)\)/)
   assert.match(bootstrap, /if \(!engine\.setters\.getSetter\(type\)\) engine\.setters\.registerSetter\(type, setter\)/)
   assert.match(bootstrap, /runBackground\(['"]auto-load remote component implementations['"]/)
+  assert.match(bootstrap, /if \(!dashboardMaterialGcAdmissionPort\) \{\s*loadProject\(\)\s*return\s*\}/)
+  assert.match(bootstrap, /withDashboardMaterialAdmissionBeforeExposure\(\{/)
+  assert.match(
+    bootstrap,
+    /readMaterialGcSnapshot: projectId => dashboardPersistence\.readMaterialGcSnapshot\(projectId\)/,
+  )
+  assert.match(bootstrap, /reason: ['"]editor-startup['"]/)
+  assert.match(bootstrap, /reason: ['"]editor-draft-restore['"]/)
+  assert.equal(
+    bootstrap.match(/await loadDashboardProjectAfterMaterialAdmission\(\{/g)?.length,
+    2,
+    'startup and durable draft restore must share the admission boundary',
+  )
+})
+
+test('Dashboard runtime conditionally composes the direct Host admission port and non-Host catalog lease', async () => {
+  const runtime = await readFile(join(sourceRoot, 'editor/runtime.ts'), 'utf8')
+
+  assert.match(
+    runtime,
+    /dashboardLocalMaterialCatalogRuntime = createDashboardLocalMaterialCatalogRuntime\([\s\S]*dashboardMaterialGcAdmissionPort[\s\S]*withMaterialAdmission:/,
+  )
+  assert.equal(
+    runtime.match(/dashboardMaterialGcAdmissionPort\.admitMaterialRefsUnderSharedMutation/g)?.length,
+    2,
+    'the admission port must bind promotion semantics and Host semantics directly',
+  )
+  assert.match(
+    runtime,
+    /createDashboardLocalMaterialPromotionRuntime\([\s\S]*admitMaterialRefsUnderSharedMutation:[\s\S]*dashboardMaterialGcAdmissionPort\.admitMaterialRefsUnderSharedMutation/,
+  )
+  assert.match(
+    runtime,
+    /createDashboardAgentHost\([\s\S]*admitMaterialRefsUnderSharedMutation:[\s\S]*dashboardMaterialGcAdmissionPort\.admitMaterialRefsUnderSharedMutation/,
+  )
 })
 
 test('Dashboard persistence is versioned and hotkey cleanup uses engine-owned leases', async () => {
@@ -850,6 +885,12 @@ test('Dashboard persistence is versioned and hotkey cleanup uses engine-owned le
   assert.match(header, /openDashboardPreviewAfterSave/)
   assert.match(header, /await persistDashboardProject\(['"]manual-save['"]\)/)
   assert.match(header, /await dashboardPersistence\.flush\(\)/)
+  assert.match(header, /const materialGcAdmissionPort = dashboardMaterialGcAdmissionPort/)
+  assert.match(header, /\.\.\.\(materialGcAdmissionPort\s*\?\s*\{/)
+  assert.match(header, /beforeNavigate:/)
+  assert.match(header, /withDashboardMaterialAdmissionBeforeExposure\(\{/)
+  assert.match(header, /dashboardPersistence\.readMaterialGcSnapshot\(activeProjectId\)/)
+  assert.match(header, /operation: \(\) => handle\.navigate\(url\)/)
   assert.match(moveHotkey, /hotkey\.acquireBinding\(\.\.\.binding\)/)
   assert.match(moveHotkey, /ctx\.onDispose\(release\)/)
   assert.doesNotMatch(moveHotkey, /hotkey\.unbind/)

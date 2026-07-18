@@ -26,7 +26,6 @@ import {
   type DashboardLocalGrantMutationResultV1,
   type DashboardLocalGrantRecordV1,
   type DashboardLocalGrantRevokeV1,
-  type DashboardMaterialGcSnapshotV1,
   type DashboardMutationProvenanceReadRequestV1,
   type DashboardProjectListV1,
   type DashboardProjectVersionCreateV1,
@@ -56,6 +55,8 @@ import {
   refreshIndexedDbCompatibilitySnapshot,
   switchIndexedDbCompatibilityBranch,
 } from '../lib/storage/index.mjs'
+import type { DashboardMaterialGcSnapshotV1 } from '../lib/storage/material-gc.mjs'
+import type { DashboardMaterialGcRuntime } from './agent/capabilities/promotion/material-gc-runtime.mjs'
 import {
   type DurableAgentBatchV1,
   type DurableAgentCommitResultV1,
@@ -1343,10 +1344,39 @@ export interface DashboardPreviewWindowHandle {
 
 export type DashboardPreviewOpenResult = Readonly<{ status: 'opened' }> | Readonly<{ status: 'failed'; error: Error }>
 
+export interface DashboardMaterialAdmissionBoundaryOptions<Result> {
+  readonly projectId: string
+  readonly reason: string
+  readonly readMaterialGcSnapshot: (projectId: string) => Promise<DashboardMaterialGcSnapshotV1>
+  readonly withMaterialAdmission: DashboardMaterialGcRuntime['withMaterialAdmission']
+  readonly operation: () => Result | PromiseLike<Result>
+}
+
+/**
+ * Keeps one non-Host shared mutation lease across durable root admission and
+ * the first Core/render exposure that can make those roots live.
+ */
+export const withDashboardMaterialAdmissionBeforeExposure = async <Result>(
+  options: DashboardMaterialAdmissionBoundaryOptions<Result>,
+): Promise<Result> => {
+  const snapshot = await options.readMaterialGcSnapshot(options.projectId)
+  return options.withMaterialAdmission(
+    {
+      schemaVersion: 1,
+      projectId: options.projectId,
+      materialRefs: snapshot.materialRefs,
+      unresolvedPromotionIds: snapshot.unresolvedPromotionIds,
+      reason: options.reason,
+    },
+    () => options.operation(),
+  )
+}
+
 export const openDashboardPreviewAfterSave = async (options: {
   readonly openWindow: () => DashboardPreviewWindowHandle | null
   readonly persist: () => Promise<unknown>
   readonly previewUrl: string
+  readonly beforeNavigate?: (handle: DashboardPreviewWindowHandle, url: string) => void | PromiseLike<void>
 }): Promise<DashboardPreviewOpenResult> => {
   const previewWindow = options.openWindow()
   if (!previewWindow) {
@@ -1354,7 +1384,8 @@ export const openDashboardPreviewAfterSave = async (options: {
   }
   try {
     await options.persist()
-    previewWindow.navigate(options.previewUrl)
+    if (options.beforeNavigate) await options.beforeNavigate(previewWindow, options.previewUrl)
+    else previewWindow.navigate(options.previewUrl)
     return Object.freeze({ status: 'opened' })
   } catch (cause) {
     const error = asError(cause)

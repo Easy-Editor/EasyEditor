@@ -1,7 +1,12 @@
 import BannerImg from '@/assets/banner.png'
 import { Button } from '@/components/ui/button'
-import { type DashboardPreviewWindowHandle, openDashboardPreviewAfterSave } from '@/editor/persistence-runtime'
 import {
+  type DashboardPreviewWindowHandle,
+  openDashboardPreviewAfterSave,
+  withDashboardMaterialAdmissionBeforeExposure,
+} from '@/editor/persistence-runtime'
+import {
+  dashboardMaterialGcAdmissionPort,
   dashboardMaterialGcEnabled,
   dashboardMaterialGcRuntime,
   dashboardPersistence,
@@ -52,6 +57,7 @@ export const AppHeader = ({ className, agentEnabled = false, agentOpen = false, 
   }
 
   const preview = async () => {
+    const materialGcAdmissionPort = dashboardMaterialGcAdmissionPort
     const result = await openDashboardPreviewAfterSave({
       openWindow: createPreviewWindow,
       persist: async () => {
@@ -60,6 +66,21 @@ export const AppHeader = ({ className, agentEnabled = false, agentOpen = false, 
         dashboardMaterialGcRuntime.trigger('preview-flush')
       },
       previewUrl: '/preview',
+      ...(materialGcAdmissionPort
+        ? {
+            beforeNavigate: async (handle: DashboardPreviewWindowHandle, url: string) => {
+              const projectId = dashboardPersistence.getSnapshot().projectId
+              if (!projectId) throw new Error('Dashboard preview requires an active persistence scope')
+              await withDashboardMaterialAdmissionBeforeExposure({
+                projectId,
+                reason: 'preview-navigation',
+                readMaterialGcSnapshot: activeProjectId => dashboardPersistence.readMaterialGcSnapshot(activeProjectId),
+                withMaterialAdmission: materialGcAdmissionPort.withMaterialAdmission,
+                operation: () => handle.navigate(url),
+              })
+            },
+          }
+        : {}),
     })
     if (result.status === 'failed') {
       console.error('[EasyEditor] Dashboard preview save failed:', result.error)
