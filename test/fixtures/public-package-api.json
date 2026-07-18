@@ -96,10 +96,23 @@
       "ModelEvent",
       "ModelTurnPhase",
       "ModelTurnRequest",
-      "startAgentWorker"
+      "WORKER_TELEMETRY_SCHEMA_VERSION",
+      "WorkerTelemetryEvent",
+      "WorkerTelemetryEventType",
+      "WorkerTelemetryLedger",
+      "WorkerTelemetrySink",
+      "WorkerTelemetryStatus",
+      "createWorkerTelemetryEvent",
+      "createWorkerTelemetryLedger",
+      "startAgentWorker",
+      "workerTelemetryEventTypes"
     ],
     "runtime": [
-      "startAgentWorker"
+      "WORKER_TELEMETRY_SCHEMA_VERSION",
+      "createWorkerTelemetryEvent",
+      "createWorkerTelemetryLedger",
+      "startAgentWorker",
+      "workerTelemetryEventTypes"
     ]
   },
   "@easy-editor/easypack": {

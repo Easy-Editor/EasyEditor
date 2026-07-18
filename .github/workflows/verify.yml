@@ -86,6 +86,14 @@ jobs:
           pnpm --filter @easy-editor/core build
           pnpm --filter @easy-editor/core types
 
+      - name: Verify Agent Runtime package
+        run: |
+          pnpm --filter @easy-editor/agent-runtime lint
+          pnpm --filter @easy-editor/agent-runtime test
+          pnpm --filter @easy-editor/agent-runtime test-types
+          pnpm --filter @easy-editor/agent-runtime build
+          pnpm --filter @easy-editor/agent-runtime types
+
       - name: Verify instance-based plugin and renderer graph
         run: |
           pnpm --filter @easy-editor/plugin-dashboard lint
@@ -149,7 +157,9 @@ jobs:
         run: |
           pnpm --dir examples/dashboard lint
           pnpm --dir examples/dashboard test
-          pnpm --dir examples/dashboard build
+          pnpm --dir examples/dashboard build:deps
+          pnpm --dir examples/dashboard exec tsc --project tsconfig.app.json --noEmit
+          pnpm --dir examples/dashboard build:only
 
       - name: Verify published API baselines
         run: pnpm public-api:check
@@ -158,7 +168,7 @@ jobs:
         run: pnpm --dir docs docs:build
 
   dashboard-browser:
-    name: Dashboard browser lifecycle (Chromium)
+    name: Dashboard lifecycle and Agent Runtime Golden (Chromium)
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -185,6 +195,12 @@ jobs:
       - name: Verify Dashboard lifecycle in Chromium
         run: pnpm test:e2e
 
+      - name: Verify credential-free Agent Runtime Golden and online lifecycle
+        run: pnpm --dir examples/dashboard exec playwright test --config e2e/playwright.online-components.config.ts
+
+      - name: Verify production-only online surface
+        run: pnpm --dir examples/dashboard exec playwright test --config e2e/playwright.production-surface.config.ts
+
       - name: Upload Playwright evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -193,6 +209,47 @@ jobs:
           path: |
             playwright-report/
             test-results/
+            examples/dashboard/playwright-report/
+            examples/dashboard/test-results/
+            examples/dashboard/e2e/playwright-report/
+            examples/dashboard/e2e/test-results/
+          retention-days: 14
+
+  dashboard-performance:
+    name: Agent Runtime fixed-profile performance evidence (non-blocking)
+    needs: quality
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.engine-strict=true
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Capture fixed-profile performance evidence
+        run: pnpm exec playwright test --config=examples/dashboard/e2e/playwright.agent-runtime-performance.config.ts
+
+      - name: Upload performance evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-runtime-performance-${{ github.run_attempt }}
+          path: examples/dashboard/e2e/test-results/agent-runtime-performance/
           retention-days: 14
 
   portability:
