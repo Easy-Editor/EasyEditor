@@ -118,7 +118,10 @@ export interface DashboardAgentWorkspaceCompositionDependencies {
   readonly persistence: DashboardAgentWorkspacePersistence
   readonly agentPersistence: AgentPersistencePort
   readonly invocationActivity?: AgentWorkspaceInvocationActivity
-  readonly createSessionHost: (binding: BoundAgentRuntimeBinding) => DashboardAgentWorkspaceSessionHost | null
+  readonly createSessionHost: (
+    binding: BoundAgentRuntimeBinding,
+    grantAuthority?: DashboardAgentWorkspaceGrantAuthority,
+  ) => DashboardAgentWorkspaceSessionHost | null
   readonly createRuntime: (options: AgentRuntimeOptions) => AgentRuntime
   readonly detachEditor: () => MaybePromise<void>
   readonly loadEditorDraft: (draft: CanonicalWorkingDraftV1) => MaybePromise<void>
@@ -459,7 +462,7 @@ class DefaultDashboardAgentWorkspaceComposition implements DashboardAgentWorkspa
 
   async #composeLiveBinding(binding: BoundAgentRuntimeBinding): Promise<LiveBindingResources> {
     if (!this.#workerFactory) throw new Error(PRODUCTION_WORKER_UNAVAILABLE)
-    const host = this.#dependencies.createSessionHost(binding)
+    const host = this.#dependencies.createSessionHost(binding, this.#grantAuthority)
     if (!host) throw new Error('Dashboard Agent Session Host is unavailable')
     let runtime: AgentRuntime
     try {
@@ -977,7 +980,7 @@ const loadDefaultDependencies = async (): Promise<DashboardAgentWorkspaceComposi
     persistence: runtime.dashboardPersistence,
     agentPersistence: runtime.dashboardAgentPersistence,
     invocationActivity: runtime.dashboardInvocationActivity,
-    createSessionHost: binding => runtime.composeDashboardAgentSessionHost(binding),
+    createSessionHost: (binding, grantAuthority) => runtime.composeDashboardAgentSessionHost(binding, grantAuthority),
     createRuntime: agentRuntime.createAgentRuntime,
     detachEditor: editor.detachDashboardPersistenceListeners,
     loadEditorDraft: editor.loadDashboardEditorDraft,

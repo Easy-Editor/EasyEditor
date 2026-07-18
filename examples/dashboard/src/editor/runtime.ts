@@ -15,6 +15,13 @@ import {
   createDashboardOnlineArtifactCapabilityService,
   createDashboardOnlineArtifactCoreAdapter,
 } from './agent/capabilities/artifact/index.mjs'
+import {
+  type LocalMaterialPromotionGrantIdentity,
+  createDashboardLocalMaterialPromotionCoreAdapter,
+  createDashboardLocalMaterialPromotionPersistenceAdapter,
+  createDashboardLocalMaterialPromotionRuntime,
+  createDashboardSameOriginLocalMaterialPromotionClient,
+} from './agent/capabilities/promotion/index.mjs'
 import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
 import {
   type DashboardAgentHost,
@@ -141,7 +148,10 @@ export const disposeDashboardAgentActivity = () => {
   dashboardInvocationActivity.dispose()
 }
 
-const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost => {
+const createBoundDashboardAgentHost = (
+  authority: DashboardAgentHostAuthority,
+  grantIdentity?: LocalMaterialPromotionGrantIdentity,
+): DashboardAgentHost => {
   const dataResolver = dashboardAgentRuntimeFeatureFlags.data
     ? createDashboardSameOriginDataResolver({ fetchImpl: window.fetch.bind(window) })
     : undefined
@@ -164,6 +174,35 @@ const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): 
           isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
         })
       : undefined
+  const promotionRuntime =
+    dashboardAgentRuntimeFeatureFlags.runtime &&
+    dashboardAgentRuntimeFeatureFlags.online &&
+    dashboardAgentRuntimeFeatureFlags.promotion
+      ? createDashboardLocalMaterialPromotionRuntime({
+          authority,
+          featureFlags: dashboardAgentRuntimeFeatureFlags,
+          client: createDashboardSameOriginLocalMaterialPromotionClient({
+            projectId: authority.projectId,
+            fetchImpl: window.fetch.bind(window),
+          }),
+          core: createDashboardLocalMaterialPromotionCoreAdapter({
+            engine,
+            projectId: authority.projectId,
+            branchId: authority.branchId,
+            runAgentMutation: (callId, operation) => dashboardPersistence.runAgentMutation(callId, operation),
+            isTransactionCommittedError: error => error instanceof TransactionCommittedError,
+            isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
+          }),
+          persistence: createDashboardLocalMaterialPromotionPersistenceAdapter({
+            authority,
+            persistence: dashboardPersistence,
+          }),
+          crypto: window.crypto,
+          ...(grantIdentity ? { grantIdentity } : {}),
+          isTransactionCommittedError: error => error instanceof TransactionCommittedError,
+          isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
+        })
+      : null
   const host = createDashboardAgentHost({
     activityLease: dashboardHumanActivityLease,
     authority,
@@ -175,20 +214,30 @@ const createBoundDashboardAgentHost = (authority: DashboardAgentHostAuthority): 
     persistence: dashboardPersistence,
     ...(artifactService ? { artifactService } : {}),
     ...(dataResolver ? { dataResolver } : {}),
+    ...(promotionRuntime
+      ? {
+          promotionService: promotionRuntime.promotionService ?? undefined,
+          promotionAvailability: promotionRuntime.promotionAvailability,
+        }
+      : {}),
   })
   if (!host) throw new Error('Dashboard Agent Host could not be composed while enabled')
   return host
 }
 
-export const composeDashboardAgentHost = (authority: DashboardAgentHostAuthority): DashboardAgentHost | null =>
-  dashboardAgentRuntimeFeatureFlags.runtime ? createBoundDashboardAgentHost(authority) : null
+export const composeDashboardAgentHost = (
+  authority: DashboardAgentHostAuthority,
+  grantIdentity?: LocalMaterialPromotionGrantIdentity,
+): DashboardAgentHost | null =>
+  dashboardAgentRuntimeFeatureFlags.runtime ? createBoundDashboardAgentHost(authority, grantIdentity) : null
 
 export const composeDashboardAgentSessionHost = (
   authority: DashboardAgentSessionHostAuthority,
+  grantIdentity?: LocalMaterialPromotionGrantIdentity,
 ): DashboardAgentSessionHost | null =>
   createDashboardAgentSessionHost({
     authority,
-    createHost: createBoundDashboardAgentHost,
+    createHost: hostAuthority => createBoundDashboardAgentHost(hostAuthority, grantIdentity),
     enabled: dashboardAgentRuntimeFeatureFlags.runtime,
   })
 

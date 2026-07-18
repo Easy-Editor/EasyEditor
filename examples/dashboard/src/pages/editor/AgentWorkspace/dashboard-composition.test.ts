@@ -368,6 +368,7 @@ const dependencies = (
   persistence: FakePersistence,
   events: string[],
   options: {
+    captureGrantAuthority?: (authority: DashboardAgentWorkspaceGrantAuthority | undefined) => void
     loadError?: Error
     reattachBinding?: () => string
     recoveryBridge?: DashboardAgentWorkspaceCompositionDependencies['recoveryBridge']
@@ -376,7 +377,8 @@ const dependencies = (
   runtimeEnabled: true,
   persistence,
   agentPersistence: {} as DashboardAgentWorkspaceCompositionDependencies['agentPersistence'],
-  createSessionHost(binding) {
+  createSessionHost(binding, hostGrantAuthority) {
+    options.captureGrantAuthority?.(hostGrantAuthority)
     events.push(`host-create:${binding.branchId}`)
     return {
       async observe() {
@@ -519,6 +521,24 @@ test('creates and binds an active durable session before composing the Host and 
   })
   assert.ok(events.indexOf('save-session:session-1') < events.indexOf('host-create:main'))
   assert.equal(composition.getSnapshot().remote.availability.state, 'ready')
+  await composition.dispose()
+})
+
+test('passes the same injected trusted grant authority to the bound Host composition', async () => {
+  const events: string[] = []
+  const persistence = new FakePersistence(events, draft(), null)
+  const capturedAuthorities: Array<DashboardAgentWorkspaceGrantAuthority | undefined> = []
+  const composition = await createDashboardAgentWorkspaceComposition({
+    dependencies: dependencies(persistence, events, {
+      captureGrantAuthority: authority => capturedAuthorities.push(authority),
+    }),
+    workerFactory,
+    grantAuthority,
+    createId: ids(),
+  })
+
+  assert.equal(capturedAuthorities.length, 1)
+  assert.equal(capturedAuthorities[0], grantAuthority)
   await composition.dispose()
 })
 

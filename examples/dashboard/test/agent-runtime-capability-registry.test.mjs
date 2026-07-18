@@ -69,7 +69,7 @@ test('Dashboard capability catalog is finite, ordered, immutable, and hash-addre
     DASHBOARD_CAPABILITY_DESCRIPTORS.map(descriptor => descriptor.capability),
     expectedCapabilityNames,
   )
-  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/4')
+  assert.equal(DASHBOARD_CAPABILITY_REGISTRY_REVISION, 'dashboard-capability-registry/5')
   assert.equal(DASHBOARD_CAPABILITY_REGISTRY_HASH, registryHash(DASHBOARD_CAPABILITY_DESCRIPTORS))
   assert.match(DASHBOARD_CAPABILITY_REGISTRY_HASH, /^sha256:[a-f0-9]{64}$/)
   assert.equal(Object.isFrozen(DASHBOARD_CAPABILITY_DESCRIPTORS), true)
@@ -92,6 +92,7 @@ test('registry publishes bounded data and online artifact declarations beside th
   )
   assert.deepEqual(available, [
     'artifact.createOnline',
+    'artifact.promoteLocal',
     'artifact.reviseOnline',
     'data.bind',
     'data.inspect',
@@ -199,6 +200,29 @@ test('describeCapability returns exact revisioned JSON schemas without availabil
     assert.equal(artifact.output.properties.componentName.const, 'GeneratedMaterialHost')
     assert.equal(artifact.output.properties.artifactRef.properties.target.properties.kind.const, 'online')
   }
+
+  const promoteLocal = await describeDashboardCapability(describeRequest('artifact.promoteLocal'))
+  assert.equal(promoteLocal.revision, 'artifact.promoteLocal/1')
+  assert.equal(promoteLocal.input.additionalProperties, false)
+  assert.deepEqual(promoteLocal.input.required, ['schemaVersion', 'nodeId'])
+  assert.deepEqual(Object.keys(promoteLocal.input.properties), ['schemaVersion', 'nodeId'])
+  assert.equal(promoteLocal.input.properties.schemaVersion.const, 1)
+  assert.equal(promoteLocal.output.properties.kind.const, 'local-material-promotion-post-images')
+  assert.equal(promoteLocal.output.properties.componentName.const, 'GeneratedMaterialHost')
+  assert.deepEqual(promoteLocal.output.required, ['schemaVersion', 'kind', 'componentName', 'nodeId', 'artifactRef'])
+  assert.equal(promoteLocal.output.properties.artifactRef.properties.target.properties.kind.const, 'local-material')
+  assert.deepEqual(promoteLocal.output.properties.artifactRef.properties.target.required, [
+    'kind',
+    'materialId',
+    'materialVersion',
+    'buildIntegrity',
+  ])
+  assert.deepEqual(promoteLocal.output.properties.artifactRef.properties.rollbackTo.required, [
+    'artifactId',
+    'sourceRevision',
+    'logicalComponentId',
+    'sourceIntegrity',
+  ])
 })
 
 test('unknown names and malformed describe requests reject with typed stable errors', async () => {

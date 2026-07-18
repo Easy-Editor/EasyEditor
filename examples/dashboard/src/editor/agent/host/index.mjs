@@ -741,6 +741,9 @@ export class DashboardAgentHost {
   #manifestCache
   #invocationActivity
   #persistence
+  #promotionAvailability
+  #promotionRecoveryBarrier
+  #promotionService
   #screenApplyChangeSet
   #snapshotService
   #unregisterCoreProvider
@@ -759,6 +762,8 @@ export class DashboardAgentHost {
     isTransactionRollbackIncompleteError,
     now = Date.now,
     persistence,
+    promotionAvailability,
+    promotionService,
   }) {
     if (!Number.isSafeInteger(adapterGeneration) || adapterGeneration < 1) {
       throw new TypeError('adapterGeneration must be a positive safe integer')
@@ -798,6 +803,45 @@ export class DashboardAgentHost {
       }
       this.#artifactService = artifactService
     } else this.#artifactService = null
+    if (promotionAvailability !== undefined && typeof promotionAvailability !== 'function') {
+      throw new TypeError('promotionAvailability must be a function')
+    }
+    if (promotionService !== undefined) {
+      for (const method of ['promoteLocal', 'queryReceipt', 'resumePending']) {
+        if (typeof promotionService?.[method] !== 'function') {
+          throw new TypeError(`promotionService must expose ${method}`)
+        }
+      }
+      if (typeof promotionAvailability !== 'function') {
+        throw new TypeError('promotionAvailability must be a function when promotionService is configured')
+      }
+      this.#promotionService = promotionService
+    } else this.#promotionService = null
+    this.#promotionAvailability = promotionAvailability ?? null
+    this.#promotionRecoveryBarrier = this.#promotionService
+      ? Promise.resolve()
+          .then(() => this.#promotionService.resumePending())
+          .then(result => {
+            assertPlainRecord(result, 'promotion-recovery')
+            assertExactKeys(result, ['results', 'schemaVersion'], [], 'promotion-recovery')
+            const results = readOwnDataValue(result, 'results')
+            if (readOwnDataValue(result, 'schemaVersion') !== 1 || !Array.isArray(results)) {
+              throw new TypeError('promotion recovery result is invalid')
+            }
+            if (results.some(entry => readOwnDataValue(entry, 'status', undefined) === 'indeterminate')) {
+              throw new TypeError('promotion recovery remains indeterminate')
+            }
+            return null
+          })
+          .catch(
+            () =>
+              new DashboardAgentHostError(
+                DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+                'promotion-recovery-indeterminate',
+                { stage: 'resume-pending' },
+              ),
+          )
+      : Promise.resolve(null)
     this.#engine = engine
     this.#persistence = persistence
     const coreProvider = createCoreProjectionProvider(createCoreAdapter(engine, adapterGeneration))
@@ -936,6 +980,7 @@ export class DashboardAgentHost {
     assertAuthority(this.#authority, request, ['projectId', 'branchId'])
     const capability = readOwnDataValue(request, 'capability')
     dashboardCapabilityRegistry.assertAvailable(capability)
+    await this.#assertPromotionAvailable(capability)
     if (isDashboardDataCapability(capability) && !this.#dataService) {
       throw new DashboardAgentHostError(
         DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
@@ -949,6 +994,35 @@ export class DashboardAgentHost {
       )
     }
     return boundaryClone(await dashboardCapabilityRegistry.describeCapability(request))
+  }
+
+  async #assertPromotionAvailable(capability) {
+    if (capability !== 'artifact.promoteLocal') return
+    await this.#awaitPromotionRecovery()
+    if (!this.#promotionAvailability) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+        'promotion-feature-disabled',
+      )
+    }
+    const availability = await this.#promotionAvailability()
+    assertPlainRecord(availability, 'promotion-availability')
+    assertExactKeys(availability, ['available'], ['reason'], 'promotion-availability')
+    if (readOwnDataValue(availability, 'available') !== true) {
+      const reason = requireNonEmptyString(readOwnDataValue(availability, 'reason'), 'promotion-availability.reason')
+      throw new DashboardAgentHostError(DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable, reason)
+    }
+    if (!this.#promotionService) {
+      throw new DashboardAgentHostError(
+        DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
+        'promotion-service-is-unavailable',
+      )
+    }
+  }
+
+  async #awaitPromotionRecovery() {
+    const failure = await this.#promotionRecoveryBarrier
+    if (failure) throw failure
   }
 
   #rejected(call, error) {
@@ -1026,6 +1100,7 @@ export class DashboardAgentHost {
       const invocationContext = normalizeInvokeContext(context, call)
       const capability = readOwnDataValue(call, 'capability')
       dashboardCapabilityRegistry.assertAvailable(capability)
+      await this.#assertPromotionAvailable(capability)
       if (isDashboardDataCapability(capability) && !this.#dataService) {
         throw new DashboardAgentHostError(
           DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable,
@@ -1046,6 +1121,9 @@ export class DashboardAgentHost {
       }
       if (capability === 'artifact.reviseOnline') {
         return boundaryClone(await this.#artifactService.reviseOnline(call))
+      }
+      if (capability === 'artifact.promoteLocal') {
+        return boundaryClone(await this.#promotionService.promoteLocal(call))
       }
       if (capability === 'screen.applyChangeSet') {
         return boundaryClone(await this.#screenApplyChangeSet(call))
@@ -1131,6 +1209,13 @@ export class DashboardAgentHost {
     if (compensationReceipt !== null) {
       return boundaryClone(normalizeToolReceipt(compensationReceipt, authority, 'task-compensation-recovery'))
     }
+    if (this.#promotionService) {
+      await this.#awaitPromotionRecovery()
+      const promotionReceipt = await this.#promotionService.queryReceipt(authority)
+      if (promotionReceipt !== null) {
+        return boundaryClone(normalizeToolReceipt(promotionReceipt, authority, 'local-material-promotion-recovery'))
+      }
+    }
     if (this.#artifactService) {
       const artifactReceipt = await this.#artifactService.queryReceipt(authority)
       if (artifactReceipt !== null) {
@@ -1169,5 +1254,7 @@ export const createDashboardAgentHost = (options = {}) => {
     isTransactionRollbackIncompleteError: readOwnDataValue(options, 'isTransactionRollbackIncompleteError', undefined),
     now: readOwnDataValue(options, 'now', Date.now),
     persistence: readOwnDataValue(options, 'persistence', undefined),
+    promotionAvailability: readOwnDataValue(options, 'promotionAvailability', undefined),
+    promotionService: readOwnDataValue(options, 'promotionService', undefined),
   })
 }

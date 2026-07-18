@@ -1,5 +1,5 @@
 export const DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION = 1
-export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/4'
+export const DASHBOARD_CAPABILITY_REGISTRY_REVISION = 'dashboard-capability-registry/5'
 export const DASHBOARD_FUTURE_CAPABILITY_UNAVAILABLE_REASON = 'not-yet-available'
 
 export const DASHBOARD_CAPABILITY_ERROR_CODE = Object.freeze({
@@ -240,6 +240,34 @@ const onlineArtifactRef = strictObject(
   },
   ['artifactId', 'sourceRevision', 'logicalComponentId', 'sourceIntegrity', 'target'],
 )
+const artifactSourceRevision = strictObject(
+  {
+    artifactId: nonEmptyString,
+    sourceRevision: nonEmptyString,
+    logicalComponentId: nonEmptyString,
+    sourceIntegrity: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+  },
+  ['artifactId', 'sourceRevision', 'logicalComponentId', 'sourceIntegrity'],
+)
+const localMaterialArtifactRef = strictObject(
+  {
+    artifactId: nonEmptyString,
+    sourceRevision: nonEmptyString,
+    logicalComponentId: nonEmptyString,
+    sourceIntegrity: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+    target: strictObject(
+      {
+        kind: { const: 'local-material' },
+        materialId: nonEmptyString,
+        materialVersion: nonEmptyString,
+        buildIntegrity: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+      },
+      ['kind', 'materialId', 'materialVersion', 'buildIntegrity'],
+    ),
+    rollbackTo: artifactSourceRevision,
+  },
+  ['artifactId', 'sourceRevision', 'logicalComponentId', 'sourceIntegrity', 'target', 'rollbackTo'],
+)
 const onlineArtifactOutput = strictObject(
   {
     schemaVersion: { const: 1 },
@@ -277,6 +305,23 @@ const availableDescriptors = [
       ['schemaVersion', 'documentId', 'parentId', 'position', 'source', 'css', 'safeManifest', 'dependencies'],
     ),
     output: onlineArtifactOutput,
+  },
+  {
+    schemaVersion: 1,
+    capability: 'artifact.promoteLocal',
+    revision: 'artifact.promoteLocal/1',
+    availability: 'available',
+    input: strictObject({ schemaVersion: { const: 1 }, nodeId: nonEmptyString }, ['schemaVersion', 'nodeId']),
+    output: strictObject(
+      {
+        schemaVersion: { const: 1 },
+        kind: { const: 'local-material-promotion-post-images' },
+        componentName: { const: 'GeneratedMaterialHost' },
+        nodeId: nonEmptyString,
+        artifactRef: localMaterialArtifactRef,
+      },
+      ['schemaVersion', 'kind', 'componentName', 'nodeId', 'artifactRef'],
+    ),
   },
   {
     schemaVersion: 1,
@@ -493,7 +538,7 @@ const availableDescriptors = [
   },
 ]
 
-const futureCapabilityNames = ['artifact.promoteLocal', 'project.checkpoint']
+const futureCapabilityNames = ['project.checkpoint']
 
 const unavailableDescriptors = futureCapabilityNames.map(capability => ({
   schemaVersion: 1,
@@ -517,7 +562,7 @@ export const DASHBOARD_CAPABILITY_NAMES = Object.freeze(
 )
 
 export const DASHBOARD_CAPABILITY_REGISTRY_HASH =
-  'sha256:a3e29bd0f6e1d41ec6d83edae317b194ba9d7266db037c382d35a1993ad9e2e6'
+  'sha256:79fef483d017b7ea202df09a7e47059eee2188945b08eba76e9c2672704839b3'
 
 export const DASHBOARD_CAPABILITY_REGISTRY_SNAPSHOT = deepFreeze({
   schemaVersion: DASHBOARD_CAPABILITY_REGISTRY_SCHEMA_VERSION,

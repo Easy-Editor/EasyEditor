@@ -16,6 +16,7 @@ import type { HumanActivityLease } from '../activity/index.mjs'
 import type { DashboardInvocationActivity } from '../activity/invocation-activity.mjs'
 import type { DashboardOnlineArtifactCapabilityService } from '../capabilities/artifact/index.mjs'
 import type { DashboardDataCapabilityService, DashboardDataResolver } from '../capabilities/data/index.mjs'
+import type { DashboardLocalMaterialPromotionCapabilityService } from '../capabilities/promotion/index.mjs'
 import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
 import type { ReceiptRecoveryResult } from '../persistence/receipt-ledger.mjs'
@@ -51,7 +52,13 @@ export interface DashboardAgentHostOptions {
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
   readonly now?: () => number
   readonly persistence?: DashboardAgentHostPersistence
+  readonly promotionAvailability?: DashboardLocalMaterialPromotionAvailability
+  readonly promotionService?: DashboardLocalMaterialPromotionCapabilityService
 }
+
+export type DashboardLocalMaterialPromotionAvailability = () => Promise<
+  Readonly<{ available: boolean; reason?: string | null }>
+>
 
 export interface DashboardAgentHostPersistence extends ScreenApplyPersistencePort, TaskCompensationPersistence {
   recoverDurableAgentReceipt(
@@ -99,6 +106,8 @@ export declare class DashboardAgentHost implements AgentHost {
     readonly isTransactionRollbackIncompleteError: (error: unknown) => boolean
     readonly now?: () => number
     readonly persistence: DashboardAgentHostPersistence
+    readonly promotionAvailability?: DashboardLocalMaterialPromotionAvailability
+    readonly promotionService?: DashboardLocalMaterialPromotionCapabilityService
   })
   readonly disposed: boolean
   observe(request: ObserveRequest): Promise<HostSnapshot | HostSnapshotDelta>

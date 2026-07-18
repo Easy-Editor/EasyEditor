@@ -307,6 +307,8 @@ const createHarness = async (t, options = {}) => {
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     now: () => 1_700_000_000_000,
     persistence,
+    promotionAvailability: options.promotionAvailability,
+    promotionService: options.promotionService,
   })
   assert.ok(host)
   const rpc = createRpc(host)
@@ -454,6 +456,344 @@ test('Host gates and routes online artifact create/revise plus receipt recovery 
     'queryReceipt',
     { projectId: authority.projectId, branchId: authority.branchId, callId: receipt.callId },
   ])
+})
+
+test('Host keeps local promotion on a separate gated service port and recovers its receipts before online artifacts', async t => {
+  const calls = []
+  const promotionReceipt = {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    callId: 'promotion-call-1',
+    status: 'applied',
+    revision: 'revision-promotion-1',
+  }
+  const localArtifactRef = {
+    artifactId: 'artifact-created',
+    sourceRevision: 'source-revised',
+    logicalComponentId: 'logical-created',
+    sourceIntegrity: `sha256:${'b'.repeat(64)}`,
+    target: {
+      kind: 'local-material',
+      materialId: 'material-local',
+      materialVersion: '1.0.0',
+      buildIntegrity: `sha256:${'c'.repeat(64)}`,
+    },
+    rollbackTo: {
+      artifactId: 'artifact-created',
+      sourceRevision: 'source-revised',
+      logicalComponentId: 'logical-created',
+      sourceIntegrity: `sha256:${'b'.repeat(64)}`,
+    },
+  }
+  const promotionService = {
+    async promoteLocal(call) {
+      calls.push(['promoteLocal', structuredClone(call)])
+      return {
+        schemaVersion: 1,
+        callId: call.callId,
+        status: 'applied',
+        revision: promotionReceipt.revision,
+        output: {
+          schemaVersion: 1,
+          kind: 'local-material-promotion-post-images',
+          componentName: 'GeneratedMaterialHost',
+          nodeId: call.arguments.nodeId,
+          artifactRef: localArtifactRef,
+        },
+      }
+    },
+    async queryReceipt(request) {
+      calls.push(['promotion.queryReceipt', structuredClone(request)])
+      return request.callId === promotionReceipt.callId ? promotionReceipt : null
+    },
+    async resumePending() {
+      calls.push(['resumePending'])
+      return { schemaVersion: 1, results: [] }
+    },
+  }
+  const artifactService = {
+    async createOnline() {
+      assert.fail('promotion must not dispatch through artifactService.createOnline')
+    },
+    async reviseOnline() {
+      assert.fail('promotion must not dispatch through artifactService.reviseOnline')
+    },
+    async queryReceipt(request) {
+      calls.push(['artifact.queryReceipt', structuredClone(request)])
+      return null
+    },
+  }
+  const promotionAvailability = async () => ({ available: true })
+  const { rpc } = await createHarness(t, { artifactService, promotionAvailability, promotionService })
+
+  const schema = await rpc.call('describeCapability', {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    capability: 'artifact.promoteLocal',
+  })
+  assert.equal(schema.revision, 'artifact.promoteLocal/1')
+  assert.deepEqual(schema.input.required, ['schemaVersion', 'nodeId'])
+  assert.deepEqual(Object.keys(schema.input.properties), ['schemaVersion', 'nodeId'])
+
+  const call = semanticCall({
+    arguments: { schemaVersion: 1, nodeId: 'generated-created' },
+    callId: promotionReceipt.callId,
+    capability: 'artifact.promoteLocal',
+    expectedRevision: 'service-owned-fence',
+  })
+  const result = await rpc.call('invoke', invokeRequest(call))
+  assert.equal(result.status, 'applied')
+  assert.equal(result.output.componentName, 'GeneratedMaterialHost')
+  assert.equal(result.output.artifactRef.target.kind, 'local-material')
+  assert.deepEqual(calls.slice(0, 2), [['resumePending'], ['promoteLocal', call]])
+  assert.doesNotMatch(JSON.stringify({ result, schema }), /callback|\bEngine\b/u)
+
+  assert.deepEqual(await rpc.call('queryReceipt', receiptQuery(promotionReceipt.callId)), promotionReceipt)
+  assert.deepEqual(calls.slice(2), [
+    [
+      'promotion.queryReceipt',
+      { projectId: authority.projectId, branchId: authority.branchId, callId: promotionReceipt.callId },
+    ],
+  ])
+})
+
+test('Host returns the runtime promotion gate reason without invoking the promotion service', async t => {
+  for (const reason of [
+    'promotion-feature-disabled',
+    'promotion-requires-node-20',
+    'promotion-server-unavailable',
+    'promotion-local-grant-required',
+  ]) {
+    let invocations = 0
+    const promotionService = {
+      async promoteLocal() {
+        invocations += 1
+        assert.fail('unavailable promotion must not invoke the service')
+      },
+      async queryReceipt() {
+        return null
+      },
+      async resumePending() {
+        return { schemaVersion: 1, results: [] }
+      },
+    }
+    const { rpc } = await createHarness(t, {
+      promotionAvailability: async () => ({ available: false, reason }),
+      promotionService,
+    })
+    await assert.rejects(
+      rpc.call('describeCapability', {
+        schemaVersion: 1,
+        projectId: authority.projectId,
+        branchId: authority.branchId,
+        capability: 'artifact.promoteLocal',
+      }),
+      error => error.code === DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable && error.reason === reason,
+    )
+    const result = await rpc.call(
+      'invoke',
+      invokeRequest(
+        semanticCall({
+          arguments: { schemaVersion: 1, nodeId: 'generated-created' },
+          callId: `promotion-unavailable-${reason}`,
+          capability: 'artifact.promoteLocal',
+          expectedRevision: 'service-owned-fence',
+        }),
+      ),
+    )
+    assert.equal(result.status, 'rejected')
+    assert.equal(result.failure.code, DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable)
+    assert.equal(result.failure.details.reason, reason)
+    assert.equal(invocations, 0)
+  }
+})
+
+test('Host awaits one active-registry recovery per bound host before concurrent promotion describe, invoke, and query', async t => {
+  const events = []
+  let resumeCount = 0
+  let releaseRecovery
+  const recoveryGate = new Promise(resolvePromise => {
+    releaseRecovery = resolvePromise
+  })
+  const promotionService = {
+    async promoteLocal(call) {
+      events.push('promote')
+      return {
+        schemaVersion: 1,
+        callId: call.callId,
+        status: 'applied',
+        revision: 'promotion-revision',
+        output: {
+          schemaVersion: 1,
+          kind: 'local-material-promotion-post-images',
+          componentName: 'GeneratedMaterialHost',
+          nodeId: call.arguments.nodeId,
+          artifactRef: {
+            artifactId: 'artifact-recovered',
+            sourceRevision: 'source-recovered',
+            logicalComponentId: 'logical-recovered',
+            sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+            target: {
+              kind: 'local-material',
+              materialId: 'material-recovered',
+              materialVersion: '1.0.0',
+              buildIntegrity: `sha256:${'b'.repeat(64)}`,
+            },
+            rollbackTo: {
+              artifactId: 'artifact-recovered',
+              sourceRevision: 'source-recovered',
+              logicalComponentId: 'logical-recovered',
+              sourceIntegrity: `sha256:${'a'.repeat(64)}`,
+            },
+          },
+        },
+      }
+    },
+    async queryReceipt() {
+      events.push('query')
+      return null
+    },
+    async resumePending() {
+      resumeCount += 1
+      events.push('recover-active-registry')
+      return recoveryGate
+    },
+  }
+  const promotionAvailability = async () => {
+    events.push('availability')
+    return { available: true }
+  }
+  const first = await createHarness(t, { promotionAvailability, promotionService })
+  const call = semanticCall({
+    arguments: { schemaVersion: 1, nodeId: 'generated-recovered' },
+    callId: 'promotion-after-recovery',
+    capability: 'artifact.promoteLocal',
+    expectedRevision: 'service-owned-fence',
+  })
+  const describePromise = first.host.describeCapability({
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    capability: 'artifact.promoteLocal',
+  })
+  const invokePromise = first.host.invoke(call, invocationContext())
+  const queryPromise = first.host.queryReceipt(receiptQuery('promotion-after-recovery'))
+
+  await new Promise(resolvePromise => setImmediate(resolvePromise))
+  assert.equal(resumeCount, 1)
+  assert.deepEqual(events, ['recover-active-registry'])
+  releaseRecovery({ schemaVersion: 1, results: [] })
+
+  const [schema, result, receipt] = await Promise.all([describePromise, invokePromise, queryPromise])
+  assert.equal(schema.revision, 'artifact.promoteLocal/1')
+  assert.equal(result.status, 'applied')
+  assert.equal(receipt, null)
+  assert.equal(resumeCount, 1)
+  assert.equal(events[0], 'recover-active-registry')
+  assert.equal(events.filter(event => event === 'availability').length, 2)
+  assert.equal(events.filter(event => event === 'promote').length, 1)
+  assert.equal(events.filter(event => event === 'query').length, 1)
+
+  events.length = 0
+  const reloaded = await createHarness(t, { promotionAvailability, promotionService })
+  await reloaded.host.describeCapability({
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    capability: 'artifact.promoteLocal',
+  })
+  assert.equal(resumeCount, 2, 'a reloaded bound Host must recover exactly once for its own lifecycle')
+  assert.deepEqual(events, ['recover-active-registry', 'availability'])
+})
+
+test('Host caches an indeterminate promotion recovery failure and never repeats or bypasses resumePending', async t => {
+  let resumeCount = 0
+  let downstreamCalls = 0
+  const promotionService = {
+    async promoteLocal() {
+      downstreamCalls += 1
+      assert.fail('indeterminate recovery must block promotion')
+    },
+    async queryReceipt() {
+      downstreamCalls += 1
+      assert.fail('indeterminate recovery must block promotion receipt lookup')
+    },
+    async resumePending() {
+      resumeCount += 1
+      return {
+        schemaVersion: 1,
+        results: [
+          {
+            schemaVersion: 1,
+            callId: 'promotion-indeterminate',
+            status: 'indeterminate',
+            failure: { code: 'INDETERMINATE_SERVER_OUTCOME', message: 'unknown', retryable: false },
+          },
+        ],
+      }
+    },
+  }
+  const promotionAvailability = async () => {
+    downstreamCalls += 1
+    assert.fail('indeterminate recovery must block availability checks')
+  }
+  const { host } = await createHarness(t, { promotionAvailability, promotionService })
+  const request = {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    capability: 'artifact.promoteLocal',
+  }
+  const call = semanticCall({
+    arguments: { schemaVersion: 1, nodeId: 'generated-indeterminate' },
+    callId: 'promotion-indeterminate',
+    capability: 'artifact.promoteLocal',
+    expectedRevision: 'service-owned-fence',
+  })
+  const [firstDescribe, secondDescribe, invocation, receipt] = await Promise.allSettled([
+    host.describeCapability(request),
+    host.describeCapability(request),
+    host.invoke(call, invocationContext()),
+    host.queryReceipt(receiptQuery(call.callId)),
+  ])
+
+  for (const described of [firstDescribe, secondDescribe]) {
+    assert.equal(described.status, 'rejected')
+    assert.equal(described.reason.code, DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable)
+    assert.equal(described.reason.reason, 'promotion-recovery-indeterminate')
+  }
+  assert.equal(invocation.status, 'fulfilled')
+  assert.equal(invocation.value.status, 'rejected')
+  assert.equal(invocation.value.failure.code, DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable)
+  assert.equal(invocation.value.failure.details.reason, 'promotion-recovery-indeterminate')
+  assert.equal(receipt.status, 'rejected')
+  assert.equal(receipt.reason.code, DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable)
+  assert.equal(receipt.reason.reason, 'promotion-recovery-indeterminate')
+  assert.equal(resumeCount, 1)
+  assert.equal(downstreamCalls, 0)
+
+  await assert.rejects(
+    host.describeCapability(request),
+    error =>
+      error.code === DASHBOARD_AGENT_HOST_ERROR_CODE.capabilityUnavailable &&
+      error.reason === 'promotion-recovery-indeterminate',
+  )
+  assert.equal(resumeCount, 1, 'a cached recovery failure must not retry implicitly')
+})
+
+test('Host validates the dedicated promotion service without widening the online artifact service contract', async t => {
+  const requiredMethods = ['promoteLocal', 'queryReceipt', 'resumePending']
+  for (const missing of requiredMethods) {
+    const promotionService = Object.fromEntries(
+      requiredMethods.filter(method => method !== missing).map(method => [method, async () => null]),
+    )
+    await assert.rejects(
+      async () => createHarness(t, { promotionAvailability: async () => ({ available: true }), promotionService }),
+      new TypeError(`promotionService must expose ${missing}`),
+    )
+  }
 })
 
 test('actual MessageChannel observation owns full and delta DTOs without host leakage or aliasing', async t => {
