@@ -28,6 +28,7 @@ const PUBLISHED_MANIFEST_NAME = 'published.json'
 const BACKUP_MANIFEST_NAME = 'backup-manifest.json'
 const PROMOTIONS_DIRECTORY_NAME = 'promotions'
 const TRASH_DIRECTORY_NAME = 'trash'
+const GC_SWEEP_RECEIPTS_DIRECTORY_NAME = 'gc-sweep-receipts'
 const LOCK_FILE_NAME = '.registry.lock'
 const FENCE_FILE_NAME = '.registry-fence.json'
 const INDEX_FILE_NAME = 'registry-index.json'
@@ -40,6 +41,10 @@ const ROOT_ATOMIC_TEMPORARY_PATTERNS = Object.freeze([
 const PROMOTION_ATOMIC_TEMPORARY_PATTERNS = Object.freeze([
   /^\.published\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
 ])
+const GC_SWEEP_RECEIPT_ATOMIC_TEMPORARY_PATTERNS = Object.freeze([
+  /^\.[\da-f]{64}\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
+])
+const GC_SWEEP_RECEIPT_FILE_PATTERN = /^[\da-f]{64}\.json$/u
 const DEFAULT_LEASE = Object.freeze({
   acquireTimeoutMs: 2_000,
   heartbeatMs: 5_000,
@@ -264,6 +269,13 @@ const parseBackupManifest = value => {
   ) {
     throw registryError('backup-invalid', 'Backup GC state hash does not match its durable roots', { status: 400 })
   }
+  if (
+    gcState.replicaRoots.some(
+      root => root.releasedRegistryGeneration !== undefined && root.releasedRegistryGeneration > value.sourceGeneration,
+    )
+  ) {
+    throw registryError('backup-invalid', 'Backup release generation exceeds its source generation', { status: 400 })
+  }
   return Object.freeze({
     schemaVersion: REGISTRY_BACKUP_SCHEMA_VERSION,
     entries: parseBackupMaterials(value.materials),
@@ -299,6 +311,12 @@ const normalizeRetainedMaterialRefs = value => {
     seen.add(key)
   }
   return identities
+}
+
+const unionRetainedMaterialRefs = (...groups) => {
+  const refs = new Map()
+  for (const identity of groups.flat()) refs.set(identityKey(identity), identity)
+  return normalizeRetainedMaterialRefs([...refs.values()])
 }
 
 const gcIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u
@@ -370,26 +388,25 @@ const normalizeUnresolvedPromotionIds = value => {
   return Object.freeze(result)
 }
 
+const REPLICA_ROOT_FIELDS = Object.freeze([
+  'acceptedRequestDigest',
+  'materialRefs',
+  'projectId',
+  'releasedAt',
+  'replicaGeneration',
+  'replicaId',
+  'resolvedPromotions',
+  'snapshotDigest',
+  'state',
+  'tenantId',
+  'unresolvedPromotionIds',
+  'updatedAt',
+  'userId',
+])
+
 const normalizeReplicaRoot = value => {
-  requireObject(
-    value,
-    [
-      'acceptedRequestDigest',
-      'materialRefs',
-      'projectId',
-      'releasedAt',
-      'replicaGeneration',
-      'replicaId',
-      'resolvedPromotions',
-      'snapshotDigest',
-      'state',
-      'tenantId',
-      'unresolvedPromotionIds',
-      'updatedAt',
-      'userId',
-    ],
-    'replica root',
-  )
+  const hasReleasedRegistryGeneration = exactObject(value, [...REPLICA_ROOT_FIELDS, 'releasedRegistryGeneration'])
+  if (!hasReleasedRegistryGeneration) requireObject(value, REPLICA_ROOT_FIELDS, 'replica root')
   if (!['active', 'released'].includes(value.state)) {
     throw registryError('invalid-request', 'replica root state is invalid', { status: 400 })
   }
@@ -414,6 +431,12 @@ const normalizeReplicaRoot = value => {
     updatedAt: value.updatedAt,
     releasedAt: value.releasedAt,
   }
+  if (hasReleasedRegistryGeneration) {
+    root.releasedRegistryGeneration = requireGcGeneration(
+      value.releasedRegistryGeneration,
+      'replicaRoot.releasedRegistryGeneration',
+    )
+  }
   if (root.state === 'active' && root.releasedAt !== null) {
     throw registryError('invalid-request', 'active replica root must not have releasedAt', { status: 400 })
   }
@@ -425,6 +448,11 @@ const normalizeReplicaRoot = value => {
       root.resolvedPromotions.length !== 0)
   ) {
     throw registryError('invalid-request', 'released replica root must be an empty tombstone', { status: 400 })
+  }
+  if (root.state === 'active' && hasReleasedRegistryGeneration) {
+    throw registryError('invalid-request', 'active replica root must not have releasedRegistryGeneration', {
+      status: 400,
+    })
   }
   return Object.freeze(root)
 }
@@ -462,6 +490,59 @@ const retainedMaterialRefsForGcState = gcState => {
   return sortIdentities(refs.values())
 }
 
+const createGcSweepResult = ({ deletedMaterials, plan, registryGeneration }) =>
+  Object.freeze({
+    schemaVersion: REGISTRY_SCHEMA_VERSION,
+    deletedMaterials: Object.freeze(deletedMaterials.map(identity => Object.freeze(cloneJson(identity)))),
+    registryGeneration,
+    replicaGeneration: plan.replicaGeneration,
+    planHash: plan.planHash,
+  })
+
+const normalizeGcSweepReceipt = value => {
+  requireObject(
+    value,
+    ['deletedMaterials', 'kind', 'plan', 'registryGeneration', 'schemaVersion', 'state'],
+    'GC sweep receipt',
+  )
+  if (
+    value.schemaVersion !== REGISTRY_SCHEMA_VERSION ||
+    value.kind !== 'material-gc-sweep-receipt' ||
+    !['started', 'completed'].includes(value.state)
+  ) {
+    throw registryError('registry-corrupt', 'GC sweep receipt has an unsupported schema', { status: 500 })
+  }
+  let plan
+  let deletedMaterials
+  try {
+    plan = validateMaterialGcPlan(value.plan)
+    deletedMaterials = normalizeRetainedMaterialRefs(value.deletedMaterials)
+  } catch {
+    throw registryError('registry-corrupt', 'GC sweep receipt contains invalid plan data', { status: 500 })
+  }
+  if (plan.planHash !== sha256(JSON.stringify(createMaterialGcPlanHashInput(plan)))) {
+    throw registryError('registry-corrupt', 'GC sweep receipt plan integrity is invalid', { status: 500 })
+  }
+  const candidateKeys = new Set(plan.deletionCandidates.map(identityKey))
+  if (deletedMaterials.some(identity => !candidateKeys.has(identityKey(identity)))) {
+    throw registryError('registry-corrupt', 'GC sweep receipt contains a non-candidate material', { status: 500 })
+  }
+  if (
+    (value.state === 'started' && (value.registryGeneration !== null || deletedMaterials.length !== 0)) ||
+    (value.state === 'completed' && (!Number.isSafeInteger(value.registryGeneration) || value.registryGeneration <= 0))
+  ) {
+    throw registryError('registry-corrupt', 'GC sweep receipt state is invalid', { status: 500 })
+  }
+  return Object.freeze({
+    schemaVersion: REGISTRY_SCHEMA_VERSION,
+    kind: 'material-gc-sweep-receipt',
+    state: value.state,
+    plan,
+    deletedMaterials: Object.freeze(deletedMaterials.map(identity => Object.freeze(cloneJson(identity)))),
+    registryGeneration: value.registryGeneration,
+  })
+}
+
 export const createFileMaterialRegistry = async (options = {}) => {
   const fileSystem = options.fileSystem ?? nodeFileSystem
   const checkpoint = typeof options.checkpoint === 'function' ? options.checkpoint : async () => undefined
@@ -479,6 +560,9 @@ export const createFileMaterialRegistry = async (options = {}) => {
   )
   const promotionsDirectory = join(rootDir, PROMOTIONS_DIRECTORY_NAME)
   const trashDirectory = join(rootDir, TRASH_DIRECTORY_NAME)
+  // Sweep receipts are registry-local replay evidence. Portable backups intentionally omit them because
+  // every plan is bound to registryId, which is derived from this registry root and is invalid at another root.
+  const gcSweepReceiptsDirectory = join(rootDir, GC_SWEEP_RECEIPTS_DIRECTORY_NAME)
   const lockPath = join(rootDir, LOCK_FILE_NAME)
   const fencePath = join(rootDir, FENCE_FILE_NAME)
   const indexPath = join(rootDir, INDEX_FILE_NAME)
@@ -680,6 +764,104 @@ export const createFileMaterialRegistry = async (options = {}) => {
     } finally {
       await handle?.close().catch(() => undefined)
     }
+  }
+
+  const readGcSweepReceipt = async plan => {
+    const value = await readJson(gcSweepReceiptPathFor(plan.planHash))
+    if (value === null) return null
+    const receipt = normalizeGcSweepReceipt(value)
+    if (!sameJson(receipt.plan, plan)) {
+      throw registryError('registry-corrupt', 'GC sweep receipt does not match its plan identity', { status: 500 })
+    }
+    return receipt
+  }
+
+  const persistGcSweepReceipt = async ({ deletedMaterials = [], plan, registryGeneration = null, state }) => {
+    const receipt = normalizeGcSweepReceipt({
+      schemaVersion: REGISTRY_SCHEMA_VERSION,
+      kind: 'material-gc-sweep-receipt',
+      state,
+      plan,
+      deletedMaterials,
+      registryGeneration,
+    })
+    await writeAtomicJson({
+      path: gcSweepReceiptPathFor(plan.planHash),
+      value: receipt,
+      beforeRename: () => callCheckpoint('before-gc-sweep-receipt-rename', { planHash: plan.planHash, state }),
+      afterRename: () => callCheckpoint('after-gc-sweep-receipt-rename', { planHash: plan.planHash, state }),
+    })
+    return receipt
+  }
+
+  const isOlderGcPlanForReplica = (candidate, current) =>
+    candidate.replicaGeneration < current.replicaGeneration ||
+    (candidate.replicaGeneration === current.replicaGeneration &&
+      candidate.registryGeneration < current.registryGeneration)
+
+  const compareGcPlansForReplica = (left, right) =>
+    left.replicaGeneration - right.replicaGeneration || left.registryGeneration - right.registryGeneration
+
+  const listGcSweepReceipts = async () => {
+    const entries = await fileSystem.readdir(gcSweepReceiptsDirectory, { withFileTypes: true })
+    const receipts = []
+    for (const entry of entries) {
+      if (!GC_SWEEP_RECEIPT_FILE_PATTERN.test(entry.name)) continue
+      if (!entry.isFile()) {
+        throw registryError('registry-corrupt', 'GC sweep receipt is not a regular file', { status: 500 })
+      }
+      const path = join(gcSweepReceiptsDirectory, entry.name)
+      const value = await readJson(path)
+      if (value === null) continue
+      const receipt = normalizeGcSweepReceipt(value)
+      if (path !== gcSweepReceiptPathFor(receipt.plan.planHash)) {
+        throw registryError('registry-corrupt', 'GC sweep receipt filename does not match its plan hash', {
+          status: 500,
+        })
+      }
+      receipts.push(receipt)
+    }
+    return receipts
+  }
+
+  const pruneOlderCompletedGcSweepReceipts = async plan => {
+    let removed = false
+    for (const receipt of await listGcSweepReceipts()) {
+      if (
+        receipt.state !== 'completed' ||
+        receipt.plan.planHash === plan.planHash ||
+        receipt.plan.registryId !== plan.registryId ||
+        receipt.plan.rootKeyDigest !== plan.rootKeyDigest ||
+        !isOlderGcPlanForReplica(receipt.plan, plan)
+      ) {
+        continue
+      }
+      await verifyMutationLease()
+      await fileSystem.rm(gcSweepReceiptPathFor(receipt.plan.planHash), { force: true })
+      removed = true
+    }
+    if (removed) await syncDirectory(gcSweepReceiptsDirectory)
+  }
+
+  const reconcileGcSweepReceiptsForRoot = async authority => {
+    const authorityDigest = rootKeyDigest(authority)
+    const receiptsForRoot = (await listGcSweepReceipts()).filter(
+      receipt => receipt.plan.registryId === registryId && receipt.plan.rootKeyDigest === authorityDigest,
+    )
+    const started = receiptsForRoot
+      .filter(receipt => receipt.state === 'started')
+      .sort((left, right) => compareGcPlansForReplica(left.plan, right.plan))
+    for (const receipt of started) await completeStartedGcSweep(receipt.plan)
+
+    const latestCompleted = (await listGcSweepReceipts())
+      .filter(
+        receipt =>
+          receipt.state === 'completed' &&
+          receipt.plan.registryId === registryId &&
+          receipt.plan.rootKeyDigest === authorityDigest,
+      )
+      .sort((left, right) => compareGcPlansForReplica(right.plan, left.plan))[0]
+    if (latestCompleted) await pruneOlderCompletedGcSweepReceipts(latestCompleted.plan)
   }
 
   const assertConfinedDirectoryChain = async (rootDirectory, relativeDirectoryPath) => {
@@ -1147,6 +1329,11 @@ export const createFileMaterialRegistry = async (options = {}) => {
   }
 
   const promotionDirectoryFor = promotionId => join(promotionsDirectory, storageKeyForPromotion(promotionId))
+  const gcSweepReceiptPathFor = planHash =>
+    join(
+      gcSweepReceiptsDirectory,
+      `${requireGcDigest(planHash, 'GC sweep receipt planHash').slice('sha256:'.length)}.json`,
+    )
 
   const loadPromotion = async (promotionDirectory, signal) => {
     throwIfAborted(signal)
@@ -1331,6 +1518,15 @@ export const createFileMaterialRegistry = async (options = {}) => {
       !gcDigestPattern.test(value.snapshotHash)
     ) {
       throw registryError('registry-corrupt', 'Registry index has an unsupported schema', { status: 500 })
+    }
+    if (
+      gcState.replicaRoots.some(
+        root => root.releasedRegistryGeneration !== undefined && root.releasedRegistryGeneration > value.generation,
+      )
+    ) {
+      throw registryError('registry-corrupt', 'Released replica generation exceeds the registry generation', {
+        status: 500,
+      })
     }
     return Object.freeze({
       schemaVersion: value.schemaVersion,
@@ -1524,6 +1720,7 @@ export const createFileMaterialRegistry = async (options = {}) => {
 
   const cleanupAtomicRecoveryTemporaries = async () => {
     await cleanupAtomicTemporaryFiles(rootDir, ROOT_ATOMIC_TEMPORARY_PATTERNS)
+    await cleanupAtomicTemporaryFiles(gcSweepReceiptsDirectory, GC_SWEEP_RECEIPT_ATOMIC_TEMPORARY_PATTERNS)
     const entries = await fileSystem.readdir(promotionsDirectory, { withFileTypes: true })
     for (const entry of entries) {
       if (entry.isSymbolicLink()) {
@@ -1679,6 +1876,33 @@ export const createFileMaterialRegistry = async (options = {}) => {
       })
     })
 
+  const validateNewMaterialAdmissions = (projectId, current, requestedRefs) => {
+    const alreadyRetained = new Set((current ? activeRootMaterialRefs(current) : []).map(identityKey))
+    for (const identity of requestedRefs) {
+      if (alreadyRetained.has(identityKey(identity))) continue
+      const active = materialIndex.get(identityKey(identity))
+      if (!active || active.state !== 'active' || active.projectId !== projectId) {
+        throw registryError('material-not-found', 'A newly admitted material is not active in the authorized project', {
+          status: 404,
+        })
+      }
+    }
+  }
+
+  const unionResolvedPromotions = (current, additions) => {
+    const byPromotionId = new Map((current?.resolvedPromotions ?? []).map(entry => [entry.promotionId, entry]))
+    for (const addition of additions) {
+      const existing = byPromotionId.get(addition.promotionId)
+      if (existing && !sameJson(existing.materialRef, addition.materialRef)) {
+        throw registryError('registry-corrupt', 'A retained promotion changed its immutable material identity', {
+          status: 500,
+        })
+      }
+      byPromotionId.set(addition.promotionId, addition)
+    }
+    return normalizeResolvedPromotions([...byPromotionId.values()])
+  }
+
   const gcCandidatesForProject = (projectId, retainedMaterialRefs) => {
     const retainedKeys = new Set(retainedMaterialRefs.map(identityKey))
     return sortIdentities(
@@ -1713,16 +1937,19 @@ export const createFileMaterialRegistry = async (options = {}) => {
     return validateMaterialGcPlan({ ...base, planHash: sha256(JSON.stringify(base)) })
   }
 
-  const planGarbageCollectionInternal = async input => {
+  const planGarbageCollectionInternal = async (input, signal) => {
     if (!exactObject(input, ['principal', 'request'])) {
       throw registryError('invalid-request', 'planGarbageCollection input is invalid', { status: 400 })
     }
+    throwIfAborted(signal)
     const { principal: principalValue, request: requestValue } = input
     const principal = normalizePrincipal(principalValue)
     const request = validateMaterialGcPlanRequest(requestValue)
-    const durable = await reconcileDurableIndex()
+    const authority = { ...principal, projectId: request.projectId, replicaId: request.replicaId }
+    await reconcileGcSweepReceiptsForRoot(authority)
+    const durable = await reconcileDurableIndex(signal)
     const gcState = gcStateFromDurable(durable)
-    const key = rootKey({ ...principal, projectId: request.projectId, replicaId: request.replicaId })
+    const key = rootKey(authority)
     const current = gcState.replicaRoots.find(root => rootKey(root) === key) ?? null
     const requestDigest = sha256(JSON.stringify(createMaterialGcPlanRequestDigestInput(request)))
     const isExactReplay =
@@ -1734,6 +1961,13 @@ export const createFileMaterialRegistry = async (options = {}) => {
     if (isExactReplay) {
       return createGcPlan({ durable, principal, request, requestDigest, root: current })
     }
+    if (current?.state === 'released') {
+      throw registryError(
+        'gc-replica-generation-conflict',
+        'Released replica GC roots are terminal; reopening requires a new replicaId',
+        { status: 409 },
+      )
+    }
     if (
       (!current && request.expectedReplicaGeneration !== 0) ||
       (current && request.expectedReplicaGeneration !== current.replicaGeneration)
@@ -1743,7 +1977,23 @@ export const createFileMaterialRegistry = async (options = {}) => {
         retryable: true,
       })
     }
-    const resolvedPromotions = resolvePromotionRoots(request.projectId, request.unresolvedPromotionIds)
+    validateNewMaterialAdmissions(request.projectId, current, request.materialRefs)
+    const requestedResolvedPromotions = resolvePromotionRoots(request.projectId, request.unresolvedPromotionIds)
+    const materialRefs = unionRetainedMaterialRefs(
+      current?.materialRefs ?? [],
+      request.materialRefs,
+      requestedResolvedPromotions.map(resolution => resolution.materialRef),
+    )
+    const unresolvedPromotionIds = normalizeUnresolvedPromotionIds([
+      ...new Set([...(current?.unresolvedPromotionIds ?? []), ...request.unresolvedPromotionIds]),
+    ])
+    const resolvedPromotions = unionResolvedPromotions(current, requestedResolvedPromotions)
+    validateMaterialGcPlanRequest({
+      ...request,
+      materialRefs,
+      unresolvedPromotionIds,
+    })
+    throwIfAborted(signal)
     const nextRoot = normalizeReplicaRoot({
       ...principal,
       projectId: request.projectId,
@@ -1752,8 +2002,8 @@ export const createFileMaterialRegistry = async (options = {}) => {
       replicaGeneration: (current?.replicaGeneration ?? 0) + 1,
       acceptedRequestDigest: requestDigest,
       snapshotDigest: request.snapshotDigest,
-      materialRefs: request.materialRefs,
-      unresolvedPromotionIds: request.unresolvedPromotionIds,
+      materialRefs,
+      unresolvedPromotionIds,
       resolvedPromotions,
       updatedAt: now(),
       releasedAt: null,
@@ -1762,14 +2012,59 @@ export const createFileMaterialRegistry = async (options = {}) => {
       legacyRetainedMaterialRefs: gcState.legacyRetainedMaterialRefs,
       replicaRoots: [...gcState.replicaRoots.filter(root => rootKey(root) !== key), nextRoot],
     })
+    const prospectivePlan = createGcPlan({
+      durable: {
+        ...durable,
+        generation: durable.generation + 1,
+        legacyRetainedMaterialRefs: nextGcState.legacyRetainedMaterialRefs,
+        replicaRoots: nextGcState.replicaRoots,
+      },
+      principal,
+      request,
+      requestDigest,
+      root: nextRoot,
+    })
+    throwIfAborted(signal)
     const nextDurable = await setDurableGcState(nextGcState)
-    return createGcPlan({ durable: nextDurable, principal, request, requestDigest, root: nextRoot })
+    if (nextDurable.generation !== prospectivePlan.registryGeneration) {
+      throw registryError('registry-corrupt', 'Garbage collection plan generation was not persisted exactly', {
+        status: 500,
+      })
+    }
+    return prospectivePlan
   }
 
-  const sweepGarbageCollectionInternal = async input => {
+  const completeStartedGcSweep = async (plan, durableValue = undefined) => {
+    const durable = durableValue ?? (await reconcileDurableIndex())
+    const deletedMaterials = plan.deletionCandidates.filter(identity => {
+      const active = materialIndex.get(identityKey(identity))
+      return !active || active.projectId !== plan.projectId
+    })
+    let receipt
+    try {
+      receipt = await persistGcSweepReceipt({
+        state: 'completed',
+        plan,
+        deletedMaterials,
+        registryGeneration: durable.generation,
+      })
+    } catch (error) {
+      receipt = await readGcSweepReceipt(plan)
+      if (receipt?.state !== 'completed') throw error
+    }
+    await pruneOlderCompletedGcSweepReceipts(plan)
+    return createGcSweepResult({
+      plan,
+      deletedMaterials: receipt.deletedMaterials,
+      registryGeneration: receipt.registryGeneration,
+    })
+  }
+
+  const sweepGarbageCollectionInternal = async (input, signal) => {
     if (!exactObject(input, ['principal', 'request'])) {
       throw registryError('invalid-request', 'sweepGarbageCollection input is invalid', { status: 400 })
     }
+    throwIfAborted(signal)
     const { principal: principalValue, request: requestValue } = input
     const principal = normalizePrincipal(principalValue)
     const request = validateMaterialGcSweepRequest(requestValue)
@@ -1780,12 +2075,28 @@ export const createFileMaterialRegistry = async (options = {}) => {
     ) {
       throw registryError('gc-plan-invalid', 'Garbage collection plan integrity is invalid', { status: 400 })
     }
-    const durable = await reconcileDurableIndex()
-    const gcState = gcStateFromDurable(durable)
     const authority = { ...principal, projectId: plan.projectId, replicaId: plan.replicaId }
+    if (plan.rootKeyDigest !== rootKeyDigest(authority)) {
+      throw registryError('gc-replica-generation-conflict', 'Replica GC root changed after planning', {
+        status: 409,
+        retryable: true,
+      })
+    }
+    const durable = await reconcileDurableIndex(signal)
+    const existingReceipt = await readGcSweepReceipt(plan)
+    if (existingReceipt?.state === 'completed') {
+      await pruneOlderCompletedGcSweepReceipts(plan)
+      return createGcSweepResult({
+        plan,
+        deletedMaterials: existingReceipt.deletedMaterials,
+        registryGeneration: existingReceipt.registryGeneration,
+      })
+    }
+    if (existingReceipt?.state === 'started') return completeStartedGcSweep(plan, durable)
+
+    const gcState = gcStateFromDurable(durable)
     const root = gcState.replicaRoots.find(candidate => rootKey(candidate) === rootKey(authority)) ?? null
     if (
-      plan.rootKeyDigest !== rootKeyDigest(authority) ||
       !root ||
       root.state !== 'active' ||
       root.replicaGeneration !== plan.replicaGeneration ||
@@ -1815,45 +2126,93 @@ export const createFileMaterialRegistry = async (options = {}) => {
     }
 
     const deletedMaterials = []
-    for (const identity of expectedCandidates) {
-      const record = materialIndex.get(identityKey(identity))
-      if (!record || record.projectId !== plan.projectId) continue
-      const sourceDirectory = promotionDirectoryFor(record.promotionId)
-      const trashPath = join(trashDirectory, `${storageKeyForPromotion(record.promotionId)}.${randomUUID()}`)
-      await callCheckpoint('before-gc-rename', { promotionId: record.promotionId })
-      await verifyMutationLease()
-      await fileSystem.rename(sourceDirectory, trashPath)
-      await syncDirectory(promotionsDirectory)
-      await syncDirectory(trashDirectory)
-      await callCheckpoint('after-gc-rename-before-removal', { promotionId: record.promotionId })
-      materialIndex.delete(identityKey(identity))
-      pendingIndex.delete(record.promotionId)
-      deletedMaterials.push(Object.freeze(cloneJson(identity)))
-      await verifyMutationLease()
-      await fileSystem.rm(trashPath, { force: true, recursive: true })
-      await syncDirectory(trashDirectory)
-      await callCheckpoint('after-gc-removal-before-index-activation', { promotionId: record.promotionId })
+    let deletionStarted = false
+    let receiptStarted = false
+    try {
+      if (expectedCandidates.length === 0) {
+        const receipt = await persistGcSweepReceipt({
+          state: 'completed',
+          plan,
+          deletedMaterials,
+          registryGeneration: durable.generation,
+        })
+        await pruneOlderCompletedGcSweepReceipts(plan)
+        return createGcSweepResult({
+          plan,
+          deletedMaterials: receipt.deletedMaterials,
+          registryGeneration: receipt.registryGeneration,
+        })
+      }
+
+      for (const identity of expectedCandidates) {
+        const record = materialIndex.get(identityKey(identity))
+        if (!record || record.projectId !== plan.projectId) continue
+        const sourceDirectory = promotionDirectoryFor(record.promotionId)
+        const trashPath = join(trashDirectory, `${storageKeyForPromotion(record.promotionId)}.${randomUUID()}`)
+        await callCheckpoint('before-gc-rename', { promotionId: record.promotionId })
+        await verifyMutationLease()
+        if (!deletionStarted) {
+          throwIfAborted(signal)
+          await persistGcSweepReceipt({ state: 'started', plan })
+          receiptStarted = true
+          throwIfAborted(signal)
+          await verifyMutationLease()
+        }
+        if (!deletionStarted) throwIfAborted(signal)
+        await fileSystem.rename(sourceDirectory, trashPath)
+        deletionStarted = true
+        await syncDirectory(promotionsDirectory)
+        await syncDirectory(trashDirectory)
+        await callCheckpoint('after-gc-rename-before-removal', { promotionId: record.promotionId })
+        materialIndex.delete(identityKey(identity))
+        pendingIndex.delete(record.promotionId)
+        deletedMaterials.push(Object.freeze(cloneJson(identity)))
+        await verifyMutationLease()
+        await fileSystem.rm(trashPath, { force: true, recursive: true })
+        await syncDirectory(trashDirectory)
+        await callCheckpoint('after-gc-removal-before-index-activation', { promotionId: record.promotionId })
+      }
+      const nextDurable = await reconcileDurableIndex()
+      const receipt = await persistGcSweepReceipt({
+        state: 'completed',
+        plan,
+        deletedMaterials,
+        registryGeneration: nextDurable.generation,
+      })
+      await pruneOlderCompletedGcSweepReceipts(plan)
+      return createGcSweepResult({
+        plan,
+        deletedMaterials: receipt.deletedMaterials,
+        registryGeneration: receipt.registryGeneration,
+      })
+    } catch (error) {
+      const durableReceipt = await readGcSweepReceipt(plan)
+      if (durableReceipt?.state === 'completed') {
+        await pruneOlderCompletedGcSweepReceipts(plan)
+        return createGcSweepResult({
+          plan,
+          deletedMaterials: durableReceipt.deletedMaterials,
+          registryGeneration: durableReceipt.registryGeneration,
+        })
+      }
+      if (deletionStarted) return completeStartedGcSweep(plan)
+      if (receiptStarted || durableReceipt?.state === 'started') await completeStartedGcSweep(plan)
+      throw error
     }
-    const nextDurable = await reconcileDurableIndex()
-    return Object.freeze({
-      schemaVersion: REGISTRY_SCHEMA_VERSION,
-      deletedMaterials: Object.freeze(deletedMaterials),
-      registryGeneration: nextDurable.generation,
-      replicaGeneration: root.replicaGeneration,
-      planHash: plan.planHash,
-    })
   }
 
-  const releaseGarbageCollectionRootInternal = async input => {
+  const releaseGarbageCollectionRootInternal = async (input, signal) => {
     if (!exactObject(input, ['principal', 'request'])) {
       throw registryError('invalid-request', 'releaseGarbageCollectionRoot input is invalid', { status: 400 })
     }
+    throwIfAborted(signal)
     const { principal: principalValue, request: requestValue } = input
     const principal = normalizePrincipal(principalValue)
     const request = validateMaterialGcReleaseRequest(requestValue)
-    const durable = await reconcileDurableIndex()
-    const gcState = gcStateFromDurable(durable)
     const authority = { ...principal, projectId: request.projectId, replicaId: request.replicaId }
+    await reconcileGcSweepReceiptsForRoot(authority)
+    const durable = await reconcileDurableIndex(signal)
+    const gcState = gcStateFromDurable(durable)
     const key = rootKey(authority)
     const current = gcState.replicaRoots.find(root => rootKey(root) === key) ?? null
     const requestDigest = sha256(JSON.stringify(createMaterialGcReleaseRequestDigestInput(request)))
@@ -1863,6 +2222,13 @@ export const createFileMaterialRegistry = async (options = {}) => {
       current.snapshotDigest === request.snapshotDigest &&
       request.expectedReplicaGeneration === current.replicaGeneration - 1
     if (exactReplay) {
+      if (current.releasedRegistryGeneration === undefined) {
+        throw registryError(
+          'gc-replica-generation-conflict',
+          'Legacy released replica roots do not contain exact replay evidence',
+          { status: 409 },
+        )
+      }
       return Object.freeze({
         schemaVersion: REGISTRY_SCHEMA_VERSION,
         status: 'released',
@@ -1870,7 +2236,7 @@ export const createFileMaterialRegistry = async (options = {}) => {
         replicaId: request.replicaId,
         replicaGeneration: current.replicaGeneration,
         requestDigest,
-        registryGeneration: durable.generation,
+        registryGeneration: current.releasedRegistryGeneration,
       })
     }
     if (
@@ -1885,6 +2251,7 @@ export const createFileMaterialRegistry = async (options = {}) => {
       })
     }
     const releasedAt = now()
+    throwIfAborted(signal)
     const tombstone = normalizeReplicaRoot({
       ...authority,
       state: 'released',
@@ -1896,11 +2263,17 @@ export const createFileMaterialRegistry = async (options = {}) => {
       resolvedPromotions: [],
       updatedAt: releasedAt,
       releasedAt,
+      releasedRegistryGeneration: durable.generation + 1,
     })
     const nextDurable = await setDurableGcState({
       legacyRetainedMaterialRefs: gcState.legacyRetainedMaterialRefs,
       replicaRoots: [...gcState.replicaRoots.filter(root => rootKey(root) !== key), tombstone],
     })
+    if (nextDurable.generation !== tombstone.releasedRegistryGeneration) {
+      throw registryError('registry-corrupt', 'Released replica registry generation was not persisted exactly', {
+        status: 500,
+      })
+    }
     return Object.freeze({
       schemaVersion: REGISTRY_SCHEMA_VERSION,
       status: 'released',
@@ -1918,6 +2291,7 @@ export const createFileMaterialRegistry = async (options = {}) => {
   physicalRegistryRoot = await fileSystem.realpath(rootDir)
   await ensureDirectory(promotionsDirectory)
   await ensureDirectory(trashDirectory)
+  await ensureDirectory(gcSweepReceiptsDirectory)
   await scanRegistry()
 
   return Object.freeze({
@@ -1993,11 +2367,17 @@ export const createFileMaterialRegistry = async (options = {}) => {
         }
         return verifyBackupInternal(request.backupDirectory)
       }).catch(error => throwFailure(error)),
-    planGarbageCollection: input =>
-      enqueue(() => withLease(() => planGarbageCollectionInternal(input))).catch(error => throwFailure(error)),
-    sweepGarbageCollection: input =>
-      enqueue(() => withLease(() => sweepGarbageCollectionInternal(input))).catch(error => throwFailure(error)),
-    releaseGarbageCollectionRoot: input =>
-      enqueue(() => withLease(() => releaseGarbageCollectionRootInternal(input))).catch(error => throwFailure(error)),
+    planGarbageCollection: (input, options = {}) =>
+      enqueue(() => withLease(() => planGarbageCollectionInternal(input, options.signal), options.signal)).catch(
+        error => throwFailure(error),
+      ),
+    sweepGarbageCollection: (input, options = {}) =>
+      enqueue(() => withLease(() => sweepGarbageCollectionInternal(input, options.signal), options.signal)).catch(
+        error => throwFailure(error),
+      ),
+    releaseGarbageCollectionRoot: (input, options = {}) =>
+      enqueue(() => withLease(() => releaseGarbageCollectionRootInternal(input, options.signal), options.signal)).catch(
+        error => throwFailure(error),
+      ),
   })
 }

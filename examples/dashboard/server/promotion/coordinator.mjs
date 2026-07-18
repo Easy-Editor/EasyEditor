@@ -180,21 +180,21 @@ export const createMaterialGcCoordinator = ({ authorizePrincipal, registry } = {
       const request = validateMaterialGcPlanRequest(requestValue)
       const principal = await authorize(headers, request.projectId, signal)
       throwIfPromotionAborted(signal)
-      return runPromotionPhase(() => registry.planGarbageCollection({ principal, request }), signal)
+      return registry.planGarbageCollection({ principal, request }, { signal })
     },
     async sweepGc({ headers, request: requestValue, signal } = {}) {
       throwIfPromotionAborted(signal)
       const request = validateMaterialGcSweepRequest(requestValue)
       const principal = await authorize(headers, request.plan.projectId, signal)
       throwIfPromotionAborted(signal)
-      return runPromotionPhase(() => registry.sweepGarbageCollection({ principal, request }), signal)
+      return registry.sweepGarbageCollection({ principal, request }, { signal })
     },
     async releaseGc({ headers, request: requestValue, signal } = {}) {
       throwIfPromotionAborted(signal)
       const request = validateMaterialGcReleaseRequest(requestValue)
       const principal = await authorize(headers, request.projectId, signal)
       throwIfPromotionAborted(signal)
-      return runPromotionPhase(() => registry.releaseGarbageCollectionRoot({ principal, request }), signal)
+      return registry.releaseGarbageCollectionRoot({ principal, request }, { signal })
     },
   })
 }

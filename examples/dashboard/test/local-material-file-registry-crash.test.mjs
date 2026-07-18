@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { fork } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -17,6 +17,7 @@ const GC_TEST_PRINCIPAL = Object.freeze({ tenantId: 'crash-test-tenant', userId:
 const gcReplicaGenerations = new Map()
 const ATOMIC_TEMPORARY_PATTERNS = Object.freeze({
   fence: /^\.registry-fence\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
+  gcReceipt: /^\.[\da-f]{64}\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
   index: /^\.registry-index\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
   published: /^\.published\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
 })
@@ -56,14 +57,14 @@ const identityFor = request => ({
   buildIntegrity: request.buildIntegrity,
 })
 
-const planGcForTest = async (registry, retainedMaterialRefs) => {
-  const generationKey = registry.rootDir
+const planGcForTest = async (registry, retainedMaterialRefs, replicaId = 'crash-test-replica') => {
+  const generationKey = `${registry.rootDir}\0${replicaId}`
   const plan = await registry.planGarbageCollection({
     principal: GC_TEST_PRINCIPAL,
     request: {
       schemaVersion: 1,
       projectId: 'project-1',
-      replicaId: 'crash-test-replica',
+      replicaId,
       expectedReplicaGeneration: gcReplicaGenerations.get(generationKey) ?? 0,
       snapshotDigest: sha256(JSON.stringify(retainedMaterialRefs)),
       materialRefs: retainedMaterialRefs,
@@ -315,6 +316,86 @@ test('recovery removes strictly named root atomic JSON temporaries left by SIGKI
   assert.ok(remaining.includes(fenceDecoy))
 })
 
+test('recovery removes only strictly named GC receipt temporaries left before deletion begins', async t => {
+  const { children, makeBuild, registry, rootDir } = await createFixture(t)
+  const request = promotionRequest({
+    buildDirectory: await makeBuild('gc-receipt-temporary'),
+    promotionId: 'promotion-gc-receipt-temporary',
+  })
+  await registry.stagePromotion(request)
+  await registry.publishPromotion({ promotionId: request.promotionId })
+  const plan = await planGcForTest(registry, [])
+  const child = startChild(children, {
+    action: 'sweep',
+    rootDir,
+    plan,
+    principal: GC_TEST_PRINCIPAL,
+    pauseAtCheckpoint: 'before-gc-sweep-receipt-rename',
+  })
+  await waitForMessage(
+    child,
+    message => message?.type === 'checkpoint' && message.checkpoint?.name === 'before-gc-sweep-receipt-rename',
+  )
+  await killChild(child)
+
+  const receiptsDirectory = join(rootDir, 'gc-sweep-receipts')
+  assert.ok((await readdir(receiptsDirectory)).some(name => ATOMIC_TEMPORARY_PATTERNS.gcReceipt.test(name)))
+  const decoy = '.receipt.not-ours.tmp'
+  await writeFile(join(receiptsDirectory, decoy), 'preserve me')
+
+  const restarted = await createFileMaterialRegistry({ rootDir })
+  assert.notEqual(await restarted.readMaterial(identityFor(request)), null)
+  await restarted.recoverPendingPromotions()
+  const remaining = await readdir(receiptsDirectory)
+  assert.equal(
+    remaining.some(name => ATOMIC_TEMPORARY_PATTERNS.gcReceipt.test(name)),
+    false,
+  )
+  assert.ok(remaining.includes(decoy))
+  const swept = await sweepGcForTest(restarted, plan)
+  assert.deepEqual(swept.deletedMaterials, [identityFor(request)])
+})
+
+test('a new replica generation reconciles a crashed started sweep before admission and bounds receipts', async t => {
+  const { children, makeBuild, registry, rootDir } = await createFixture(t)
+  const request = promotionRequest({
+    buildDirectory: await makeBuild('gc-started-before-next-plan'),
+    promotionId: 'promotion-gc-started-before-next-plan',
+  })
+  await registry.stagePromotion(request)
+  await registry.publishPromotion({ promotionId: request.promotionId })
+  const startedPlan = await planGcForTest(registry, [])
+  const child = startChild(children, {
+    action: 'sweep',
+    rootDir,
+    plan: startedPlan,
+    principal: GC_TEST_PRINCIPAL,
+    pauseAtCheckpoint: 'after-gc-sweep-receipt-rename',
+  })
+  await waitForMessage(
+    child,
+    message => message?.type === 'checkpoint' && message.checkpoint?.name === 'after-gc-sweep-receipt-rename',
+  )
+  await killChild(child)
+
+  const receiptsDirectory = join(rootDir, 'gc-sweep-receipts')
+  const [startedReceiptName] = (await readdir(receiptsDirectory)).filter(name => name.endsWith('.json'))
+  const startedReceipt = JSON.parse(await readFile(join(receiptsDirectory, startedReceiptName), 'utf8'))
+  assert.equal(startedReceipt.state, 'started')
+
+  const restarted = await createFileMaterialRegistry({ rootDir })
+  const nextPlan = await planGcForTest(restarted, [identityFor(request)])
+  assert.equal(nextPlan.replicaGeneration, startedPlan.replicaGeneration + 1)
+  assert.notEqual(await restarted.readMaterial(identityFor(request)), null)
+  const latestResult = await sweepGcForTest(restarted, nextPlan)
+  assert.deepEqual(latestResult.deletedMaterials, [])
+
+  const receiptFiles = (await readdir(receiptsDirectory)).filter(name => name.endsWith('.json'))
+  assert.deepEqual(receiptFiles, [`${nextPlan.planHash.slice('sha256:'.length)}.json`])
+  const replayRestart = await createFileMaterialRegistry({ rootDir })
+  assert.deepEqual(await sweepGcForTest(replayRestart, nextPlan), latestResult)
+})
+
 test('SIGKILL around stage rename recovers nested orphans and durable pending state', async t => {
   const { children, makeBuild, rootDir } = await createFixture(t)
 
@@ -376,7 +457,7 @@ test('SIGKILL around stage rename recovers nested orphans and durable pending st
   })
 })
 
-test('SIGKILL around GC rename and removal never restores deleted visibility', async t => {
+test('SIGKILL around GC rename and removal reconciles an exact durable sweep receipt', async t => {
   const { children, makeBuild, registry, rootDir } = await createFixture(t)
   const v1 = promotionRequest({ buildDirectory: await makeBuild('gc-v1'), promotionId: 'promotion-gc-crash-v1' })
   const v2 = promotionRequest({
@@ -410,11 +491,20 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   assert.ok((await readdir(join(rootDir, 'trash'))).length > 0)
   await afterRenameRestart.recoverPendingPromotions()
   assert.deepEqual(await readdir(join(rootDir, 'trash')), [])
-  await assert.rejects(
-    sweepGcForTest(afterRenameRestart, planBeforeRemoval),
-    assertRegistryError('gc-generation-conflict'),
-  )
+  const replayBeforeRemoval = await sweepGcForTest(afterRenameRestart, planBeforeRemoval)
+  assert.deepEqual(replayBeforeRemoval.deletedMaterials, [identityFor(v1)])
+  assert.deepEqual(await sweepGcForTest(afterRenameRestart, planBeforeRemoval), replayBeforeRemoval)
 
+  await afterRenameRestart.releaseGarbageCollectionRoot({
+    principal: GC_TEST_PRINCIPAL,
+    request: {
+      schemaVersion: 1,
+      projectId: planBeforeRemoval.projectId,
+      replicaId: planBeforeRemoval.replicaId,
+      expectedReplicaGeneration: planBeforeRemoval.replicaGeneration,
+      snapshotDigest: planBeforeRemoval.snapshotDigest,
+    },
+  })
   const v3 = promotionRequest({
     buildDirectory: await makeBuild('gc-v3'),
     promotionId: 'promotion-gc-crash-v3',
@@ -423,7 +513,11 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   })
   await afterRenameRestart.stagePromotion(v3)
   await afterRenameRestart.publishPromotion({ promotionId: v3.promotionId })
-  const planAfterRemoval = await planGcForTest(afterRenameRestart, [identityFor(v3)])
+  const planAfterRemoval = await planGcForTest(
+    afterRenameRestart,
+    [identityFor(v3)],
+    'crash-test-replica-after-release',
+  )
   const afterRemoval = startChild(children, {
     action: 'sweep',
     rootDir,
@@ -442,10 +536,9 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   assert.equal(await afterRemovalRestart.readMaterial(identityFor(v2)), null)
   assert.equal((await afterRemovalRestart.readMaterial(identityFor(v3))).promotionId, v3.promotionId)
   assert.deepEqual(await readdir(join(rootDir, 'trash')), [])
-  await assert.rejects(
-    sweepGcForTest(afterRemovalRestart, planAfterRemoval),
-    assertRegistryError('gc-generation-conflict'),
-  )
+  const replayAfterRemoval = await sweepGcForTest(afterRemovalRestart, planAfterRemoval)
+  assert.deepEqual(replayAfterRemoval.deletedMaterials, [identityFor(v2)])
+  assert.deepEqual(await sweepGcForTest(afterRemovalRestart, planAfterRemoval), replayAfterRemoval)
 })
 
 test('a cross-process lease rejects a live contender and is reclaimable after SIGKILL', async t => {

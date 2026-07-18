@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { createFileMaterialRegistry } from '../server/promotion/file-material-registry.mjs'
+import {
+  MATERIAL_GC_SWEEP_ROUTE,
+  createFileMaterialRegistry,
+  createMaterialGcCoordinator,
+  createMaterialPromotionHandler,
+} from '../server/promotion/index.mjs'
 
 const ENTRY_SOURCE = 'export default { mount() {}, update() {}, destroy() {} }'
 const sha256 = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const digest = character => `sha256:${character.repeat(64)}`
+const storageKeyForPromotion = promotionId => createHash('sha256').update(promotionId).digest('hex')
 const PRINCIPAL_A = Object.freeze({ tenantId: 'tenant-a', userId: 'user-a' })
 const PRINCIPAL_B = Object.freeze({ tenantId: 'tenant-a', userId: 'user-b' })
 
@@ -19,13 +25,13 @@ const identityFor = request => ({
   buildIntegrity: request.buildIntegrity,
 })
 
-const createFixture = async t => {
+const createFixture = async (t, registryOptions = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'easy-editor-material-gc-server-'))
   const rootDir = join(directory, 'registry')
   const workspaceRoot = join(directory, 'workspace')
   await mkdir(workspaceRoot, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const registry = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+  const registry = await createFileMaterialRegistry({ ...registryOptions, rootDir, workspaceRoot })
   let sequence = 0
   const addMaterial = async ({ projectId, materialId, materialVersion, promotionId, publish = true }) => {
     sequence += 1
@@ -90,8 +96,8 @@ const planGc = (
     },
   })
 
-const sweepGc = (registry, plan, principal = PRINCIPAL_A) =>
-  registry.sweepGarbageCollection({ principal, request: { schemaVersion: 1, plan } })
+const sweepGc = (registry, plan, principal = PRINCIPAL_A, options = undefined) =>
+  registry.sweepGarbageCollection({ principal, request: { schemaVersion: 1, plan } }, options)
 
 const releaseGc = (registry, plan, principal = PRINCIPAL_A) =>
   registry.releaseGarbageCollectionRoot({
@@ -108,6 +114,69 @@ const releaseGc = (registry, plan, principal = PRINCIPAL_A) =>
 const assertCode = code => error => {
   assert.equal(error?.code, code)
   return true
+}
+
+const deferred = () => {
+  let resolve
+  const promise = new Promise(resolvePromise => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
+const seedPublishedMaterials = async ({ count, projectId, rootDir }) => {
+  const promotionsDirectory = join(rootDir, 'promotions')
+  await mkdir(promotionsDirectory, { recursive: true })
+  const entryIntegrity = sha256(ENTRY_SOURCE)
+  const bindings = Array.from({ length: count }, (_, index) => {
+    const suffix = String(index).padStart(4, '0')
+    return {
+      schemaVersion: 1,
+      promotionId: sha256(`candidate-promotion-${suffix}`),
+      projectId,
+      materialId: `material-candidate-${suffix}`,
+      materialVersion: '1.0.0',
+      logicalComponentId: `logical-candidate-${suffix}`,
+      buildIntegrity: entryIntegrity,
+      sourceRevision: {
+        artifactId: `artifact-candidate-${suffix}`,
+        sourceRevision: `revision-candidate-${suffix}`,
+        logicalComponentId: `logical-candidate-${suffix}`,
+        sourceIntegrity: digest('a'),
+      },
+      dependencyLockDigest: digest('b'),
+      entryFile: 'index.mjs',
+      files: [
+        {
+          path: 'index.mjs',
+          byteLength: Buffer.byteLength(ENTRY_SOURCE),
+          integrity: entryIntegrity,
+        },
+      ],
+      createdAt: index + 1,
+    }
+  })
+  for (let offset = 0; offset < bindings.length; offset += 64) {
+    await Promise.all(
+      bindings.slice(offset, offset + 64).map(async binding => {
+        const promotionDirectory = join(promotionsDirectory, storageKeyForPromotion(binding.promotionId))
+        const buildDirectory = join(promotionDirectory, 'build')
+        await mkdir(buildDirectory, { recursive: true })
+        await Promise.all([
+          writeFile(join(buildDirectory, 'index.mjs'), ENTRY_SOURCE),
+          writeFile(
+            join(promotionDirectory, 'staged.json'),
+            `${JSON.stringify({ schemaVersion: 1, kind: 'staged', binding })}\n`,
+          ),
+          writeFile(
+            join(promotionDirectory, 'published.json'),
+            `${JSON.stringify({ schemaVersion: 1, kind: 'published', binding })}\n`,
+          ),
+        ])
+      }),
+    )
+  }
+  return bindings
 }
 
 test('replica roots retain across devices while candidates remain confined to the authorized project', async t => {
@@ -209,13 +278,59 @@ test('replica CAS supports exact ACK replay and released tombstones prevent ABA 
     },
   })
   assert.deepEqual(releaseReplay, released)
-  await assert.rejects(planGc(registry), assertCode('gc-replica-generation-conflict'))
+  for (const expectedReplicaGeneration of [
+    second.replicaGeneration,
+    released.replicaGeneration,
+    released.replicaGeneration + 1,
+  ]) {
+    await assert.rejects(
+      planGc(registry, {
+        expectedReplicaGeneration,
+        snapshotDigest: digest('e'),
+      }),
+      assertCode('gc-replica-generation-conflict'),
+    )
+  }
 
-  const reactivated = await planGc(registry, {
-    expectedReplicaGeneration: released.replicaGeneration,
+  const reopened = await planGc(registry, {
+    replicaId: 'replica-new-uuid',
     snapshotDigest: digest('e'),
   })
-  assert.equal(reactivated.replicaGeneration, released.replicaGeneration + 1)
+  assert.equal(reopened.replicaGeneration, 1)
+  assert.deepEqual(
+    await releaseGc(registry, second),
+    released,
+    'release ACK replay must preserve the first registry generation after another replica mutates',
+  )
+
+  const replayRestart = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+  assert.deepEqual(await releaseGc(replayRestart, second), released)
+})
+
+test('legacy released tombstones remain readable without fabricating exact release replay evidence', async t => {
+  const { registry, rootDir, workspaceRoot } = await createFixture(t)
+  const plan = await planGc(registry)
+  await releaseGc(registry, plan)
+
+  const indexPath = join(rootDir, 'registry-index.json')
+  const legacyIndex = JSON.parse(await readFile(indexPath, 'utf8'))
+  const { releasedRegistryGeneration: _releasedRegistryGeneration, ...legacyRoot } = legacyIndex.replicaRoots[0]
+  legacyIndex.replicaRoots = [legacyRoot]
+  const gcState = {
+    legacyRetainedMaterialRefs: legacyIndex.legacyRetainedMaterialRefs,
+    replicaRoots: legacyIndex.replicaRoots,
+  }
+  legacyIndex.gcStateHash = sha256(JSON.stringify(gcState))
+  legacyIndex.snapshotHash = sha256(JSON.stringify({ materials: [], pendingPromotions: [], gcState }))
+  await writeFile(indexPath, `${JSON.stringify(legacyIndex)}\n`)
+
+  const restarted = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+  await assert.rejects(releaseGc(restarted, plan), assertCode('gc-replica-generation-conflict'))
+  const freshReplica = await planGc(restarted, {
+    replicaId: 'replica-after-legacy-tombstone',
+    snapshotDigest: digest('d'),
+  })
+  assert.equal(freshReplica.replicaGeneration, 1)
 })
 
 test('unresolved promotions resolve only to active same-project materials and failures do not write roots', async t => {
@@ -263,6 +378,517 @@ test('unresolved promotions resolve only to active same-project materials and fa
   assert.deepEqual(durable.replicaRoots[0].resolvedPromotions, [
     { promotionId: active.promotionId, materialRef: identityFor(active) },
   ])
+})
+
+test('active replica admissions are monotonic across omitted material and promotion roots', async t => {
+  const { addMaterial, registry, rootDir } = await createFixture(t)
+  const direct = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-direct-root',
+    materialVersion: '1.0.0',
+    promotionId: digest('1'),
+  })
+  const promoted = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-promotion-root',
+    materialVersion: '1.0.0',
+    promotionId: digest('2'),
+  })
+
+  const admitted = await planGc(registry, {
+    materialRefs: [identityFor(direct)],
+    unresolvedPromotionIds: [promoted.promotionId],
+  })
+  const omitted = await planGc(registry, {
+    expectedReplicaGeneration: admitted.replicaGeneration,
+    snapshotDigest: digest('d'),
+    materialRefs: [],
+    unresolvedPromotionIds: [],
+  })
+  assert.deepEqual(
+    omitted.globalRetainedMaterialRefs,
+    [identityFor(direct), identityFor(promoted)].sort((left, right) => left.materialId.localeCompare(right.materialId)),
+  )
+  assert.deepEqual(omitted.deletionCandidates, [])
+
+  const durable = JSON.parse(await readFile(join(rootDir, 'registry-index.json'), 'utf8'))
+  const [root] = durable.replicaRoots
+  assert.deepEqual(
+    root.materialRefs,
+    [identityFor(direct), identityFor(promoted)].sort((left, right) => left.materialId.localeCompare(right.materialId)),
+  )
+  assert.deepEqual(root.unresolvedPromotionIds, [promoted.promotionId])
+  assert.deepEqual(root.resolvedPromotions, [{ promotionId: promoted.promotionId, materialRef: identityFor(promoted) }])
+})
+
+test('a monotonic replica root rejects its 4097th material before durable mutation and remains serviceable', async t => {
+  const { addMaterial, registry, rootDir } = await createFixture(t)
+  const overflow = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-overflow',
+    materialVersion: '1.0.0',
+    promotionId: digest('2'),
+  })
+  const [promotionDirectory] = await readdir(join(rootDir, 'promotions'))
+  const staged = JSON.parse(await readFile(join(rootDir, 'promotions', promotionDirectory, 'staged.json'), 'utf8'))
+  const materialRefs = Array.from({ length: 4096 }, (_, index) => ({
+    materialId: `material-root-${String(index).padStart(4, '0')}`,
+    materialVersion: '1.0.0',
+    buildIntegrity: digest('f'),
+  }))
+  const root = {
+    tenantId: PRINCIPAL_A.tenantId,
+    userId: PRINCIPAL_A.userId,
+    projectId: 'project-a',
+    replicaId: 'replica-a',
+    state: 'active',
+    replicaGeneration: 1,
+    acceptedRequestDigest: digest('e'),
+    snapshotDigest: digest('c'),
+    materialRefs,
+    unresolvedPromotionIds: [],
+    resolvedPromotions: [],
+    updatedAt: 1,
+    releasedAt: null,
+  }
+  const gcState = { legacyRetainedMaterialRefs: [], replicaRoots: [root] }
+  const indexPath = join(rootDir, 'registry-index.json')
+  const seededIndex = JSON.parse(await readFile(indexPath, 'utf8'))
+  seededIndex.generation += 1
+  seededIndex.legacyRetainedMaterialRefs = []
+  seededIndex.replicaRoots = [root]
+  seededIndex.gcStateHash = sha256(JSON.stringify(gcState))
+  seededIndex.snapshotHash = sha256(JSON.stringify({ materials: [staged.binding], pendingPromotions: [], gcState }))
+  await writeFile(indexPath, `${JSON.stringify(seededIndex)}\n`)
+  const durableBefore = await readFile(indexPath, 'utf8')
+
+  await assert.rejects(
+    planGc(registry, {
+      expectedReplicaGeneration: 1,
+      snapshotDigest: digest('d'),
+      materialRefs: [identityFor(overflow)],
+    }),
+    assertCode('invalid-request'),
+  )
+  assert.equal(await readFile(indexPath, 'utf8'), durableBefore)
+
+  const healthy = await planGc(registry, {
+    replicaId: 'replica-after-root-limit',
+    snapshotDigest: digest('d'),
+  })
+  assert.equal(healthy.replicaGeneration, 1)
+})
+
+test('cross-replica global retained roots reject the 4097th identity before durable mutation', async t => {
+  const { addMaterial, registry, rootDir } = await createFixture(t)
+  const admittedByReplicaB = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-replica-b',
+    materialVersion: '1.0.0',
+    promotionId: digest('3'),
+  })
+  const [promotionDirectory] = await readdir(join(rootDir, 'promotions'))
+  const staged = JSON.parse(await readFile(join(rootDir, 'promotions', promotionDirectory, 'staged.json'), 'utf8'))
+  const materialRefs = Array.from({ length: 4096 }, (_, index) => ({
+    materialId: `material-global-${String(index).padStart(4, '0')}`,
+    materialVersion: '1.0.0',
+    buildIntegrity: digest('f'),
+  }))
+  const replicaA = {
+    tenantId: PRINCIPAL_A.tenantId,
+    userId: PRINCIPAL_A.userId,
+    projectId: 'project-a',
+    replicaId: 'replica-a',
+    state: 'active',
+    replicaGeneration: 1,
+    acceptedRequestDigest: digest('e'),
+    snapshotDigest: digest('c'),
+    materialRefs,
+    unresolvedPromotionIds: [],
+    resolvedPromotions: [],
+    updatedAt: 1,
+    releasedAt: null,
+  }
+  const gcState = { legacyRetainedMaterialRefs: [], replicaRoots: [replicaA] }
+  const indexPath = join(rootDir, 'registry-index.json')
+  const seededIndex = JSON.parse(await readFile(indexPath, 'utf8'))
+  seededIndex.generation += 1
+  seededIndex.legacyRetainedMaterialRefs = []
+  seededIndex.replicaRoots = [replicaA]
+  seededIndex.gcStateHash = sha256(JSON.stringify(gcState))
+  seededIndex.snapshotHash = sha256(JSON.stringify({ materials: [staged.binding], pendingPromotions: [], gcState }))
+  await writeFile(indexPath, `${JSON.stringify(seededIndex)}\n`)
+  const durableBefore = await readFile(indexPath, 'utf8')
+  const parsedBefore = JSON.parse(durableBefore)
+
+  await assert.rejects(
+    planGc(registry, {
+      replicaId: 'replica-b',
+      snapshotDigest: digest('d'),
+      materialRefs: [identityFor(admittedByReplicaB)],
+    }),
+    assertCode('invalid-request'),
+  )
+  const durableAfter = await readFile(indexPath, 'utf8')
+  assert.equal(durableAfter, durableBefore)
+  assert.equal(JSON.parse(durableAfter).generation, parsedBefore.generation)
+  assert.deepEqual(JSON.parse(durableAfter).replicaRoots, parsedBefore.replicaRoots)
+
+  await registry.releaseGarbageCollectionRoot({
+    principal: PRINCIPAL_A,
+    request: {
+      schemaVersion: 1,
+      projectId: replicaA.projectId,
+      replicaId: replicaA.replicaId,
+      expectedReplicaGeneration: replicaA.replicaGeneration,
+      snapshotDigest: replicaA.snapshotDigest,
+    },
+  })
+  const healthy = await planGc(registry, {
+    replicaId: 'replica-b',
+    snapshotDigest: digest('d'),
+    materialRefs: [identityFor(admittedByReplicaB)],
+  })
+  assert.equal(healthy.globalRetainedMaterialRefs.length, 1)
+})
+
+test('a project with 4097 deletion candidates rejects planning before durable mutation', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'easy-editor-material-gc-candidate-limit-'))
+  const rootDir = join(directory, 'registry')
+  const workspaceRoot = join(directory, 'workspace')
+  await mkdir(workspaceRoot, { recursive: true })
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const materials = await seedPublishedMaterials({ count: 4097, projectId: 'project-candidate-limit', rootDir })
+  const indexPath = join(rootDir, 'registry-index.json')
+  const gcState = { legacyRetainedMaterialRefs: [], replicaRoots: [] }
+  await writeFile(
+    indexPath,
+    `${JSON.stringify({
+      schemaVersion: 2,
+      kind: 'material-registry-index',
+      fence: 1,
+      generation: 1,
+      snapshotHash: sha256(JSON.stringify({ materials, pendingPromotions: [], gcState })),
+      gcStateHash: sha256(JSON.stringify(gcState)),
+      legacyRetainedMaterialRefs: [],
+      replicaRoots: [],
+    })}\n`,
+  )
+  const registry = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+  const durableBefore = await readFile(indexPath, 'utf8')
+
+  await assert.rejects(
+    planGc(registry, {
+      projectId: 'project-candidate-limit',
+      replicaId: 'replica-candidate-limit',
+      snapshotDigest: digest('d'),
+    }),
+    assertCode('invalid-request'),
+  )
+  assert.equal(await readFile(indexPath, 'utf8'), durableBefore)
+
+  const healthy = await planGc(registry, {
+    projectId: 'project-empty',
+    replicaId: 'replica-after-candidate-limit',
+    snapshotDigest: digest('e'),
+  })
+  assert.deepEqual(healthy.deletionCandidates, [])
+})
+
+test('material admission and sweep serialize without a stale-reference deletion window', async t => {
+  await t.test('admission first advances durable generations and rejects the stale sweep', async subtest => {
+    const { addMaterial, registry, rootDir, workspaceRoot } = await createFixture(subtest)
+    const candidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-admission-wins',
+      materialVersion: '1.0.0',
+      promotionId: digest('3'),
+    })
+    const staleSweep = await planGc(registry)
+    assert.deepEqual(staleSweep.deletionCandidates, [identityFor(candidate)])
+
+    const admittingReplica = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+    const admitted = await planGc(admittingReplica, {
+      expectedReplicaGeneration: staleSweep.replicaGeneration,
+      snapshotDigest: digest('d'),
+      materialRefs: [identityFor(candidate)],
+    })
+    assert.ok(admitted.registryGeneration > staleSweep.registryGeneration)
+    await assert.rejects(sweepGc(registry, staleSweep), assertCode('gc-replica-generation-conflict'))
+    assert.notEqual(await registry.readMaterial(identityFor(candidate)), null)
+  })
+
+  await t.test('sweep first makes the later admission fail without mutating its durable root', async subtest => {
+    const { addMaterial, registry, rootDir, workspaceRoot } = await createFixture(subtest)
+    const candidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-sweep-wins',
+      materialVersion: '1.0.0',
+      promotionId: digest('4'),
+    })
+    const sweepPlan = await planGc(registry)
+    const sweepingReplica = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+    const swept = await sweepGc(sweepingReplica, sweepPlan)
+    assert.deepEqual(swept.deletedMaterials, [identityFor(candidate)])
+    const beforeAdmission = JSON.parse(await readFile(join(rootDir, 'registry-index.json'), 'utf8'))
+
+    await assert.rejects(
+      planGc(registry, {
+        expectedReplicaGeneration: sweepPlan.replicaGeneration,
+        snapshotDigest: digest('d'),
+        materialRefs: [identityFor(candidate)],
+      }),
+      assertCode('material-not-found'),
+    )
+    const afterAdmission = JSON.parse(await readFile(join(rootDir, 'registry-index.json'), 'utf8'))
+    assert.deepEqual(afterAdmission, beforeAdmission, 'failed admission must not authorize a local mutation')
+    assert.equal(await registry.readMaterial(identityFor(candidate)), null)
+  })
+})
+
+test('sweep abort is exact before deletion and quiescent after the first rename', async t => {
+  await t.test('a queued aborted sweep never acquires a mutation lease or deletes', async subtest => {
+    let pauseAt = null
+    const reached = deferred()
+    const release = deferred()
+    const checkpoint = async event => {
+      if (event.name !== pauseAt) return
+      reached.resolve()
+      await release.promise
+    }
+    const { addMaterial, registry } = await createFixture(subtest, { checkpoint })
+    const candidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-queued-abort',
+      materialVersion: '1.0.0',
+      promotionId: digest('5'),
+    })
+    const sweepPlan = await planGc(registry)
+    pauseAt = 'registry-lease-acquired'
+    const holder = planGc(registry, {
+      expectedReplicaGeneration: sweepPlan.replicaGeneration,
+      snapshotDigest: digest('d'),
+    })
+    await reached.promise
+    pauseAt = null
+    const controller = new AbortController()
+    const queuedSweep = sweepGc(registry, sweepPlan, PRINCIPAL_A, { signal: controller.signal })
+    controller.abort()
+    release.resolve()
+    await holder
+    await assert.rejects(queuedSweep, assertCode('promotion-aborted'))
+    assert.notEqual(await registry.readMaterial(identityFor(candidate)), null)
+  })
+
+  await t.test('abort at the pre-rename checkpoint leaves every candidate visible', async subtest => {
+    let pauseAt = null
+    const reached = deferred()
+    const release = deferred()
+    const checkpoint = async event => {
+      if (event.name !== pauseAt) return
+      reached.resolve()
+      await release.promise
+    }
+    const { addMaterial, registry } = await createFixture(subtest, { checkpoint })
+    const candidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-pre-rename-abort',
+      materialVersion: '1.0.0',
+      promotionId: digest('6'),
+    })
+    const sweepPlan = await planGc(registry)
+    pauseAt = 'before-gc-rename'
+    const controller = new AbortController()
+    const sweep = sweepGc(registry, sweepPlan, PRINCIPAL_A, { signal: controller.signal })
+    await reached.promise
+    controller.abort()
+    release.resolve()
+    await assert.rejects(sweep, assertCode('promotion-aborted'))
+    assert.notEqual(await registry.readMaterial(identityFor(candidate)), null)
+  })
+
+  await t.test('abort during the final mutation-lease verification still prevents the first rename', async subtest => {
+    const nodeFileSystem = await import('node:fs/promises')
+    const verificationReached = deferred()
+    const releaseVerification = deferred()
+    let pauseNextLockStat = false
+    const fileSystem = {
+      ...nodeFileSystem,
+      async lstat(path, options) {
+        if (pauseNextLockStat && path.endsWith('.registry.lock')) {
+          pauseNextLockStat = false
+          verificationReached.resolve()
+          await releaseVerification.promise
+        }
+        return nodeFileSystem.lstat(path, options)
+      },
+    }
+    const checkpoint = async event => {
+      if (event.name === 'after-gc-sweep-receipt-rename' && event.state === 'started') {
+        pauseNextLockStat = true
+      }
+    }
+    const { addMaterial, registry } = await createFixture(subtest, { checkpoint, fileSystem })
+    const candidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-final-lease-abort',
+      materialVersion: '1.0.0',
+      promotionId: digest('7'),
+    })
+    const sweepPlan = await planGc(registry)
+    const controller = new AbortController()
+    const sweep = sweepGc(registry, sweepPlan, PRINCIPAL_A, { signal: controller.signal })
+    await verificationReached.promise
+    controller.abort()
+    releaseVerification.resolve()
+
+    await assert.rejects(sweep, assertCode('promotion-aborted'))
+    assert.notEqual(await registry.readMaterial(identityFor(candidate)), null)
+    const replay = await sweepGc(registry, sweepPlan)
+    assert.deepEqual(replay.deletedMaterials, [])
+  })
+
+  await t.test('abort after rename cannot settle the request before durable reconciliation', async subtest => {
+    let pauseAt = null
+    const reached = deferred()
+    const release = deferred()
+    const checkpoint = async event => {
+      if (event.name !== pauseAt) return
+      reached.resolve()
+      await release.promise
+    }
+    const { addMaterial, registry } = await createFixture(subtest, { checkpoint })
+    const firstCandidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-post-rename-abort-a',
+      materialVersion: '1.0.0',
+      promotionId: digest('7'),
+    })
+    const secondCandidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-post-rename-abort-b',
+      materialVersion: '1.0.0',
+      promotionId: digest('8'),
+    })
+    const sweepPlan = await planGc(registry)
+    pauseAt = 'after-gc-rename-before-removal'
+    const controller = new AbortController()
+    let settled = false
+    const sweep = sweepGc(registry, sweepPlan, PRINCIPAL_A, { signal: controller.signal }).finally(() => {
+      settled = true
+    })
+    await reached.promise
+    controller.abort()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(settled, false)
+    release.resolve()
+    const result = await sweep
+    assert.deepEqual(result.deletedMaterials, [identityFor(firstCandidate), identityFor(secondCandidate)])
+    assert.equal(await registry.readMaterial(identityFor(firstCandidate)), null)
+    assert.equal(await registry.readMaterial(identityFor(secondCandidate)), null)
+  })
+})
+
+test('exact sweep receipt survives transport ACK loss and restart without deleting twice', async t => {
+  let pauseAt = null
+  let renameCount = 0
+  const reached = deferred()
+  const release = deferred()
+  const checkpoint = async event => {
+    if (event.name === 'before-gc-rename') renameCount += 1
+    if (event.name !== pauseAt) return
+    reached.resolve()
+    await release.promise
+  }
+  const { addMaterial, registry, rootDir, workspaceRoot } = await createFixture(t, { checkpoint })
+  const candidate = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-ack-loss',
+    materialVersion: '1.0.0',
+    promotionId: digest('9'),
+  })
+  const plan = await planGc(registry)
+  const gcCoordinator = createMaterialGcCoordinator({
+    registry,
+    authorizePrincipal: async () => PRINCIPAL_A,
+  })
+  const handler = createMaterialPromotionHandler({
+    coordinator: Object.freeze({
+      async promote() {
+        throw new Error('not used')
+      },
+      async query() {
+        throw new Error('not used')
+      },
+      ...gcCoordinator,
+    }),
+  })
+  const transport = signal =>
+    handler.handle({
+      method: 'POST',
+      path: MATERIAL_GC_SWEEP_ROUTE,
+      headers: { origin: 'http://dashboard.test', 'content-type': 'application/json' },
+      expectedOrigins: ['http://dashboard.test'],
+      body: JSON.stringify({ schemaVersion: 1, plan }),
+      signal,
+    })
+
+  pauseAt = 'after-gc-rename-before-removal'
+  const controller = new AbortController()
+  let firstSettled = false
+  const lostResponse = transport(controller.signal).finally(() => {
+    firstSettled = true
+  })
+  await reached.promise
+  controller.abort()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(firstSettled, false)
+  release.resolve()
+  const first = await lostResponse
+  assert.equal(first.status, 200)
+
+  pauseAt = null
+  const replay = await transport()
+  assert.deepEqual(replay, first)
+  assert.equal(Object.isFrozen(replay.body), true)
+  assert.equal(Object.isFrozen(replay.body.deletedMaterials), true)
+  assert.equal(renameCount, 1)
+
+  const restarted = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+  const restartReplay = await sweepGc(restarted, plan)
+  assert.deepEqual(restartReplay, first.body)
+  assert.equal(Object.isFrozen(restartReplay), true)
+  assert.equal(Object.isFrozen(restartReplay.deletedMaterials), true)
+  assert.deepEqual(restartReplay.deletedMaterials, [identityFor(candidate)])
+})
+
+test('completed sweep receipts retain only the latest exact replay per replica across restart', async t => {
+  const { registry, rootDir, workspaceRoot } = await createFixture(t)
+  let planA = await planGc(registry, { snapshotDigest: sha256('replica-a-0') })
+  let resultA = await sweepGc(registry, planA)
+  const planB = await planGc(registry, {
+    replicaId: 'replica-bounded-b',
+    snapshotDigest: sha256('replica-b-0'),
+  })
+  const resultB = await sweepGc(registry, planB)
+
+  for (let generation = 1; generation <= 12; generation += 1) {
+    planA = await planGc(registry, {
+      expectedReplicaGeneration: planA.replicaGeneration,
+      snapshotDigest: sha256(`replica-a-${generation}`),
+    })
+    resultA = await sweepGc(registry, planA)
+  }
+
+  const receiptsDirectory = join(rootDir, 'gc-sweep-receipts')
+  const receiptFiles = (await readdir(receiptsDirectory)).filter(name => name.endsWith('.json')).sort()
+  assert.deepEqual(receiptFiles, [planA, planB].map(plan => `${plan.planHash.slice('sha256:'.length)}.json`).sort())
+
+  await releaseGc(registry, planA)
+  const restarted = await createFileMaterialRegistry({ rootDir, workspaceRoot })
+  assert.deepEqual(await sweepGc(restarted, planA), resultA)
+  assert.deepEqual(await sweepGc(restarted, planB), resultB)
+  assert.equal((await readdir(receiptsDirectory)).filter(name => name.endsWith('.json')).length, 2)
 })
 
 test('sweep rejects registry mutation, candidate tampering, and a different trusted principal', async t => {

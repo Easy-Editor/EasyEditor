@@ -59,6 +59,21 @@ const sweepGcForTest = (registry, plan) =>
     request: { schemaVersion: 1, plan },
   })
 
+const releaseGcForTest = async (registry, plan) => {
+  const released = await registry.releaseGarbageCollectionRoot({
+    principal: GC_TEST_PRINCIPAL,
+    request: {
+      schemaVersion: 1,
+      projectId: plan.projectId,
+      replicaId: plan.replicaId,
+      expectedReplicaGeneration: plan.replicaGeneration,
+      snapshotDigest: plan.snapshotDigest,
+    },
+  })
+  gcReplicaGenerations.set(`${registry.rootDir}\0${plan.replicaId}`, released.replicaGeneration)
+  return released
+}
+
 const materialIdentity = (
   materialId = 'material-kpi',
   materialVersion = '1.0.0',
@@ -312,7 +327,8 @@ test('GC is dry-run fenced and deletes an old build only after every caller-prov
   const retainedPlan = await planGcForTest(registry, [v2Identity, v1Identity])
   assert.deepEqual(retainedPlan.deletionCandidates, [])
 
-  const releasedPlan = await planGcForTest(registry, [v2Identity])
+  await releaseGcForTest(registry, retainedPlan)
+  const releasedPlan = await planGcForTest(registry, [v2Identity], 'registry-test-replica-after-release')
   assert.deepEqual(releasedPlan.deletionCandidates, [v1Identity])
   assert.notEqual(await registry.readMaterial(v1Identity), null, 'dry-run must not mutate the registry')
   const swept = await sweepGcForTest(registry, releasedPlan)

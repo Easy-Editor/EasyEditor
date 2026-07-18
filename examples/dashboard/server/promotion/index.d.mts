@@ -277,6 +277,7 @@ export interface MaterialRegistryReplicaRootV2 extends MaterialPromotionPrincipa
   readonly resolvedPromotions: readonly Readonly<MaterialRegistryResolvedPromotionV2>[]
   readonly updatedAt: number
   readonly releasedAt: number | null
+  readonly releasedRegistryGeneration?: number
 }
 
 export interface MaterialRegistryGcStateV2 {
@@ -312,12 +313,15 @@ export interface MaterialPromotionRegistry {
   verifyBackup?(request: Readonly<{ backupDirectory: string }>): MaybePromise<MaterialRegistryBackupVerificationV1>
   planGarbageCollection?(
     input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcPlanRequestV1 }>,
+    options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialGcPlanV1>
   sweepGarbageCollection?(
     input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcSweepRequestV1 }>,
+    options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialGcSweepResultV1>
   releaseGarbageCollectionRoot?(
     input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcReleaseRequestV1 }>,
+    options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialGcReleaseResultV1>
 }
 
@@ -341,12 +345,15 @@ export interface FileMaterialRegistry extends MaterialPromotionRegistry {
   verifyBackup(request: Readonly<{ backupDirectory: string }>): MaybePromise<MaterialRegistryBackupVerificationV1>
   planGarbageCollection(
     input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcPlanRequestV1 }>,
+    options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialGcPlanV1>
   sweepGarbageCollection(
     input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcSweepRequestV1 }>,
+    options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialGcSweepResultV1>
   releaseGarbageCollectionRoot(
     input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcReleaseRequestV1 }>,
+    options?: MaterialPromotionPhaseOptions,
   ): MaybePromise<MaterialGcReleaseResultV1>
 }
 
