@@ -1,6 +1,7 @@
 import type { ModelAdapter, ModelEvent, ModelTurnRequest } from '@easy-editor/agent-runtime/worker'
 
 export declare const DEFAULT_GATEWAY_MODEL_PATH: '/api/agent/model/stream'
+export declare const GATEWAY_MODEL_TOKEN_BUDGET: 4096
 
 export interface GatewayModelAdapterOptions {
   readonly providerId: string

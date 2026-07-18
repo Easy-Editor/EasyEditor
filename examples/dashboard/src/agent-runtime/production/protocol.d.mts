@@ -1,3 +1,5 @@
+import type { WorkerTelemetryEvent } from '@easy-editor/agent-runtime/worker'
+
 export interface ProductionAgentModelConfig {
   readonly providerId: string
   readonly model: string
@@ -15,6 +17,7 @@ export interface ProductionAgentGrantAuthority {
 export type ProductionAgentWorkerControlMessage =
   | Readonly<{ schemaVersion: 1; kind: 'ready'; generation: number }>
   | Readonly<{ schemaVersion: 1; kind: 'fault'; generation: number; message: string }>
+  | Readonly<{ schemaVersion: 1; kind: 'telemetry'; generation: number; event: WorkerTelemetryEvent }>
 
 export interface ProductionAgentWorkerStartMessage {
   readonly schemaVersion: 1

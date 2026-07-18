@@ -1,3 +1,4 @@
+import { createMainThreadWorkerTelemetryDelivery } from '../worker-telemetry-control.mjs'
 import {
   PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION,
   ProductionAgentWorkerError,
@@ -24,12 +25,18 @@ const createEndpoint = (options, platform) => {
     options === null ||
     typeof options !== 'object' ||
     Array.isArray(options) ||
-    Object.keys(options).length !== 1 ||
-    !Object.hasOwn(options, 'config')
+    Object.getPrototypeOf(options) !== Object.prototype ||
+    Reflect.ownKeys(options).some(key => key !== 'config' && key !== 'telemetry') ||
+    !Object.hasOwn(options, 'config') ||
+    Reflect.ownKeys(options).some(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(options, key)
+      return typeof key !== 'string' || descriptor?.enumerable !== true || !Object.hasOwn(descriptor, 'value')
+    })
   ) {
     throw new ProductionAgentWorkerError('invalid-config', 'Production Agent model configuration is invalid')
   }
   const config = cloneProductionAgentModelConfig(options.config)
+  const telemetry = createMainThreadWorkerTelemetryDelivery(options.telemetry)
   const generation = (nextWorkerGeneration += 1)
   const channel = platform.createMessageChannel()
   let worker
@@ -81,6 +88,10 @@ const createEndpoint = (options, platform) => {
     }
     if (control.generation !== generation) {
       publishFault(workerFault('Production Agent module Worker generation does not match its endpoint'))
+      return
+    }
+    if (control.kind === 'telemetry') {
+      telemetry.emit(control.event)
       return
     }
     if (control.kind === 'fault') {

@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   DEFAULT_GATEWAY_MODEL_PATH,
+  GATEWAY_MODEL_TOKEN_BUDGET,
   GatewayModelAdapter,
   GatewayModelAdapterError,
 } from '../src/agent-runtime/gateway-model-adapter.mjs'
@@ -102,6 +103,7 @@ test('maps the exact ModelTurnRequest into the same-origin Gateway DTO and parse
   assert.ok(init.signal instanceof AbortSignal)
 
   const body = JSON.parse(init.body)
+  assert.equal(body.maxOutputTokens, GATEWAY_MODEL_TOKEN_BUDGET)
   assert.deepEqual(Object.keys(body).sort(), [
     'branchId',
     'maxOutputTokens',

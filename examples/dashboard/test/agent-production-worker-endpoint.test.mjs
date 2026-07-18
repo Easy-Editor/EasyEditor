@@ -11,6 +11,7 @@ import {
   createProductionAgentGrantAuthority,
   readProductionAgentModelConfig,
 } from '../src/agent-runtime/production/protocol.mjs'
+import { startProductionAgentWorkerRuntime } from '../src/agent-runtime/production/worker-runtime.mjs'
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url))
 const readRepositoryFile = relativePath => readFile(new URL(relativePath, `file://${repositoryRoot}/`), 'utf8')
@@ -46,13 +47,13 @@ class FakeModuleWorker extends EventTarget {
   }
 }
 
-const createHarness = () => {
+const createHarness = telemetry => {
   const worker = new FakeModuleWorker()
   const channel = new MessageChannel()
   const workerCreations = []
   const queuedMicrotasks = []
   const endpoint = createProductionAgentWorkerEndpointForPlatform(
-    { config },
+    { config, ...(telemetry ? { telemetry } : {}) },
     {
       createMessageChannel: () => channel,
       createWorker: generation => {
@@ -64,6 +65,15 @@ const createHarness = () => {
   )
   return { channel, endpoint, queuedMicrotasks, worker, workerCreations }
 }
+
+const telemetryEvent = (taskId = 'task-1') => ({
+  schemaVersion: 1,
+  eventType: 'task.started',
+  timestampMs: 1,
+  status: 'started',
+  sessionId: 'session-1',
+  taskId,
+})
 
 test('production endpoint transfers one safe config and completes the ready lifecycle', async t => {
   const harness = createHarness()
@@ -153,6 +163,138 @@ test('fault control messages and mismatched generations fail closed without refl
   })
 })
 
+test('production telemetry crosses the real control protocol without cloning the main-thread sink', () => {
+  const received = []
+  const harness = createHarness({ emit: event => received.push(event) })
+  const start = harness.worker.messages[0].message
+  assert.deepEqual(Object.keys(start).sort(), ['config', 'generation', 'kind', 'port', 'schemaVersion'])
+  harness.worker.dispatchMessage({
+    schemaVersion: 1,
+    kind: 'telemetry',
+    generation: start.generation,
+    event: telemetryEvent(),
+  })
+  assert.deepEqual(received, [telemetryEvent()])
+  assert.equal(Object.isFrozen(received[0]), true)
+  harness.endpoint.terminate()
+  harness.channel.port2.close()
+})
+
+test('production telemetry fails closed for sensitive fields and wrong generations', () => {
+  const secret = 'RAW_PROMPT_CREDENTIAL_MUST_NOT_REFLECT'
+  for (const messageFor of [
+    generation => ({
+      schemaVersion: 1,
+      kind: 'telemetry',
+      generation,
+      event: { ...telemetryEvent(), credential: secret },
+    }),
+    generation => ({
+      schemaVersion: 1,
+      kind: 'telemetry',
+      generation: generation + 1,
+      event: telemetryEvent(),
+    }),
+  ]) {
+    const received = []
+    const faults = []
+    const harness = createHarness({ emit: event => received.push(event) })
+    harness.endpoint.onFault(error => faults.push(error))
+    const generation = harness.worker.messages[0].message.generation
+    harness.worker.dispatchMessage(messageFor(generation))
+    assert.deepEqual(received, [])
+    assert.equal(faults.length, 1)
+    assert.doesNotMatch(faults[0].message, new RegExp(secret))
+    harness.endpoint.terminate()
+    harness.channel.port2.close()
+  }
+})
+
+test('production telemetry rejects discriminant accessors without evaluating them', () => {
+  for (const field of ['schemaVersion', 'eventType']) {
+    let reads = 0
+    const event = telemetryEvent()
+    Object.defineProperty(event, field, {
+      enumerable: true,
+      get() {
+        reads += 1
+        return telemetryEvent()[field]
+      },
+    })
+    const received = []
+    const faults = []
+    const harness = createHarness({ emit: value => received.push(value) })
+    harness.endpoint.onFault(error => faults.push(error))
+    const generation = harness.worker.messages[0].message.generation
+    harness.worker.dispatchMessage({ schemaVersion: 1, kind: 'telemetry', generation, event })
+    assert.equal(reads, 0)
+    assert.deepEqual(received, [])
+    assert.equal(faults.length, 1)
+    harness.endpoint.terminate()
+    harness.channel.port2.close()
+  }
+})
+
+test('production telemetry delivery is bounded and sink failures remain non-fatal', async () => {
+  let calls = 0
+  const harness = createHarness({
+    emit: () => {
+      calls += 1
+      return new Promise(() => {})
+    },
+  })
+  const generation = harness.worker.messages[0].message.generation
+  for (let index = 0; index < 33; index += 1) {
+    harness.worker.dispatchMessage({
+      schemaVersion: 1,
+      kind: 'telemetry',
+      generation,
+      event: telemetryEvent(`task-${index}`),
+    })
+  }
+  assert.equal(calls, 32)
+  harness.worker.dispatchMessage({ schemaVersion: 1, kind: 'ready', generation })
+  await harness.endpoint.ready()
+  harness.endpoint.terminate()
+  harness.channel.port2.close()
+
+  const throwing = createHarness({
+    emit: () => {
+      throw new Error('private sink failure')
+    },
+  })
+  const throwingGeneration = throwing.worker.messages[0].message.generation
+  throwing.worker.dispatchMessage({
+    schemaVersion: 1,
+    kind: 'telemetry',
+    generation: throwingGeneration,
+    event: telemetryEvent(),
+  })
+  throwing.worker.dispatchMessage({ schemaVersion: 1, kind: 'ready', generation: throwingGeneration })
+  await throwing.endpoint.ready()
+  throwing.endpoint.terminate()
+  throwing.channel.port2.close()
+})
+
+test('the production Worker runtime functionally requires telemetry and the actual Gateway token budget', async () => {
+  let capturedOptions
+  const controls = []
+  await startProductionAgentWorkerRuntime({
+    start: options => {
+      capturedOptions = options
+      return Promise.resolve()
+    },
+    port: {},
+    model: {},
+    generation: 9,
+    postControl: control => controls.push(control),
+  })
+  assert.equal(capturedOptions.modelTokenBudget, 4_096)
+  assert.equal(typeof capturedOptions.telemetry.emit, 'function')
+  capturedOptions.telemetry.emit(telemetryEvent())
+  assert.deepEqual(controls, [{ schemaVersion: 1, kind: 'telemetry', generation: 9, event: telemetryEvent() }])
+})
+
 test('terminate-before-ready rejects once and closes an idempotent endpoint', async () => {
   const harness = createHarness()
   const ready = harness.endpoint.ready()
@@ -218,14 +360,16 @@ test('browser config reads only providerId/model/path and rejects secret-bearing
 })
 
 test('production Worker modules are isolated from testing/E2E imports and the bundle verifier permits them', async () => {
-  const [entrySource, endpointSource, protocolSource, workerSource, verifierSource] = await Promise.all([
-    readRepositoryFile('examples/dashboard/src/agent-runtime/production/index.mjs'),
-    readRepositoryFile('examples/dashboard/src/agent-runtime/production/endpoint.mjs'),
-    readRepositoryFile('examples/dashboard/src/agent-runtime/production/protocol.mjs'),
-    readRepositoryFile('examples/dashboard/src/agent-runtime/production/worker.mjs'),
-    readRepositoryFile('examples/dashboard/scripts/verify-production-bundle.mjs'),
-  ])
-  const productionSource = [entrySource, endpointSource, protocolSource, workerSource].join('\n')
+  const [entrySource, endpointSource, protocolSource, workerSource, workerRuntimeSource, verifierSource] =
+    await Promise.all([
+      readRepositoryFile('examples/dashboard/src/agent-runtime/production/index.mjs'),
+      readRepositoryFile('examples/dashboard/src/agent-runtime/production/endpoint.mjs'),
+      readRepositoryFile('examples/dashboard/src/agent-runtime/production/protocol.mjs'),
+      readRepositoryFile('examples/dashboard/src/agent-runtime/production/worker.mjs'),
+      readRepositoryFile('examples/dashboard/src/agent-runtime/production/worker-runtime.mjs'),
+      readRepositoryFile('examples/dashboard/scripts/verify-production-bundle.mjs'),
+    ])
+  const productionSource = [entrySource, endpointSource, protocolSource, workerSource, workerRuntimeSource].join('\n')
 
   assert.doesNotMatch(productionSource, /runtime-e2e|agent-runtime\/testing|ScriptedModelAdapter/u)
   assert.doesNotMatch(productionSource, /apiKey|authorization|provider.?secret/iu)
@@ -234,7 +378,13 @@ test('production Worker modules are isolated from testing/E2E imports and the bu
   assert.match(endpointSource, /type: 'module'/u)
   assert.match(workerSource, /from '@easy-editor\/agent-runtime\/worker'/u)
   assert.match(workerSource, /new GatewayModelAdapter\(start\.config\)/u)
-  assert.match(workerSource, /startAgentWorker\(/u)
+  assert.match(workerSource, /startProductionAgentWorkerRuntime\(/u)
+  assert.match(workerSource, /start: startAgentWorker/u)
+  assert.match(workerRuntimeSource, /modelTokenBudget: GATEWAY_MODEL_TOKEN_BUDGET/u)
+  assert.match(
+    workerRuntimeSource,
+    /start\(\{ port, model, modelTokenBudget: GATEWAY_MODEL_TOKEN_BUDGET, telemetry \}\)/u,
+  )
   assert.match(verifierSource, /@easy-editor\/agent-runtime\/testing/u)
   assert.match(verifierSource, /ScriptedModelAdapter/u)
   assert.match(verifierSource, /allowing the production Gateway Worker/u)

@@ -1,6 +1,7 @@
 import { startAgentWorker } from '@easy-editor/agent-runtime/worker'
 import { GatewayModelAdapter } from '../gateway-model-adapter.mjs'
 import { PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION, parseProductionAgentWorkerStartMessage } from './protocol.mjs'
+import { startProductionAgentWorkerRuntime } from './worker-runtime.mjs'
 
 let started = false
 
@@ -11,9 +12,12 @@ self.addEventListener('message', event => {
   const start = parseProductionAgentWorkerStartMessage(event.data)
   started = true
 
-  void startAgentWorker({
+  void startProductionAgentWorkerRuntime({
+    start: startAgentWorker,
     port: start.port,
     model: new GatewayModelAdapter(start.config),
+    generation: start.generation,
+    postControl,
   }).then(
     () => {
       postControl({

@@ -1,4 +1,5 @@
 export const DEFAULT_GATEWAY_MODEL_PATH = '/api/agent/model/stream'
+export const GATEWAY_MODEL_TOKEN_BUDGET = 4_096
 const DEFAULT_DEADLINE_MS = 60_000
 const DEFAULT_MAX_RESPONSE_BYTES = 1_100_000
 const DEFAULT_MAX_RESPONSE_LINES = 258
@@ -99,7 +100,7 @@ const gatewayBody = (request, options) => {
       { role: 'system', content: SYSTEM_MESSAGE },
       ...chunksOf(serialized).map(content => ({ role: 'user', content })),
     ],
-    maxOutputTokens: 4_096,
+    maxOutputTokens: GATEWAY_MODEL_TOKEN_BUDGET,
   }
 }
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)

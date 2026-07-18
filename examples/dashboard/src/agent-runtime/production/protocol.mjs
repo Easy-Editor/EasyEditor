@@ -1,3 +1,5 @@
+import { parseWorkerTelemetryControlEvent } from '../worker-telemetry-control.mjs'
+
 export const PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION = 1
 
 export const PRODUCTION_AGENT_MODEL_ENV = Object.freeze({
@@ -12,6 +14,7 @@ const CONFIG_FIELDS = Object.freeze(['model', 'path', 'providerId'])
 const CONTROL_FIELDS = Object.freeze({
   ready: Object.freeze(['generation', 'kind', 'schemaVersion']),
   fault: Object.freeze(['generation', 'kind', 'message', 'schemaVersion']),
+  telemetry: Object.freeze(['event', 'generation', 'kind', 'schemaVersion']),
 })
 const START_FIELDS = Object.freeze(['config', 'generation', 'kind', 'port', 'schemaVersion'])
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
@@ -32,7 +35,7 @@ const fail = (code, message) => {
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 const exactDataValues = (value, fields) => {
-  if (!isRecord(value)) return undefined
+  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return undefined
   const keys = Reflect.ownKeys(value)
   if (keys.some(key => typeof key !== 'string')) return undefined
   keys.sort()
@@ -40,7 +43,7 @@ const exactDataValues = (value, fields) => {
   const values = {}
   for (const field of fields) {
     const descriptor = Object.getOwnPropertyDescriptor(value, field)
-    if (!descriptor || !Object.hasOwn(descriptor, 'value')) return undefined
+    if (!descriptor || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) return undefined
     values[field] = descriptor.value
   }
   return values
@@ -79,7 +82,14 @@ export const createProductionAgentGrantAuthority = config => {
 
 export const parseProductionAgentWorkerControlMessage = value => {
   const kind = isRecord(value) ? Object.getOwnPropertyDescriptor(value, 'kind')?.value : undefined
-  const fields = kind === 'ready' ? CONTROL_FIELDS.ready : kind === 'fault' ? CONTROL_FIELDS.fault : undefined
+  const fields =
+    kind === 'ready'
+      ? CONTROL_FIELDS.ready
+      : kind === 'fault'
+        ? CONTROL_FIELDS.fault
+        : kind === 'telemetry'
+          ? CONTROL_FIELDS.telemetry
+          : undefined
   const values = fields ? exactDataValues(value, fields) : undefined
   if (!values || values.schemaVersion !== PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION) {
     fail('invalid-handshake', 'Production Agent Worker control message is invalid')
@@ -105,6 +115,14 @@ export const parseProductionAgentWorkerControlMessage = value => {
       kind: 'fault',
       generation: values.generation,
       message: values.message,
+    })
+  }
+  if (values.kind === 'telemetry') {
+    return Object.freeze({
+      schemaVersion: PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION,
+      kind: 'telemetry',
+      generation: values.generation,
+      event: parseWorkerTelemetryControlEvent(values.event),
     })
   }
   fail('invalid-handshake', 'Production Agent Worker control message is invalid')

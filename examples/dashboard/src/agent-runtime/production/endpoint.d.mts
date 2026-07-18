@@ -1,4 +1,5 @@
 import type { AgentWorkerEndpoint } from '@easy-editor/agent-runtime'
+import type { WorkerTelemetrySink } from '@easy-editor/agent-runtime/worker'
 import type { ProductionAgentModelConfig } from './protocol.mjs'
 
 export interface ProductionAgentWorkerEndpoint extends AgentWorkerEndpoint {
@@ -7,6 +8,7 @@ export interface ProductionAgentWorkerEndpoint extends AgentWorkerEndpoint {
 
 export interface ProductionAgentWorkerEndpointOptions {
   readonly config: ProductionAgentModelConfig
+  readonly telemetry?: WorkerTelemetrySink
 }
 
 export interface ProductionAgentWorkerLike {
