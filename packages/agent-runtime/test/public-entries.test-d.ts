@@ -21,8 +21,15 @@ import {
   MemoryAgentPersistence,
   ScriptedModelAdapter,
 } from '../src/testing.js'
-import { startAgentWorker } from '../src/worker.js'
-import type { AgentSessionContextBudget, ModelAdapter, ModelEvent, ModelTurnRequest } from '../src/worker.js'
+import { createWorkerTelemetryLedger, startAgentWorker } from '../src/worker.js'
+import type {
+  AgentSessionContextBudget,
+  ModelAdapter,
+  ModelEvent,
+  ModelTurnRequest,
+  WorkerTelemetryEvent,
+  WorkerTelemetrySink,
+} from '../src/worker.js'
 
 declare const endpoint: AgentWorkerEndpoint
 declare const host: AgentHost
@@ -64,7 +71,34 @@ const worker: Promise<void> = startAgentWorker({
   port: new MessageChannel().port1,
   model,
   sessionContextBudget: workerBudget,
+  telemetry: { emit: () => undefined },
 })
+const telemetrySink: WorkerTelemetrySink = { emit: event => void event.eventType }
+const telemetryLedger = createWorkerTelemetryLedger({ capacity: 32 })
+const telemetryEvent: WorkerTelemetryEvent = {
+  schemaVersion: 1,
+  eventType: 'model-request.started',
+  timestampMs: 1,
+  status: 'started',
+  sessionId: 'session-1',
+  taskId: 'task-1',
+  stepId: 'step-1',
+  modelRequestId: 'request-1',
+}
+const completedTelemetryEvent: WorkerTelemetryEvent = {
+  ...telemetryEvent,
+  eventType: 'model-request.completed',
+  timestampMs: 2,
+  durationMs: 1,
+  status: 'completed',
+}
+// @ts-expect-error telemetry has no raw prompt or arbitrary metadata fields
+const invalidTelemetryEvent: WorkerTelemetryEvent = { ...telemetryEvent, prompt: 'raw prompt' }
+// @ts-expect-error model request completion telemetry requires a measured duration
+const invalidUntimedTelemetryEvent: WorkerTelemetryEvent = {
+  ...telemetryEvent,
+  eventType: 'model-request.completed',
+}
 const context: AgentSessionContextDigest = request.sessionContext
 const acceptedBlueprint: AgentAcceptedBlueprint = {
   schemaVersion: 1,
@@ -96,6 +130,9 @@ type RootModelAdapter = import('../src/index.js').ModelAdapter
 // @ts-expect-error protocol parsers are package-private.
 type RootProtocolEnvelope = import('../src/index.js').ProtocolEnvelope
 
+// @ts-expect-error telemetry is intentionally Worker-only.
+type RootTelemetrySink = import('../src/index.js').WorkerTelemetrySink
+
 void runtime
 void publicModelTurnCorrelationIsRequired
 void publicModelStepId
@@ -106,6 +143,12 @@ void recovery
 void events
 void worker
 void workerBudget
+void telemetrySink
+void telemetryLedger
+void telemetryEvent
+void completedTelemetryEvent
+void invalidTelemetryEvent
+void invalidUntimedTelemetryEvent
 void context
 void acceptedBlueprint
 void changes
@@ -113,3 +156,4 @@ void invocationContext
 void compensationTarget
 void (undefined as unknown as RootModelAdapter)
 void (undefined as unknown as RootProtocolEnvelope)
+void (undefined as unknown as RootTelemetrySink)

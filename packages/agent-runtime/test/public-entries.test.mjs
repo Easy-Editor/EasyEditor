@@ -56,6 +56,8 @@ test('source entries expose finite profile-specific APIs', () => {
     'createWorkerStateMachine',
     'parseModelEvent',
     'parseProtocolEnvelope',
+    'WorkerTelemetrySink',
+    'createWorkerTelemetryLedger',
   ]) {
     assert.equal(root.all.includes(name), false, `root entry must not export ${name}`)
   }
@@ -75,9 +77,24 @@ test('source entries expose finite profile-specific APIs', () => {
       'ModelEvent',
       'ModelTurnPhase',
       'ModelTurnRequest',
+      'WORKER_TELEMETRY_SCHEMA_VERSION',
+      'WorkerTelemetryEvent',
+      'WorkerTelemetryEventType',
+      'WorkerTelemetryLedger',
+      'WorkerTelemetrySink',
+      'WorkerTelemetryStatus',
+      'createWorkerTelemetryEvent',
+      'createWorkerTelemetryLedger',
       'startAgentWorker',
+      'workerTelemetryEventTypes',
     ],
-    runtime: ['startAgentWorker'],
+    runtime: [
+      'WORKER_TELEMETRY_SCHEMA_VERSION',
+      'createWorkerTelemetryEvent',
+      'createWorkerTelemetryLedger',
+      'startAgentWorker',
+      'workerTelemetryEventTypes',
+    ],
   })
   assert.deepEqual(testing, {
     all: [
@@ -109,7 +126,13 @@ test('source entries expose finite profile-specific APIs', () => {
 test('publish entries mirror runtime exports and keep the model stack out of root', async () => {
   const expected = {
     index: ['createAgentRuntime'],
-    worker: ['startAgentWorker'],
+    worker: [
+      'WORKER_TELEMETRY_SCHEMA_VERSION',
+      'createWorkerTelemetryEvent',
+      'createWorkerTelemetryLedger',
+      'startAgentWorker',
+      'workerTelemetryEventTypes',
+    ],
     testing: [
       'DeterministicClock',
       'DeterministicIdFactory',
@@ -137,6 +160,7 @@ test('publish entries mirror runtime exports and keep the model stack out of roo
       'parseModelEvent',
       'ScriptedModelAdapter',
       'startAgentWorker',
+      'createWorkerTelemetryLedger',
     ]) {
       assert.doesNotMatch(source, new RegExp(forbidden), `root bundle must not include ${forbidden}`)
     }

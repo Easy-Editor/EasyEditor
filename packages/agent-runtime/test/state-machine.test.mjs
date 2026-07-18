@@ -48,6 +48,9 @@ const { HostSnapshotDeltaApplyError, applyHostSnapshotDelta } = await import(
 const { createAgentSessionContext } = await import(
   pathToFileURL(join(compiledRoot, 'internal/session-context/index.js'))
 )
+const { createSafeWorkerTelemetryEmitter, createWorkerTelemetryEvent, createWorkerTelemetryLedger } = await import(
+  pathToFileURL(join(compiledRoot, 'internal/telemetry.js'))
+)
 
 const binding = { projectId: 'project-1', branchId: 'branch-1' }
 
@@ -215,7 +218,7 @@ const hostDelta = (overrides = {}) => ({
 })
 
 const createMachine = (steps, overrides = {}) => {
-  const model = new ScriptedModelAdapter(steps)
+  const model = overrides.model ?? new ScriptedModelAdapter(steps)
   const host = overrides.host ?? new TestHost()
   const persistence = overrides.persistence ?? new TestPersistence()
   const phases = []
@@ -228,6 +231,7 @@ const createMachine = (steps, overrides = {}) => {
     idFactory: overrides.idFactory ?? createIds(),
     repairBudget: overrides.repairBudget,
     sessionContextBudget: overrides.sessionContextBudget,
+    telemetrySink: overrides.telemetrySink,
     onSnapshot: snapshot => phases.push(snapshot.phase),
   })
   return { machine, model, host, persistence, phases }
@@ -368,6 +372,238 @@ test('runs the deterministic happy path and commits a serializable checkpoint', 
   assert.deepEqual(fixture.host.invocationContexts, [{ schemaVersion: 1 }])
   assertOrdered(fixture.phases, ['OBSERVE', 'BLUEPRINT', 'PLAN_STEP', 'EXECUTE', 'VERIFY', 'CHECKPOINT', 'COMPLETED'])
   fixture.model.assertFullyConsumed()
+})
+
+test('emits bounded Worker-only telemetry with queryable task, step, model request, and call lineage', async () => {
+  const secret = 'RAW_PROMPT_CREDENTIAL_SOURCE_MUST_NOT_APPEAR'
+  const ledger = createWorkerTelemetryLedger({ capacity: 64 })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+    ],
+    { telemetrySink: { emit: event => ledger.append(event) } },
+  )
+
+  const ref = await fixture.machine.submit({ text: secret, metadata: { credential: secret } })
+  await fixture.machine.waitForIdle()
+
+  const events = ledger.query({ sessionId: ref.sessionId, taskId: ref.taskId })
+  assert.ok(events.length > 0)
+  assert.deepEqual(events[0], {
+    schemaVersion: 1,
+    eventType: 'task.started',
+    timestampMs: 2,
+    status: 'started',
+    sessionId: ref.sessionId,
+    taskId: ref.taskId,
+  })
+  assert.ok(events.some(event => event.eventType === 'model-request.started' && event.modelRequestId === 'request-1'))
+  assert.ok(events.some(event => event.eventType === 'tool-call.completed' && event.callId === scopedCallId()))
+  assert.equal(events.at(-1).eventType, 'runtime.terminal')
+  for (let index = 1; index < events.length; index += 1) {
+    assert.ok(events[index].timestampMs > events[index - 1].timestampMs)
+  }
+  for (const end of events.filter(event =>
+    /^(phase|model-request|tool-call)\.(completed|failed)$/u.test(event.eventType),
+  )) {
+    const prefix = end.eventType.split('.')[0]
+    const start = events.find(
+      event =>
+        event.eventType === `${prefix}.started` &&
+        (!('stepId' in end) || event.stepId === end.stepId) &&
+        (!('modelRequestId' in end) || event.modelRequestId === end.modelRequestId) &&
+        (!('callId' in end) || event.callId === end.callId),
+    )
+    assert.ok(start)
+    assert.equal(end.durationMs, end.timestampMs - start.timestampMs)
+  }
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(secret))
+  for (const event of events) {
+    for (const forbidden of ['metadata', 'message', 'prompt', 'input', 'output', 'source', 'error', 'credential']) {
+      assert.equal(Object.hasOwn(event, forbidden), false)
+    }
+  }
+})
+
+test('telemetry sink failures and bounded pending emissions never break task execution', async () => {
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [complete] },
+    ],
+    { telemetrySink: { emit: () => Promise.reject(new Error('sensitive sink failure')) } },
+  )
+  await fixture.machine.submit({ text: 'Complete without exposing sink failures' })
+  await fixture.machine.waitForIdle()
+  assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
+
+  const emitter = createSafeWorkerTelemetryEmitter({ emit: () => new Promise(() => {}) }, { maxPending: 2 })
+  for (let index = 0; index < 3; index += 1) {
+    emitter.emit({
+      schemaVersion: 1,
+      eventType: 'task.started',
+      timestampMs: index,
+      status: 'started',
+      sessionId: 'session-1',
+      taskId: `task-${index}`,
+    })
+  }
+  assert.deepEqual(emitter.stats(), { pending: 2, dropped: 1, failed: 0 })
+})
+
+test('telemetry reduces arbitrary model error text to a finite error code', async () => {
+  const secret = 'RAW_MODEL_ERROR_TEXT_AND_CREDENTIAL'
+  const ledger = createWorkerTelemetryLedger({ capacity: 32 })
+  const model = {
+    async *run() {
+      if (secret.length === 0) yield complete
+      throw new Error(secret)
+    },
+  }
+  const fixture = createMachine([], {
+    model,
+    telemetrySink: { emit: event => ledger.append(event) },
+  })
+  const ref = await fixture.machine.submit({ text: 'Trigger a safe failure event' })
+  await fixture.machine.waitForIdle()
+
+  const events = ledger.query({ sessionId: ref.sessionId, taskId: ref.taskId })
+  assert.ok(
+    events.some(event => event.eventType === 'model-request.failed' && event.errorCode === 'model-request-failed'),
+  )
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(secret))
+})
+
+test('public compensation telemetry preserves its Runtime-owned step and call correlation', async () => {
+  const persistence = new TestPersistence()
+  persistence.generation = 1
+  persistence.records = [terminalTaskRecord()]
+  const ledger = createWorkerTelemetryLedger({ capacity: 64 })
+  const fixture = createMachine([], {
+    persistence,
+    telemetrySink: { emit: event => ledger.append(event) },
+  })
+  await fixture.machine.recover()
+  await fixture.machine.compensate('target-task')
+
+  const task = fixture.machine.getSnapshot().activeTask
+  const events = ledger.query({ sessionId: task.sessionId, taskId: task.taskId })
+  const started = events.find(event => event.eventType === 'compensation.started')
+  const completed = events.find(event => event.eventType === 'compensation.completed')
+  assert.ok(started)
+  assert.ok(completed)
+  assert.equal(completed.stepId, started.stepId)
+  assert.equal(completed.callId, started.callId)
+  assert.equal(completed.durationMs, completed.timestampMs - started.timestampMs)
+  assert.ok(events.some(event => event.eventType === 'runtime.terminal' && event.status === 'completed'))
+})
+
+test('telemetry ledger rejects capacity overflow without changing accepted records and rejects orphan correlations', () => {
+  const ledger = createWorkerTelemetryLedger({ capacity: 3 })
+  assert.throws(
+    () =>
+      ledger.append({
+        schemaVersion: 1,
+        eventType: 'phase.started',
+        timestampMs: 0,
+        status: 'started',
+        sessionId: 'session-1',
+        taskId: 'orphan-task',
+        stepId: 'step-1',
+      }),
+    /telemetry event is invalid/i,
+  )
+  ledger.append({
+    schemaVersion: 1,
+    eventType: 'task.started',
+    timestampMs: 1,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId: 'task-1',
+  })
+  ledger.append({
+    schemaVersion: 1,
+    eventType: 'phase.started',
+    timestampMs: 2,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId: 'task-1',
+    stepId: 'step-1',
+  })
+  assert.throws(
+    () =>
+      ledger.append({
+        schemaVersion: 1,
+        eventType: 'tool-call.completed',
+        timestampMs: 3,
+        durationMs: 1,
+        status: 'completed',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        stepId: 'step-1',
+        callId: 'orphan-call',
+        artifactId: 'orphan-artifact',
+      }),
+    /telemetry event is invalid/i,
+  )
+  ledger.append({
+    schemaVersion: 1,
+    eventType: 'phase.completed',
+    timestampMs: 3,
+    durationMs: 1,
+    status: 'completed',
+    sessionId: 'session-1',
+    taskId: 'task-1',
+    stepId: 'step-1',
+  })
+  const accepted = ledger.query({ sessionId: 'session-1', taskId: 'task-1' })
+  assert.throws(
+    () =>
+      ledger.append({
+        schemaVersion: 1,
+        eventType: 'tool-call.started',
+        timestampMs: 4,
+        status: 'started',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        stepId: 'step-1',
+        callId: 'capacity-rejected-call',
+        changeSetId: 'capacity-rejected-change-set',
+        artifactId: 'capacity-rejected-artifact',
+      }),
+    /telemetry event is invalid/i,
+  )
+  assert.equal(ledger.size, 3)
+  assert.deepEqual(ledger.query({ sessionId: 'session-1', taskId: 'task-1' }), accepted)
+  assert.deepEqual(
+    accepted.map(event => event.timestampMs),
+    [1, 2, 3],
+  )
+})
+
+test('telemetry event validation rejects raw payload fields, invalid enums, identifiers, and numbers', () => {
+  const base = {
+    schemaVersion: 1,
+    eventType: 'task.started',
+    timestampMs: 1,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId: 'task-1',
+  }
+  for (const invalid of [
+    { ...base, prompt: 'raw prompt' },
+    { ...base, metadata: {} },
+    { ...base, message: 'raw error text' },
+    { ...base, error: 'raw error text' },
+    { ...base, source: 'generated source' },
+    { ...base, eventType: 'custom.event' },
+    { ...base, timestampMs: -1 },
+    { ...base, taskId: 'contains whitespace' },
+    Object.defineProperty({ ...base }, 'taskId', { get: () => 'task-1', enumerable: true }),
+  ]) {
+    assert.throws(() => createWorkerTelemetryEvent(invalid), /telemetry event is invalid/i)
+  }
 })
 
 test('projects and recovers the submitted intent, accepted blueprint, completion summary, and model context', async () => {

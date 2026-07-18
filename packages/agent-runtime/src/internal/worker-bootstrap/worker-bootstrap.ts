@@ -125,6 +125,7 @@ export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAg
           clock,
           idFactory,
           sessionContextBudget: options.sessionContextBudget,
+          telemetrySink: options.telemetry,
           onSnapshot: publish,
         })
         if (request.recover) {

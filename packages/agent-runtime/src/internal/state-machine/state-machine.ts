@@ -36,6 +36,8 @@ import {
   parseAgentSessionContextDigest,
 } from '../session-context/index.js'
 import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
+import type { WorkerTelemetrySink } from '../telemetry.js'
+import { createSafeWorkerTelemetryEmitter } from '../telemetry.js'
 
 type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
 type ModelToolCallProposal = Extract<ModelEvent, { readonly kind: 'tool-call' }>['call']
@@ -68,6 +70,7 @@ export interface WorkerStateMachineOptions {
   readonly idFactory: IdFactory
   readonly repairBudget?: number
   readonly sessionContextBudget?: AgentSessionContextBudget
+  readonly telemetrySink?: WorkerTelemetrySink
   readonly onSnapshot?: (snapshot: AgentRuntimeSnapshot) => void
 }
 
@@ -641,6 +644,58 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   let persistenceGeneration = 0
   let commitTail = Promise.resolve()
   let persistenceTail = Promise.resolve()
+  const telemetry = createSafeWorkerTelemetryEmitter(options.telemetrySink)
+  const terminalTelemetryTasks = new Set<string>()
+  const toolTelemetryStarts = new Map<string, number>()
+
+  const safeTelemetryErrorCode = (value: unknown, fallback: string) =>
+    typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value) ? value : fallback
+
+  const emitTelemetry = (task: MutableTask, event: Record<string, unknown>, startedAt?: number): number | undefined => {
+    if (!options.telemetrySink) return undefined
+    const timestampMs = options.clock.now()
+    telemetry.emit({
+      schemaVersion: 1,
+      timestampMs,
+      ...(startedAt === undefined ? {} : { durationMs: Math.max(0, timestampMs - startedAt) }),
+      sessionId: task.sessionId,
+      taskId: task.taskId,
+      ...event,
+    })
+    return timestampMs
+  }
+
+  const ensureToolTelemetryStart = (task: MutableTask, call: SemanticCall) => {
+    if (toolTelemetryStarts.has(call.callId)) return
+    const startedAt = emitTelemetry(task, {
+      eventType: 'tool-call.started',
+      status: 'started',
+      stepId: call.stepId,
+      callId: call.callId,
+    })
+    if (startedAt !== undefined) toolTelemetryStarts.set(call.callId, startedAt)
+  }
+
+  const emitToolTelemetryEnd = (
+    task: MutableTask,
+    call: SemanticCall,
+    eventType: 'tool-call.completed' | 'tool-call.failed',
+    status: 'completed' | 'failed',
+    errorCode?: string,
+  ) => {
+    emitTelemetry(
+      task,
+      {
+        eventType,
+        status,
+        stepId: call.stepId,
+        callId: call.callId,
+        ...(errorCode ? { errorCode } : {}),
+      },
+      toolTelemetryStarts.get(call.callId),
+    )
+    toolTelemetryStarts.delete(call.callId)
+  }
 
   const refreshSessionContext = (task: MutableTask) => {
     task.sessionContext = cloneFrozen(createAgentSessionContext([...tasks.values()], sessionContextBudget))
@@ -808,6 +863,26 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const setPhase = (task: MutableTask, phase: AgentPhase) => {
     task.phase = phase
     task.updatedAt = options.clock.now()
+    if (terminalPhases.has(phase) && !terminalTelemetryTasks.has(task.taskId)) {
+      terminalTelemetryTasks.add(task.taskId)
+      if (phase === 'COMPLETED') {
+        emitTelemetry(task, { eventType: 'task.completed', status: 'completed' })
+      } else if (phase === 'CANCELLED') {
+        emitTelemetry(task, { eventType: 'task.cancelled', status: 'cancelled' })
+      } else if (phase === 'FAILED') {
+        emitTelemetry(task, {
+          eventType: 'task.failed',
+          status: 'failed',
+          errorCode: safeTelemetryErrorCode(task.failure?.code, 'worker-task-failed'),
+        })
+      }
+      emitTelemetry(task, {
+        eventType: 'runtime.terminal',
+        status: phase === 'COMPLETED' ? 'completed' : phase === 'FAILED' ? 'failed' : 'cancelled',
+        ...(phase === 'FAILED' ? { errorCode: safeTelemetryErrorCode(task.failure?.code, 'worker-task-failed') } : {}),
+      })
+      for (const callId of task.callIds) toolTelemetryStarts.delete(callId)
+    }
     emit()
   }
 
@@ -968,12 +1043,40 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task.nextModelPhase = phase
     const stepId = nextRuntimeId('step')
     const modelRequestId = nextRuntimeId('request')
-    const events = await collectModelEvents(
-      options.model,
-      turnRequest(task, phase, stepId, modelRequestId),
-      task.controller?.signal ?? new AbortController().signal,
-    )
-    return { ...interpretEvents(events, phase), stepId, modelRequestId }
+    const phaseStartedAt = emitTelemetry(task, { eventType: 'phase.started', status: 'started', stepId })
+    const modelRequestStartedAt = emitTelemetry(task, {
+      eventType: 'model-request.started',
+      status: 'started',
+      stepId,
+      modelRequestId,
+    })
+    try {
+      const events = await collectModelEvents(
+        options.model,
+        turnRequest(task, phase, stepId, modelRequestId),
+        task.controller?.signal ?? new AbortController().signal,
+      )
+      const outcome = interpretEvents(events, phase)
+      emitTelemetry(
+        task,
+        { eventType: 'model-request.completed', status: 'completed', stepId, modelRequestId },
+        modelRequestStartedAt,
+      )
+      emitTelemetry(task, { eventType: 'phase.completed', status: 'completed', stepId }, phaseStartedAt)
+      return { ...outcome, stepId, modelRequestId }
+    } catch (error) {
+      const errorCode = safeTelemetryErrorCode(
+        error instanceof WorkerStateMachineError ? error.code : undefined,
+        isAbortError(error) ? 'request-aborted' : 'model-request-failed',
+      )
+      emitTelemetry(
+        task,
+        { eventType: 'model-request.failed', status: 'failed', errorCode, stepId, modelRequestId },
+        modelRequestStartedAt,
+      )
+      emitTelemetry(task, { eventType: 'phase.failed', status: 'failed', errorCode, stepId }, phaseStartedAt)
+      throw error
+    }
   }
 
   const assertCallContext = (task: MutableTask, call: SemanticCall) => {
@@ -1209,6 +1312,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     const code = failureCode(result)
     const satisfied = result.status === 'applied' || (result.status === 'not-applied' && code === 'NO_CHANGE')
     if (satisfied) {
+      emitToolTelemetryEnd(task, call, 'tool-call.completed', 'completed')
       task.failure = undefined
       task.consecutiveYields = 0
       setPhase(task, 'VERIFY')
@@ -1223,6 +1327,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     }
 
     if (result.status === 'not-applied' && (code === 'STALE_REVISION' || code === 'HUMAN_ACTIVITY')) {
+      emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', safeTelemetryErrorCode(code, 'tool-call-failed'))
       task.consecutiveYields += 1
       if (task.consecutiveYields > 1) {
         task.failure = {
@@ -1240,8 +1345,18 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       return 'yielded'
     }
 
-    if (result.status === 'indeterminate') return pauseIndeterminateInvocation(task, result)
+    if (result.status === 'indeterminate') {
+      emitToolTelemetryEnd(
+        task,
+        call,
+        'tool-call.failed',
+        'failed',
+        safeTelemetryErrorCode(code, 'tool-call-indeterminate'),
+      )
+      return pauseIndeterminateInvocation(task, result)
+    }
 
+    emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', safeTelemetryErrorCode(code, 'tool-call-failed'))
     task.failure = result.failure
     return persistRepairTransition(task, { clearPendingInvocation: true })
   }
@@ -1269,6 +1384,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task.pendingInvocationDurable = false
     task.callIds.push(call.callId)
     task.callIndex.push({ callId: call.callId, capability: call.capability })
+    ensureToolTelemetryStart(task, call)
     if (task.callIndexComplete) {
       task.callIndexComplete =
         task.callIndex.length === task.callIds.length &&
@@ -1304,6 +1420,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (!pending) return 'repair'
     const call = pending.call
     assertCallContext(task, call)
+    ensureToolTelemetryStart(task, call)
     return withCommitLock(task, async () => {
       if (!task.pendingInvocationDurable) {
         setPhase(task, 'EXECUTE')
@@ -1515,6 +1632,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const driveCompensation = async (task: MutableTask, targetTaskId: string) => {
     setPhase(task, 'OBSERVE')
     const observed = await observeFull(task)
+    const stepId = nextRuntimeId('step')
+    const phaseStartedAt = emitTelemetry(task, { eventType: 'phase.started', status: 'started', stepId })
     const call = createRuntimeOwnedCall(
       task,
       {
@@ -1523,10 +1642,55 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         arguments: { schemaVersion: 1, targetTaskId },
         expectedRevision: observed.revision,
       },
-      nextRuntimeId('step'),
+      stepId,
     )
-    const disposition = await executeAndVerify(task, call, true, `Compensated task ${targetTaskId}`)
-    if (disposition === 'completed') return
+    const compensationStartedAt = emitTelemetry(task, {
+      eventType: 'compensation.started',
+      status: 'started',
+      stepId,
+      callId: call.callId,
+    })
+    let disposition: ExecutionDisposition
+    try {
+      disposition = await executeAndVerify(task, call, true, `Compensated task ${targetTaskId}`)
+    } catch (error) {
+      const errorCode = safeTelemetryErrorCode(
+        error instanceof WorkerStateMachineError ? error.code : undefined,
+        'compensation-failed',
+      )
+      emitTelemetry(
+        task,
+        { eventType: 'compensation.failed', status: 'failed', errorCode, stepId, callId: call.callId },
+        compensationStartedAt,
+      )
+      emitTelemetry(task, { eventType: 'phase.failed', status: 'failed', errorCode, stepId }, phaseStartedAt)
+      throw error
+    }
+    if (disposition === 'completed') {
+      emitTelemetry(
+        task,
+        { eventType: 'compensation.completed', status: 'compensated', stepId, callId: call.callId },
+        compensationStartedAt,
+      )
+      emitTelemetry(task, { eventType: 'phase.completed', status: 'completed', stepId }, phaseStartedAt)
+      return
+    }
+    emitTelemetry(
+      task,
+      {
+        eventType: 'compensation.failed',
+        status: 'failed',
+        errorCode: 'compensation-incomplete',
+        stepId,
+        callId: call.callId,
+      },
+      compensationStartedAt,
+    )
+    emitTelemetry(
+      task,
+      { eventType: 'phase.failed', status: 'failed', errorCode: 'compensation-incomplete', stepId },
+      phaseStartedAt,
+    )
     if (task.controller?.signal.aborted || task.phase === 'CANCELLED' || activeTask !== task) {
       throw task.controller?.signal.reason ?? new DOMException('Compensation task is no longer active', 'AbortError')
     }
@@ -1700,6 +1864,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         ...(supersedesPrevious ? { supersedesTaskId: previous.taskId } : {}),
       }
       tasks.set(task.taskId, task)
+      emitTelemetry(task, { eventType: 'task.started', status: 'started' })
       refreshSessionContext(task)
       activeTask = task
       emit()
@@ -1753,6 +1918,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         consecutiveYields: 0,
       }
       tasks.set(task.taskId, task)
+      emitTelemetry(task, { eventType: 'task.started', status: 'started' })
       refreshSessionContext(task)
       activeTask = task
       emit()
@@ -1876,7 +2042,10 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       const mergedTasks = new Map(tasks)
       for (const task of recoveredTasks) mergedTasks.set(task.taskId, task)
       assertUniqueSessionCallIds([...mergedTasks.values()])
-      for (const task of recoveredTasks) tasks.set(task.taskId, task)
+      for (const task of recoveredTasks) {
+        tasks.set(task.taskId, task)
+        emitTelemetry(task, { eventType: 'task.started', status: 'started' })
+      }
       for (const task of recoveredTasks) {
         if (!task.sessionContext) refreshSessionContext(task)
       }

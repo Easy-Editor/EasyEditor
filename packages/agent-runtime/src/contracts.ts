@@ -1,3 +1,5 @@
+import type { WorkerTelemetrySink } from './internal/telemetry.js'
+
 /** Values that are safe to validate and send across a structured-clone boundary. */
 export type JsonPrimitive = boolean | number | string | null
 
@@ -446,4 +448,5 @@ export interface AgentWorkerOptions {
   readonly clock?: Clock
   readonly idFactory?: IdFactory
   readonly sessionContextBudget?: AgentSessionContextBudget
+  readonly telemetry?: WorkerTelemetrySink
 }
