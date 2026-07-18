@@ -740,6 +740,7 @@ export class DashboardAgentHost {
   #engine
   #manifestCache
   #invocationActivity
+  #mutationGate
   #persistence
   #promotionAvailability
   #promotionRecoveryBarrier
@@ -760,6 +761,7 @@ export class DashboardAgentHost {
     invocationActivity,
     isTransactionCommittedError,
     isTransactionRollbackIncompleteError,
+    mutationGate,
     now = Date.now,
     persistence,
     promotionAvailability,
@@ -794,6 +796,10 @@ export class DashboardAgentHost {
       throw new TypeError('invocationActivity must expose begin')
     }
     this.#invocationActivity = invocationActivity
+    if (mutationGate !== undefined && typeof mutationGate?.acquireShared !== 'function') {
+      throw new TypeError('mutationGate must expose acquireShared')
+    }
+    this.#mutationGate = mutationGate
     this.#authority = normalizeAuthority(authority)
     if (artifactService !== undefined) {
       for (const method of ['createOnline', 'queryReceipt', 'reviseOnline']) {
@@ -820,7 +826,15 @@ export class DashboardAgentHost {
     this.#promotionAvailability = promotionAvailability ?? null
     this.#promotionRecoveryBarrier = this.#promotionService
       ? Promise.resolve()
-          .then(() => this.#promotionService.resumePending())
+          .then(async () => {
+            const mutationLease = this.#mutationGate ? await this.#mutationGate.acquireShared() : null
+            try {
+              this.#assertActive()
+              return await this.#promotionService.resumePending()
+            } finally {
+              mutationLease?.release()
+            }
+          })
           .then(result => {
             assertPlainRecord(result, 'promotion-recovery')
             assertExactKeys(result, ['results', 'schemaVersion'], [], 'promotion-recovery')
@@ -1068,6 +1082,7 @@ export class DashboardAgentHost {
 
   async invoke(call, context) {
     let finishInvocationActivity = () => undefined
+    let mutationLease = null
     try {
       this.#assertActive()
       assertExactKeys(
@@ -1100,6 +1115,8 @@ export class DashboardAgentHost {
       const invocationContext = normalizeInvokeContext(context, call)
       const capability = readOwnDataValue(call, 'capability')
       dashboardCapabilityRegistry.assertAvailable(capability)
+      mutationLease = this.#mutationGate ? await this.#mutationGate.acquireShared() : null
+      this.#assertActive()
       await this.#assertPromotionAvailable(capability)
       if (isDashboardDataCapability(capability) && !this.#dataService) {
         throw new DashboardAgentHostError(
@@ -1178,6 +1195,7 @@ export class DashboardAgentHost {
       return this.#rejected(call, error)
     } finally {
       finishInvocationActivity()
+      mutationLease?.release()
     }
   }
 
@@ -1252,6 +1270,7 @@ export const createDashboardAgentHost = (options = {}) => {
     invocationActivity: readOwnDataValue(options, 'invocationActivity', undefined),
     isTransactionCommittedError: readOwnDataValue(options, 'isTransactionCommittedError', undefined),
     isTransactionRollbackIncompleteError: readOwnDataValue(options, 'isTransactionRollbackIncompleteError', undefined),
+    mutationGate: readOwnDataValue(options, 'mutationGate', undefined),
     now: readOwnDataValue(options, 'now', Date.now),
     persistence: readOwnDataValue(options, 'persistence', undefined),
     promotionAvailability: readOwnDataValue(options, 'promotionAvailability', undefined),

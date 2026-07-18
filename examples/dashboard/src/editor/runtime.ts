@@ -8,6 +8,7 @@ import {
 import { createDashboardUmdGlobals } from '../globals'
 import {
   createDashboardInvocationActivity,
+  createDashboardMutationQuiescenceGate,
   createHumanActivityLease,
   installHumanActivityTracking,
 } from './agent/activity/index.mjs'
@@ -17,13 +18,20 @@ import {
   createDashboardOnlineArtifactPersistenceAdapter,
 } from './agent/capabilities/artifact/index.mjs'
 import {
+  type DashboardMaterialGcAdmissionInput,
+  type DashboardMaterialGcAdmissionReceiptV1,
   type LocalMaterialPromotionGrantIdentity,
   createDashboardLocalMaterialCatalogRuntime,
   createDashboardLocalMaterialPromotionCoreAdapter,
   createDashboardLocalMaterialPromotionPersistenceAdapter,
   createDashboardLocalMaterialPromotionRuntime,
+  createDashboardMaterialGcCrossTabCoordinator,
+  createDashboardMaterialGcReplicaState,
+  createDashboardMaterialGcRuntime,
   createDashboardSameOriginLocalMaterialCatalogClient,
   createDashboardSameOriginLocalMaterialPromotionClient,
+  createDashboardSameOriginMaterialGcClient,
+  resolveDashboardMaterialGcEnabled,
 } from './agent/capabilities/promotion/index.mjs'
 import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
 import {
@@ -73,6 +81,16 @@ engineReference.current = engine
 remoteResources.bindEngine(engine)
 
 export const dashboardAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
+export const dashboardMaterialGcEnabled = resolveDashboardMaterialGcEnabled(import.meta.env)
+export const dashboardMutationQuiescenceGate = dashboardMaterialGcEnabled
+  ? createDashboardMutationQuiescenceGate({ inputTarget: window })
+  : null
+export const dashboardMaterialGcCrossTabCoordinator = dashboardMaterialGcEnabled
+  ? createDashboardMaterialGcCrossTabCoordinator({
+      enabled: true,
+      lockManager: window.navigator.locks,
+    })
+  : null
 
 export interface DashboardAgentWorkspaceE2EProbeState {
   readonly binding: Readonly<{
@@ -99,7 +117,7 @@ export const registerDashboardAgentWorkspaceE2EProbe = (
 const dashboardHumanActivityLease = createHumanActivityLease()
 export const dashboardInvocationActivity = createDashboardInvocationActivity()
 let releaseDashboardHumanActivityTracking: (() => void) | null =
-  dashboardAgentRuntimeFeatureFlags.runtime === true
+  dashboardAgentRuntimeFeatureFlags.runtime === true || dashboardMaterialGcEnabled
     ? installHumanActivityTracking({
         lease: dashboardHumanActivityLease,
         target: window,
@@ -123,6 +141,46 @@ export const dashboardPersistence = createDashboardPersistenceRuntime({
 })
 
 export const dashboardAgentPersistence = createDashboardAgentPersistencePort(dashboardPersistence)
+
+export const dashboardMaterialGcClient = dashboardMaterialGcEnabled
+  ? createDashboardSameOriginMaterialGcClient({ fetchImpl: window.fetch.bind(window) })
+  : null
+export const dashboardMaterialGcReplicaState = dashboardMaterialGcEnabled
+  ? createDashboardMaterialGcReplicaState({
+      storage: window.localStorage,
+      crypto: window.crypto,
+      coordinator: dashboardMaterialGcCrossTabCoordinator!,
+    })
+  : null
+export const dashboardMaterialGcRuntime = dashboardMaterialGcEnabled
+  ? createDashboardMaterialGcRuntime({
+      enabled: true,
+      crypto: window.crypto,
+      client: dashboardMaterialGcClient!,
+      replicaState: dashboardMaterialGcReplicaState!,
+      coordinator: dashboardMaterialGcCrossTabCoordinator!,
+      persistence: dashboardPersistence,
+      humanActivity: dashboardHumanActivityLease,
+      invocationActivity: dashboardInvocationActivity,
+      mutationGate: dashboardMutationQuiescenceGate!,
+      onError: error => {
+        console.error('[EasyEditor] Durable material GC failed closed:', error)
+      },
+    })
+  : createDashboardMaterialGcRuntime({ enabled: false })
+
+export const dashboardMaterialGcAdmissionPort = dashboardMaterialGcEnabled
+  ? Object.freeze({
+      admitMaterialRefsUnderSharedMutation: (input: DashboardMaterialGcAdmissionInput) =>
+        dashboardMaterialGcRuntime.admitMaterialRefsUnderSharedMutation(input),
+      withMaterialAdmission: <Result>(
+        input: DashboardMaterialGcAdmissionInput,
+        operation: (
+          receipt: Readonly<DashboardMaterialGcAdmissionReceiptV1 | { readonly status: 'disabled' }>,
+        ) => Result | PromiseLike<Result>,
+      ) => dashboardMaterialGcRuntime.withMaterialAdmission(input, operation),
+    })
+  : null
 
 export const dashboardLocalMaterialCatalogRuntime = createDashboardLocalMaterialCatalogRuntime({
   enabled:
@@ -154,10 +212,12 @@ export const persistDashboardProject = (
   dashboardPersistence.save({ ...captureDashboardPersistenceInput(), commitKind })
 
 export const disposeDashboardAgentActivity = () => {
+  dashboardMaterialGcRuntime.dispose()
   releaseDashboardHumanActivityTracking?.()
   releaseDashboardHumanActivityTracking = null
   dashboardHumanActivityLease.dispose()
   dashboardInvocationActivity.dispose()
+  dashboardMutationQuiescenceGate?.dispose()
 }
 
 const createBoundDashboardAgentHost = (
@@ -213,6 +273,7 @@ const createBoundDashboardAgentHost = (
           ...(grantIdentity ? { grantIdentity } : {}),
           onPromotionApplied: async () => {
             await dashboardLocalMaterialCatalogRuntime.refresh()
+            dashboardMaterialGcRuntime.trigger('promotion-applied')
           },
           isTransactionCommittedError: error => error instanceof TransactionCommittedError,
           isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
@@ -224,6 +285,7 @@ const createBoundDashboardAgentHost = (
     enabled: true,
     engine,
     invocationActivity: dashboardInvocationActivity,
+    ...(dashboardMutationQuiescenceGate ? { mutationGate: dashboardMutationQuiescenceGate } : {}),
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
     persistence: dashboardPersistence,
@@ -264,6 +326,15 @@ if (import.meta.env.VITE_E2E === '1') {
       getPersistenceState: () => dashboardPersistence.getSnapshot(),
       getAgentWorkspaceState: () => dashboardAgentWorkspaceE2EProbe?.() ?? null,
       flushPersistence: () => dashboardPersistence.flush(),
+      ...(dashboardMaterialGcEnabled
+        ? {
+            getMaterialGcState: () => dashboardMaterialGcRuntime.getSnapshot(),
+            triggerMaterialGc: async () => {
+              dashboardMaterialGcRuntime.trigger('manual-save')
+              return dashboardMaterialGcRuntime.waitForIdle()
+            },
+          }
+        : {}),
     }),
   })
 }

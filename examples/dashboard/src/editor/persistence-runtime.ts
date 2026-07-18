@@ -26,6 +26,7 @@ import {
   type DashboardLocalGrantMutationResultV1,
   type DashboardLocalGrantRecordV1,
   type DashboardLocalGrantRevokeV1,
+  type DashboardMaterialGcSnapshotV1,
   type DashboardMutationProvenanceReadRequestV1,
   type DashboardProjectListV1,
   type DashboardProjectVersionCreateV1,
@@ -40,6 +41,7 @@ import {
   IndexedDbDashboardStorageBackend,
   type JsonObject,
   type LegacyStorageAdapter,
+  type ProjectMaterialGcFenceContextV1,
   type ProjectPersistenceCompensationRunStateResultV1,
   ProjectPersistenceCoordinator,
   type ProjectPersistenceMutationProvenanceReadResultV1,
@@ -1238,6 +1240,36 @@ export class DashboardPersistenceRuntime {
       this.#notify()
       throw error
     }
+  }
+
+  async readMaterialGcSnapshot(projectId: string): Promise<DashboardMaterialGcSnapshotV1> {
+    this.#assertReady()
+    const scope = this.#scope
+    if (!scope || projectId !== scope.projectId) {
+      throw new Error('Dashboard Material GC project does not match the active persistence scope')
+    }
+    await this.flush()
+    if (this.#state !== 'ready' || this.#scope?.projectId !== projectId) {
+      throw new Error('Dashboard persistence scope changed before the Material GC snapshot')
+    }
+    return this.#coordinator.readMaterialGcSnapshot({ schemaVersion: 1, projectId })
+  }
+
+  async withMaterialGcFence<Result>(
+    projectId: string,
+    operation: (context: ProjectMaterialGcFenceContextV1) => Result | PromiseLike<Result>,
+  ): Promise<Result> {
+    this.#assertReady()
+    if (typeof operation !== 'function') throw new TypeError('Dashboard Material GC operation must be a function')
+    const scope = this.#scope
+    if (!scope || projectId !== scope.projectId) {
+      throw new Error('Dashboard Material GC project does not match the active persistence scope')
+    }
+    await this.flush()
+    if (this.#state !== 'ready' || this.#scope?.projectId !== projectId) {
+      throw new Error('Dashboard persistence scope changed before the Material GC fence')
+    }
+    return this.#coordinator.withMaterialGcFence({ schemaVersion: 1, projectId }, operation)
   }
 
   async readWorkingDraft(): Promise<CanonicalWorkingDraftV1 | null> {

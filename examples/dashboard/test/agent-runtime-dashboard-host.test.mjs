@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { MessageChannel } from 'node:worker_threads'
 import ts from 'typescript'
 
+import { createDashboardMutationQuiescenceGate } from '../src/editor/agent/activity/mutation-quiescence-gate.mjs'
 import {
   DASHBOARD_AGENT_HOST_ERROR_CODE,
   DashboardAgentHostError,
@@ -101,6 +102,14 @@ const invocationContext = compensationTarget => ({
   schemaVersion: 1,
   ...(compensationTarget === undefined ? {} : { compensationTarget }),
 })
+
+const eventually = async predicate => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolvePromise => setImmediate(resolvePromise))
+  }
+  assert.fail('condition was not reached')
+}
 
 const runtimeCompensationTarget = (overrides = {}) => ({
   schemaVersion: 1,
@@ -305,6 +314,7 @@ const createHarness = async (t, options = {}) => {
     invocationActivity: options.invocationActivity,
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
+    mutationGate: options.mutationGate,
     now: () => 1_700_000_000_000,
     persistence,
     promotionAvailability: options.promotionAvailability,
@@ -1398,6 +1408,121 @@ test('Host projects only safe bounded data.bind node targets to invocation activ
     },
     { phase: 'finished', callId: 'data-bind-target-unsafe' },
   ])
+})
+
+test('Host invocation waits behind GC exclusive ownership and resumes with one shared lease', async t => {
+  const gate = createDashboardMutationQuiescenceGate()
+  t.after(() => gate.dispose())
+  const phases = []
+  const dataService = {
+    bind: async () => assert.fail('unexpected bind'),
+    inspect: async () => assert.fail('unexpected inspect'),
+    preview: async () => assert.fail('unexpected preview'),
+    upsert: async call => {
+      phases.push(`service:${call.callId}`)
+      return { schemaVersion: 1, callId: call.callId, status: 'applied' }
+    },
+  }
+  const invocationActivity = {
+    begin(input) {
+      phases.push(`activity-start:${input.callId}`)
+      return () => phases.push(`activity-finish:${input.callId}`)
+    },
+  }
+  const { host } = await createHarness(t, { dataService, invocationActivity, mutationGate: gate })
+  const full = await host.observe(observeRequest())
+  const exclusive = gate.tryAcquireExclusive()
+  assert.ok(exclusive)
+  let settled = false
+  const invocation = host
+    .invoke(
+      semanticCall({
+        arguments: { schemaVersion: 1, source: { sourceId: 'source-gated' } },
+        callId: 'data-upsert-gated',
+        capability: 'data.upsert',
+        expectedRevision: full.revision,
+      }),
+      invocationContext(),
+    )
+    .then(result => {
+      settled = true
+      return result
+    })
+
+  assert.equal(gate.getSnapshot().waitingSharedCount, 1)
+  await Promise.resolve()
+  assert.equal(settled, false)
+  assert.deepEqual(phases, [])
+  assert.equal(exclusive.release(), true)
+  assert.equal(gate.getSnapshot().sharedCount, 1, 'shared ownership is reserved before Host resumes')
+  const result = await invocation
+  assert.equal(result.status, 'applied')
+  assert.deepEqual(phases, [
+    'activity-start:data-upsert-gated',
+    'service:data-upsert-gated',
+    'activity-finish:data-upsert-gated',
+  ])
+  assert.equal(gate.getSnapshot().sharedCount, 0)
+})
+
+test('disposing the gate during an exclusive sweep keeps a queued Host invocation closed until settle', async t => {
+  const gate = createDashboardMutationQuiescenceGate()
+  let serviceCalls = 0
+  let activityCalls = 0
+  const dataService = {
+    bind: async () => assert.fail('unexpected bind'),
+    inspect: async () => assert.fail('unexpected inspect'),
+    preview: async () => assert.fail('unexpected preview'),
+    upsert: async call => {
+      serviceCalls += 1
+      return { schemaVersion: 1, callId: call.callId, status: 'applied' }
+    },
+  }
+  const invocationActivity = {
+    begin() {
+      activityCalls += 1
+      return () => undefined
+    },
+  }
+  const { host } = await createHarness(t, { dataService, invocationActivity, mutationGate: gate })
+  const exclusiveSweep = gate.tryAcquireExclusive()
+  assert.ok(exclusiveSweep)
+  let settled = false
+  const invocation = host
+    .invoke(
+      semanticCall({
+        arguments: { schemaVersion: 1, source: { sourceId: 'source-disposed' } },
+        callId: 'data-upsert-disposed-gate',
+        capability: 'data.upsert',
+        expectedRevision: 'revision-not-read-before-gate',
+      }),
+      invocationContext(),
+    )
+    .then(result => {
+      settled = true
+      return result
+    })
+  await eventually(() => gate.getSnapshot().waitingSharedCount === 1)
+  gate.dispose()
+  await Promise.resolve()
+  assert.equal(settled, false)
+  assert.equal(serviceCalls, 0)
+  assert.equal(activityCalls, 0)
+  assert.equal(gate.getSnapshot().exclusiveActive, true)
+
+  exclusiveSweep.release()
+  const result = await invocation
+  assert.equal(result.status, 'rejected')
+  assert.equal(serviceCalls, 0)
+  assert.equal(activityCalls, 0)
+  assert.deepEqual(gate.getSnapshot(), {
+    schemaVersion: 1,
+    disposed: true,
+    exclusiveActive: false,
+    inputBlocked: false,
+    sharedCount: 0,
+    waitingSharedCount: 0,
+  })
 })
 
 test('Host projects active Screen targets without granting UI observers invocation authority', async t => {

@@ -14,6 +14,7 @@ import type {
 import type { EngineInstance } from '@easy-editor/core/instance'
 import type { HumanActivityLease } from '../activity/index.mjs'
 import type { DashboardInvocationActivity } from '../activity/invocation-activity.mjs'
+import type { DashboardMutationQuiescenceGate } from '../activity/mutation-quiescence-gate.mjs'
 import type { DashboardOnlineArtifactCapabilityService } from '../capabilities/artifact/index.mjs'
 import type { DashboardDataCapabilityService, DashboardDataResolver } from '../capabilities/data/index.mjs'
 import type { DashboardLocalMaterialPromotionCapabilityService } from '../capabilities/promotion/index.mjs'
@@ -40,6 +41,7 @@ export interface DashboardAgentHostAuthority {
 export interface DashboardAgentHostOptions {
   readonly activityLease?: HumanActivityLease
   readonly invocationActivity?: Pick<DashboardInvocationActivity, 'begin'>
+  readonly mutationGate?: Pick<DashboardMutationQuiescenceGate, 'acquireShared'>
   readonly enabled?: boolean
   readonly engine?: EngineInstance
   readonly authority?: DashboardAgentHostAuthority
@@ -95,6 +97,7 @@ export declare class DashboardAgentHost implements AgentHost {
   constructor(options: {
     readonly activityLease: HumanActivityLease
     readonly invocationActivity?: Pick<DashboardInvocationActivity, 'begin'>
+    readonly mutationGate?: Pick<DashboardMutationQuiescenceGate, 'acquireShared'>
     readonly engine: EngineInstance
     readonly authority: DashboardAgentHostAuthority
     readonly adapterGeneration?: number

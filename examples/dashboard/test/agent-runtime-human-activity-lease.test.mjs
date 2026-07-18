@@ -6,6 +6,7 @@ import {
   createHumanActivityLease,
   installHumanActivityTracking,
 } from '../src/editor/agent/activity/index.mjs'
+import { resolveDashboardMaterialGcEnabled } from '../src/editor/agent/capabilities/promotion/material-gc-replica-state.mjs'
 import { AGENT_RUNTIME_FEATURE_FLAG_ENV, resolveAgentRuntimeFeatureFlags } from '../src/editor/agent/feature-flags.mjs'
 
 const createClock = () => {
@@ -144,9 +145,12 @@ test('event tracking holds pointer drags, renews motion, and records keyboard ac
   assert.equal(lease.isActive(), false)
 })
 
-test('Dashboard runtime installs no activity listeners by default and enabled tracking remains active', async () => {
+test('Dashboard runtime installs no activity listeners by default and Agent or GC tracking remains active', async () => {
   const runtimeSource = await readFile(new URL('../src/editor/runtime.ts', import.meta.url), 'utf8')
-  assert.match(runtimeSource, /dashboardAgentRuntimeFeatureFlags\.runtime === true\s*\? installHumanActivityTracking\(/)
+  assert.match(
+    runtimeSource,
+    /dashboardAgentRuntimeFeatureFlags\.runtime === true \|\| dashboardMaterialGcEnabled\s*\? installHumanActivityTracking\(/,
+  )
 
   const clock = createClock()
   const lease = createHumanActivityLease({
@@ -164,7 +168,9 @@ test('Dashboard runtime installs no activity listeners by default and enabled tr
   }
 
   const defaultFlags = resolveAgentRuntimeFeatureFlags()
-  const disabledRelease = defaultFlags.runtime === true ? installHumanActivityTracking({ lease, target }) : null
+  const defaultGcEnabled = resolveDashboardMaterialGcEnabled()
+  const disabledRelease =
+    defaultFlags.runtime === true || defaultGcEnabled ? installHumanActivityTracking({ lease, target }) : null
   assert.equal(disabledRelease, null)
   assert.equal(listeners.length, 0)
   assert.equal(lease.isActive(), false)
@@ -181,4 +187,9 @@ test('Dashboard runtime installs no activity listeners by default and enabled tr
   enabledRelease?.()
   clock.advance(20)
   assert.equal(lease.isActive(), false)
+
+  const gcEnabled = resolveDashboardMaterialGcEnabled({ VITE_DASHBOARD_MATERIAL_GC: '1' })
+  const gcRelease = gcEnabled ? installHumanActivityTracking({ lease, target }) : null
+  assert.equal(typeof gcRelease, 'function')
+  gcRelease?.()
 })

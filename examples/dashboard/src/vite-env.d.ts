@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 
+import type { DashboardMaterialGcRuntimeSnapshotV1 } from './editor/agent/capabilities/promotion/material-gc-runtime.mjs'
 import type { DashboardPersistenceSnapshot } from './editor/persistence-runtime'
 import type { DashboardAgentWorkspaceE2EProbeState } from './pages/editor/AgentWorkspace/page-integration'
 
@@ -11,7 +12,9 @@ declare global {
       getAgentWorkspaceState: () => DashboardAgentWorkspaceE2EProbeState | null
       getEngineState: () => 'created' | 'initializing' | 'ready' | 'disposing' | 'disposed' | 'failed'
       getPersistenceState: () => DashboardPersistenceSnapshot
+      getMaterialGcState?: () => DashboardMaterialGcRuntimeSnapshotV1
       flushPersistence: () => Promise<void>
+      triggerMaterialGc?: () => Promise<DashboardMaterialGcRuntimeSnapshotV1>
     }>
   }
 }

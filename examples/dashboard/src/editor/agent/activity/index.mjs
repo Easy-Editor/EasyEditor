@@ -4,6 +4,11 @@ export {
   createHumanActivityLease,
 } from './human-activity-lease.mjs'
 export { createDashboardInvocationActivity } from './invocation-activity.mjs'
+export {
+  DashboardMutationQuiescenceGate,
+  DashboardMutationQuiescenceGateDisposedError,
+  createDashboardMutationQuiescenceGate,
+} from './mutation-quiescence-gate.mjs'
 
 const requireEventTarget = target => {
   if (!target || typeof target.addEventListener !== 'function' || typeof target.removeEventListener !== 'function') {

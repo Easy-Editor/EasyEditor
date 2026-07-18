@@ -1,7 +1,12 @@
 import BannerImg from '@/assets/banner.png'
 import { Button } from '@/components/ui/button'
 import { type DashboardPreviewWindowHandle, openDashboardPreviewAfterSave } from '@/editor/persistence-runtime'
-import { dashboardPersistence, persistDashboardProject } from '@/editor/runtime'
+import {
+  dashboardMaterialGcEnabled,
+  dashboardMaterialGcRuntime,
+  dashboardPersistence,
+  persistDashboardProject,
+} from '@/editor/runtime'
 import { cn } from '@/lib/utils'
 import { Bot } from 'lucide-react'
 import { toast } from 'sonner'
@@ -34,6 +39,7 @@ export const AppHeader = ({ className, agentEnabled = false, agentOpen = false, 
     try {
       const result = await persistDashboardProject('manual-save')
       await dashboardPersistence.flush()
+      dashboardMaterialGcRuntime.trigger('manual-save')
       if (result.compatibilityWarning) {
         toast.warning('已保存，但旧版兼容快照刷新失败')
       } else {
@@ -51,12 +57,30 @@ export const AppHeader = ({ className, agentEnabled = false, agentOpen = false, 
       persist: async () => {
         await persistDashboardProject('manual-save')
         await dashboardPersistence.flush()
+        dashboardMaterialGcRuntime.trigger('preview-flush')
       },
       previewUrl: '/preview',
     })
     if (result.status === 'failed') {
       console.error('[EasyEditor] Dashboard preview save failed:', result.error)
       toast.error('预览失败：当前更改尚未保存')
+    }
+  }
+
+  const releaseMaterialGcRoot = async () => {
+    if (!window.confirm('确认释放此浏览器对当前项目自定义物料的持久引用？')) return
+    try {
+      const result = await dashboardMaterialGcRuntime.releaseCurrentReplica()
+      if (result.status === 'released' || result.status === 'already-released') {
+        toast.success('已释放此浏览器的物料引用')
+      } else if (result.status === 'not-registered') {
+        toast.info('当前浏览器尚未登记物料引用')
+      } else {
+        toast.warning('当前无法释放物料引用')
+      }
+    } catch (error) {
+      console.error('[EasyEditor] Durable material GC release failed:', error)
+      toast.error('释放物料引用失败，未执行删除')
     }
   }
 
@@ -97,6 +121,16 @@ export const AppHeader = ({ className, agentEnabled = false, agentOpen = false, 
               <Button variant='outline' onClick={() => void save()}>
                 保存
               </Button>
+              {dashboardMaterialGcEnabled ? (
+                <Button
+                  type='button'
+                  variant='outline'
+                  data-testid='material-gc-release'
+                  onClick={() => void releaseMaterialGcRoot()}
+                >
+                  释放本机物料引用
+                </Button>
+              ) : null}
             </div>
           </div>
         </div>

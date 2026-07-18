@@ -821,9 +821,39 @@ test('real promotion remains durable across editor/preview reload and Workspace 
   await expectSurfaceInstances(preview, 'preview', [GENERATED_MATERIAL_PRIMARY_ID, durableCopyId])
   expect((await readPersistedNodes(preview, [GENERATED_MATERIAL_PRIMARY_ID, durableCopyId])).nodes).toEqual(localNodes)
 
+  const materialGcCycle = await page.evaluate(async projectId => {
+    const probe = window.__EASY_EDITOR_E2E__
+    if (!probe?.triggerMaterialGc) throw new Error('G009 Material GC E2E probe is unavailable')
+    const runtimeSnapshot = await probe.triggerMaterialGc()
+    const stateModule = await import('/src/editor/agent/capabilities/promotion/material-gc-replica-state.mjs')
+    const projectState = JSON.parse(
+      localStorage.getItem(
+        `${stateModule.DASHBOARD_MATERIAL_GC_PROJECT_STORAGE_PREFIX}${encodeURIComponent(projectId)}`,
+      ) ?? 'null',
+    )
+    return { runtimeSnapshot, projectState }
+  }, initialBinding.projectId)
+  expect(materialGcCycle.runtimeSnapshot).toMatchObject({
+    schemaVersion: 1,
+    status: 'swept',
+    projectId: initialBinding.projectId,
+    failure: null,
+  })
+  expect(materialGcCycle.projectState).toMatchObject({
+    schemaVersion: 1,
+    projectId: initialBinding.projectId,
+    replicaId: expect.stringMatching(/^[\da-f-]{36}$/u),
+    replicaGeneration: expect.any(Number),
+    snapshotDigest: expect.stringMatching(/^sha256:[\da-f]{64}$/u),
+    pendingPlanRequest: null,
+    status: 'active',
+  })
+  expect(materialGcCycle.projectState.replicaGeneration).toBeGreaterThan(0)
+
   const stableMainSnapshot = await readMaterialGcSnapshot(page)
   expect(await readMaterialGcSnapshot(page)).toEqual(stableMainSnapshot)
   expect(stableMainSnapshot.snapshotDigest).toMatch(/^sha256:[\da-f]{64}$/u)
+  expect(materialGcCycle.projectState.snapshotDigest).toBe(stableMainSnapshot.snapshotDigest)
   expect(stableMainSnapshot.materialRefs).toEqual([materialIdentity])
   expect(stableMainSnapshot.unresolvedPromotionIds).toEqual([])
   expect(stableMainSnapshot.generationFence).toEqual([
@@ -912,6 +942,14 @@ test('real promotion remains durable across editor/preview reload and Workspace 
     },
   ].sort(compareRootFence)
   expect(stableMainSnapshot.rootFence).toEqual(expectedMainRoots)
+
+  await page.reload()
+  await waitForWorkspaceRuntime(page)
+  await expectSurfaceInstances(page, 'editor', [GENERATED_MATERIAL_PRIMARY_ID, durableCopyId])
+  expect(await readEditorNodes(page, [GENERATED_MATERIAL_PRIMARY_ID, durableCopyId])).toEqual(localNodes)
+  await preview.reload()
+  await expectSurfaceInstances(preview, 'preview', [GENERATED_MATERIAL_PRIMARY_ID, durableCopyId])
+  expect((await readPersistedNodes(preview, [GENERATED_MATERIAL_PRIMARY_ID, durableCopyId])).nodes).toEqual(localNodes)
 
   const restoredWorkspace = await openWorkspace(page)
   await restoredWorkspace.getByRole('tab', { name: '版本' }).click()

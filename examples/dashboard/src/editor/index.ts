@@ -37,6 +37,7 @@ import {
   captureDashboardPersistenceInput,
   composeDashboardAgentHost,
   dashboardAgentRuntimeFeatureFlags,
+  dashboardMaterialGcRuntime,
   dashboardPersistence,
   disposeDashboardAgentActivity,
   engine,
@@ -399,6 +400,7 @@ const bootstrapDashboardEditor = async () => {
     engine.loadProject(initialProject.schema, true)
     restoreActiveDocument(initialProject.activeDocument)
     installPersistenceListeners()
+    dashboardMaterialGcRuntime.trigger('startup')
 
     void remoteResources
       .runBackground('auto-load remote component implementations', autoLoadAllRemoteComponents)
