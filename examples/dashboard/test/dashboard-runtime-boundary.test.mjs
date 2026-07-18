@@ -861,6 +861,11 @@ test('Dashboard runtime conditionally composes the direct Host admission port an
   )
   assert.match(
     runtime,
+    /dashboardAgentRuntimeFeatureFlags\.promotion\s*&&\s*dashboardMaterialGcEnabled\s*&&\s*dashboardMaterialGcAdmissionPort/,
+    'promotion composition must remain disabled unless durable GC admission is available',
+  )
+  assert.match(
+    runtime,
     /createDashboardLocalMaterialPromotionRuntime\([\s\S]*admitMaterialRefsUnderSharedMutation:[\s\S]*dashboardMaterialGcAdmissionPort\.admitMaterialRefsUnderSharedMutation/,
   )
   assert.match(

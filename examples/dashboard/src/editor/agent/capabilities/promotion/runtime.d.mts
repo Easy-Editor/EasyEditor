@@ -58,7 +58,7 @@ export declare const createDashboardLocalMaterialPromotionRuntime: (options: {
   }
   readonly now?: () => number
   readonly onPromotionApplied?: () => void | Promise<void>
-  readonly admitMaterialRefsUnderSharedMutation?: DashboardLocalMaterialPromotionCapabilityServiceOptions['admitMaterialRefsUnderSharedMutation']
+  readonly admitMaterialRefsUnderSharedMutation: DashboardLocalMaterialPromotionCapabilityServiceOptions['admitMaterialRefsUnderSharedMutation']
   readonly isTransactionCommittedError?: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
 }) => DashboardLocalMaterialPromotionRuntime

@@ -814,6 +814,7 @@ test('promotion runtime refresh hook observes direct and resumed applied results
     featureFlags: { runtime: true, online: true, promotion: true },
     client: { checkAvailability: async () => ({ available: true }) },
     persistence: { checkLocalGrant: async () => ({ granted: true }) },
+    admitMaterialRefsUnderSharedMutation: async () => undefined,
     onPromotionApplied: async () => {
       refreshes += 1
       throw new Error('projection refresh failed')

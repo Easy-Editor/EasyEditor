@@ -67,7 +67,7 @@ const createPersistence = checkLocalGrant =>
   })
 
 const createRuntime = ({
-  admitMaterialRefsUnderSharedMutation,
+  admitMaterialRefsUnderSharedMutation = async () => undefined,
   checkAvailability,
   checkLocalGrant,
   featureFlags = enabledFlags,
@@ -87,7 +87,7 @@ const createRuntime = ({
     core: serviceCore,
     crypto,
     featureFlags,
-    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
+    admitMaterialRefsUnderSharedMutation,
     ...(runtimeGrantIdentity ? { grantIdentity: runtimeGrantIdentity } : {}),
     persistence: createPersistence(
       checkLocalGrant ??
@@ -328,6 +328,32 @@ test('promotion runtime is inert under default-off feature flags and does not to
     reason: LOCAL_MATERIAL_PROMOTION_AVAILABILITY_REASON.runtimeDisabled,
   })
   assert.equal(optionalReads, 0)
+})
+
+test('enabled promotion runtime refuses construction without the shared material admission port', () => {
+  assert.throws(
+    () =>
+      createDashboardLocalMaterialPromotionRuntime({
+        authority,
+        client: Object.freeze({
+          async checkAvailability() {
+            return { schemaVersion: 1, available: true, reason: null }
+          },
+          async promote() {
+            assert.fail('failed composition must not promote')
+          },
+          async queryPromotion() {
+            assert.fail('failed composition must not query')
+          },
+        }),
+        core: serviceCore,
+        crypto,
+        featureFlags: enabledFlags,
+        grantIdentity,
+        persistence: createPersistence(async () => ({ schemaVersion: 1, granted: true, reason: 'granted' })),
+      }),
+    /options\.admitMaterialRefsUnderSharedMutation is required/u,
+  )
 })
 
 test('promotion runtime passes staged-retention admission through before server activation', async () => {

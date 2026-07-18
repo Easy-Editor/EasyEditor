@@ -283,10 +283,7 @@ const createService = options => {
     promote: requireMethod(options.client, 'promote', 'client'),
     queryPromotion: requireMethod(options.client, 'queryPromotion', 'client'),
   })
-  const admitMaterialRefsUnderSharedMutation =
-    options.admitMaterialRefsUnderSharedMutation === undefined
-      ? null
-      : requireMethod(options, 'admitMaterialRefsUnderSharedMutation', 'options')
+  const admitMaterialRefsUnderSharedMutation = requireMethod(options, 'admitMaterialRefsUnderSharedMutation', 'options')
   const now = typeof options.now === 'function' ? options.now : Date.now
   const crypto = options.crypto ?? globalThis.crypto
   if (!crypto?.subtle || typeof crypto.subtle.digest !== 'function') {
@@ -617,26 +614,24 @@ const createService = options => {
         { requiredPause: true },
       )
     }
-    if (admitMaterialRefsUnderSharedMutation !== null) {
-      try {
-        await admitMaterialRefsUnderSharedMutation(
-          freezeDto({
-            schemaVersion: 1,
-            projectId: call.projectId,
-            materialRefs: materialRefsOf(artifactRef),
-            unresolvedPromotionIds: [state.promotionId],
-            reason: 'promotion-activation',
-          }),
-        )
-      } catch {
-        return invocationFailure(
-          call.callId,
-          'not-applied',
-          LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed,
-          'The activated local material could not be admitted before the Core ref switch',
-          { stage: 'material-admission' },
-        )
-      }
+    try {
+      await admitMaterialRefsUnderSharedMutation(
+        freezeDto({
+          schemaVersion: 1,
+          projectId: call.projectId,
+          materialRefs: materialRefsOf(artifactRef),
+          unresolvedPromotionIds: [state.promotionId],
+          reason: 'promotion-activation',
+        }),
+      )
+    } catch {
+      return invocationFailure(
+        call.callId,
+        'not-applied',
+        LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed,
+        'The activated local material could not be admitted before the Core ref switch',
+        { stage: 'material-admission' },
+      )
     }
     const transactionFingerprint = await hashJson(
       transactionFingerprintInput({ call, prepare: state.prepare, artifactRef, promotionId: state.promotionId }),
@@ -830,7 +825,7 @@ const createService = options => {
         { requiredPause: true },
       )
     }
-    if (admitMaterialRefsUnderSharedMutation !== null && hydrated.state.stage === 'prepared') {
+    if (hydrated.state.stage === 'prepared') {
       try {
         await admitMaterialRefsUnderSharedMutation(
           freezeDto({

@@ -291,11 +291,12 @@ test('promotion Core adapter uses one updateProps and preserves node identity, s
 })
 
 const createServiceHarness = async ({
-  admitMaterialRefsUnderSharedMutation,
+  admitMaterialRefsUnderSharedMutation = async () => undefined,
   artifactOverride = null,
   coreFailure = null,
   coreResultMutator = null,
   durableFailure = null,
+  omitMaterialAdmission = false,
   promoteAckLoss = false,
   queryPromotionFailure = null,
   queryPromotionResult = undefined,
@@ -515,7 +516,7 @@ const createServiceHarness = async ({
     core,
     persistence,
     client,
-    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
+    ...(omitMaterialAdmission ? {} : { admitMaterialRefsUnderSharedMutation }),
     now: () => 123,
   })
 
@@ -532,6 +533,13 @@ const createServiceHarness = async ({
     service,
   }
 }
+
+test('promotion capability refuses construction without the shared material admission port', async () => {
+  await assert.rejects(
+    createServiceHarness({ omitMaterialAdmission: true }),
+    /options\.admitMaterialRefsUnderSharedMutation is required/u,
+  )
+})
 
 test('promoteLocal binds the server identity to the canonical call digest and commits existing journal/root stores', async () => {
   const harness = await createServiceHarness()

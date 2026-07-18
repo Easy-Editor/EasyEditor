@@ -685,6 +685,81 @@ test('a project with 4097 deletion candidates rejects planning before durable mu
   assert.deepEqual(healthy.deletionCandidates, [])
 })
 
+test('GC sweep builds one active-plus-pending identity index per sweep phase', async t => {
+  await t.test('ordinary sweep reuses one identity index for every candidate', async subtest => {
+    const indexEvents = []
+    const { addMaterial, registry } = await createFixture(subtest, {
+      checkpoint: async event => {
+        if (event.name === 'gc-record-identity-index-built') indexEvents.push(structuredClone(event))
+      },
+    })
+    const candidates = []
+    for (let index = 0; index < 12; index += 1) {
+      candidates.push(
+        await addMaterial({
+          projectId: 'project-a',
+          materialId: `material-indexed-${index}`,
+          materialVersion: '1.0.0',
+          promotionId: sha256(`promotion-indexed-${index}`),
+        }),
+      )
+    }
+
+    const plan = await planGc(registry)
+    const result = await sweepGc(registry, plan)
+
+    assert.deepEqual(result.deletedMaterials, plan.deletionCandidates)
+    assert.deepEqual(indexEvents, [
+      {
+        name: 'gc-record-identity-index-built',
+        phase: 'sweep',
+        recordCount: candidates.length,
+        identityCount: candidates.length,
+      },
+    ])
+  })
+
+  await t.test('started-receipt recovery builds its own identity index once', async subtest => {
+    const indexEvents = []
+    const { addMaterial, registry, rootDir } = await createFixture(subtest, {
+      checkpoint: async event => {
+        if (event.name === 'gc-record-identity-index-built') indexEvents.push(structuredClone(event))
+      },
+    })
+    const candidate = await addMaterial({
+      projectId: 'project-a',
+      materialId: 'material-started-index',
+      materialVersion: '1.0.0',
+      promotionId: sha256('promotion-started-index'),
+    })
+    const plan = await planGc(registry)
+    await writeFile(
+      join(rootDir, 'gc-sweep-receipts', `${plan.planHash.slice('sha256:'.length)}.json`),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        kind: 'material-gc-sweep-receipt',
+        state: 'started',
+        plan,
+        deletedMaterials: [],
+        registryGeneration: null,
+      })}\n`,
+    )
+
+    const result = await sweepGc(registry, plan)
+
+    assert.deepEqual(result.deletedMaterials, [])
+    assert.notEqual(await registry.readMaterial(identityFor(candidate)), null)
+    assert.deepEqual(indexEvents, [
+      {
+        name: 'gc-record-identity-index-built',
+        phase: 'complete-started',
+        recordCount: 1,
+        identityCount: 1,
+      },
+    ])
+  })
+})
+
 test('material admission and sweep serialize without a stale-reference deletion window', async t => {
   await t.test('admission first advances durable generations and rejects the stale sweep', async subtest => {
     const { addMaterial, registry, rootDir, workspaceRoot } = await createFixture(subtest)

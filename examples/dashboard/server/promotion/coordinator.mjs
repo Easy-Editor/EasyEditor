@@ -27,21 +27,136 @@ const sourceRevisionOf = artifact => ({
   sourceIntegrity: artifact.sourceIntegrity,
 })
 
-const sameFrozenSource = (material, request) => {
+const invalidDescriptor = Symbol('invalid-promotion-binding-descriptor')
+
+const ownDataValue = (value, key) => {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return invalidDescriptor
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : invalidDescriptor
+  } catch {
+    return invalidDescriptor
+  }
+}
+
+const materialBindingOf = material => {
+  const sourceRevision = ownDataValue(material, 'sourceRevision')
+  return Object.freeze({
+    schemaVersion: ownDataValue(material, 'schemaVersion'),
+    promotionId: ownDataValue(material, 'promotionId'),
+    projectId: ownDataValue(material, 'projectId'),
+    materialId: ownDataValue(material, 'materialId'),
+    materialVersion: ownDataValue(material, 'materialVersion'),
+    logicalComponentId: ownDataValue(material, 'logicalComponentId'),
+    sourceRevision: Object.freeze({
+      artifactId: ownDataValue(sourceRevision, 'artifactId'),
+      sourceRevision: ownDataValue(sourceRevision, 'sourceRevision'),
+      logicalComponentId: ownDataValue(sourceRevision, 'logicalComponentId'),
+      sourceIntegrity: ownDataValue(sourceRevision, 'sourceIntegrity'),
+    }),
+    dependencyLockDigest: ownDataValue(material, 'dependencyLockDigest'),
+    buildIntegrity: ownDataValue(material, 'buildIntegrity'),
+  })
+}
+
+const buildBindingOf = (material, materialBinding) => {
+  const filesValue = ownDataValue(material, 'files')
+  const length = ownDataValue(filesValue, 'length')
+  const entryFile = ownDataValue(material, 'entryFile')
+  const createdAt = ownDataValue(material, 'createdAt')
+  let filesAreArray = false
+  try {
+    filesAreArray = Array.isArray(filesValue)
+  } catch {
+    return null
+  }
+  if (
+    !filesAreArray ||
+    !Number.isSafeInteger(length) ||
+    length < 1 ||
+    typeof entryFile !== 'string' ||
+    !Number.isSafeInteger(createdAt)
+  ) {
+    return null
+  }
+  const files = []
+  for (let index = 0; index < length; index += 1) {
+    const file = ownDataValue(filesValue, String(index))
+    const path = ownDataValue(file, 'path')
+    const byteLength = ownDataValue(file, 'byteLength')
+    const integrity = ownDataValue(file, 'integrity')
+    if (typeof path !== 'string' || !Number.isSafeInteger(byteLength) || typeof integrity !== 'string') return null
+    files.push(Object.freeze({ path, byteLength, integrity }))
+  }
+  return Object.freeze({
+    buildIntegrity: materialBinding.buildIntegrity,
+    entryFile,
+    files: Object.freeze(files),
+    createdAt,
+  })
+}
+
+const requestBoundMaterialOf = request => {
   const artifact = request.artifact
   const materialIdentity = createCanonicalDurableMaterialIdentity(request)
-  return (
-    material.projectId === request.projectId &&
-    material.promotionId === request.promotionId &&
-    material.materialId === materialIdentity.materialId &&
-    material.materialVersion === materialIdentity.materialVersion &&
-    material.logicalComponentId === artifact.logicalComponentId &&
-    material.dependencyLockDigest === artifact.dependencyLockDigest &&
-    material.sourceRevision?.artifactId === artifact.artifactId &&
-    material.sourceRevision?.sourceRevision === artifact.sourceRevision &&
-    material.sourceRevision?.logicalComponentId === artifact.logicalComponentId &&
-    material.sourceRevision?.sourceIntegrity === artifact.sourceIntegrity
+  return Object.freeze({
+    schemaVersion: request.schemaVersion,
+    promotionId: request.promotionId,
+    projectId: request.projectId,
+    materialId: materialIdentity.materialId,
+    materialVersion: materialIdentity.materialVersion,
+    logicalComponentId: artifact.logicalComponentId,
+    sourceRevision: Object.freeze(sourceRevisionOf(artifact)),
+    dependencyLockDigest: artifact.dependencyLockDigest,
+  })
+}
+
+const sameRequestBoundMaterial = (material, expected) =>
+  material.schemaVersion === expected.schemaVersion &&
+  material.promotionId === expected.promotionId &&
+  material.projectId === expected.projectId &&
+  material.materialId === expected.materialId &&
+  material.materialVersion === expected.materialVersion &&
+  material.logicalComponentId === expected.logicalComponentId &&
+  material.sourceRevision.artifactId === expected.sourceRevision.artifactId &&
+  material.sourceRevision.sourceRevision === expected.sourceRevision.sourceRevision &&
+  material.sourceRevision.logicalComponentId === expected.sourceRevision.logicalComponentId &&
+  material.sourceRevision.sourceIntegrity === expected.sourceRevision.sourceIntegrity &&
+  material.dependencyLockDigest === expected.dependencyLockDigest
+
+const sameFrozenSource = (material, request) =>
+  sameRequestBoundMaterial(materialBindingOf(material), requestBoundMaterialOf(request))
+
+const sameBuildBinding = (left, right) =>
+  left.buildIntegrity === right.buildIntegrity &&
+  left.entryFile === right.entryFile &&
+  left.createdAt === right.createdAt &&
+  left.files.length === right.files.length &&
+  left.files.every(
+    (file, index) =>
+      file.path === right.files[index].path &&
+      file.byteLength === right.files[index].byteLength &&
+      file.integrity === right.files[index].integrity,
   )
+
+const validateAuthoredBinding = (binding, buildBinding, request) => {
+  return (
+    sameRequestBoundMaterial(binding, requestBoundMaterialOf(request)) &&
+    typeof binding.buildIntegrity === 'string' &&
+    binding.buildIntegrity.length > 0 &&
+    buildBinding !== null
+  )
+}
+
+const validatePublishedBinding = (published, request, authoredBuildBinding) => {
+  const binding = materialBindingOf(published)
+  const buildBinding = buildBindingOf(published, binding)
+  return ownDataValue(published, 'state') === 'active' &&
+    sameRequestBoundMaterial(binding, requestBoundMaterialOf(request)) &&
+    buildBinding !== null &&
+    sameBuildBinding(buildBinding, authoredBuildBinding)
+    ? binding
+    : null
 }
 
 const activeResponse = (material, promotionId, rollbackTo) =>
@@ -92,15 +207,13 @@ export const createMaterialPromotionCoordinator = ({ authorizePrincipal, author,
       const authored = await runPromotionPhase(() => author.authorPromotion({ principal, request, signal }), signal)
       try {
         throwIfPromotionAborted(signal)
-        const materialIdentity = createCanonicalDurableMaterialIdentity(request)
-        if (
-          authored?.materialId !== materialIdentity.materialId ||
-          authored?.materialVersion !== materialIdentity.materialVersion
-        ) {
+        const authoredBinding = materialBindingOf(authored)
+        const authoredBuildBinding = buildBindingOf(authored, authoredBinding)
+        if (!validateAuthoredBinding(authoredBinding, authoredBuildBinding, request)) {
           throw promotionError(
             'promotion-build-invalid',
             503,
-            'Trusted wrapper author returned a mismatched durable material identity',
+            'Trusted wrapper author returned mismatched immutable promotion bindings',
           )
         }
         await runPromotionPhase(() => registry.stagePromotion(authored, { signal }), signal)
@@ -110,7 +223,15 @@ export const createMaterialPromotionCoordinator = ({ authorizePrincipal, author,
           signal,
         )
         throwIfPromotionAborted(signal)
-        return activeResponse(published, request.promotionId, sourceRevisionOf(request.artifact))
+        const publishedBinding = validatePublishedBinding(published, request, authoredBuildBinding)
+        if (!publishedBinding) {
+          throw promotionError(
+            'promotion-build-invalid',
+            503,
+            'Material registry published mismatched immutable promotion bindings',
+          )
+        }
+        return activeResponse(publishedBinding, request.promotionId, sourceRevisionOf(request.artifact))
       } finally {
         if (typeof author.releasePromotion === 'function') {
           await author.releasePromotion(authored).catch(() => undefined)

@@ -1868,9 +1868,16 @@ export const createFileMaterialRegistry = async (options = {}) => {
 
   const promotionRecords = () => [...materialIndex.values(), ...pendingIndex.values()]
 
-  const recordsForIdentity = identity => {
-    const key = identityKey(identity)
-    return promotionRecords().filter(record => identityKey(record) === key)
+  const createPromotionRecordIdentityIndex = () => {
+    const records = promotionRecords()
+    const byIdentity = new Map()
+    for (const record of records) {
+      const key = identityKey(record)
+      const matching = byIdentity.get(key)
+      if (matching) matching.push(record)
+      else byIdentity.set(key, [record])
+    }
+    return Object.freeze({ byIdentity, recordCount: records.length })
   }
 
   const resolvePromotionRoots = (projectId, promotionIds) =>
@@ -2066,8 +2073,14 @@ export const createFileMaterialRegistry = async (options = {}) => {
 
   const completeStartedGcSweep = async (plan, durableValue = undefined) => {
     const durable = durableValue ?? (await reconcileDurableIndex())
+    const identityIndex = createPromotionRecordIdentityIndex()
+    await callCheckpoint('gc-record-identity-index-built', {
+      phase: 'complete-started',
+      recordCount: identityIndex.recordCount,
+      identityCount: identityIndex.byIdentity.size,
+    })
     const deletedMaterials = plan.deletionCandidates.filter(identity => {
-      const records = recordsForIdentity(identity)
+      const records = identityIndex.byIdentity.get(identityKey(identity)) ?? []
       return !records.some(record => record.projectId === plan.projectId)
     })
     let receipt
@@ -2175,8 +2188,16 @@ export const createFileMaterialRegistry = async (options = {}) => {
         })
       }
 
+      const identityIndex = createPromotionRecordIdentityIndex()
+      await callCheckpoint('gc-record-identity-index-built', {
+        phase: 'sweep',
+        recordCount: identityIndex.recordCount,
+        identityCount: identityIndex.byIdentity.size,
+      })
       for (const identity of expectedCandidates) {
-        const records = recordsForIdentity(identity).filter(record => record.projectId === plan.projectId)
+        const records = (identityIndex.byIdentity.get(identityKey(identity)) ?? []).filter(
+          record => record.projectId === plan.projectId,
+        )
         if (records.length === 0) continue
         for (const record of records) {
           const sourceDirectory = promotionDirectoryFor(record.promotionId)

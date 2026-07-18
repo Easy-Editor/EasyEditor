@@ -164,7 +164,7 @@ export interface DashboardLocalMaterialPromotionCapabilityServiceOptions {
   readonly core: LocalMaterialPromotionCorePort
   readonly persistence: LocalMaterialPromotionPersistencePort
   readonly client: LocalMaterialPromotionClientPort
-  readonly admitMaterialRefsUnderSharedMutation?: (
+  readonly admitMaterialRefsUnderSharedMutation: (
     input: Readonly<LocalMaterialPromotionAdmissionInputV1>,
   ) => unknown | PromiseLike<unknown>
   readonly now?: () => number

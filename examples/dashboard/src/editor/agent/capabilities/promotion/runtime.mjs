@@ -105,6 +105,9 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
     'admitMaterialRefsUnderSharedMutation',
     'options',
   )
+  if (typeof admitMaterialRefsUnderSharedMutation !== 'function') {
+    throw new TypeError('options.admitMaterialRefsUnderSharedMutation is required')
+  }
   const checkAvailability = requireMethod(client, 'checkAvailability', 'client')
   const checkLocalGrant = requireMethod(persistence, 'checkLocalGrant', 'persistence')
   const rawPromotionService = createDashboardLocalMaterialPromotionCapabilityService({
@@ -113,7 +116,7 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
     core: options.core,
     persistence,
     crypto: options.crypto,
-    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
+    admitMaterialRefsUnderSharedMutation,
     ...(typeof options.now === 'function' ? { now: options.now } : {}),
     ...(typeof options.isTransactionCommittedError === 'function'
       ? { isTransactionCommittedError: options.isTransactionCommittedError }

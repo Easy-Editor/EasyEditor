@@ -252,7 +252,9 @@ const createBoundDashboardAgentHost = (
   const promotionRuntime =
     dashboardAgentRuntimeFeatureFlags.runtime &&
     dashboardAgentRuntimeFeatureFlags.online &&
-    dashboardAgentRuntimeFeatureFlags.promotion
+    dashboardAgentRuntimeFeatureFlags.promotion &&
+    dashboardMaterialGcEnabled &&
+    dashboardMaterialGcAdmissionPort
       ? createDashboardLocalMaterialPromotionRuntime({
           authority,
           featureFlags: dashboardAgentRuntimeFeatureFlags,
@@ -273,12 +275,7 @@ const createBoundDashboardAgentHost = (
             persistence: dashboardPersistence,
           }),
           crypto: window.crypto,
-          ...(dashboardMaterialGcAdmissionPort
-            ? {
-                admitMaterialRefsUnderSharedMutation:
-                  dashboardMaterialGcAdmissionPort.admitMaterialRefsUnderSharedMutation,
-              }
-            : {}),
+          admitMaterialRefsUnderSharedMutation: dashboardMaterialGcAdmissionPort.admitMaterialRefsUnderSharedMutation,
           ...(grantIdentity ? { grantIdentity } : {}),
           onPromotionApplied: async () => {
             await dashboardLocalMaterialCatalogRuntime.refresh()

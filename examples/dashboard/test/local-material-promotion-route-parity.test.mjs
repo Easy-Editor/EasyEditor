@@ -116,10 +116,29 @@ const sourceRevisionOf = value => ({
   sourceIntegrity: value.sourceIntegrity,
 })
 
+const withForgedSourceRevision = (binding, field, value) => ({
+  ...binding,
+  sourceRevision: { ...binding.sourceRevision, [field]: value },
+})
+
+const requestBindingMutations = [
+  binding => ({ ...binding, schemaVersion: 2 }),
+  binding => ({ ...binding, promotionId: digest('b') }),
+  binding => ({ ...binding, projectId: 'project-forged' }),
+  binding => ({ ...binding, materialId: 'forged-material-id' }),
+  binding => ({ ...binding, materialVersion: 'forged-material-version' }),
+  binding => ({ ...binding, logicalComponentId: 'logical-forged' }),
+  binding => withForgedSourceRevision(binding, 'artifactId', 'artifact-forged'),
+  binding => withForgedSourceRevision(binding, 'sourceRevision', 'source-revision-forged'),
+  binding => withForgedSourceRevision(binding, 'logicalComponentId', 'logical-forged'),
+  binding => withForgedSourceRevision(binding, 'sourceIntegrity', digest('b')),
+  binding => ({ ...binding, dependencyLockDigest: digest('b') }),
+]
+
 const promotionError = (code, status, message, retryable = false) =>
   Object.assign(new Error(message), { code, status, retryable })
 
-const createCoordinatorHarness = ({ exposeMaterialList = false, mutateAuthored, onStage } = {}) => {
+const createCoordinatorHarness = ({ exposeMaterialList = false, mutateAuthored, mutatePublished, onStage } = {}) => {
   const authorizationCalls = []
   const authorCalls = []
   const registryCalls = []
@@ -173,7 +192,8 @@ const createCoordinatorHarness = ({ exposeMaterialList = false, mutateAuthored, 
       const record = records.get(promotionId)
       if (!record) throw promotionError('promotion-not-found', 404, 'Promotion was not staged')
       record.state = 'active'
-      return { ...clone(record.binding), state: 'active' }
+      const published = { ...clone(record.binding), state: 'active' }
+      return mutatePublished ? mutatePublished(published) : published
     },
     async queryPromotion(request) {
       registryCalls.push({ method: 'queryPromotion', request: clone(request) })
@@ -297,29 +317,90 @@ test('coordinator binds project authority to the trusted principal and keeps pro
   assert.equal(harness.authorCalls.length, 2, 'project authority is checked before authoring')
 })
 
-test('coordinator rejects forged durable identity before the registry observes authored output', async () => {
-  for (const mutateAuthored of [
-    authored => ({ ...authored, materialId: 'forged-material-id' }),
-    authored => ({ ...authored, materialVersion: 'forged-material-version' }),
-  ]) {
+test('coordinator rejects every forged request-derived author binding before staging', async () => {
+  for (const mutateAuthored of requestBindingMutations) {
     const harness = createCoordinatorHarness({ mutateAuthored })
 
     const result = await harness.handler.handle(transportRequest(promotionRequest()))
 
-    assert.deepEqual(result, {
-      status: 503,
-      body: {
-        schemaVersion: 1,
-        error: {
-          code: 'promotion-build-invalid',
-          message: 'Trusted wrapper author returned a mismatched durable material identity',
-          retryable: false,
-        },
-      },
-    })
+    assert.equal(result.status, 503)
+    assert.equal(result.body.error.code, 'promotion-build-invalid')
     assert.equal(harness.authorCalls.length, 1)
     assert.equal(harness.registryCalls.length, 0)
   }
+})
+
+test('coordinator rejects accessor-backed author bindings without invoking hostile getters', async () => {
+  for (const nested of [false, true]) {
+    let getterReads = 0
+    const harness = createCoordinatorHarness({
+      mutateAuthored(authored) {
+        const forged = { ...authored }
+        const target = nested ? { ...authored.sourceRevision } : forged
+        Object.defineProperty(target, nested ? 'sourceIntegrity' : 'projectId', {
+          enumerable: true,
+          get() {
+            getterReads += 1
+            return nested ? authored.sourceRevision.sourceIntegrity : authored.projectId
+          },
+        })
+        if (nested) forged.sourceRevision = target
+        return forged
+      },
+    })
+
+    const result = await harness.handler.handle(transportRequest(promotionRequest()))
+
+    assert.equal(result.status, 503)
+    assert.equal(result.body.error.code, 'promotion-build-invalid')
+    assert.equal(getterReads, 0)
+    assert.equal(harness.registryCalls.length, 0)
+  }
+})
+
+test('coordinator rejects forged published bindings instead of returning active', async () => {
+  for (const mutatePublished of [
+    ...requestBindingMutations,
+    published => ({ ...published, buildIntegrity: digest('b') }),
+    published => ({ ...published, state: 'manifest-staged' }),
+    published => ({ ...published, entryFile: 'dist/forged.js' }),
+    published => ({ ...published, createdAt: 201 }),
+    published => ({
+      ...published,
+      files: [{ ...published.files[0], integrity: digest('b') }],
+    }),
+  ]) {
+    const harness = createCoordinatorHarness({ mutatePublished })
+
+    const result = await harness.handler.handle(transportRequest(promotionRequest()))
+
+    assert.equal(result.status, 503)
+    assert.equal(result.body.error.code, 'promotion-build-invalid')
+    assert.equal(harness.registryCalls.filter(call => call.method === 'stagePromotion').length, 1)
+    assert.equal(harness.registryCalls.filter(call => call.method === 'publishPromotion').length, 1)
+  }
+})
+
+test('coordinator rejects accessor-backed published bindings without invoking hostile getters', async () => {
+  let getterReads = 0
+  const harness = createCoordinatorHarness({
+    mutatePublished(published) {
+      Object.defineProperty(published, 'buildIntegrity', {
+        enumerable: true,
+        get() {
+          getterReads += 1
+          return buildIntegrity
+        },
+      })
+      return published
+    },
+  })
+
+  const result = await harness.handler.handle(transportRequest(promotionRequest()))
+
+  assert.equal(result.status, 503)
+  assert.equal(result.body.error.code, 'promotion-build-invalid')
+  assert.equal(getterReads, 0)
 })
 
 test('active promotion reuse accepts only the canonical durable material identity', async () => {
