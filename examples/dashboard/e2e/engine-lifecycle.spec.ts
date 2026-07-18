@@ -94,6 +94,7 @@ test('dashboard lifecycle, reload, persistence, and preview remain coherent', as
     'getAgentTelemetryState',
     'getAgentWorkspaceState',
     'getEngineState',
+    'getHumanActivityGeneration',
     'getPersistenceState',
   ])
 
