@@ -78,6 +78,24 @@ const promotionIdentity = request => ({
   },
 })
 
+const sha256Hex = value => createHash('sha256').update(canonicalJsonStringify(value)).digest('hex')
+
+export const createCanonicalDurableMaterialIdentity = request => {
+  const materialId = `local-material-${sha256Hex({
+    schemaVersion: 1,
+    kind: 'local-material-registry-lineage',
+    projectId: request.projectId,
+    artifactId: request.artifact.artifactId,
+  })}`
+  const materialVersion = `local-version-${sha256Hex({
+    schemaVersion: 1,
+    kind: 'local-material-registry-version',
+    materialId,
+    promotionId: request.promotionId,
+  })}`
+  return Object.freeze({ materialId, materialVersion })
+}
+
 export const createCanonicalPromotionId = request =>
   `sha256:${createHash('sha256')
     .update(canonicalJsonStringify(promotionIdentity(request)))

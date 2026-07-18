@@ -4,6 +4,7 @@ import {
 } from '../../shared/material-catalog-contract.mjs'
 import { promotionError, runPromotionPhase, throwIfPromotionAborted } from './promotion-error.mjs'
 import {
+  createCanonicalDurableMaterialIdentity,
   validateMaterialCatalogList,
   validateMaterialCatalogRead,
   validateMaterialGcPlanRequest,
@@ -28,11 +29,12 @@ const sourceRevisionOf = artifact => ({
 
 const sameFrozenSource = (material, request) => {
   const artifact = request.artifact
+  const materialIdentity = createCanonicalDurableMaterialIdentity(request)
   return (
     material.projectId === request.projectId &&
     material.promotionId === request.promotionId &&
-    material.materialId === artifact.logicalComponentId &&
-    material.materialVersion === artifact.sourceRevision &&
+    material.materialId === materialIdentity.materialId &&
+    material.materialVersion === materialIdentity.materialVersion &&
     material.logicalComponentId === artifact.logicalComponentId &&
     material.dependencyLockDigest === artifact.dependencyLockDigest &&
     material.sourceRevision?.artifactId === artifact.artifactId &&
@@ -90,6 +92,17 @@ export const createMaterialPromotionCoordinator = ({ authorizePrincipal, author,
       const authored = await runPromotionPhase(() => author.authorPromotion({ principal, request, signal }), signal)
       try {
         throwIfPromotionAborted(signal)
+        const materialIdentity = createCanonicalDurableMaterialIdentity(request)
+        if (
+          authored?.materialId !== materialIdentity.materialId ||
+          authored?.materialVersion !== materialIdentity.materialVersion
+        ) {
+          throw promotionError(
+            'promotion-build-invalid',
+            503,
+            'Trusted wrapper author returned a mismatched durable material identity',
+          )
+        }
         await runPromotionPhase(() => registry.stagePromotion(authored, { signal }), signal)
         throwIfPromotionAborted(signal)
         const published = await runPromotionPhase(

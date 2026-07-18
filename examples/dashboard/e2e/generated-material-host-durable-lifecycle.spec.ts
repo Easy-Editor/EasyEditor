@@ -512,8 +512,8 @@ test('real promotion remains durable across editor/preview reload and Workspace 
     sourceIntegrity: seed.artifactRef.sourceIntegrity,
     target: {
       kind: 'local-material',
-      materialId: seed.artifactRef.logicalComponentId,
-      materialVersion: seed.artifactRef.sourceRevision,
+      materialId: expect.stringMatching(/^local-material-[\da-f]{64}$/u),
+      materialVersion: expect.stringMatching(/^local-version-[\da-f]{64}$/u),
       buildIntegrity: expect.stringMatching(/^sha256:[\da-f]{64}$/u),
     },
     rollbackTo: {
@@ -523,6 +523,8 @@ test('real promotion remains durable across editor/preview reload and Workspace 
       sourceIntegrity: seed.artifactRef.sourceIntegrity,
     },
   })
+  expect(localArtifactRef.target.materialId).not.toBe(seed.artifactRef.logicalComponentId)
+  expect(localArtifactRef.target.materialVersion).not.toBe(seed.artifactRef.sourceRevision)
   expect(promotion.promotionJournal).toMatchObject({
     recordId: `promotion:${PROMOTION_CALL_ID}`,
     kind: 'local-material-promotion',

@@ -7,7 +7,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { verifyArtifactRecordIntegrity } from '../../src/lib/storage/artifact-contracts.mjs'
 import { checkEasypackRuntimeReadiness, loadEasypackRuntime } from './easypack-runtime-loader.mjs'
 import { promotionError, throwIfPromotionAborted } from './promotion-error.mjs'
-import { validateMaterialPromotionCall } from './request-contract.mjs'
+import { createCanonicalDurableMaterialIdentity, validateMaterialPromotionCall } from './request-contract.mjs'
 
 const EASYPACK_ENTRY_FILE = 'dist/index.esm.js'
 const WORKSPACE_MARKER_FILE = '.easy-editor-workspace-owner.json'
@@ -774,6 +774,8 @@ export const createEasypackTrustedWrapperAuthor = ({
         throw promotionError('artifact-integrity-mismatch', 409, 'Artifact integrity verification failed')
       }
 
+      const materialIdentity = createCanonicalDurableMaterialIdentity(promotionRequest)
+
       throwIfPromotionAborted(signal)
       const leaseState = await beginLifecycleOperation()
       let buildDirectory
@@ -841,8 +843,8 @@ export const createEasypackTrustedWrapperAuthor = ({
           schemaVersion: 1,
           promotionId: promotionRequest.promotionId,
           projectId: promotionRequest.projectId,
-          materialId: artifact.logicalComponentId,
-          materialVersion: artifact.sourceRevision,
+          materialId: materialIdentity.materialId,
+          materialVersion: materialIdentity.materialVersion,
           logicalComponentId: artifact.logicalComponentId,
           buildIntegrity: entry.integrity,
           sourceRevision: Object.freeze(sourceRevisionOf(artifact)),

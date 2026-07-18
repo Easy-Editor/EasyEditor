@@ -16,6 +16,7 @@ import {
   createMaterialPromotionHandler,
   createNodeMaterialPromotionMiddleware,
 } from '../server/promotion/index.mjs'
+import { createCanonicalDurableMaterialIdentity } from '../server/promotion/request-contract.mjs'
 import { canonicalJsonStringify } from '../src/lib/storage/canonical-json.mjs'
 
 const sha256 = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
@@ -118,7 +119,7 @@ const sourceRevisionOf = value => ({
 const promotionError = (code, status, message, retryable = false) =>
   Object.assign(new Error(message), { code, status, retryable })
 
-const createCoordinatorHarness = ({ onStage } = {}) => {
+const createCoordinatorHarness = ({ exposeMaterialList = false, mutateAuthored, onStage } = {}) => {
   const authorizationCalls = []
   const authorCalls = []
   const registryCalls = []
@@ -136,12 +137,13 @@ const createCoordinatorHarness = ({ onStage } = {}) => {
     async authorPromotion(input) {
       authorCalls.push(clone(input))
       const requestArtifact = input.request.artifact
-      return {
+      const materialIdentity = createCanonicalDurableMaterialIdentity(input.request)
+      const authored = {
         schemaVersion: 1,
         promotionId: input.request.promotionId,
         projectId: input.request.projectId,
-        materialId: requestArtifact.logicalComponentId,
-        materialVersion: requestArtifact.sourceRevision,
+        materialId: materialIdentity.materialId,
+        materialVersion: materialIdentity.materialVersion,
         logicalComponentId: requestArtifact.logicalComponentId,
         buildIntegrity,
         sourceRevision: sourceRevisionOf(requestArtifact),
@@ -151,6 +153,7 @@ const createCoordinatorHarness = ({ onStage } = {}) => {
         files: [{ path: 'dist/index.esm.js', byteLength: buildBytes.byteLength, integrity: buildIntegrity }],
         createdAt: 200,
       }
+      return mutateAuthored ? mutateAuthored(authored) : authored
     },
   }
   const registry = {
@@ -178,6 +181,14 @@ const createCoordinatorHarness = ({ onStage } = {}) => {
       if (!record || record.binding.projectId !== request.projectId) return null
       return { ...clone(record.binding), state: record.state }
     },
+  }
+  if (exposeMaterialList) {
+    registry.listMaterials = async ({ projectId }) => {
+      registryCalls.push({ method: 'listMaterials', projectId })
+      return [...records.values()]
+        .filter(record => record.state === 'active' && record.binding.projectId === projectId)
+        .map(record => ({ ...clone(record.binding), state: record.state }))
+    }
   }
   const coordinator = createMaterialPromotionCoordinator({ authorizePrincipal, author, registry })
   const handler = createMaterialPromotionHandler({ coordinator })
@@ -223,6 +234,7 @@ const requestOverHttp = (origin, value, overrides = {}) => {
 test('coordinator binds project authority to the trusted principal and keeps promotionId idempotent', async () => {
   const harness = createCoordinatorHarness()
   const request = promotionRequest()
+  const materialIdentity = createCanonicalDurableMaterialIdentity(request)
   const first = await harness.handler.handle(transportRequest(request))
   const second = await harness.handler.handle(transportRequest(request))
 
@@ -233,8 +245,8 @@ test('coordinator binds project authority to the trusted principal and keeps pro
       schemaVersion: 1,
       status: 'active',
       promotionId: request.promotionId,
-      materialId: 'logical-kpi',
-      materialVersion: 'source-revision-7',
+      materialId: materialIdentity.materialId,
+      materialVersion: materialIdentity.materialVersion,
       buildIntegrity,
       rollbackTo: sourceRevisionOf(request.artifact),
     },
@@ -283,6 +295,57 @@ test('coordinator binds project authority to the trusted principal and keeps pro
     retryable: false,
   })
   assert.equal(harness.authorCalls.length, 2, 'project authority is checked before authoring')
+})
+
+test('coordinator rejects forged durable identity before the registry observes authored output', async () => {
+  for (const mutateAuthored of [
+    authored => ({ ...authored, materialId: 'forged-material-id' }),
+    authored => ({ ...authored, materialVersion: 'forged-material-version' }),
+  ]) {
+    const harness = createCoordinatorHarness({ mutateAuthored })
+
+    const result = await harness.handler.handle(transportRequest(promotionRequest()))
+
+    assert.deepEqual(result, {
+      status: 503,
+      body: {
+        schemaVersion: 1,
+        error: {
+          code: 'promotion-build-invalid',
+          message: 'Trusted wrapper author returned a mismatched durable material identity',
+          retryable: false,
+        },
+      },
+    })
+    assert.equal(harness.authorCalls.length, 1)
+    assert.equal(harness.registryCalls.length, 0)
+  }
+})
+
+test('active promotion reuse accepts only the canonical durable material identity', async () => {
+  const harness = createCoordinatorHarness({ exposeMaterialList: true })
+  const request = promotionRequest()
+  const first = await harness.handler.handle(transportRequest(request))
+  const second = await harness.handler.handle(transportRequest(request))
+
+  assert.deepEqual(second, first)
+  assert.equal(harness.authorCalls.length, 1)
+  assert.equal(harness.registryCalls.filter(call => call.method === 'stagePromotion').length, 1)
+
+  harness.records.get(request.promotionId).binding.materialId = request.artifact.logicalComponentId
+  const legacyAlias = await harness.handler.handle(transportRequest(request))
+  assert.deepEqual(legacyAlias, {
+    status: 409,
+    body: {
+      schemaVersion: 1,
+      error: {
+        code: 'promotion-conflict',
+        message: 'promotionId is already bound to different frozen inputs',
+        retryable: false,
+      },
+    },
+  })
+  assert.equal(harness.authorCalls.length, 1)
 })
 
 test('same promotionId rejects a different frozen source revision with a typed 409', async () => {

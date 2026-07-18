@@ -8,11 +8,13 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { createEasypackTrustedWrapperAuthor } from '../server/promotion/easypack-author.mjs'
+import { createCanonicalDurableMaterialIdentity } from '../server/promotion/request-contract.mjs'
 import { canonicalJsonStringify } from '../src/lib/storage/canonical-json.mjs'
 
 const childFixturePath = fileURLToPath(new URL('./fixtures/local-material-author-child.mjs', import.meta.url))
 
 const sha256 = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
+const sha256Hex = value => createHash('sha256').update(value).digest('hex')
 const sha256Sri = value => `sha256-${createHash('sha256').update(value).digest('base64')}`
 const digest = character => `sha256:${character.repeat(64)}`
 const delay = milliseconds => new Promise(resolvePromise => setTimeout(resolvePromise, milliseconds))
@@ -103,6 +105,54 @@ const promotionRequest = (overrides = {}) => {
   }
   return { ...request, promotionId: overrides.promotionId ?? canonicalPromotionId(request) }
 }
+
+test('canonical durable identity separates registry lineage from logical source identity', () => {
+  const firstRequest = promotionRequest()
+  const first = createCanonicalDurableMaterialIdentity(firstRequest)
+  const repeated = createCanonicalDurableMaterialIdentity(firstRequest)
+  const nextSource = `${rawSource}\n// next frozen revision`
+  const nextPromotionRequest = promotionRequest({
+    artifact: artifact({
+      sourceRevision: 'source-revision-8',
+      source: nextSource,
+      sourceIntegrity: sha256(nextSource),
+    }),
+  })
+  const nextPromotion = createCanonicalDurableMaterialIdentity(nextPromotionRequest)
+  const otherArtifactRequest = promotionRequest({ artifact: artifact({ artifactId: 'artifact-secondary' }) })
+  const otherProjectRequest = promotionRequest({
+    projectId: 'project-secondary',
+    artifact: artifact({ projectId: 'project-secondary' }),
+  })
+
+  const expectedMaterialId = `local-material-${sha256Hex(
+    canonicalJsonStringify({
+      schemaVersion: 1,
+      kind: 'local-material-registry-lineage',
+      projectId: firstRequest.projectId,
+      artifactId: firstRequest.artifact.artifactId,
+    }),
+  )}`
+  const expectedMaterialVersion = `local-version-${sha256Hex(
+    canonicalJsonStringify({
+      schemaVersion: 1,
+      kind: 'local-material-registry-version',
+      materialId: expectedMaterialId,
+      promotionId: firstRequest.promotionId,
+    }),
+  )}`
+
+  assert.deepEqual(first, { materialId: expectedMaterialId, materialVersion: expectedMaterialVersion })
+  assert.deepEqual(repeated, first)
+  assert.match(first.materialId, /^local-material-[\da-f]{64}$/u)
+  assert.match(first.materialVersion, /^local-version-[\da-f]{64}$/u)
+  assert.notEqual(first.materialId, firstRequest.artifact.logicalComponentId)
+  assert.notEqual(first.materialVersion, firstRequest.artifact.sourceRevision)
+  assert.equal(nextPromotion.materialId, first.materialId)
+  assert.notEqual(nextPromotion.materialVersion, first.materialVersion)
+  assert.notEqual(createCanonicalDurableMaterialIdentity(otherArtifactRequest).materialId, first.materialId)
+  assert.notEqual(createCanonicalDurableMaterialIdentity(otherProjectRequest).materialId, first.materialId)
+})
 
 const isInside = (root, candidate) => {
   const pathFromRoot = relative(root, candidate)
@@ -627,8 +677,12 @@ test('Node 20 author builds only a fixed trusted sandbox-proxy wrapper in a conf
   assert.equal(first.schemaVersion, 1)
   assert.equal(first.promotionId, input.request.promotionId)
   assert.equal(first.projectId, 'project-promotion')
-  assert.equal(first.materialId, 'logical-kpi')
-  assert.equal(first.materialVersion, 'source-revision-7')
+  assert.deepEqual(
+    { materialId: first.materialId, materialVersion: first.materialVersion },
+    createCanonicalDurableMaterialIdentity(input.request),
+  )
+  assert.notEqual(first.materialId, first.logicalComponentId)
+  assert.notEqual(first.materialVersion, first.sourceRevision.sourceRevision)
   assert.equal(first.logicalComponentId, 'logical-kpi')
   assert.equal(first.dependencyLockDigest, dependencyLockDigest)
   assert.equal(first.entryFile, 'dist/index.esm.js')
