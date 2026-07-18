@@ -207,6 +207,16 @@ const identityMatchesFence = (identity, fence) =>
 const markerMatchesFence = (marker, fence) =>
   marker?.canonicalBackend === 'indexeddb' && sameFence(fenceFromMarker(marker), fence)
 
+const markerAdvancesFence = (marker, fence) => {
+  if (marker?.canonicalBackend !== 'indexeddb') return false
+  const markerFence = fenceFromMarker(marker)
+  return (
+    markerFence.projectId === fence.projectId &&
+    markerFence.branchId === fence.branchId &&
+    markerFence.draftGeneration > fence.draftGeneration
+  )
+}
+
 const writeIdentity = (legacy, fence) => {
   const identity = Object.freeze({ schemaVersion: 1, projectId: fence.projectId, branchId: fence.branchId })
   legacy.writeValue(DASHBOARD_STORAGE_IDENTITY_POINTER_KEY, JSON.stringify(identity))
@@ -263,11 +273,13 @@ const inspectMarker = legacy => {
   return inspection.marker
 }
 
-const assertTransitionSurface = (legacy, transition) => {
+const assertTransitionSurface = (legacy, transition, { allowAdvancedTarget = false } = {}) => {
   const marker = inspectMarker(legacy)
   const identity = readIdentity(legacy)
   const markerAtSource = markerMatchesFence(marker, transition.source)
-  const markerAtTarget = markerMatchesFence(marker, transition.target)
+  const markerAtTarget =
+    markerMatchesFence(marker, transition.target) ||
+    (allowAdvancedTarget && markerAdvancesFence(marker, transition.target))
   const identityAtSource = identityMatchesFence(identity, transition.source)
   const identityAtTarget = identityMatchesFence(identity, transition.target)
   if ((!markerAtSource && !markerAtTarget) || (!identityAtSource && !identityAtTarget)) {
@@ -280,7 +292,7 @@ const assertTransitionSurface = (legacy, transition) => {
 }
 
 const assertCompletedTransitionStable = (legacy, transition) => {
-  const surface = assertTransitionSurface(legacy, transition)
+  const surface = assertTransitionSurface(legacy, transition, { allowAdvancedTarget: true })
   if (!surface.markerAtTarget || !surface.identityAtTarget) {
     throw failure(DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch, 'completed-branch-switch-surface-is-not-stable')
   }

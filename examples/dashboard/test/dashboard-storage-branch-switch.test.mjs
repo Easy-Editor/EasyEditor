@@ -181,6 +181,113 @@ test('branch switch prepares exact restore identity, writes verified target byte
   assertTargetSurface({ storage, target })
 })
 
+test('completed branch switch remains stable after a later save on the restored target', async () => {
+  const { legacy, source, storage } = await seedSource()
+  const target = await createDraft('restore-version-1', 'restored', 1, 30)
+  await prepare({ legacy, source, target })
+  await switchIndexedDbCompatibilityBranch({
+    legacy,
+    draft: target,
+    restoreRequest: restoreRequest(target),
+    now: () => 31,
+  })
+
+  const savedTarget = await createDraft(target.branchId, 'saved after restore', 2, 40)
+  await refreshIndexedDbCompatibilitySnapshot({ legacy, draft: savedTarget, now: () => 41 })
+
+  const recovered = await recoverIndexedDbCompatibilityBranchSwitch({
+    legacy,
+    ensureRestoreTarget: async () => {
+      throw new Error('completed transition must not recreate the original restore target')
+    },
+  })
+
+  assert.equal(recovered.status, 'stable')
+  assertTargetSurface({ storage, target: savedTarget })
+})
+
+test('completed target advancement stays fail-closed for invalid authority changes and pending drift', async t => {
+  const seedCompletedTarget = async () => {
+    const seeded = await seedSource()
+    const target = await createDraft('restore-version-1', 'restored', 1, 30)
+    await prepare({ legacy: seeded.legacy, source: seeded.source, target })
+    await switchIndexedDbCompatibilityBranch({
+      legacy: seeded.legacy,
+      draft: target,
+      restoreRequest: restoreRequest(target),
+      now: () => 31,
+    })
+    return { ...seeded, target }
+  }
+
+  await t.test('foreign project or branch', async () => {
+    const { legacy, storage, target } = await seedCompletedTarget()
+    writeStorageCompatibilityMarker(storage, {
+      canonicalBackend: 'indexeddb',
+      projectId: 'foreign-project',
+      branchId: 'foreign-branch',
+      draftGeneration: 2,
+      projectHash: target.projectHash,
+      updatedAt: 40,
+    })
+    await assert.rejects(
+      recoverIndexedDbCompatibilityBranchSwitch({ legacy, ensureRestoreTarget: async () => ({ draft: target }) }),
+      error => error.code === 'integrity-mismatch' && error.reason === 'branch-switch-surface-has-unrelated-authority',
+    )
+  })
+
+  await t.test('generation rollback', async () => {
+    const { legacy, storage, target } = await seedCompletedTarget()
+    writeStorageCompatibilityMarker(storage, {
+      canonicalBackend: 'indexeddb',
+      projectId: target.projectId,
+      branchId: target.branchId,
+      draftGeneration: 0,
+      projectHash: target.projectHash,
+      updatedAt: 40,
+    })
+    await assert.rejects(
+      recoverIndexedDbCompatibilityBranchSwitch({ legacy, ensureRestoreTarget: async () => ({ draft: target }) }),
+      error => error.code === 'integrity-mismatch' && error.reason === 'branch-switch-fence-is-malformed',
+    )
+  })
+
+  await t.test('same generation with a different hash', async () => {
+    const { legacy, storage, target } = await seedCompletedTarget()
+    const divergent = await createDraft(target.branchId, 'divergent target', target.draftGeneration, 40)
+    writeStorageCompatibilityMarker(storage, {
+      canonicalBackend: 'indexeddb',
+      projectId: target.projectId,
+      branchId: target.branchId,
+      draftGeneration: divergent.draftGeneration,
+      projectHash: divergent.projectHash,
+      updatedAt: 40,
+    })
+    await assert.rejects(
+      recoverIndexedDbCompatibilityBranchSwitch({ legacy, ensureRestoreTarget: async () => ({ draft: target }) }),
+      error => error.code === 'integrity-mismatch' && error.reason === 'branch-switch-surface-has-unrelated-authority',
+    )
+  })
+
+  await t.test('pending transition marker drift', async () => {
+    const { legacy, source, storage } = await seedSource()
+    const target = await createDraft('restore-version-1', 'restored', 1, 30)
+    await prepare({ legacy, source, target })
+    writeStorageCompatibilityMarker(storage, {
+      canonicalBackend: 'indexeddb',
+      projectId: target.projectId,
+      branchId: target.branchId,
+      draftGeneration: 2,
+      projectHash: target.projectHash,
+      updatedAt: 40,
+    })
+    await assert.rejects(
+      recoverIndexedDbCompatibilityBranchSwitch({ legacy, ensureRestoreTarget: async () => ({ draft: target }) }),
+      error => error.code === 'integrity-mismatch' && error.reason === 'branch-switch-surface-has-unrelated-authority',
+    )
+  })
+})
+
 test('every branch-switch crash point recovers deterministically from the durable target draft', async t => {
   const seeded = await seedSource()
   const initialEntries = seeded.storage.snapshot()
