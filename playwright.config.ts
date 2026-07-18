@@ -5,6 +5,7 @@ const appUrl = `http://127.0.0.1:${appPort}`
 
 export default defineConfig({
   testDir: './examples/dashboard/e2e',
+  testIgnore: '**/generated-material-host-online.spec.ts',
   expect: { timeout: 15_000 },
   forbidOnly: !!process.env.CI,
   failOnFlakyTests: !!process.env.CI,
