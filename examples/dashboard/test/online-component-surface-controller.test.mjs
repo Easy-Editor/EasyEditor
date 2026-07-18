@@ -167,12 +167,24 @@ const createHostFactory = () => {
       unregister(instanceId) {
         return instances.delete(instanceId)
       },
+      whenReady() {
+        return Promise.resolve(!host.disposed)
+      },
+      abortOwnedActivation() {
+        instances.clear()
+        return true
+      },
       dispose() {
         host.disposed = true
         instances.clear()
       },
       getDiagnostics() {
-        return { iframeCount: host.disposed || instances.size === 0 ? 0 : 1, instanceCount: instances.size }
+        return {
+          state: host.disposed ? 'disposed' : instances.size === 0 ? 'idle' : 'ready',
+          generation: host.disposed || instances.size === 0 ? 0 : 1,
+          iframeCount: host.disposed || instances.size === 0 ? 0 : 1,
+          instanceCount: instances.size,
+        }
       },
     }
     hosts.push(host)
@@ -226,6 +238,7 @@ test('default-off and safe-boot perform zero artifact reads and create zero surf
       ...options,
     })
     assert.equal(await controller.register(registration('node-1')), false)
+    assert.equal(await controller.whenReady({ expectedInstanceIds: ['node-1'] }), true)
     assert.equal(reads, 0)
     assert.equal(hosts.calls.length, 0)
     assert.equal(controller.getDiagnostics().state, options.safeBoot ? 'safe-boot' : 'disabled')
@@ -456,9 +469,137 @@ test('late artifact resolution cannot resurrect an unregistered instance', async
   })
   const pending = controller.register(registration('late'))
   assert.equal(controller.unregister('late'), true)
+  assert.equal(await controller.whenReady({ expectedInstanceIds: [] }), true)
   resolveRead(artifact())
   assert.equal(await pending, false)
   assert.equal(hosts.calls.length, 0)
+})
+
+test('readiness drains artifact materialization and then waits for host activation', async () => {
+  let resolveRead
+  let resolveHostReady
+  const pendingRead = new Promise(resolve => {
+    resolveRead = resolve
+  })
+  const pendingHostReady = new Promise(resolve => {
+    resolveHostReady = resolve
+  })
+  let hostReadyCalls = 0
+  const hosts = []
+  const controller = createOnlineComponentSurfaceController({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'editor-surface',
+    featureEnabled: true,
+    safeBoot: false,
+    markerStore: createStorage(),
+    hashBytes,
+    surfaceHostOptions: { mode: 'editor', mount: {} },
+    readArtifact: () => pendingRead,
+    createSurfaceHost: () => {
+      const host = {
+        disposed: false,
+        register: () => true,
+        update: () => true,
+        unregister: () => true,
+        whenReady() {
+          hostReadyCalls += 1
+          return pendingHostReady
+        },
+        abortOwnedActivation: () => true,
+        dispose() {
+          this.disposed = true
+        },
+        getDiagnostics() {
+          return { state: this.disposed ? 'disposed' : 'starting', generation: 1, iframeCount: 1 }
+        },
+      }
+      hosts.push(host)
+      return host
+    },
+  })
+
+  const registrationResult = controller.register(registration('pending'))
+  let settled = false
+  const readiness = controller.whenReady({ expectedInstanceIds: ['pending'] }).then(value => {
+    settled = true
+    return value
+  })
+  await Promise.resolve()
+  assert.equal(hosts.length, 0)
+  assert.equal(settled, false)
+
+  resolveRead(artifact())
+  assert.equal(await registrationResult, true)
+  for (let attempt = 0; attempt < 10 && hostReadyCalls === 0; attempt += 1) await Promise.resolve()
+  assert.equal(hostReadyCalls, 1)
+  assert.equal(settled, false)
+
+  resolveHostReady(true)
+  assert.equal(await readiness, true)
+})
+
+test('dispose interrupts readiness while artifact materialization is unresolved', async () => {
+  let resolveRead
+  const pendingRead = new Promise(resolve => {
+    resolveRead = resolve
+  })
+  const controller = createOnlineComponentSurfaceController({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'editor-surface',
+    featureEnabled: true,
+    safeBoot: false,
+    markerStore: createStorage(),
+    hashBytes,
+    createSurfaceHost: createHostFactory().factory,
+    surfaceHostOptions: { mode: 'editor', mount: {} },
+    readArtifact: () => pendingRead,
+  })
+  const registrationResult = controller.register(registration('pending'))
+  const readiness = controller.whenReady({ expectedInstanceIds: ['pending'] })
+  controller.dispose()
+  assert.equal(await readiness, false)
+  resolveRead(artifact())
+  assert.equal(await registrationResult, false)
+})
+
+test('readiness loops across a host restart generation before reporting activation-ready', async () => {
+  let generation = 1
+  let resolveFirstReadiness
+  const firstReadiness = new Promise(resolve => {
+    resolveFirstReadiness = resolve
+  })
+  let calls = 0
+  const controller = createOnlineComponentSurfaceController({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'editor-surface',
+    featureEnabled: true,
+    safeBoot: false,
+    markerStore: createStorage(),
+    hashBytes,
+    surfaceHostOptions: { mode: 'editor', mount: {} },
+    readArtifact: async artifactRef => artifact(artifactRef),
+    createSurfaceHost: () => ({
+      register: () => true,
+      update: () => true,
+      unregister: () => true,
+      whenReady() {
+        calls += 1
+        return calls === 1 ? firstReadiness : Promise.resolve(true)
+      },
+      abortOwnedActivation: () => true,
+      dispose: () => undefined,
+      getDiagnostics: () => ({ state: generation === 1 ? 'starting' : 'ready', generation, iframeCount: 1 }),
+    }),
+  })
+  assert.equal(await controller.register(registration('node')), true)
+  const readiness = controller.whenReady({ expectedInstanceIds: ['node'] })
+  generation = 2
+  resolveFirstReadiness(false)
+  assert.equal(await readiness, true)
+  assert.equal(calls, 2)
 })
 
 test('last-write-wins drops a late old revision update', async () => {
@@ -491,6 +632,65 @@ test('last-write-wins drops a late old revision update', async () => {
   const instance = hosts.hosts[0].instances.get('node')
   assert.equal(instance.payload.props.title, 'newest')
   assert.equal(instance.payload.artifact.source, source)
+})
+
+test('readiness ignores a never-settling stale update after a newer record completes', async () => {
+  const never = new Promise(() => undefined)
+  const hosts = createHostFactory()
+  const controller = createOnlineComponentSurfaceController({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'editor-surface',
+    featureEnabled: true,
+    safeBoot: false,
+    markerStore: createStorage(),
+    hashBytes,
+    createSurfaceHost: hosts.factory,
+    surfaceHostOptions: { mode: 'editor', mount: {} },
+    readArtifact: artifactRef =>
+      artifactRef.sourceRevision === 'revision-never' ? never : Promise.resolve(artifact(artifactRef)),
+  })
+  await controller.register(registration('node'))
+  let staleSettled = false
+  void controller.update('node', { node: node(ref('revision-never')) }).then(() => {
+    staleSettled = true
+  })
+  assert.equal(await controller.update('node', { node: node(ref('revision-current')) }), true)
+  assert.equal(await controller.whenReady({ expectedInstanceIds: ['node'] }), true)
+  assert.equal(staleSettled, false)
+  assert.equal(hosts.hosts[0].instances.get('node').revisionKey, runtimeRevisionKey(source))
+  controller.dispose()
+})
+
+test('readiness waits for the exact current and registered instance census instead of a same-sized wrong id', async () => {
+  const hosts = createHostFactory()
+  const controller = createOnlineComponentSurfaceController({
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'editor-surface',
+    featureEnabled: true,
+    safeBoot: false,
+    markerStore: createStorage(),
+    hashBytes,
+    createSurfaceHost: hosts.factory,
+    surfaceHostOptions: { mode: 'editor', mount: {} },
+    readArtifact: async artifactRef => artifact(artifactRef),
+  })
+  assert.equal(await controller.register(registration('wrong-node')), true)
+  let settled = false
+  const exactReadiness = controller.whenReady({ expectedInstanceIds: ['expected-node'] }).then(value => {
+    settled = true
+    return value
+  })
+  await Promise.resolve()
+  assert.equal(settled, false)
+  assert.equal(controller.matchesReadyCensus({ expectedInstanceIds: ['expected-node'] }), false)
+
+  assert.equal(controller.unregister('wrong-node'), true)
+  assert.equal(await controller.register(registration('expected-node')), true)
+  assert.equal(await exactReadiness, true)
+  assert.equal(controller.matchesReadyCensus({ expectedInstanceIds: ['expected-node'] }), true)
+  controller.dispose()
 })
 
 test('pending and quarantined markers isolate only their matching immutable revision', async t => {

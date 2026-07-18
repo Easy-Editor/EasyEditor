@@ -83,6 +83,14 @@ export const createOnlineComponentActivationLifecycle = options => {
     return true
   }
 
+  const abortPending = () => {
+    if (state !== 'pending' || !marker) return false
+    store.clear(key, marker)
+    marker = undefined
+    state = 'disposed'
+    return true
+  }
+
   const fail = () => {
     if (state === 'quarantined') return false
     if (state !== 'pending' && state !== 'active') return false
@@ -103,6 +111,7 @@ export const createOnlineComponentActivationLifecycle = options => {
     begin,
     heartbeat,
     completeRehydrate,
+    abortPending,
     fail,
     dispose,
     getDiagnostics: () => Object.freeze({ state, revisionKey, key }),

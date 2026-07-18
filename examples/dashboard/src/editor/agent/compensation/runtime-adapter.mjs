@@ -722,10 +722,7 @@ export const createDashboardTaskCompensationService = options => {
     commitCompensationRunState: requireMethod(persistence, 'commitCompensationRunState', 'options.persistence'),
     async recoverDurableAgentReceipt(request) {
       const recovery = await recoverReceipt(request)
-      if (
-        (recovery.classification === 'committed' || recovery.classification === 'failed') &&
-        screenIntentKind(recovery) === 'screen-change-set-pre-images'
-      ) {
+      if (recovery.classification === 'committed' && screenIntentKind(recovery) === 'screen-change-set-pre-images') {
         try {
           await verifyRecovery(recovery, request.callId)
         } catch (error) {

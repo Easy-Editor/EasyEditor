@@ -29,6 +29,26 @@ const assertPlainObject = (value, name) => {
   return value
 }
 
+const normalizeReadinessInput = value => {
+  const input = assertPlainObject(value, 'surface controller readiness input')
+  if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'expectedInstanceIds')) {
+    throw new TypeError('surface controller readiness input fields are invalid')
+  }
+  if (!Array.isArray(input.expectedInstanceIds)) {
+    throw new TypeError('surface controller readiness expectedInstanceIds must be an array')
+  }
+  const expectedInstanceIds = input.expectedInstanceIds.map((instanceId, index) =>
+    assertIdentifier(instanceId, `expectedInstanceIds[${index}]`),
+  )
+  if (new Set(expectedInstanceIds).size !== expectedInstanceIds.length) {
+    throw new TypeError('surface controller readiness expectedInstanceIds must be unique')
+  }
+  return Object.freeze({ expectedInstanceIds: Object.freeze([...expectedInstanceIds].sort()) })
+}
+
+const sameIds = (actual, expected) =>
+  actual.length === expected.length && actual.every((instanceId, index) => instanceId === expected[index])
+
 const assertStorage = storage => {
   for (const method of ['getItem', 'setItem', 'removeItem']) {
     if (typeof storage?.[method] !== 'function') throw new TypeError(`markerStore.${method} is required`)
@@ -334,9 +354,33 @@ export const createOnlineComponentSurfaceController = options => {
 
   const instances = new Map()
   const artifactProjections = new Map()
+  const readinessChangeWaiters = new Set()
   let host
   let disposed = false
   let faultCount = 0
+
+  const notifyReadinessChange = () => {
+    for (const resolve of readinessChangeWaiters) resolve()
+    readinessChangeWaiters.clear()
+  }
+
+  const raceReadinessChange = async promise => {
+    let resolveChange
+    const changed = new Promise(resolve => {
+      resolveChange = resolve
+      readinessChangeWaiters.add(resolve)
+    })
+    try {
+      return await Promise.race([
+        promise.then(value => ({ status: 'settled', value })),
+        changed.then(() => ({ status: 'changed' })),
+      ])
+    } finally {
+      readinessChangeWaiters.delete(resolveChange)
+    }
+  }
+
+  const waitForReadinessChange = () => new Promise(resolve => readinessChangeWaiters.add(resolve))
 
   const verifyArtifact = async normalizedRef => {
     const rawArtifact = await readArtifact(normalizedRef)
@@ -385,7 +429,15 @@ export const createOnlineComponentSurfaceController = options => {
       activationId,
       markerStore: markerAdapter.store,
     })
-    for (const method of ['register', 'update', 'unregister', 'dispose', 'getDiagnostics']) {
+    for (const method of [
+      'register',
+      'update',
+      'unregister',
+      'whenReady',
+      'abortOwnedActivation',
+      'dispose',
+      'getDiagnostics',
+    ]) {
       if (typeof host?.[method] !== 'function') {
         host?.dispose?.()
         host = undefined
@@ -437,6 +489,21 @@ export const createOnlineComponentSurfaceController = options => {
     }
   }
 
+  const trackApplyRecord = record => {
+    const pending = applyRecord(record)
+    record.pending = pending
+    const release = () => {
+      if (record.pending !== pending) return
+      record.pending = undefined
+      notifyReadinessChange()
+    }
+    void pending.then(release, release)
+    return pending
+  }
+
+  const currentPendingApplies = () =>
+    [...instances.values()].map(record => record.pending).filter(pending => pending !== undefined)
+
   const register = async input => {
     if (disposed || state === 'disabled' || state === 'safe-boot' || failClosed) {
       return false
@@ -445,7 +512,8 @@ export const createOnlineComponentSurfaceController = options => {
     if (instances.has(normalized.instanceId)) throw new Error(`instance ${normalized.instanceId} is already registered`)
     const record = { input: normalized, registered: false }
     instances.set(normalized.instanceId, record)
-    return applyRecord(record)
+    notifyReadinessChange()
+    return trackApplyRecord(record)
   }
 
   const update = async (instanceId, patch) => {
@@ -460,7 +528,67 @@ export const createOnlineComponentSurfaceController = options => {
       registered: current.registered,
     }
     instances.set(instanceId, record)
-    return applyRecord(record)
+    notifyReadinessChange()
+    return trackApplyRecord(record)
+  }
+
+  const currentInstanceIds = () => [...instances.keys()].sort()
+  const registeredInstanceIds = () =>
+    [...instances.entries()]
+      .filter(([, record]) => record.registered)
+      .map(([instanceId]) => instanceId)
+      .sort()
+
+  const matchesReadyCensus = rawInput => {
+    const { expectedInstanceIds } = normalizeReadinessInput(rawInput)
+    if (state === 'disabled' || state === 'safe-boot') return true
+    if (disposed || state === 'quarantined' || failClosed) return false
+    return (
+      sameIds(currentInstanceIds(), expectedInstanceIds) &&
+      sameIds(registeredInstanceIds(), expectedInstanceIds) &&
+      currentPendingApplies().length === 0
+    )
+  }
+
+  const whenReady = async rawInput => {
+    const { expectedInstanceIds } = normalizeReadinessInput(rawInput)
+    while (true) {
+      if (disposed || state === 'quarantined' || failClosed) return false
+      if (state === 'disabled' || state === 'safe-boot') return true
+      if (!sameIds(currentInstanceIds(), expectedInstanceIds)) {
+        await waitForReadinessChange()
+        continue
+      }
+      if (expectedInstanceIds.length === 0) return true
+      const pendingApplies = currentPendingApplies()
+      if (pendingApplies.length > 0) {
+        await raceReadinessChange(Promise.allSettled(pendingApplies))
+        continue
+      }
+      if (!sameIds(registeredInstanceIds(), expectedInstanceIds)) return false
+      if (!host) return false
+
+      const currentHost = host
+      const generation = currentHost.getDiagnostics().generation
+      const readiness = await raceReadinessChange(currentHost.whenReady({ expectedInstanceIds }))
+      if (readiness.status === 'changed') continue
+      const ready = readiness.value
+      if (disposed || state === 'quarantined' || failClosed) return false
+      if (currentPendingApplies().length > 0 || host !== currentHost) continue
+      if (!sameIds(currentInstanceIds(), expectedInstanceIds)) continue
+      if (ready === true) return true
+
+      const diagnostics = currentHost.getDiagnostics()
+      if (
+        diagnostics.generation !== generation &&
+        diagnostics.state !== 'disposed' &&
+        diagnostics.state !== 'quarantined' &&
+        diagnostics.state !== 'safe-boot'
+      ) {
+        continue
+      }
+      return false
+    }
   }
 
   const unregister = instanceId => {
@@ -468,6 +596,7 @@ export const createOnlineComponentSurfaceController = options => {
     const current = instances.get(instanceId)
     if (!current) return false
     instances.delete(instanceId)
+    notifyReadinessChange()
     if (current.registered && host) host.unregister(instanceId)
     if (instances.size === 0 && state === 'active') state = 'idle'
     return true
@@ -481,9 +610,15 @@ export const createOnlineComponentSurfaceController = options => {
     return true
   }
 
+  const abortOwnedActivation = () => {
+    if (disposed) return false
+    return host?.abortOwnedActivation() ?? false
+  }
+
   const dispose = () => {
     if (disposed) return
     disposed = true
+    notifyReadinessChange()
     instances.clear()
     artifactProjections.clear()
     host?.dispose()
@@ -494,7 +629,10 @@ export const createOnlineComponentSurfaceController = options => {
     register,
     update,
     unregister,
+    whenReady,
+    matchesReadyCensus,
     clearQuarantine,
+    abortOwnedActivation,
     dispose,
     getDiagnostics: () =>
       Object.freeze({

@@ -173,6 +173,28 @@ const createCancelableController = () => {
   }
 }
 
+const emptySurfaceReadinessBridge = Object.freeze({
+  matchesReadyCensus: () => true,
+  whenReady: () => Promise.resolve(true),
+})
+
+const emptySurfaceReadinessController = Object.freeze({
+  matchesReadyCensus: () => true,
+  abortOwnedActivation: () => false,
+})
+
+const createHostCensusElement = instanceId => ({
+  getAttribute: name => (name === 'data-easy-editor-generated-material-host' ? instanceId : null),
+})
+
+const createSurfaceDocument = (getMount, instanceIds = []) => ({
+  documentElement: {},
+  querySelector: getMount,
+  querySelectorAll: () => instanceIds.map(createHostCensusElement),
+})
+
+const readinessInput = expectedInstanceIds => ({ expectedInstanceIds })
+
 const flushPromiseJobs = () => new Promise(resolve => setImmediate(resolve))
 
 const node = Object.freeze({ componentName: 'GeneratedMaterialHost', $agent: { schemaVersion: 1, artifactRef: {} } })
@@ -330,7 +352,7 @@ test('runtime CustomEvent exposes only the stable safe DTO', () => {
   })
 })
 
-test('disabled production composition performs no DOM query, controller construction, marker access, or artifact read', () => {
+test('disabled production composition performs no DOM query, controller construction, marker access, or artifact read', async () => {
   let queries = 0
   let controllers = 0
   const handle = startDashboardOnlineComponentSurface({
@@ -339,6 +361,7 @@ test('disabled production composition performs no DOM query, controller construc
     createController: () => (controllers += 1),
   })
   assert.deepEqual(handle.getDiagnostics(), { state: 'disabled', controllerCreated: false })
+  assert.equal(await handle.whenReady(readinessInput([])), false)
   assert.equal(queries, 0)
   assert.equal(controllers, 0)
 })
@@ -354,19 +377,18 @@ test('surface discovery without MutationObserver is one-shot when the public mou
     branchId: 'main',
     surfaceId: 'dashboard-editor-online',
     bridge: {
+      ...emptySurfaceReadinessBridge,
       attach() {
         throw new Error('an absent mount cannot attach the bridge')
       },
+      getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
     },
     markerStore: {},
     persistence: { readArtifact: async () => null },
-    document: {
-      documentElement: {},
-      querySelector() {
-        queries += 1
-        return null
-      },
-    },
+    document: createSurfaceDocument(() => {
+      queries += 1
+      return null
+    }),
     ...frames,
     MutationObserver: false,
     createController() {
@@ -397,6 +419,7 @@ test('surface discovery keeps mount identity live and replaces controllers only 
   let currentMount = mountA
   const events = []
   const bridge = {
+    ...emptySurfaceReadinessBridge,
     attach({ controller, mount }) {
       events.push(`attach:${mount.id}`)
       assert.equal(controller.mount, mount)
@@ -405,6 +428,7 @@ test('surface discovery keeps mount identity live and replaces controllers only 
         return true
       }
     },
+    getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
   }
   const handle = startDashboardOnlineComponentSurface({
     enabled: true,
@@ -415,13 +439,24 @@ test('surface discovery keeps mount identity live and replaces controllers only 
     bridge,
     markerStore: {},
     persistence: { readArtifact: async () => null },
-    document: { documentElement: {}, querySelector: () => currentMount },
+    document: createSurfaceDocument(() => currentMount),
     requestAnimationFrame: frames.requestAnimationFrame,
     cancelAnimationFrame: frames.cancelAnimationFrame,
     MutationObserver: invalidations.MutationObserver,
     createController: options => {
       const controller = {
+        ...emptySurfaceReadinessController,
         mount: options.surfaceHostOptions.mount,
+        whenReady() {
+          return Promise.resolve(true)
+        },
+        getDiagnostics() {
+          return { state: 'active', instanceCount: 0 }
+        },
+        abortOwnedActivation() {
+          events.push(`abort:${this.mount.id}`)
+          return true
+        },
         dispose() {
           events.push(`dispose:${this.mount.id}`)
         },
@@ -449,6 +484,7 @@ test('surface discovery keeps mount identity live and replaces controllers only 
   assert.deepEqual(events, [
     'create:mount-a',
     'attach:mount-a',
+    'abort:mount-a',
     'release:mount-a',
     'dispose:mount-a',
     'create:mount-b',
@@ -458,7 +494,7 @@ test('surface discovery keeps mount identity live and replaces controllers only 
   currentMount = null
   observer.trigger([{ type: 'childList', target: {} }])
   frames.flush()
-  assert.deepEqual(events.slice(-2), ['release:mount-b', 'dispose:mount-b'])
+  assert.deepEqual(events.slice(-3), ['abort:mount-b', 'release:mount-b', 'dispose:mount-b'])
   assert.deepEqual(handle.getDiagnostics(), { state: 'discovering', controllerCreated: false })
   assert.equal(observer.disconnected, false)
 
@@ -475,6 +511,440 @@ test('surface discovery keeps mount identity live and replaces controllers only 
   assert.equal(observer.disconnected, true)
   assert.deepEqual(events.slice(-2), ['release:mount-c', 'dispose:mount-c'])
   assert.deepEqual(handle.getDiagnostics(), { state: 'disposed', controllerCreated: false })
+})
+
+test('surface readiness synchronizes a committed mount replacement before binding its activation epoch', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const mountA = { id: 'mount-a' }
+  const mountB = { id: 'mount-b' }
+  let currentMount = mountA
+  const events = []
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge: {
+      ...emptySurfaceReadinessBridge,
+      attach({ mount }) {
+        events.push(`attach:${mount.id}`)
+        return () => events.push(`release:${mount.id}`)
+      },
+      getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
+    },
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => currentMount),
+    ...frames,
+    MutationObserver: invalidations.MutationObserver,
+    createController: options => {
+      const mount = options.surfaceHostOptions.mount
+      events.push(`create:${mount.id}`)
+      return {
+        ...emptySurfaceReadinessController,
+        whenReady: () => Promise.resolve(mount === mountB),
+        getDiagnostics: () => ({ state: 'active', instanceCount: 0 }),
+        dispose: () => events.push(`dispose:${mount.id}`),
+      }
+    },
+  })
+  assert.deepEqual(events, ['create:mount-a', 'attach:mount-a'])
+
+  currentMount = mountB
+  assert.equal(await handle.whenReady(readinessInput([])), true)
+  assert.deepEqual(events, [
+    'create:mount-a',
+    'attach:mount-a',
+    'release:mount-a',
+    'dispose:mount-a',
+    'create:mount-b',
+    'attach:mount-b',
+  ])
+
+  handle.dispose()
+})
+
+test('surface readiness follows a controlled mount handoff without accepting either mixed epoch', async () => {
+  const frames = createFrames()
+  const invalidations = createInvalidationHarness()
+  const mountA = { id: 'mount-a' }
+  const mountB = { id: 'mount-b' }
+  let currentMount = mountA
+  const events = []
+  const neverReady = new Promise(() => undefined)
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge: {
+      ...emptySurfaceReadinessBridge,
+      attach({ mount }) {
+        events.push(`attach:${mount.id}`)
+        return () => events.push(`release:${mount.id}`)
+      },
+      getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
+    },
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => currentMount),
+    ...frames,
+    MutationObserver: invalidations.MutationObserver,
+    createController: options => {
+      const mount = options.surfaceHostOptions.mount
+      events.push(`create:${mount.id}`)
+      return {
+        ...emptySurfaceReadinessController,
+        whenReady: () => (mount === mountA ? neverReady : Promise.resolve(true)),
+        getDiagnostics: () => ({ state: 'active', instanceCount: 0 }),
+        abortOwnedActivation: () => {
+          events.push(`abort:${mount.id}`)
+          return true
+        },
+        dispose: () => events.push(`dispose:${mount.id}`),
+      }
+    },
+  })
+
+  const readiness = handle.whenReady(readinessInput([]))
+  await Promise.resolve()
+  currentMount = mountB
+  invalidations.mutationObservers[0].trigger([{ type: 'childList', target: {} }])
+  frames.flush()
+
+  assert.equal(await readiness, true)
+  assert.deepEqual(events, [
+    'create:mount-a',
+    'attach:mount-a',
+    'abort:mount-a',
+    'release:mount-a',
+    'dispose:mount-a',
+    'create:mount-b',
+    'attach:mount-b',
+  ])
+  handle.dispose()
+})
+
+test('surface handle forwards activation readiness and fails closed after release or dispose', async () => {
+  const frames = createFrames()
+  const mount = { id: 'mount' }
+  let resolveReady
+  const pendingReady = new Promise(resolve => {
+    resolveReady = resolve
+  })
+  const controller = {
+    ...emptySurfaceReadinessController,
+    whenReady: () => pendingReady,
+    getDiagnostics: () => ({ state: 'active', instanceCount: 1 }),
+    dispose: () => undefined,
+  }
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge: {
+      ...emptySurfaceReadinessBridge,
+      attach: () => () => true,
+      getDiagnostics: () => ({ instanceCount: 1, scheduledFrameCount: 0 }),
+    },
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => mount),
+    ...frames,
+    MutationObserver: false,
+    createController: () => controller,
+  })
+
+  const pendingSurfaceReadiness = handle.whenReady(readinessInput([]))
+  handle.dispose()
+  resolveReady(true)
+  assert.equal(await pendingSurfaceReadiness, false)
+  assert.equal(await handle.whenReady(readinessInput([])), false)
+
+  const readyHandle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online-ready',
+    bridge: {
+      ...emptySurfaceReadinessBridge,
+      attach: () => () => true,
+      getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
+    },
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => mount),
+    ...frames,
+    MutationObserver: false,
+    createController: () => ({
+      ...emptySurfaceReadinessController,
+      whenReady: () => Promise.resolve(true),
+      getDiagnostics: () => ({ state: 'active', instanceCount: 0 }),
+      dispose: () => undefined,
+    }),
+  })
+  assert.equal(await readyHandle.whenReady(readinessInput([])), true)
+  readyHandle.dispose()
+})
+
+test('surface readiness keeps a transient zero census pending until bridge and controller match the committed host', async () => {
+  const mount = { id: 'mount' }
+  let bridgeMatches = false
+  let controllerMatches = false
+  let resolveBridge
+  let resolveController
+  const bridgeReady = new Promise(resolve => {
+    resolveBridge = resolve
+  })
+  const controllerReady = new Promise(resolve => {
+    resolveController = resolve
+  })
+  const bridge = {
+    matchesReadyCensus: () => bridgeMatches,
+    whenReady: () => bridgeReady,
+    attach: () => () => true,
+    getDiagnostics: () => ({ instanceCount: bridgeMatches ? 1 : 0, scheduledFrameCount: 0 }),
+  }
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge,
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => mount, ['node-1']),
+    ...createFrames(),
+    MutationObserver: false,
+    createController: () => ({
+      matchesReadyCensus: () => controllerMatches,
+      whenReady: () => controllerReady,
+      abortOwnedActivation: () => false,
+      getDiagnostics: () => ({ state: 'active', instanceCount: controllerMatches ? 1 : 0 }),
+      dispose: () => undefined,
+    }),
+  })
+
+  let settled = false
+  const activationReadiness = handle.whenReady({ expectedInstanceIds: ['node-1'] }).then(value => {
+    settled = true
+    return value
+  })
+  await Promise.resolve()
+  assert.equal(settled, false)
+
+  bridgeMatches = true
+  controllerMatches = true
+  resolveBridge(true)
+  resolveController(true)
+  assert.equal(await activationReadiness, true)
+  handle.dispose()
+})
+
+test('surface disposal interrupts census readiness without polling or leaked epoch work', async () => {
+  const frames = createFrames()
+  const mount = { id: 'mount' }
+  const never = new Promise(() => undefined)
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge: {
+      matchesReadyCensus: () => false,
+      whenReady: () => never,
+      attach: () => () => true,
+      getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
+    },
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => mount, ['node-1']),
+    ...frames,
+    MutationObserver: false,
+    createController: () => ({
+      matchesReadyCensus: () => false,
+      whenReady: () => never,
+      abortOwnedActivation: () => false,
+      getDiagnostics: () => ({ state: 'active', instanceCount: 0 }),
+      dispose: () => undefined,
+    }),
+  })
+  const activationReadiness = handle.whenReady({ expectedInstanceIds: ['node-1'] })
+  handle.dispose()
+  assert.equal(frames.size(), 0)
+  assert.equal(await activationReadiness, false)
+})
+
+test('a synchronous controller register failure leaves a quiescent binding fail-closed', async () => {
+  const frames = createFrames()
+  const errors = []
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    onError: error => errors.push(error),
+  })
+  const mount = createMount()
+  const handle = startDashboardOnlineComponentSurface({
+    enabled: true,
+    mode: 'editor',
+    projectId: 'project-a',
+    branchId: 'main',
+    surfaceId: 'dashboard-editor-online',
+    bridge,
+    markerStore: {},
+    persistence: { readArtifact: async () => null },
+    document: createSurfaceDocument(() => mount, ['failed']),
+    ...frames,
+    MutationObserver: false,
+    createController: () => ({
+      ...emptySurfaceReadinessController,
+      register: () => {
+        throw new Error('synchronous register failure')
+      },
+      update: () => Promise.resolve(false),
+      unregister: () => true,
+      whenReady: () => Promise.resolve(true),
+      getDiagnostics: () => ({ state: 'active', instanceCount: 0 }),
+      dispose: () => undefined,
+    }),
+  })
+  const binding = bridge.connect({
+    instanceId: 'failed',
+    node,
+    props: { title: 'failed' },
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  frames.flush()
+  assert.equal(errors.length, 1)
+  assert.equal(bridge.getDiagnostics().scheduledFrameCount, 0)
+  assert.equal(await handle.whenReady({ expectedInstanceIds: ['failed'] }), false)
+  assert.equal(frames.size(), 0)
+  binding.dispose()
+  handle.dispose()
+})
+
+test('bridge readiness requires the exact registered census and zero pending or scheduled work', async () => {
+  const frames = createFrames()
+  const harness = createCancelableController()
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  const mount = createMount()
+  bridge.attach({ controller: harness.controller, projectId: 'project-a', mount })
+  const binding = bridge.connect({
+    instanceId: 'node-1',
+    node,
+    props: { title: 'pending' },
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  const input = { expectedInstanceIds: ['node-1'], requireRegistered: true }
+  let settled = false
+  const bridgeReadiness = bridge.whenReady(input).then(value => {
+    settled = true
+    return value
+  })
+  assert.equal(bridge.matchesReadyCensus(input), false)
+  frames.flush()
+  assert.equal(harness.pending.length, 1)
+  assert.equal(settled, false)
+
+  harness.pending[0].resolve(true)
+  await flushPromiseJobs()
+  assert.equal(frames.size(), 1)
+  assert.equal(bridge.matchesReadyCensus(input), false)
+  frames.flush()
+  assert.equal(await bridgeReadiness, true)
+  assert.equal(bridge.matchesReadyCensus(input), true)
+  binding.dispose()
+  bridge.detach()
+})
+
+test('bridge readiness never substitutes a same-sized wrong binding census', async () => {
+  const frames = createFrames()
+  const bridge = createDashboardOnlineComponentSurfaceBridge({
+    ...frames,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  })
+  const mount = createMount()
+  const controller = {
+    register: () => Promise.resolve(true),
+    update: () => Promise.resolve(true),
+    unregister: () => true,
+  }
+  const detach = bridge.attach({ controller, projectId: 'project-a', mount })
+  const wrong = bridge.connect({
+    instanceId: 'wrong-node',
+    node,
+    props: {},
+    element: createElement({ left: 110, top: 60, width: 50, height: 25 }),
+  })
+  const input = { expectedInstanceIds: ['expected-node'], requireRegistered: true }
+  let settled = false
+  const bridgeReadiness = bridge.whenReady(input).then(value => {
+    settled = true
+    return value
+  })
+  frames.flush()
+  await flushPromiseJobs()
+  frames.flush()
+  await Promise.resolve()
+  assert.equal(settled, false)
+  assert.equal(bridge.matchesReadyCensus(input), false)
+  assert.equal(detach(), true)
+  assert.equal(await bridgeReadiness, false)
+  wrong.dispose()
+})
+
+test('abortOwnedActivation is explicit and generic surface dispose never invokes it', () => {
+  const frames = createFrames()
+  const mount = { id: 'mount' }
+  let abortCount = 0
+  const createHandle = () =>
+    startDashboardOnlineComponentSurface({
+      enabled: true,
+      mode: 'editor',
+      projectId: 'project-a',
+      branchId: 'main',
+      surfaceId: 'dashboard-editor-online',
+      bridge: {
+        ...emptySurfaceReadinessBridge,
+        attach: () => () => true,
+        getDiagnostics: () => ({ instanceCount: 0, scheduledFrameCount: 0 }),
+      },
+      markerStore: {},
+      persistence: { readArtifact: async () => null },
+      document: createSurfaceDocument(() => mount),
+      ...frames,
+      MutationObserver: false,
+      createController: () => ({
+        ...emptySurfaceReadinessController,
+        whenReady: () => Promise.resolve(true),
+        abortOwnedActivation: () => {
+          abortCount += 1
+          return true
+        },
+        getDiagnostics: () => ({ state: 'active', instanceCount: 0 }),
+        dispose: () => undefined,
+      }),
+    })
+
+  const controlled = createHandle()
+  assert.equal(controlled.abortOwnedActivation(), true)
+  controlled.dispose()
+  assert.equal(abortCount, 1)
+
+  const generic = createHandle()
+  generic.dispose()
+  assert.equal(abortCount, 1)
 })
 
 test('twenty bindings share one animation-frame sampler and one mount measurement per frame', async () => {
@@ -919,9 +1389,10 @@ test('editor and preview bridge composition produce identical resolved context p
       bridge,
       markerStore: {},
       persistence: { readArtifact: async () => null },
-      document: { documentElement: {}, querySelector: () => mount },
+      document: createSurfaceDocument(() => mount, ['node']),
       ...frames,
       createController: options => ({
+        ...emptySurfaceReadinessController,
         register(input) {
           assert.equal(options.surfaceHostOptions.mode, mode)
           payloads.set(mode, input.payload)
@@ -929,6 +1400,8 @@ test('editor and preview bridge composition produce identical resolved context p
         },
         update: () => Promise.resolve(true),
         unregister: () => true,
+        whenReady: () => Promise.resolve(true),
+        getDiagnostics: () => ({ state: 'active', instanceCount: 1 }),
         dispose: () => undefined,
       }),
     })
@@ -1292,7 +1765,7 @@ test('safe-boot composition preserves bindings but performs zero artifact reads 
         return null
       },
     },
-    document: { documentElement: {}, querySelector: () => mount },
+    document: createSurfaceDocument(() => mount, ['safe-node']),
     ...frames,
     createController: options => {
       controller = createOnlineComponentSurfaceController(options)
@@ -1316,6 +1789,16 @@ test('safe-boot composition preserves bindings but performs zero artifact reads 
     faultCount: 0,
   })
   assert.equal(bridge.getDiagnostics().instanceCount, 1)
+  let activationReady
+  const safeBootReadiness = handle.whenReady({ expectedInstanceIds: ['safe-node'] }).then(value => {
+    activationReady = value
+  })
+  for (let attempt = 0; attempt < 10 && activationReady === undefined; attempt += 1) {
+    await Promise.resolve()
+    frames.flush()
+  }
+  await safeBootReadiness
+  assert.equal(activationReady, true)
   binding.dispose()
   handle.dispose()
 })
@@ -1332,11 +1815,13 @@ test('editor and preview composition own independent controller, mount, marker, 
     const reads = []
     let controllerOptions
     const controller = {
+      ...emptySurfaceReadinessController,
       register: () => Promise.resolve(true),
       update: () => Promise.resolve(true),
       unregister: () => true,
+      whenReady: () => Promise.resolve(true),
       dispose: () => undefined,
-      getDiagnostics: () => ({ iframeCount: 0 }),
+      getDiagnostics: () => ({ state: 'active', instanceCount: 0, iframeCount: 0 }),
     }
     const handle = startDashboardOnlineComponentSurface({
       enabled: true,
@@ -1352,7 +1837,7 @@ test('editor and preview composition own independent controller, mount, marker, 
           return Promise.resolve(null)
         },
       },
-      document: { documentElement: {}, querySelector: () => mount },
+      document: createSurfaceDocument(() => mount),
       ...frames,
       createController(options) {
         controllerOptions = options

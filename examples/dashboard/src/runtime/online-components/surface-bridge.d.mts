@@ -24,6 +24,18 @@ export interface DashboardOnlineComponentSurfaceBridge {
   }): () => boolean
   detach(controller?: OnlineComponentSurfaceController): boolean
   connect(input: DashboardOnlineComponentBindingInput): DashboardOnlineComponentBindingHandle
+  matchesReadyCensus(
+    input: Readonly<{
+      expectedInstanceIds: readonly string[]
+      requireRegistered: boolean
+    }>,
+  ): boolean
+  whenReady(
+    input: Readonly<{
+      expectedInstanceIds: readonly string[]
+      requireRegistered: boolean
+    }>,
+  ): Promise<boolean>
   getDiagnostics(): Readonly<{
     attached: boolean
     instanceCount: number
@@ -46,6 +58,8 @@ export interface DashboardOnlineComponentSurfaceBridgeOptions {
 }
 
 export interface DashboardOnlineComponentSurfaceHandle {
+  whenReady(input: Readonly<{ expectedInstanceIds: readonly string[] }>): Promise<boolean>
+  abortOwnedActivation(): boolean
   dispose(): void
   getDiagnostics(): Readonly<{
     state: 'disabled' | 'discovering' | 'safe-boot' | 'active' | 'disposed'
@@ -64,6 +78,7 @@ export interface DashboardOnlineComponentSurfaceOptions {
   readonly markerStore: OnlineComponentSurfaceMarkerStorage
   readonly persistence: Pick<DashboardStorageBackend, 'readArtifact'>
   readonly document: Document
+  readonly telemetry?: Readonly<{ record(event: Readonly<Record<string, unknown>>): unknown }>
   readonly requestAnimationFrame?: (callback: FrameRequestCallback) => number
   readonly cancelAnimationFrame?: (handle: number) => void
   readonly MutationObserver?: typeof MutationObserver
@@ -78,6 +93,7 @@ export interface DashboardOnlineComponentSurfaceOptions {
     readonly surfaceHostOptions: Readonly<{
       mode: 'editor' | 'preview'
       mount: HTMLElement
+      telemetry?: Readonly<{ record(event: Readonly<Record<string, unknown>>): unknown }>
       onSelection?: (event: OnlineComponentTrustedShellEvent) => void
       onRuntimeEvent?: (event: OnlineComponentTrustedShellEvent) => void
       bindTrustedShell?: (shell: HTMLElement, instanceId: string) => () => void

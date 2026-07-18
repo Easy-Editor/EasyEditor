@@ -1,3 +1,4 @@
+import { createDashboardTelemetryChannel } from '../telemetry-channel.mjs'
 import { createOnlineComponentActivationLifecycle } from './activation-lifecycle.mjs'
 import { createOnlineComponentSandboxDocument } from './sandbox-document.mjs'
 import {
@@ -11,6 +12,15 @@ import { createTrustedShellEventAdapter } from './trusted-event-adapter.mjs'
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/
 const UPDATE_PATCH_KEYS = new Set(['revisionKey', 'rect', 'visible', 'generatedZ', 'payload'])
+const SANDBOX_FAULT_DIAGNOSTIC_CODES = new Set([
+  'async-lifecycle',
+  'global-pollution',
+  'lifecycle-timeout',
+  'message-storm',
+  'render-failed',
+  'resource-leak',
+  'unexpected-frame-reload',
+])
 
 const assertIdentifier = (value, name) => {
   if (typeof value !== 'string' || !IDENTIFIER_PATTERN.test(value)) {
@@ -23,6 +33,28 @@ const assertMode = mode => {
   if (mode !== 'editor' && mode !== 'preview') throw new TypeError('mode must be editor or preview')
   return mode
 }
+
+const normalizeReadinessInput = value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('surface host readiness input is required')
+  }
+  if (Object.keys(value).length !== 1 || !Object.hasOwn(value, 'expectedInstanceIds')) {
+    throw new TypeError('surface host readiness input fields are invalid')
+  }
+  if (!Array.isArray(value.expectedInstanceIds)) {
+    throw new TypeError('surface host readiness expectedInstanceIds must be an array')
+  }
+  const expectedInstanceIds = value.expectedInstanceIds.map((instanceId, index) =>
+    assertIdentifier(instanceId, `expectedInstanceIds[${index}]`),
+  )
+  if (new Set(expectedInstanceIds).size !== expectedInstanceIds.length) {
+    throw new TypeError('surface host readiness expectedInstanceIds must be unique')
+  }
+  return Object.freeze({ expectedInstanceIds: Object.freeze([...expectedInstanceIds].sort()) })
+}
+
+const sameIds = (actual, expected) =>
+  actual.length === expected.length && actual.every((instanceId, index) => instanceId === expected[index])
 
 const assertEnvironment = environment => {
   for (const method of [
@@ -304,6 +336,8 @@ export const createOnlineComponentSurfaceHost = options => {
     environment: injectedEnvironment,
     markerStore: injectedMarkerStore,
     now = () => Date.now(),
+    telemetry,
+    telemetryNow = () => Date.now(),
     allowedRuntimeEvents = ['activate'],
     onSelection = () => {},
     onRuntimeEvent = () => {},
@@ -327,6 +361,9 @@ export const createOnlineComponentSurfaceHost = options => {
   const environment = assertEnvironment(injectedEnvironment ?? createBrowserOnlineComponentSurfaceEnvironment())
   const markerStore = assertMarkerStore(injectedMarkerStore)
   if (typeof now !== 'function') throw new TypeError('now must be a function')
+  if (typeof telemetryNow !== 'function') throw new TypeError('telemetryNow must be a function')
+  const telemetryChannel = createDashboardTelemetryChannel(telemetry, telemetryNow)
+  const emitTelemetry = event => telemetryChannel.emit({ surfaceId, ...event })
 
   const eventAdapter = createTrustedShellEventAdapter({
     mode,
@@ -376,9 +413,23 @@ export const createOnlineComponentSurfaceHost = options => {
     if (disposed) throw new Error('online component surface host is disposed')
   }
 
-  const resolveReadyWaiters = value => {
-    for (const resolve of readyWaiters) resolve(value)
-    readyWaiters.clear()
+  const hasPendingActivation = () =>
+    [...activationLifecycles.values()].some(lifecycle => lifecycle.getDiagnostics().state === 'pending')
+
+  const readinessStatus = expectedInstanceIds => {
+    if (disposed || state === 'quarantined' || state === 'safe-boot') return false
+    if (!sameIds([...instances.keys()].sort(), expectedInstanceIds)) return undefined
+    if (expectedInstanceIds.length === 0) return true
+    return ready && !hasPendingActivation() ? true : undefined
+  }
+
+  const settleReadyWaiters = forcedValue => {
+    for (const waiter of [...readyWaiters]) {
+      const status = forcedValue ?? readinessStatus(waiter.expectedInstanceIds)
+      if (status === undefined) continue
+      readyWaiters.delete(waiter)
+      waiter.resolve(status)
+    }
   }
 
   const activeInstances = () =>
@@ -389,8 +440,9 @@ export const createOnlineComponentSurfaceHost = options => {
 
   const activeRevisionKeys = () => [...new Set(activeInstances().map(instance => instance.revisionKey))].sort()
 
-  const disposeLifecycle = revisionKey => {
+  const retireLifecycle = revisionKey => {
     const lifecycle = activationLifecycles.get(revisionKey)
+    lifecycle?.abortPending()
     lifecycle?.dispose()
     activationLifecycles.delete(revisionKey)
     pendingActivationSequences.delete(revisionKey)
@@ -465,7 +517,7 @@ export const createOnlineComponentSurfaceHost = options => {
     pendingBatches.clear()
     pendingActivationSequences.clear()
     sandboxResources = emptySandboxResources
-    resolveReadyWaiters(false)
+    settleReadyWaiters(false)
   }
 
   const createShell = instance => {
@@ -518,7 +570,12 @@ export const createOnlineComponentSurfaceHost = options => {
     })
     dirtyInstances.clear()
     removedInstances.clear()
-    pendingBatches.set(sequence, activeInstances().length)
+    const revisionKeys = [...new Set(updates.map(update => update.revisionKey))]
+    pendingBatches.set(sequence, {
+      instanceCount: activeInstances().length,
+      batchSize: updates.length + removals.length,
+      ...(revisionKeys.length === 1 ? { revisionKey: revisionKeys[0] } : {}),
+    })
     for (const update of updates) {
       const lifecycle = activationLifecycles.get(update.revisionKey)
       if (lifecycle?.getDiagnostics().state === 'pending' && !pendingActivationSequences.has(update.revisionKey)) {
@@ -527,6 +584,13 @@ export const createOnlineComponentSurfaceHost = options => {
     }
     channel.port1.postMessage(message)
     batchCount += 1
+    emitTelemetry({
+      eventType: 'dashboard.iframe.batch',
+      status: 'scheduled',
+      batchSize: updates.length + removals.length,
+      instanceCount: activeInstances().length,
+      ...(revisionKeys.length === 1 ? { revisionKey: revisionKeys[0] } : {}),
+    })
   }
 
   const setSurfaceVisible = visible => {
@@ -553,21 +617,29 @@ export const createOnlineComponentSurfaceHost = options => {
       rejectedMessageCount += 1
       return
     }
-    const expectedInstanceCount = pendingBatches.get(message.sequence)
-    if (expectedInstanceCount === undefined) {
+    const pendingBatch = pendingBatches.get(message.sequence)
+    if (pendingBatch === undefined) {
       rejectedMessageCount += 1
       return
     }
     pendingBatches.delete(message.sequence)
-    if (message.resources.objectUrlCount !== 0 || message.resources.instanceCount !== expectedInstanceCount) {
+    if (message.resources.objectUrlCount !== 0 || message.resources.instanceCount !== pendingBatch.instanceCount) {
       handleSandboxFault({ code: 'resource-leak', instanceId: null })
       return
     }
+    emitTelemetry({
+      eventType: 'dashboard.iframe.batch',
+      status: 'completed',
+      batchSize: pendingBatch.batchSize,
+      instanceCount: pendingBatch.instanceCount,
+      ...(pendingBatch.revisionKey === undefined ? {} : { revisionKey: pendingBatch.revisionKey }),
+    })
     for (const [revisionKey, activationSequence] of pendingActivationSequences) {
       if (activationSequence > message.sequence) continue
       activationLifecycles.get(revisionKey)?.completeRehydrate()
       pendingActivationSequences.delete(revisionKey)
     }
+    settleReadyWaiters()
   }
 
   const quarantineRevision = revisionKey => {
@@ -640,6 +712,12 @@ export const createOnlineComponentSurfaceHost = options => {
     restartCount += 1
     const started = startFrame(environment.createNonce())
     if (!started && quarantinedRevisions.size === 0) state = 'idle'
+    emitTelemetry({
+      eventType: 'dashboard.iframe.restart',
+      status: started ? 'restarted' : 'failed',
+      diagnosticCode: 'surface-restart',
+      instanceCount: activeInstances().length,
+    })
     return started
   }
 
@@ -652,6 +730,12 @@ export const createOnlineComponentSurfaceHost = options => {
       for (const revisionKey of activeRevisionKeys()) revisions.add(revisionKey)
     }
     for (const revisionKey of revisions) quarantineRevision(revisionKey)
+    emitTelemetry({
+      eventType: 'dashboard.iframe.fault',
+      status: 'failed',
+      diagnosticCode: SANDBOX_FAULT_DIAGNOSTIC_CODES.has(message.code) ? message.code : 'sandbox-fault',
+      ...(revisions.size === 1 ? { revisionKey: [...revisions][0] } : {}),
+    })
 
     clearFrameResources()
     if (activeInstances().length === 0) {
@@ -698,7 +782,6 @@ export const createOnlineComponentSurfaceHost = options => {
       ready = true
       state = surfaceVisible ? 'ready' : 'hidden'
       for (const instance of activeInstances()) dirtyInstances.add(instance.instanceId)
-      resolveReadyWaiters(true)
       scheduleWork()
       return
     }
@@ -749,6 +832,7 @@ export const createOnlineComponentSurfaceHost = options => {
 
     if (frameHandle && !beginRevisionActivation(instance.revisionKey, identity.nonce)) return false
     instances.set(instance.instanceId, instance)
+    settleReadyWaiters()
     dirtyInstances.add(instance.instanceId)
     removedInstances.delete(instance.instanceId)
     ensureVisibilitySubscription()
@@ -786,7 +870,7 @@ export const createOnlineComponentSurfaceHost = options => {
 
     if (revisionChanged) {
       if (![...instances.values()].some(instance => instance.revisionKey === current.revisionKey)) {
-        disposeLifecycle(current.revisionKey)
+        retireLifecycle(current.revisionKey)
       }
       pendingRestartReason = 'revision-changed'
       scheduleWork()
@@ -801,12 +885,13 @@ export const createOnlineComponentSurfaceHost = options => {
     assertIdentifier(instanceId, 'instanceId')
     const current = instances.get(instanceId)
     if (!current || !instances.delete(instanceId)) return false
+    settleReadyWaiters(false)
     dirtyInstances.delete(instanceId)
     removedInstances.add(instanceId)
     shells.get(instanceId)?.dispose()
     shells.delete(instanceId)
     if (![...instances.values()].some(instance => instance.revisionKey === current.revisionKey)) {
-      disposeLifecycle(current.revisionKey)
+      retireLifecycle(current.revisionKey)
     }
     if (instances.size === 0) {
       clearFrameResources()
@@ -826,6 +911,22 @@ export const createOnlineComponentSurfaceHost = options => {
     pendingRestartReason ??= reason
     scheduleWork()
     return true
+  }
+
+  const abortOwnedActivation = () => {
+    if (disposed) return false
+    clearFrameResources()
+    visibilityCleanup?.()
+    visibilityCleanup = undefined
+    instances.clear()
+    dirtyInstances.clear()
+    removedInstances.clear()
+    let aborted = false
+    for (const lifecycle of activationLifecycles.values()) {
+      aborted = lifecycle.abortPending() || aborted
+    }
+    state = 'idle'
+    return aborted
   }
 
   const dispose = () => {
@@ -882,10 +983,16 @@ export const createOnlineComponentSurfaceHost = options => {
     unregister,
     restart,
     setSurfaceVisible,
-    whenReady: () => {
-      if (ready) return Promise.resolve(true)
-      if (disposed || state === 'quarantined' || state === 'safe-boot') return Promise.resolve(false)
-      return new Promise(resolve => readyWaiters.add(resolve))
+    abortOwnedActivation,
+    whenReady: rawInput => {
+      const { expectedInstanceIds } = normalizeReadinessInput(rawInput)
+      const status = readinessStatus(expectedInstanceIds)
+      if (status !== undefined) return Promise.resolve(status)
+      const waiter = { expectedInstanceIds, resolve: undefined }
+      return new Promise(resolve => {
+        waiter.resolve = resolve
+        readyWaiters.add(waiter)
+      })
     },
     dispose,
     getDiagnostics,

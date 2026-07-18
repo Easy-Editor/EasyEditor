@@ -24,6 +24,39 @@ const assertPlainObject = (value, name) => {
   return value
 }
 
+const normalizeExpectedInstanceIds = value => {
+  if (!Array.isArray(value)) throw new TypeError('expectedInstanceIds must be an array')
+  const expected = value.map((instanceId, index) => assertIdentifier(instanceId, `expectedInstanceIds[${index}]`))
+  if (new Set(expected).size !== expected.length) throw new TypeError('expectedInstanceIds must be unique')
+  return Object.freeze([...expected].sort())
+}
+
+const normalizeSurfaceReadinessInput = value => {
+  const input = assertPlainObject(value, 'surface readiness input')
+  if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'expectedInstanceIds')) {
+    throw new TypeError('surface readiness input fields are invalid')
+  }
+  return Object.freeze({ expectedInstanceIds: normalizeExpectedInstanceIds(input.expectedInstanceIds) })
+}
+
+const normalizeBridgeReadinessInput = value => {
+  const input = assertPlainObject(value, 'surface bridge readiness input')
+  const fields = Object.keys(input).sort()
+  if (fields.length !== 2 || fields[0] !== 'expectedInstanceIds' || fields[1] !== 'requireRegistered') {
+    throw new TypeError('surface bridge readiness input fields are invalid')
+  }
+  if (typeof input.requireRegistered !== 'boolean') {
+    throw new TypeError('surface bridge readiness requireRegistered must be a boolean')
+  }
+  return Object.freeze({
+    expectedInstanceIds: normalizeExpectedInstanceIds(input.expectedInstanceIds),
+    requireRegistered: input.requireRegistered,
+  })
+}
+
+const sameInstanceIds = (actual, expected) =>
+  actual.length === expected.length && actual.every((instanceId, index) => instanceId === expected[index])
+
 const sanitizeJsonValue = (value, depth, seen) => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
@@ -218,6 +251,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
   let mutationObserver
   let listenerCount = 0
   let nextConnectionOrder = 0
+  const readinessWaiters = new Set()
 
   const report = error => {
     try {
@@ -240,6 +274,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     const scheduledFrame = frame
     frame = undefined
     safely(() => cancelFrame(scheduledFrame))
+    settleReadinessWaiters()
   }
 
   const safelyUnregister = (ownedController, instanceId) => {
@@ -247,9 +282,49 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     safely(() => ownedController.unregister(instanceId))
   }
 
+  const bindingsMatch = expectedInstanceIds =>
+    bindings.size === expectedInstanceIds.length && expectedInstanceIds.every(instanceId => bindings.has(instanceId))
+
+  const readinessStatus = (input, expectedAttachmentToken = attachmentToken) => {
+    if (expectedAttachmentToken !== attachmentToken || !controller || !mount) return false
+    if (!bindingsMatch(input.expectedInstanceIds)) return undefined
+    const expectedBindings = input.expectedInstanceIds.map(instanceId => bindings.get(instanceId))
+    if (input.requireRegistered && expectedBindings.some(binding => binding.failed)) return false
+    if (frame !== undefined || expectedBindings.some(binding => binding.pending)) return undefined
+    if (input.requireRegistered && expectedBindings.some(binding => !binding.registered)) return undefined
+    return true
+  }
+
+  function settleReadinessWaiters() {
+    for (const waiter of [...readinessWaiters]) {
+      const status = readinessStatus(waiter.input, waiter.attachmentToken)
+      if (status === undefined) continue
+      readinessWaiters.delete(waiter)
+      waiter.resolve(status)
+    }
+  }
+
+  const matchesReadyCensus = rawInput => readinessStatus(normalizeBridgeReadinessInput(rawInput)) === true
+
+  const whenReady = rawInput => {
+    const input = normalizeBridgeReadinessInput(rawInput)
+    const status = readinessStatus(input)
+    if (status !== undefined) return Promise.resolve(status)
+    const waiter = {
+      attachmentToken,
+      input,
+      resolve: undefined,
+    }
+    return new Promise(resolve => {
+      waiter.resolve = resolve
+      readinessWaiters.add(waiter)
+    })
+  }
+
   const schedule = () => {
     if (frame !== undefined || !controller || !mount || bindings.size === 0) return
     frame = requestFrame(flush)
+    settleReadinessWaiters()
   }
 
   const isObservedByAnotherBinding = (element, ignoredBinding) => {
@@ -363,7 +438,9 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     })
     if (binding.pending || binding.lastAttempt === fingerprint) return
     binding.lastAttempt = fingerprint
+    binding.failed = false
     binding.pending = true
+    settleReadinessWaiters()
     const pendingToken = Object.freeze({})
     binding.pendingToken = pendingToken
     const activeController = controller
@@ -396,7 +473,9 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
       if (!isCurrentOperation()) return
       binding.pending = false
       binding.pendingToken = undefined
+      binding.failed = true
       report(error)
+      settleReadinessWaiters()
       return
     }
     void Promise.resolve(operation).then(
@@ -405,14 +484,18 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
         binding.pending = false
         binding.pendingToken = undefined
         binding.registered ||= applied === true
+        binding.failed = applied !== true
         schedule()
+        settleReadinessWaiters()
       },
       error => {
         if (!isCurrentOperation()) return
         binding.pending = false
         binding.pendingToken = undefined
+        binding.failed = true
         report(error)
         schedule()
+        settleReadinessWaiters()
       },
     )
   }
@@ -426,6 +509,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     for (const binding of bindings.values()) {
       applyBinding(binding, measureBinding(binding, measurementContext, getComputedStyle))
     }
+    settleReadinessWaiters()
   }
 
   const attach = input => {
@@ -444,9 +528,11 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
       binding.pending = false
       binding.pendingToken = undefined
       binding.lastAttempt = undefined
+      binding.failed = false
     }
     startInvalidationSources()
     schedule()
+    settleReadinessWaiters()
     const attachedToken = attachmentToken
     return () => detach(value.controller, attachedToken)
   }
@@ -472,8 +558,10 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
       binding.pending = false
       binding.pendingToken = undefined
       binding.lastAttempt = undefined
+      binding.failed = false
     }
     for (const binding of previousBindings) safelyUnregister(previous, binding.instanceId)
+    settleReadinessWaiters()
     return true
   }
 
@@ -494,11 +582,13 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
       registered: false,
       pending: false,
       pendingToken: undefined,
+      failed: false,
     }
     bindings.set(instanceId, binding)
     if (bindings.size === 1) startInvalidationSources()
     else resizeObserver?.observe(binding.element)
     schedule()
+    settleReadinessWaiters()
 
     let active = true
     return Object.freeze({
@@ -513,11 +603,13 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
         binding.node = next.node
         binding.context = resolveDashboardOnlineComponentContext(next.props ?? {})
         binding.element = next.element
+        binding.failed = false
         if (resizeObserver && previousElement !== next.element) {
           if (!isObservedByAnotherBinding(previousElement, binding)) resizeObserver.unobserve(previousElement)
           resizeObserver.observe(next.element)
         }
         schedule()
+        settleReadinessWaiters()
         return true
       },
       dispose: () => {
@@ -529,6 +621,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
         binding.pending = false
         binding.pendingToken = undefined
         binding.lastAttempt = undefined
+        binding.failed = false
         if (bindings.size === 0) {
           cancelScheduledFrame()
           stopInvalidationSources()
@@ -536,6 +629,7 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
           safely(() => resizeObserver.unobserve(binding.element))
         }
         safelyUnregister(activeController, instanceId)
+        settleReadinessWaiters()
         return true
       },
     })
@@ -545,6 +639,8 @@ export const createDashboardOnlineComponentSurfaceBridge = (options = {}) => {
     attach,
     detach,
     connect,
+    matchesReadyCensus,
+    whenReady,
     getDiagnostics: () =>
       Object.freeze({
         attached: controller !== undefined,
@@ -569,6 +665,11 @@ export const startDashboardOnlineComponentSurface = options => {
   const enabled = options?.enabled === true
   if (!enabled) {
     return Object.freeze({
+      whenReady: rawInput => {
+        normalizeSurfaceReadinessInput(rawInput)
+        return Promise.resolve(false)
+      },
+      abortOwnedActivation: () => false,
       dispose: () => undefined,
       getDiagnostics: () => Object.freeze({ state: 'disabled', controllerCreated: false }),
     })
@@ -585,10 +686,19 @@ export const startDashboardOnlineComponentSurface = options => {
   const branchId = assertIdentifier(options.branchId, 'branchId')
   const surfaceId = assertIdentifier(options.surfaceId, 'surfaceId')
   const bridge = options.bridge
-  if (typeof bridge?.attach !== 'function') throw new TypeError('surface bridge is required')
+  if (
+    typeof bridge?.attach !== 'function' ||
+    typeof bridge?.matchesReadyCensus !== 'function' ||
+    typeof bridge?.whenReady !== 'function' ||
+    typeof bridge?.getDiagnostics !== 'function'
+  ) {
+    throw new TypeError('surface bridge readiness contract is required')
+  }
   if (typeof options.persistence?.readArtifact !== 'function') throw new TypeError('artifact persistence is required')
   const document = options.document
-  if (typeof document?.querySelector !== 'function') throw new TypeError('surface document is required')
+  if (typeof document?.querySelector !== 'function' || typeof document?.querySelectorAll !== 'function') {
+    throw new TypeError('surface document is required')
+  }
   const requestFrame = options.requestAnimationFrame ?? globalThis.requestAnimationFrame?.bind(globalThis)
   const cancelFrame = options.cancelAnimationFrame ?? globalThis.cancelAnimationFrame?.bind(globalThis)
   const MutationObserverClass = options.MutationObserver ?? globalThis.MutationObserver
@@ -604,7 +714,69 @@ export const startDashboardOnlineComponentSurface = options => {
   let currentMount
   let observer
   let frame
+  const readinessEpochWaiters = new Set()
+  const domCensusWaiters = new Set()
+  let activationEpoch = 0
   let disposed = false
+
+  const readDomCensus = () => {
+    const instanceIds = [...document.querySelectorAll('[data-easy-editor-generated-material-host]')].map(
+      (element, index) => {
+        const instanceId = element.getAttribute?.('data-easy-editor-generated-material-host')
+        return assertIdentifier(instanceId, `generated material host census[${index}]`)
+      },
+    )
+    if (new Set(instanceIds).size !== instanceIds.length) {
+      throw new Error('generated material host census contains duplicate instance ids')
+    }
+    return instanceIds.sort()
+  }
+
+  const domCensusMatches = expectedInstanceIds => sameInstanceIds(readDomCensus(), expectedInstanceIds)
+
+  const settleDomCensusWaiters = forcedValue => {
+    for (const waiter of [...domCensusWaiters]) {
+      const status = forcedValue ?? (domCensusMatches(waiter.expectedInstanceIds) ? true : undefined)
+      if (status === undefined) continue
+      domCensusWaiters.delete(waiter)
+      waiter.resolve(status)
+    }
+  }
+
+  const whenDomCensusMatches = expectedInstanceIds => {
+    if (disposed) return Promise.resolve(false)
+    if (domCensusMatches(expectedInstanceIds)) return Promise.resolve(true)
+    const waiter = { expectedInstanceIds, resolve: undefined }
+    return new Promise(resolve => {
+      waiter.resolve = resolve
+      domCensusWaiters.add(waiter)
+    })
+  }
+
+  const advanceActivationEpoch = () => {
+    activationEpoch += 1
+    for (const resolve of readinessEpochWaiters) resolve()
+    readinessEpochWaiters.clear()
+    settleDomCensusWaiters(false)
+  }
+
+  const raceActivationEpoch = async (promise, expectedEpoch) => {
+    let resolveEpochChange
+    const epochChanged = new Promise(resolve => {
+      resolveEpochChange = resolve
+      readinessEpochWaiters.add(resolve)
+    })
+    let result
+    try {
+      result = await Promise.race([
+        promise.then(value => ({ status: 'settled', value })),
+        epochChanged.then(() => ({ status: 'epoch-changed' })),
+      ])
+    } finally {
+      readinessEpochWaiters.delete(resolveEpochChange)
+    }
+    return activationEpoch === expectedEpoch ? result : { status: 'epoch-changed' }
+  }
 
   const stopDiscovery = () => {
     observer?.disconnect()
@@ -621,13 +793,15 @@ export const startDashboardOnlineComponentSurface = options => {
     })
   }
 
-  const releaseCurrentSurface = () => {
+  const releaseCurrentSurface = abortOwned => {
+    advanceActivationEpoch()
     const previousRelease = releaseBridge
     const previousController = controller
     releaseBridge = undefined
     controller = undefined
     currentMount = undefined
     try {
+      if (abortOwned) previousController?.abortOwnedActivation()
       previousRelease?.()
     } finally {
       previousController?.dispose()
@@ -652,11 +826,21 @@ export const startDashboardOnlineComponentSurface = options => {
       surfaceHostOptions: {
         mode,
         mount,
+        ...(options.telemetry ? { telemetry: options.telemetry } : {}),
         ...(options.onSelection ? { onSelection: options.onSelection } : {}),
         ...(options.onRuntimeEvent ? { onRuntimeEvent: options.onRuntimeEvent } : {}),
         ...(options.bindTrustedShell ? { bindTrustedShell: options.bindTrustedShell } : {}),
       },
     })
+    if (
+      typeof nextController?.whenReady !== 'function' ||
+      typeof nextController?.matchesReadyCensus !== 'function' ||
+      typeof nextController?.abortOwnedActivation !== 'function' ||
+      typeof nextController?.getDiagnostics !== 'function'
+    ) {
+      nextController?.dispose?.()
+      throw new TypeError('surface controller readiness contract is required')
+    }
     let nextRelease
     try {
       nextRelease = bridge.attach({ controller: nextController, projectId, mount })
@@ -668,29 +852,81 @@ export const startDashboardOnlineComponentSurface = options => {
     releaseBridge = nextRelease
     currentMount = mount
     state = options.safeBoot === true ? 'safe-boot' : 'active'
+    advanceActivationEpoch()
   }
 
   const discover = () => {
     if (disposed) return
     const nextMount = document.querySelector(selector)
     if (nextMount === currentMount) return
-    if (currentMount || controller || releaseBridge) releaseCurrentSurface()
+    if (currentMount || controller || releaseBridge) releaseCurrentSurface(true)
     state = 'discovering'
     if (nextMount) activate(nextMount)
   }
 
   if (typeof MutationObserverClass === 'function') {
-    observer = new MutationObserverClass(scheduleDiscovery)
+    observer = new MutationObserverClass(() => {
+      scheduleDiscovery()
+      settleDomCensusWaiters()
+    })
     observer.observe(document.documentElement, { childList: true, subtree: true })
   }
   discover()
 
   return Object.freeze({
+    whenReady: async rawInput => {
+      const { expectedInstanceIds } = normalizeSurfaceReadinessInput(rawInput)
+      while (true) {
+        discover()
+        const expectedEpoch = activationEpoch
+        const activeController = controller
+        const activeMount = currentMount
+        if (disposed || activationEpoch !== expectedEpoch || !activeController || !activeMount) return false
+        const controllerState = activeController.getDiagnostics().state
+        const bridgeReadinessInput = {
+          expectedInstanceIds,
+          requireRegistered: controllerState !== 'safe-boot',
+        }
+        const readiness = await raceActivationEpoch(
+          Promise.all([
+            whenDomCensusMatches(expectedInstanceIds),
+            bridge.whenReady(bridgeReadinessInput),
+            activeController.whenReady({ expectedInstanceIds }),
+          ]).then(results => results.every(result => result === true)),
+          expectedEpoch,
+        )
+        if (readiness.status === 'epoch-changed') {
+          if (disposed) return false
+          continue
+        }
+        const ready = readiness.value
+        if (
+          disposed ||
+          activationEpoch !== expectedEpoch ||
+          controller !== activeController ||
+          currentMount !== activeMount
+        ) {
+          return false
+        }
+        if (ready !== true) return false
+        const controllerDiagnostics = activeController.getDiagnostics()
+        if (!domCensusMatches(expectedInstanceIds)) continue
+        if (!bridge.matchesReadyCensus(bridgeReadinessInput)) continue
+        if (
+          controllerDiagnostics.state !== 'safe-boot' &&
+          !activeController.matchesReadyCensus({ expectedInstanceIds })
+        ) {
+          continue
+        }
+        return true
+      }
+    },
+    abortOwnedActivation: () => controller?.abortOwnedActivation?.() ?? false,
     dispose: () => {
       if (disposed) return
       disposed = true
       stopDiscovery()
-      releaseCurrentSurface()
+      releaseCurrentSurface(false)
       state = 'disposed'
     },
     getDiagnostics: () => Object.freeze({ state, controllerCreated: controller !== undefined }),

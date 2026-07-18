@@ -19,10 +19,18 @@ const loadRuntime = captures => {
   const legacyFetch = async () => ({ data: 'legacy' })
   const datasourcePackage = {
     __esModule: true,
-    createDataSourceEngine: (dataSource, engine, options) => ({ dataSource, engine, options }),
-    default: options => {
+    createDataSourceEngine: (dataSource, engine, options) => {
+      captures.engineCreations = [...(captures.engineCreations ?? []), { dataSource, engine, options }]
       captures.pluginOptions = options
-      return { name: 'DataSourcePlugin' }
+      const closureId = dataSource.list?.[0]?.id ?? 'empty'
+      return {
+        dataSource,
+        engine,
+        options,
+        reloadDataSource: async () => {
+          captures.reloadCalls = [...(captures.reloadCalls ?? []), closureId]
+        },
+      }
     },
     defaultRequestHandlersMap: { fetch: legacyFetch },
   }
@@ -39,6 +47,9 @@ const loadRuntime = captures => {
   )
   return { legacyFetch, runtime: loaded.exports }
 }
+
+const connectPageRenderer = (instance, dataSource = { list: [] }) =>
+  instance.dataSourceEngine.createDataSourceEngine(dataSource, { __namespace: 'page' })
 
 const jsonResponse = value => ({
   ok: true,
@@ -61,6 +72,7 @@ test('editor, preview, and Agent Host use explicit data flag wiring', () => {
   const runtimeSource = readFileSync(resolve(dashboardRoot, 'src/editor/runtime.ts'), 'utf8')
 
   assert.match(editorSource, /safeDataEnabled:\s*dashboardAgentRuntimeFeatureFlags\.data/u)
+  assert.match(editorSource, /engine\.config\.set\('dataSourceEngine', dashboardDataRuntime\.dataSourceEngine\)/u)
   assert.match(previewSource, /resolveDashboardSafeDataFeatureFlag\(import\.meta\.env\)/u)
   assert.match(previewSource, /composeDashboardRootSchema\([^)]*\{ safeDataEnabled \}/su)
   assert.doesNotMatch(
@@ -90,6 +102,7 @@ test('editor and preview runtime unwrap credentialed proxy data and apply the sa
     getProjectId: () => 'project-1',
     safeDataEnabled: true,
   })
+  connectPageRenderer(instance)
   const descriptor = {
     schemaVersion: 1,
     id: 'sales',
@@ -114,18 +127,104 @@ test('editor and preview runtime unwrap credentialed proxy data and apply the sa
   instance.dispose()
 })
 
-test('manual DataSourcePlugin fetch handling remains registered beside the safe handler', () => {
+test('manual datasource fetch and inert legacy mock handling remain explicit beside the safe handler', async () => {
   const captures = {}
   const { legacyFetch, runtime } = loadRuntime(captures)
+  let fetchCalls = 0
+  const instance = runtime.createDashboardDataRuntime({
+    expressionEvaluator: {},
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return jsonResponse([])
+    },
+    getProjectId: () => 'project-1',
+  })
+  connectPageRenderer(instance)
+
+  assert.strictEqual(captures.pluginOptions.requestHandlersMap.fetch, legacyFetch)
+  assert.deepEqual(
+    await captures.pluginOptions.requestHandlersMap.mock({ uri: 'mock://city/summary', method: 'GET' }),
+    { data: null },
+  )
+  assert.equal(fetchCalls, 0)
+  await assert.rejects(
+    captures.pluginOptions.requestHandlersMap.mock({ uri: 'https://fixtures.example.test/summary' }),
+    /requires a mock:\/\/ URI/iu,
+  )
+  assert.equal(typeof captures.pluginOptions.requestHandlersMap[SAFE_TYPE], 'function')
+  instance.dispose()
+  await assert.rejects(captures.pluginOptions.requestHandlersMap.mock({ uri: 'mock://city/summary' }), /disposed/iu)
+})
+
+test('editor data runtime refreshes through the current renderer-owned datasource closure', async () => {
+  const captures = {}
+  const { runtime } = loadRuntime(captures)
   const instance = runtime.createDashboardDataRuntime({
     expressionEvaluator: {},
     fetchImpl: async () => jsonResponse([]),
     getProjectId: () => 'project-1',
+    safeDataEnabled: true,
   })
 
-  assert.strictEqual(captures.pluginOptions.requestHandlersMap.fetch, legacyFetch)
-  assert.equal(typeof captures.pluginOptions.requestHandlersMap[SAFE_TYPE], 'function')
+  await assert.rejects(instance.reloadDataSources(), /not connected to a renderer/iu)
+  instance.dataSourceEngine.createDataSourceEngine({ list: [{ id: 'old-page' }] }, { __namespace: 'page' })
+  await instance.reloadDataSources()
+  assert.deepEqual(captures.reloadCalls, ['old-page'])
+  let releaseCommit
+  const committed = new Promise(resolve => {
+    releaseCommit = resolve
+  })
+  const refreshPhases = []
+  const refresh = instance.refreshAfterRerender(
+    async signal => {
+      assert.equal(signal.aborted, false)
+      instance.dataSourceEngine.createDataSourceEngine({ list: [{ id: 'new-page' }] }, { __namespace: 'page' })
+      instance.dataSourceEngine.createDataSourceEngine({ list: [{ id: 'component' }] }, { __namespace: 'component' })
+      await committed
+      refreshPhases.push('pre-reload-commit')
+    },
+    async signal => {
+      assert.equal(signal.aborted, false)
+      assert.deepEqual(captures.reloadCalls, ['old-page', 'new-page'])
+      refreshPhases.push('post-reload-commit')
+    },
+  )
+  await Promise.resolve()
+  assert.deepEqual(captures.reloadCalls, ['old-page'], 'render-time configuration must not reload before commit')
+  releaseCommit()
+  await refresh
+  assert.deepEqual(captures.reloadCalls, ['old-page', 'new-page'])
+  assert.deepEqual(refreshPhases, ['pre-reload-commit', 'post-reload-commit'])
+
+  await assert.rejects(
+    instance.refreshAfterRerender(async () => {
+      instance.dataSourceEngine.createDataSourceEngine({ list: [{ id: 'rejected-page' }] }, { __namespace: 'page' })
+      throw new Error('renderer commit failed')
+    }),
+    /renderer commit failed/u,
+  )
+  assert.deepEqual(captures.reloadCalls, ['old-page', 'new-page'])
+
+  let releaseDisposedCommit
+  const disposedCommit = new Promise(resolve => {
+    releaseDisposedCommit = resolve
+  })
+  let refreshSignal
+  const disposedRefresh = instance.refreshAfterRerender(async signal => {
+    refreshSignal = signal
+    await disposedCommit
+  })
+  await Promise.resolve()
   instance.dispose()
+  assert.equal(refreshSignal.aborted, true)
+  releaseDisposedCommit()
+  await assert.rejects(disposedRefresh, /disposed/iu)
+  assert.deepEqual(captures.reloadCalls, ['old-page', 'new-page'])
+  await assert.rejects(instance.reloadDataSources(), /disposed/iu)
+  assert.throws(
+    () => instance.dataSourceEngine.createDataSourceEngine({ list: [] }, { __namespace: 'page' }),
+    /disposed/iu,
+  )
 })
 
 test('disabled safe data handler fails closed without fetching', async () => {
@@ -141,6 +240,7 @@ test('disabled safe data handler fails closed without fetching', async () => {
     getProjectId: () => 'project-1',
     safeDataEnabled: false,
   })
+  connectPageRenderer(instance)
 
   await assert.rejects(
     captures.pluginOptions.requestHandlersMap[SAFE_TYPE]({

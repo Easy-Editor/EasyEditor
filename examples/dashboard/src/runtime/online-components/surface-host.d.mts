@@ -113,7 +113,8 @@ export interface OnlineComponentSurfaceHost {
   unregister(instanceId: string): boolean
   restart(reason: string): boolean
   setSurfaceVisible(visible: boolean): boolean
-  whenReady(): Promise<boolean>
+  abortOwnedActivation(): boolean
+  whenReady(input: Readonly<{ expectedInstanceIds: readonly string[] }>): Promise<boolean>
   dispose(): void
   getDiagnostics(): OnlineComponentSurfaceDiagnostics
 }
@@ -128,6 +129,8 @@ export interface OnlineComponentSurfaceHostOptions {
   readonly environment?: OnlineComponentSurfaceEnvironment
   readonly markerStore: OnlineComponentActivationMarkerStore
   readonly now?: () => number
+  readonly telemetry?: Readonly<{ record(event: Readonly<Record<string, unknown>>): unknown }>
+  readonly telemetryNow?: () => number
   readonly allowedRuntimeEvents?: readonly OnlineComponentTrustedShellEventType[]
   readonly onSelection?: (event: OnlineComponentTrustedShellEvent) => void
   readonly onRuntimeEvent?: (event: OnlineComponentTrustedShellEvent | OnlineComponentRuntimeEvent) => void

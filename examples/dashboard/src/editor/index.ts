@@ -12,6 +12,7 @@ import HotkeyPlugin from '@easy-editor/plugin-hotkey'
 import type { CanonicalWorkingDraftV1 } from '../lib/storage/contracts.mjs'
 import {
   DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY,
+  type DashboardOnlineComponentSurfaceHandle,
   createDashboardOnlineComponentSurfaceBridge,
   dispatchDashboardOnlineComponentRuntimeEvent,
   isDashboardOnlineComponentSurfaceEnabled,
@@ -38,6 +39,7 @@ import {
   captureDashboardPersistenceInput,
   composeDashboardAgentHost,
   dashboardAgentRuntimeFeatureFlags,
+  dashboardAgentTelemetry,
   dashboardMaterialGcAdmissionPort,
   dashboardMaterialGcRuntime,
   dashboardPersistence,
@@ -60,6 +62,138 @@ const dashboardDataRuntime = createDashboardDataRuntime({
   getProjectId: () => dashboardPersistence.getSnapshot().projectId,
   safeDataEnabled: dashboardAgentRuntimeFeatureFlags.data,
 })
+
+interface DashboardRendererCommitEvent {
+  readonly componentName?: unknown
+  readonly type?: unknown
+}
+
+const GENERATED_MATERIAL_HOST_SELECTOR = '[data-easy-editor-generated-material-host]'
+
+const captureCommittedDashboardOnlineComponentInstanceIds = (): readonly string[] => {
+  const instanceIds = [...window.document.querySelectorAll<HTMLElement>(GENERATED_MATERIAL_HOST_SELECTOR)].map(
+    (element, index) => {
+      const instanceId = element.getAttribute('data-easy-editor-generated-material-host')
+      if (!instanceId) throw new Error(`Dashboard online component host ${index} has no instance id`)
+      return instanceId
+    },
+  )
+  if (new Set(instanceIds).size !== instanceIds.length) {
+    throw new Error('Dashboard online component host census contains duplicate instance ids')
+  }
+  return Object.freeze(instanceIds.sort())
+}
+
+const createDashboardDataRefreshDisposedError = () => new Error('Dashboard data refresh was disposed')
+
+const createDashboardOnlineSurfaceReadinessError = (surface: DashboardOnlineComponentSurfaceHandle) =>
+  new Error(
+    `Dashboard online component surface did not reach activation readiness: ${JSON.stringify({
+      surface: surface.getDiagnostics(),
+      bridge: dashboardOnlineComponentSurfaceBridge?.getDiagnostics() ?? null,
+    })}`,
+  )
+
+const rerenderAndWaitForDashboardCommit = (
+  simulator: NonNullable<NonNullable<(typeof engine.project)['currentDocument']>['simulator']>,
+  signal: AbortSignal,
+): Promise<readonly string[]> =>
+  new Promise((resolve, reject) => {
+    let settled = false
+    // biome-ignore lint/style/useConst: assigned after settle is defined so synchronous renderer callbacks remain disposal-safe
+    let releaseRender: (() => void) | undefined
+    const settle = (action: () => void) => {
+      if (settled) return
+      settled = true
+      releaseRender?.()
+      signal.removeEventListener('abort', onAbort)
+      action()
+    }
+    const onAbort = () => settle(() => reject(createDashboardDataRefreshDisposedError()))
+    releaseRender = engine.designer.onEvent(DESIGNER_EVENT.NODE_RENDER, (event: DashboardRendererCommitEvent) => {
+      if (event?.componentName !== 'Renderer' || event.type !== 'All') return
+      settle(() => {
+        try {
+          resolve(captureCommittedDashboardOnlineComponentInstanceIds())
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    try {
+      simulator.rerender()
+    } catch (error) {
+      settle(() => reject(error))
+    }
+  })
+
+const waitForDashboardOnlineSurfaceActivation = async (
+  signal: AbortSignal,
+  expectedInstanceIds: readonly string[],
+): Promise<void> => {
+  const onlineSurface = dashboardOnlineComponentSurface
+  if (!onlineSurface) return
+  const ready = await new Promise<boolean>((resolve, reject) => {
+    let settled = false
+    const settle = (action: () => void) => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      action()
+    }
+    const onAbort = () => settle(() => reject(createDashboardDataRefreshDisposedError()))
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    void onlineSurface.whenReady({ expectedInstanceIds }).then(
+      value => settle(() => resolve(value)),
+      error => settle(() => reject(error)),
+    )
+  })
+  if (!ready) throw createDashboardOnlineSurfaceReadinessError(onlineSurface)
+}
+
+export const waitForDashboardOnlineComponentSurface = async (): Promise<void> => {
+  const onlineSurface = dashboardOnlineComponentSurface
+  if (!onlineSurface) return
+  const expectedInstanceIds = captureCommittedDashboardOnlineComponentInstanceIds()
+  if (!(await onlineSurface.whenReady({ expectedInstanceIds }))) {
+    throw createDashboardOnlineSurfaceReadinessError(onlineSurface)
+  }
+}
+
+export const reloadDashboardDataSources = async (): Promise<void> => {
+  if (editorDisposalStarted) throw createDashboardDataRefreshDisposedError()
+  const simulator = engine.project.currentDocument?.simulator
+  if (!simulator || simulator.isDisposed) throw new Error('Dashboard data refresh requires the active simulator')
+  let committedInstanceIds: readonly string[] | undefined
+  await dashboardDataRuntime.refreshAfterRerender(
+    async signal => {
+      await waitForDashboardOnlineSurfaceActivation(signal, captureCommittedDashboardOnlineComponentInstanceIds())
+      const preReloadInstanceIds = await rerenderAndWaitForDashboardCommit(simulator, signal)
+      await waitForDashboardOnlineSurfaceActivation(signal, preReloadInstanceIds)
+    },
+    async signal => {
+      committedInstanceIds = await rerenderAndWaitForDashboardCommit(simulator, signal)
+      await waitForDashboardOnlineSurfaceActivation(signal, committedInstanceIds)
+      if (simulator.isDisposed || engine.project.currentDocument?.simulator !== simulator) {
+        throw new Error('Dashboard data refresh simulator changed before commit')
+      }
+    },
+  )
+  if (!committedInstanceIds) throw new Error('Dashboard data refresh completed without a renderer commit census')
+  const onlineSurface = dashboardOnlineComponentSurface
+  if (onlineSurface && !(await onlineSurface.whenReady({ expectedInstanceIds: committedInstanceIds }))) {
+    throw createDashboardOnlineSurfaceReadinessError(onlineSurface)
+  }
+}
 const dashboardDataSourceRenderReducer = createDashboardDataSourceRenderReducer({
   safeDataEnabled: dashboardAgentRuntimeFeatureFlags.data,
 })
@@ -74,12 +208,67 @@ const dashboardOnlineComponentSurfaceBridge = dashboardOnlineComponentSurfaceEna
 
 let releaseSimulatorReady: (() => void) | undefined
 let releasePersistenceListeners: Array<() => void> = []
+let dashboardOnlineComponentSurface: DashboardOnlineComponentSurfaceHandle | null = null
 const dashboardEditorDisposers = new Set<() => void | Promise<void>>()
 let disposePromise: Promise<void> | undefined
 let editorDisposalStarted = false
 let lifecycleDisposalInstalled = false
 
 dashboardEditorDisposers.add(() => dashboardDataRuntime.dispose())
+
+const disposeDashboardOnlineComponentSurface = (abortOwned: boolean): void => {
+  const previous = dashboardOnlineComponentSurface
+  dashboardOnlineComponentSurface = null
+  if (abortOwned) previous?.abortOwnedActivation()
+  previous?.dispose()
+}
+
+const startDashboardOnlineComponentEditorSurface = (scope: {
+  readonly projectId: string
+  readonly branchId: string
+}): void => {
+  if (!dashboardOnlineComponentSurfaceEnabled || !dashboardOnlineComponentSurfaceBridge) return
+  dashboardOnlineComponentSurface = startDashboardOnlineComponentSurface({
+    enabled: true,
+    safeBoot: resolveDashboardOnlineComponentSafeBoot(window.location.search),
+    mode: 'editor',
+    projectId: scope.projectId,
+    branchId: scope.branchId,
+    surfaceId: 'dashboard-editor-online',
+    bridge: dashboardOnlineComponentSurfaceBridge,
+    markerStore: window.localStorage,
+    persistence: dashboardPersistence,
+    document: window.document,
+    ...(dashboardAgentTelemetry ? { telemetry: dashboardAgentTelemetry } : {}),
+    bindTrustedShell: (shell, instanceId) =>
+      engine.designer.dragon.from(
+        shell,
+        () => {
+          const node = engine.project.currentDocument?.getNode(instanceId)
+          return node ? { type: DragObjectType.Node, nodes: [node] } : null
+        },
+        'mouse',
+      ),
+    onSelection: event => {
+      if (event.type === 'select' || event.type === 'drag-start') {
+        engine.designer.selection.select(event.instanceId)
+      }
+    },
+    onRuntimeEvent: event => dispatchDashboardOnlineComponentRuntimeEvent(window, event),
+  })
+}
+
+const replaceDashboardOnlineComponentSurface = (scope: {
+  readonly projectId: string
+  readonly branchId: string
+}): void => {
+  disposeDashboardOnlineComponentSurface(true)
+  startDashboardOnlineComponentEditorSurface(scope)
+}
+
+dashboardEditorDisposers.add(() => {
+  disposeDashboardOnlineComponentSurface(false)
+})
 
 export const registerDashboardEditorDisposer = (disposer: () => void | Promise<void>): (() => void) => {
   if (editorDisposalStarted) throw new Error('Dashboard editor disposal has already started')
@@ -286,6 +475,7 @@ const installPersistenceListeners = () => {
  * listeners to the old binding or finish loading the restored binding.
  */
 export const detachDashboardPersistenceListeners = async (): Promise<void> => {
+  await waitForDashboardOnlineComponentSurface()
   for (const release of releasePersistenceListeners.splice(0)) release()
   try {
     await dashboardEditorSurfaceLifecycle.suspend()
@@ -346,18 +536,20 @@ export const loadDashboardEditorDraft = async (draft: CanonicalWorkingDraftV1): 
     engine.trustPolicy,
   ) as ProjectSchema
   await loadRemoteMaterialsFromComponentsMap(schema.componentsMap)
+  disposeDashboardOnlineComponentSurface(true)
   await loadDashboardProjectAfterMaterialAdmission({
     activeDocument: draft.activeDocument,
     projectId: draft.projectId,
     reason: 'editor-draft-restore',
     schema,
   })
+  startDashboardOnlineComponentEditorSurface({ projectId: draft.projectId, branchId: draft.branchId })
 }
 
 const bootstrapDashboardEditor = async () => {
   try {
+    engine.config.set('dataSourceEngine', dashboardDataRuntime.dataSourceEngine)
     await engine.plugins.registerPlugins([
-      dashboardDataRuntime.plugin,
       DashboardPlugin({
         group: {
           meta: Group,
@@ -397,34 +589,10 @@ const bootstrapDashboardEditor = async () => {
       if (!persistenceSnapshot.projectId || !persistenceSnapshot.branchId) {
         throw new Error('Dashboard online component editor surface requires an active persistence scope')
       }
-      const surface = startDashboardOnlineComponentSurface({
-        enabled: true,
-        safeBoot: resolveDashboardOnlineComponentSafeBoot(window.location.search),
-        mode: 'editor',
+      replaceDashboardOnlineComponentSurface({
         projectId: persistenceSnapshot.projectId,
         branchId: persistenceSnapshot.branchId,
-        surfaceId: 'dashboard-editor-online',
-        bridge: dashboardOnlineComponentSurfaceBridge,
-        markerStore: window.localStorage,
-        persistence: dashboardPersistence,
-        document: window.document,
-        bindTrustedShell: (shell, instanceId) =>
-          engine.designer.dragon.from(
-            shell,
-            () => {
-              const node = engine.project.currentDocument?.getNode(instanceId)
-              return node ? { type: DragObjectType.Node, nodes: [node] } : null
-            },
-            'mouse',
-          ),
-        onSelection: event => {
-          if (event.type === 'select' || event.type === 'drag-start') {
-            engine.designer.selection.select(event.instanceId)
-          }
-        },
-        onRuntimeEvent: event => dispatchDashboardOnlineComponentRuntimeEvent(window, event),
       })
-      registerDashboardEditorDisposer(() => surface.dispose())
     }
     await loadDashboardProjectAfterMaterialAdmission({
       activeDocument: initialProject.activeDocument,

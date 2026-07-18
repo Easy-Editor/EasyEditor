@@ -1,11 +1,14 @@
 import type { DataSource } from '@easy-editor/core'
-import DataSourcePlugin, {
+import {
   type DataSourcePluginOptions,
   createDataSourceEngine,
   defaultRequestHandlersMap,
 } from '@easy-editor/plugin-datasource'
 import { DASHBOARD_SAFE_DATA_SOURCE_TYPE } from './composition'
 import { createDashboardSameOriginDataResolver, parseSafeDataDescriptor } from './contract.mjs'
+
+const DASHBOARD_LEGACY_MOCK_DATA_SOURCE_TYPE = 'mock'
+const DASHBOARD_LEGACY_MOCK_URI_PREFIX = 'mock://'
 
 interface DashboardDataRuntimeOptions {
   readonly expressionEvaluator: NonNullable<DataSourcePluginOptions['expressionEvaluator']>
@@ -25,7 +28,11 @@ export interface DashboardDataRuntime {
   readonly dataSourceEngine: Readonly<{
     createDataSourceEngine(dataSource: DataSource, engine: unknown): ReturnType<typeof createDataSourceEngine>
   }>
-  readonly plugin: ReturnType<typeof DataSourcePlugin>
+  reloadDataSources(): Promise<void>
+  refreshAfterRerender(
+    rerenderAndWaitForCommit: (signal: AbortSignal) => void | Promise<void>,
+    rerenderAndWaitForReloadCommit?: (signal: AbortSignal) => void | Promise<void>,
+  ): Promise<void>
   dispose(): void
 }
 
@@ -49,6 +56,20 @@ export const createDashboardSafeRequestHandler = ({
   }
 }
 
+const createDashboardLegacyMockRequestHandler = (
+  signal: AbortSignal,
+): NonNullable<DataSourcePluginOptions['requestHandlersMap']>[string] => {
+  return async (options: Parameters<NonNullable<DataSourcePluginOptions['requestHandlersMap']>[string]>[0]) => {
+    if (signal.aborted) throw new Error('Dashboard data runtime is disposed')
+    if (typeof options.uri !== 'string' || !options.uri.startsWith(DASHBOARD_LEGACY_MOCK_URI_PREFIX)) {
+      throw new Error('Dashboard legacy mock datasource requires a mock:// URI')
+    }
+    // The frozen Golden fixture predates safe descriptors and carries no payload.
+    // Keep that inert endpoint reloadable without introducing a generic fallback.
+    return { data: null }
+  }
+}
+
 export const createDashboardDataRuntime = ({
   expressionEvaluator,
   fetchImpl = window.fetch.bind(window),
@@ -56,31 +77,72 @@ export const createDashboardDataRuntime = ({
   safeDataEnabled = false,
 }: DashboardDataRuntimeOptions): DashboardDataRuntime => {
   const lifecycle = new AbortController()
+  let reloadDataSources: (() => Promise<void>) | null = null
   const safeRequestHandler = createDashboardSafeRequestHandler({
     fetchImpl,
     getProjectId,
     safeDataEnabled,
     signal: lifecycle.signal,
   })
+  const legacyMockRequestHandler = createDashboardLegacyMockRequestHandler(lifecycle.signal)
   const pluginOptions: DataSourcePluginOptions = {
     expressionEvaluator,
     requestHandlersMap: {
       ...defaultRequestHandlersMap,
+      [DASHBOARD_LEGACY_MOCK_DATA_SOURCE_TYPE]: legacyMockRequestHandler,
       [DASHBOARD_SAFE_DATA_SOURCE_TYPE]: safeRequestHandler,
     },
   }
+  const assertActive = () => {
+    if (lifecycle.signal.aborted) throw new Error('Dashboard data runtime is disposed')
+  }
   const dataSourceEngine = Object.freeze({
-    createDataSourceEngine: (dataSource: DataSource, engine: unknown) =>
-      createDataSourceEngine(
+    createDataSourceEngine: (dataSource: DataSource, engine: unknown) => {
+      assertActive()
+      const runtime = createDataSourceEngine(
         dataSource as Parameters<typeof createDataSourceEngine>[0],
         engine as Parameters<typeof createDataSourceEngine>[1],
         pluginOptions,
-      ),
+      )
+      // React renderer compatibility seam: only PageRenderer owns the page-level
+      // datasource closure; component renderers use the sibling `component` namespace.
+      if ((engine as { readonly __namespace?: unknown } | null)?.__namespace === 'page') {
+        reloadDataSources = runtime.reloadDataSource
+      }
+      return runtime
+    },
   })
 
-  return Object.freeze({
+  const dashboardDataRuntime: DashboardDataRuntime = {
     dataSourceEngine,
-    plugin: DataSourcePlugin(pluginOptions),
-    dispose: () => lifecycle.abort(new Error('dashboard-data-runtime-disposed')),
-  })
+    async reloadDataSources() {
+      assertActive()
+      if (!reloadDataSources) throw new Error('Dashboard data runtime is not connected to a renderer')
+      await reloadDataSources()
+    },
+    async refreshAfterRerender(rerenderAndWaitForCommit, rerenderAndWaitForReloadCommit) {
+      assertActive()
+      if (typeof rerenderAndWaitForCommit !== 'function') {
+        throw new TypeError('Dashboard data refresh requires a renderer commit fence')
+      }
+      if (rerenderAndWaitForReloadCommit !== undefined && typeof rerenderAndWaitForReloadCommit !== 'function') {
+        throw new TypeError('Dashboard data refresh reload commit fence must be a function')
+      }
+      await rerenderAndWaitForCommit(lifecycle.signal)
+      assertActive()
+      await dashboardDataRuntime.reloadDataSources()
+      if (rerenderAndWaitForReloadCommit) {
+        assertActive()
+        await rerenderAndWaitForReloadCommit(lifecycle.signal)
+        assertActive()
+      }
+    },
+    dispose: () => {
+      if (lifecycle.signal.aborted) return
+      reloadDataSources = null
+      const error = new Error('Dashboard data runtime is disposed')
+      lifecycle.abort(error)
+    },
+  }
+  return Object.freeze(dashboardDataRuntime)
 }

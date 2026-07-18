@@ -19,6 +19,7 @@ const GOLDEN_ONLINE_SOURCE_REVISION = GENERATED_MATERIAL_SOURCE_REVISION
 const GOLDEN_FOLLOW_UP_SOURCE_REVISION = GENERATED_MATERIAL_REVISED_SOURCE_REVISION
 const GOLDEN_ONLINE_SOURCE = GENERATED_MATERIAL_SOURCE
 const GOLDEN_FOLLOW_UP_SOURCE = GENERATED_MATERIAL_REVISED_SOURCE
+const CURRENT_SNAPSHOT_REVISION_DIRECTIVE = '$e2e:current-snapshot-revision'
 
 const goldenProject = JSON.parse(
   readFileSync(new URL('../test/fixtures/agent-runtime-golden-project.json', import.meta.url), 'utf8'),
@@ -91,6 +92,8 @@ const settleMaterialGc = (page: Page): Promise<void> =>
   page.evaluate(async () => {
     const trigger = window.__EASY_EDITOR_E2E__?.triggerMaterialGc
     if (trigger) await trigger()
+    const editor = await import('/src/editor/index.ts')
+    await editor.reloadDashboardDataSources()
   })
 
 const openWorkspace = async (page: Page): Promise<Locator> => {
@@ -158,10 +161,11 @@ const setToolScriptForNextReload = async (
     completionSummary: string
     capability: string
     arguments: Record<string, unknown>
+    raceArguments?: Record<string, unknown>
   }>,
 ): Promise<string> =>
   page.evaluate(
-    async ({ key, options }) => {
+    async ({ key, options, currentSnapshotRevisionDirective }) => {
       const runtime = await import('/src/editor/runtime.ts')
       const probe = window.__EASY_EDITOR_E2E__?.getAgentWorkspaceState()
       if (!probe?.binding.sessionId) throw new Error('Golden scripted Host binding is unavailable')
@@ -171,44 +175,92 @@ const setToolScriptForNextReload = async (
       if (!host) throw new Error('Golden scripted Host is unavailable')
       try {
         const observed = await host.observe({ schemaVersion: 1, ...binding, taskId, mode: 'full' })
-        sessionStorage.setItem(
-          key,
-          JSON.stringify([
-            {
-              expectedPhase: 'BLUEPRINT',
-              events: [
-                {
+        const initialSteps = [
+          {
+            expectedPhase: 'BLUEPRINT',
+            events: [
+              {
+                schemaVersion: 1,
+                kind: 'blueprint',
+                summary: options.blueprintSummary,
+                unresolvedConstraints: [],
+              },
+            ],
+          },
+          {
+            expectedPhase: 'PLAN_STEP',
+            events: [
+              {
+                schemaVersion: 1,
+                kind: 'tool-call',
+                call: {
                   schemaVersion: 1,
-                  kind: 'blueprint',
-                  summary: options.blueprintSummary,
-                  unresolvedConstraints: [],
+                  capability: options.capability,
+                  expectedRevision: observed.revision,
+                  arguments: options.arguments,
                 },
-              ],
-            },
-            {
-              expectedPhase: 'PLAN_STEP',
-              events: [
-                {
-                  schemaVersion: 1,
-                  kind: 'tool-call',
-                  call: {
+              },
+              ...(options.raceArguments
+                ? []
+                : [{ schemaVersion: 1, kind: 'complete', summary: options.completionSummary }]),
+            ],
+          },
+        ]
+        const raceSteps = options.raceArguments
+          ? [
+              {
+                expectedPhase: 'PLAN_STEP',
+                events: [
+                  {
                     schemaVersion: 1,
-                    capability: options.capability,
-                    expectedRevision: observed.revision,
-                    arguments: options.arguments,
+                    kind: 'question',
+                    question: {
+                      questionId: 'golden-layout-confirmation',
+                      prompt: '是否保留当前 KPI 人工布局？',
+                    },
                   },
-                },
-                { schemaVersion: 1, kind: 'complete', summary: options.completionSummary },
-              ],
-            },
-          ]),
-        )
+                ],
+              },
+              {
+                expectedPhase: 'PLAN_STEP',
+                events: [
+                  {
+                    schemaVersion: 1,
+                    kind: 'tool-call',
+                    call: {
+                      schemaVersion: 1,
+                      capability: 'screen.applyChangeSet',
+                      expectedRevision: currentSnapshotRevisionDirective,
+                      arguments: options.raceArguments,
+                    },
+                  },
+                ],
+              },
+              {
+                expectedPhase: 'PLAN_STEP',
+                events: [
+                  {
+                    schemaVersion: 1,
+                    kind: 'tool-call',
+                    call: {
+                      schemaVersion: 1,
+                      capability: 'screen.applyChangeSet',
+                      expectedRevision: currentSnapshotRevisionDirective,
+                      arguments: options.raceArguments,
+                    },
+                  },
+                  { schemaVersion: 1, kind: 'complete', summary: options.completionSummary },
+                ],
+              },
+            ]
+          : []
+        sessionStorage.setItem(key, JSON.stringify([...initialSteps, ...raceSteps]))
         return observed.revision
       } finally {
         host.dispose()
       }
     },
-    { key: SCRIPT_STORAGE_KEY, options },
+    { key: SCRIPT_STORAGE_KEY, options, currentSnapshotRevisionDirective: CURRENT_SNAPSHOT_REVISION_DIRECTIVE },
   )
 
 const surfaceIdFor = (mode: 'editor' | 'preview') => (mode === 'editor' ? EDITOR_SURFACE_ID : PREVIEW_SURFACE_ID)
@@ -492,6 +544,19 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
 
   const initialBinding = (await readProbe(page))?.binding
   if (!initialBinding?.sessionId) throw new Error('Golden initial binding is unavailable')
+  const initialRaceArguments: Record<string, unknown> = {
+    schemaVersion: 1,
+    documentId: 'golden-dashboard-page',
+    operations: [
+      {
+        opId: 'golden-confirmed-title-copy',
+        type: 'set',
+        nodeId: 'golden-title',
+        fieldId: 'props.text',
+        value: '城市运行态势驾驶舱（已确认）',
+      },
+    ],
+  }
   const initialBaseRevision = await setToolScriptForNextReload(page, {
     blueprintSummary: 'city dashboard blueprint',
     completionSummary: 'city dashboard completed',
@@ -523,6 +588,7 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         },
       ],
     },
+    raceArguments: initialRaceArguments,
   })
   await page.reload()
   const scriptedBinding = (await waitForWorkspaceRuntime(page)).binding
@@ -533,13 +599,12 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
   let initialTask: WorkspaceTask
   await test.step('2. submit the city-operations dashboard intent', async () => {
     await submitIntent(page, '搭建城市运行态势大屏', '开始搭建')
-    initialTask = await waitForTask(page, tasks => tasks.find(task => task.phase === 'COMPLETED'))
+    initialTask = await waitForTask(page, tasks => tasks.find(task => task.phase === 'WAITING_USER'))
     expect(initialTask).toMatchObject({
       intent: '搭建城市运行态势大屏',
-      phase: 'COMPLETED',
+      phase: 'WAITING_USER',
       blueprint: { summary: 'city dashboard blueprint' },
-      completionSummary: 'city dashboard completed',
-      compensationEligible: true,
+      question: { questionId: 'golden-layout-confirmation' },
     })
   })
 
@@ -559,7 +624,7 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
       })
     })
     expect(layout).toMatchObject({
-      phase: 'COMPLETED',
+      phase: 'WAITING_USER',
       title: { x: 660, y: 32, width: 600, height: 72 },
       map: { x: 540, y: 150, width: 840, height: 760 },
       chart: { x: 1440, y: 180, width: 420, height: 300 },
@@ -649,9 +714,10 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
     ])
     expect(data.dataBindings).toEqual({ schemaVersion: 1, fields: { data: { sourceId: 'golden-http' } } })
     expect(data.receipt).toMatchObject({ callId: data.callId, status: 'applied', revision: data.revision })
-    await settleMaterialGc(page)
-    await page.reload()
-    await waitForWorkspaceRuntime(page)
+    await page.evaluate(async () => {
+      const editor = await import('/src/editor/index.ts')
+      await editor.reloadDashboardDataSources()
+    })
     await expect
       .poll(async () =>
         page
@@ -722,6 +788,10 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
     expect(onlineArtifactRef).toMatchObject({ target: { kind: 'online' } })
     expect(created.result.revision).not.toBe(created.observed.revision)
     expect(created.receipt).toMatchObject({ callId: 'golden-online-create-call', status: 'applied' })
+    await page.evaluate(async () => {
+      const editor = await import('/src/editor/index.ts')
+      await editor.reloadDashboardDataSources()
+    })
   })
 
   await test.step('6. render the shared editor iframe with data, theme, size, and trusted click-through', async () => {
@@ -734,7 +804,18 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
     await expect(instance).toHaveAttribute('data-rendered-width', '360')
     await expect(instance).toHaveAttribute('data-rendered-height', '180')
     await expect(instance).toHaveAttribute('data-source-revision', GOLDEN_ONLINE_SOURCE_REVISION)
-    await page.locator(`[data-online-component-shell="${onlineNodeId}"]`).click()
+    await closeWorkspace(workspace)
+    const shell = page.locator(`[data-online-component-shell="${onlineNodeId}"]`)
+    await expect
+      .poll(() =>
+        shell.evaluate(element => {
+          const rect = element.getBoundingClientRect()
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+          return hit === element || element.contains(hit)
+        }),
+      )
+      .toBe(true)
+    await shell.click()
     await expect
       .poll(() =>
         page.evaluate(async nodeId => {
@@ -746,82 +827,259 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
   })
 
   let humanRect: Readonly<{ x: number; y: number; width: number; height: number }>
-  await test.step('7. reject a stale prepared call, reobserve, and preserve the human move', async () => {
-    const prepared = await page.evaluate(
-      async ({ binding }) => {
+  await test.step('7. yield to post-intent human activity, reobserve, retry, and preserve the move', async () => {
+    const raceWorkspace = await openWorkspace(page)
+    await raceWorkspace.getByRole('tab', { name: '任务' }).click()
+    const before = await page.evaluate(
+      nodeId =>
+        import('/src/editor/runtime.ts').then(runtime => {
+          const rect = runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect()
+          if (!rect) throw new Error('Golden online node has no rect before human move')
+          runtime.armDashboardAgentPostIntentGate()
+          return {
+            rect,
+            activityGeneration: runtime.getDashboardHumanActivityGeneration(),
+            persistenceGeneration: runtime.dashboardPersistence.getSnapshot().draftGeneration,
+          }
+        }),
+      onlineNodeId,
+    )
+
+    await page.locator('#agent-workspace-response').fill('确认保留当前 KPI 布局')
+    await raceWorkspace.getByRole('button', { name: '提交回答' }).click()
+    const gatedCallId = await page.evaluate(async () => {
+      const runtime = await import('/src/editor/runtime.ts')
+      return runtime.waitForDashboardAgentPostIntent()
+    })
+    expect(gatedCallId).toEqual(expect.any(String))
+    const reached = await page.evaluate(async () => {
+      const runtime = await import('/src/editor/runtime.ts')
+      return {
+        activityGeneration: runtime.getDashboardHumanActivityGeneration(),
+        persistenceGeneration: runtime.dashboardPersistence.getSnapshot().draftGeneration,
+      }
+    })
+    expect(reached.activityGeneration).toBeGreaterThan(before.activityGeneration)
+    expect(reached.persistenceGeneration).toBe(before.persistenceGeneration)
+
+    await closeWorkspace(raceWorkspace)
+    await dragEditorShell(page, onlineNodeId, { x: 80, y: 50 })
+    const held = await page.evaluate(
+      async ({ binding, callId, nodeId, taskId }) => {
         const runtime = await import('/src/editor/runtime.ts')
-        const authority = { ...binding, taskId: 'golden-stale-task' }
-        const host = runtime.composeDashboardAgentHost(authority)
-        if (!host) throw new Error('Golden stale-check Host is unavailable')
+        const storage = await import('/src/lib/storage/index.mjs')
+        const durable = await import('/src/editor/agent/persistence/durable-agent-commit.mjs')
+        const rect = runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect()
+        const task = window.__EASY_EDITOR_E2E__
+          ?.getAgentWorkspaceState()
+          ?.snapshot.remote.tasks.find(candidate => candidate.taskId === taskId)
+        const telemetry = window.__EASY_EDITOR_E2E__?.getAgentTelemetryState({ callId })
+        if (!telemetry) throw new Error('Golden held-call telemetry is unavailable')
+        const coordinator = new storage.ProjectPersistenceCoordinator({
+          backend: new storage.IndexedDbDashboardStorageBackend({ indexedDB, crypto }),
+          crypto,
+        })
         try {
-          return await host.observe({ schemaVersion: 1, ...authority, mode: 'full' })
+          const authority = { projectId: binding.projectId, branchId: binding.branchId, callId }
+          return {
+            activityGeneration: runtime.getDashboardHumanActivityGeneration(),
+            persistenceGeneration: runtime.dashboardPersistence.getSnapshot().draftGeneration,
+            phase: task?.phase,
+            rect,
+            receipt: await durable.recoverDurableAgentReceipt({ coordinator, ...authority }),
+            receiptLineage: await coordinator.readReceiptLineage(authority),
+            exactEvents: telemetry.events.filter(event => 'callId' in event && event.callId === callId),
+          }
         } finally {
-          host.dispose()
+          await coordinator.dispose()
         }
       },
-      { binding: initialBinding },
+      { binding: initialBinding, callId: gatedCallId, nodeId: onlineNodeId, taskId: initialTask.taskId },
     )
-    const beforeHumanMove = await page.evaluate(nodeId => {
-      return import('/src/editor/runtime.ts').then(runtime => {
-        const rect = runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect()
-        if (!rect) throw new Error('Golden online node has no rect before human move')
-        return rect
-      })
-    }, onlineNodeId)
-    await page.keyboard.down('Shift')
-    try {
-      await dragEditorShell(page, onlineNodeId, { x: 80, y: 50 })
-      await persistEditorDraft(page)
-    } finally {
-      await page.keyboard.up('Shift')
-    }
-    const stale = await page.evaluate(
-      async ({ binding, nodeId, preparedRevision }) => {
-        const runtime = await import('/src/editor/runtime.ts')
-        const authority = { ...binding, taskId: 'golden-stale-task' }
-        const host = runtime.composeDashboardAgentHost(authority)
-        if (!host) throw new Error('Golden stale-check Host is unavailable')
-        try {
-          const rejected = await host.invoke(
-            {
-              schemaVersion: 1,
-              ...authority,
-              stepId: 'golden-stale-step',
-              callId: 'golden-stale-call',
-              capability: 'screen.inspect',
-              expectedRevision: preparedRevision,
-              arguments: { nodeIds: [nodeId] },
-            },
-            { schemaVersion: 1 },
-          )
-          const reobserved = await host.observe({ schemaVersion: 1, ...authority, mode: 'full' })
-          const retried = await host.invoke(
-            {
-              schemaVersion: 1,
-              ...authority,
-              stepId: 'golden-reobserve-step',
-              callId: 'golden-reobserve-call',
-              capability: 'screen.inspect',
-              expectedRevision: reobserved.revision,
-              arguments: { nodeIds: [nodeId] },
-            },
-            { schemaVersion: 1 },
-          )
+    expect(held.activityGeneration).toBeGreaterThan(reached.activityGeneration)
+    expect(held.persistenceGeneration).toBe(before.persistenceGeneration)
+    expect(held.phase).not.toBe('COMPLETED')
+    expect(held.rect).toBeTruthy()
+    expect({ x: held.rect?.x, y: held.rect?.y }).not.toEqual({ x: before.rect.x, y: before.rect.y })
+    expect(held.receipt).toMatchObject({
+      classification: 'indeterminate',
+      reason: 'missing-durable-receipt',
+    })
+    expect(held.receiptLineage).toMatchObject({
+      callId: gatedCallId,
+      receiptIntent: { callId: gatedCallId, status: 'pending' },
+      receipt: null,
+      applyWitness: null,
+      failureWitness: null,
+    })
+    expect(held.exactEvents.map(event => event.eventType)).toEqual(
+      expect.arrayContaining(['dashboard.call.observed', 'tool-call.started', 'dashboard.screen.prepare']),
+    )
+    expect(
+      held.exactEvents.some(event =>
+        ['dashboard.screen.commit', 'dashboard.screen.verify', 'tool-call.completed', 'tool-call.failed'].includes(
+          event.eventType,
+        ),
+      ),
+    ).toBe(false)
+    await page.evaluate(async () => {
+      const runtime = await import('/src/editor/runtime.ts')
+      runtime.releaseDashboardAgentPostIntentGate()
+    })
+
+    initialTask = await waitForTask(page, tasks =>
+      tasks.find(task => task.taskId === initialTask.taskId && task.phase === 'COMPLETED'),
+    )
+    expect(initialTask).toMatchObject({
+      phase: 'COMPLETED',
+      completionSummary: 'city dashboard completed',
+      compensationEligible: true,
+    })
+    await persistEditorDraft(page)
+    humanRect = await page.evaluate(
+      nodeId =>
+        import('/src/editor/runtime.ts').then(runtime => {
           const rect = runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect()
           if (!rect) throw new Error('Golden online node has no rect after human move')
-          return { rejected, reobserved, retried, rect }
-        } finally {
-          host.dispose()
+          return rect
+        }),
+      onlineNodeId,
+    )
+    expect(humanRect).toMatchObject({ width: before.rect.width, height: before.rect.height })
+    expect({ x: humanRect.x, y: humanRect.y }).not.toEqual({ x: before.rect.x, y: before.rect.y })
+
+    const durable = await page.evaluate(
+      async ({ binding, callId, nodeId, taskId }) => {
+        const runtime = await import('/src/editor/runtime.ts')
+        const journal = await runtime.dashboardPersistence.readAgentPersistence({
+          schemaVersion: 1,
+          ...binding,
+          expectedPersistenceGeneration: 0,
+        })
+        const taskRecord = journal.records.find(record => record.recordId === `task:${taskId}`)
+        const value = taskRecord?.value as
+          | {
+              callIndex?: readonly Readonly<{ callId: string; capability: string }>[]
+              repairAttempts?: number
+            }
+          | undefined
+        const callIndex = value?.callIndex ?? []
+        const failedIndex = callIndex.findIndex(entry => entry.callId === callId)
+        const retry = failedIndex < 0 ? undefined : callIndex[failedIndex + 1]
+        if (!retry) throw new Error('Golden retry call is absent from the durable task index')
+        const title = runtime.engine.project.currentDocument?.getNode('golden-title')?.exportRaw().props?.text
+        return {
+          callIndex,
+          failedReceipt: await runtime.dashboardPersistence.recoverDurableAgentReceipt({
+            projectId: binding.projectId,
+            branchId: binding.branchId,
+            callId,
+          }),
+          repairAttempts: value?.repairAttempts,
+          retryReceipt: await runtime.dashboardPersistence.recoverDurableAgentReceipt({
+            projectId: binding.projectId,
+            branchId: binding.branchId,
+            callId: retry.callId,
+          }),
+          retryCallId: retry.callId,
+          title,
+          rect: runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect(),
         }
       },
-      { binding: initialBinding, nodeId: onlineNodeId, preparedRevision: prepared.revision },
+      { binding: initialBinding, callId: gatedCallId, nodeId: onlineNodeId, taskId: initialTask.taskId },
     )
-    humanRect = stale.rect
-    expect(stale.rejected).toMatchObject({ status: 'rejected', failure: { code: 'STALE_REVISION' } })
-    expect(stale.reobserved.revision).not.toBe(prepared.revision)
-    expect(stale.retried).toMatchObject({ status: 'applied', revision: stale.reobserved.revision })
-    expect(humanRect).toMatchObject({ width: beforeHumanMove.width, height: beforeHumanMove.height })
-    expect({ x: humanRect.x, y: humanRect.y }).not.toEqual({ x: beforeHumanMove.x, y: beforeHumanMove.y })
+    expect(durable.repairAttempts).toBe(0)
+    expect(durable.callIndex).toHaveLength(3)
+    expect(durable.callIndex[1]).toEqual({ callId: gatedCallId, capability: 'screen.applyChangeSet' })
+    expect(durable.callIndex[2]).toEqual({
+      callId: durable.retryCallId,
+      capability: 'screen.applyChangeSet',
+    })
+    expect(durable.retryCallId).not.toBe(gatedCallId)
+    expect(durable.failedReceipt).toMatchObject({
+      classification: 'failed',
+      receipt: {
+        callId: gatedCallId,
+        status: 'not-applied',
+        failure: { code: 'HUMAN_ACTIVITY', details: { stage: 'after-intent' } },
+      },
+    })
+    expect(durable.retryReceipt).toMatchObject({
+      classification: 'committed',
+      receipt: { callId: durable.retryCallId, status: 'applied' },
+    })
+    expect(durable.title).toBe('城市运行态势驾驶舱（已确认）')
+    expect(durable.rect).toEqual(humanRect)
+
+    const telemetry = await page.evaluate(taskId => {
+      const state = window.__EASY_EDITOR_E2E__?.getAgentTelemetryState({ taskId })
+      if (!state) throw new Error('Golden telemetry probe is unavailable')
+      return state
+    }, initialTask.taskId)
+    const gatedEvents = telemetry.events.filter(event => 'callId' in event && event.callId === gatedCallId)
+    const retryEvents = telemetry.events.filter(event => 'callId' in event && event.callId === durable.retryCallId)
+    const failed = gatedEvents.find(
+      event => event.eventType === 'tool-call.failed' && event.errorCode === 'HUMAN_ACTIVITY',
+    )
+    const yielded = gatedEvents.find(
+      event =>
+        event.eventType === 'execution.disposition' &&
+        event.disposition === 'yielded' &&
+        event.reason === 'HUMAN_ACTIVITY',
+    )
+    const failedPrepare = gatedEvents.find(event => event.eventType === 'dashboard.screen.prepare')
+    const completed = retryEvents.find(
+      event => event.eventType === 'tool-call.completed' && typeof event.changeSetId === 'string',
+    )
+    if (!failed?.callId || !failed.changeSetId || !yielded || !completed?.callId || !completed.changeSetId) {
+      throw new Error('Golden HUMAN_ACTIVITY telemetry lineage is incomplete')
+    }
+    expect(failed.callId).toBe(gatedCallId)
+    expect(yielded.callId).toBe(gatedCallId)
+    expect(yielded.stepId).toBe(failed.stepId)
+    expect(failedPrepare?.changeSetId).toBe(failed.changeSetId)
+    expect(gatedEvents.some(event => event.eventType === 'dashboard.screen.commit')).toBe(false)
+    expect(gatedEvents.some(event => event.eventType === 'dashboard.screen.verify')).toBe(false)
+    expect(completed.callId).toBe(durable.retryCallId)
+    expect(completed.stepId).not.toBe(failed.stepId)
+    expect(completed.changeSetId).not.toBe(failed.changeSetId)
+    const failedModelRequest = telemetry.events.find(
+      event => event.eventType === 'model-request.started' && event.stepId === failed.stepId,
+    )
+    const retryModelRequest = telemetry.events.find(
+      event => event.eventType === 'model-request.started' && event.stepId === completed.stepId,
+    )
+    expect(failedModelRequest?.modelRequestId).toEqual(expect.any(String))
+    expect(retryModelRequest?.modelRequestId).toEqual(expect.any(String))
+    expect(retryModelRequest?.modelRequestId).not.toBe(failedModelRequest?.modelRequestId)
+    expect(
+      telemetry.events.filter(event => event.eventType === 'phase.started' && event.phase === 'REPAIR'),
+    ).toHaveLength(0)
+    expect(
+      telemetry.events.filter(event => event.eventType === 'phase.started' && event.phase === 'PLAN_STEP').length,
+    ).toBeGreaterThanOrEqual(4)
+    expect(
+      telemetry.events.some(
+        event => event.eventType === 'dashboard.snapshot.captured' && event.snapshotMode === 'full',
+      ),
+    ).toBe(true)
+    const callObservations = telemetry.events.filter(event => event.eventType === 'dashboard.call.observed')
+    const failedObservation = callObservations.find(event => event.callId === gatedCallId)
+    const retryObservation = callObservations.find(event => event.callId === durable.retryCallId)
+    expect(failedObservation?.projectRevision).toEqual(expect.any(String))
+    expect(retryObservation?.projectRevision).toEqual(expect.any(String))
+    expect(retryObservation?.projectRevision).not.toBe(failedObservation?.projectRevision)
+    const failedEventIndex = telemetry.events.findIndex(event => event === failed)
+    const retryObservationIndex = telemetry.events.findIndex(event => event === retryObservation)
+    const retrySnapshots = telemetry.events
+      .slice(failedEventIndex + 1, retryObservationIndex)
+      .filter(event => event.eventType === 'dashboard.snapshot.captured' && event.snapshotMode === 'full')
+    expect(failedEventIndex).toBeGreaterThanOrEqual(0)
+    expect(retryObservationIndex).toBeGreaterThan(failedEventIndex)
+    expect(retrySnapshots.at(-1)?.projectRevision).toBe(retryObservation?.projectRevision)
+    expect(telemetry.stats.dropped).toBe(0)
+    expect(telemetry.stats.failed).toBe(0)
+    expect(JSON.stringify(telemetry.events)).not.toMatch(/sourceText|cssText|dependencies|messages|prompt/u)
   })
 
   let version: WorkspaceProbe['snapshot']['remote']['versions'][number]
@@ -916,7 +1174,11 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         expect.objectContaining({
           recordId: `task:${initialTask.taskId}`,
           value: expect.objectContaining({
-            callIndex: [expect.objectContaining({ capability: 'screen.applyChangeSet' })],
+            callIndex: [
+              expect.objectContaining({ capability: 'screen.applyChangeSet' }),
+              expect.objectContaining({ capability: 'screen.applyChangeSet' }),
+              expect.objectContaining({ capability: 'screen.applyChangeSet' }),
+            ],
           }),
         }),
         expect.objectContaining({
@@ -927,11 +1189,16 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         }),
       ]),
     )
-    expect(durable.receipts).toHaveLength(2)
+    expect(durable.receipts).toHaveLength(4)
     expect(durable.receipts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ status: 'applied', witness: expect.any(Object) }),
         expect.objectContaining({ status: 'applied', witness: expect.any(Object) }),
+        expect.objectContaining({ status: 'applied', witness: expect.any(Object) }),
+        expect.objectContaining({
+          status: 'not-applied',
+          failure: expect.objectContaining({ code: 'HUMAN_ACTIVITY' }),
+        }),
       ]),
     )
     expect(followUpBaseRevision).toEqual(expect.any(String))
@@ -1103,9 +1370,13 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
     })
     expect(compensated.run).toMatchObject({
       taskId: initialTask.taskId,
-      cursor: 1,
+      cursor: 2,
       status: 'completed-with-conflicts',
-      conflicts: [expect.objectContaining({ code: 'POST_IMAGE_CHANGED' })],
+      originalCallIds: [expect.any(String), expect.any(String)],
+      conflicts: [
+        expect.objectContaining({ code: 'POST_IMAGE_CHANGED' }),
+        expect.objectContaining({ code: 'POST_IMAGE_CHANGED' }),
+      ],
     })
     await expect(compensationWorkspace.getByText('任务补偿遇到人工修改')).toBeVisible()
     await preview.close()

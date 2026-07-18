@@ -21,6 +21,7 @@ import {
 } from '../src/editor/agent/persistence/provenance.mjs'
 import {
   createApplyWitness,
+  createFailureWitness,
   createReceiptIntent,
   createToolReceipt,
   createToolReceiptWitness,
@@ -515,6 +516,50 @@ test('production compensation adapter executes trusted raw restore without freez
   assert.deepEqual(harness.document.exportRaw(), harness.forwardSchema)
   assert.equal(harness.state.runs.get('restore').status, 'completed')
   assert.equal(harness.document.history.isUndoable(), true)
+})
+
+test('a durable failed Screen call is skipped while committed calls remain compensable', async t => {
+  const harness = await createHarness(t)
+  const failedCallId = 'forward-failed'
+  const failedIntent = createReceiptIntent({
+    ...harness.state.lineages.get('forward-1').receiptIntent,
+    callId: failedCallId,
+  })
+  const failedWitness = createFailureWitness({
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    callId: failedCallId,
+    draftGeneration: 1,
+    transactionFingerprint: `sha256:${'f'.repeat(64)}`,
+    receiptStatus: 'not-applied',
+    failureCode: 'HUMAN_ACTIVITY',
+  })
+  const failedReceipt = createToolReceipt({
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    branchId: authority.branchId,
+    callId: failedCallId,
+    status: 'not-applied',
+    revision: 'revision-failed',
+    witness: createToolReceiptWitness(failedWitness),
+    failure: { code: 'HUMAN_ACTIVITY', message: 'human activity won the fence', retryable: true },
+  })
+  harness.state.recoveries.set(failedCallId, {
+    classification: 'failed',
+    receiptIntent: failedIntent,
+    receipt: failedReceipt,
+  })
+
+  const receipt = await harness.compensate('skip-failed', [
+    { callId: 'forward-1', capability: 'screen.applyChangeSet' },
+    { callId: failedCallId, capability: 'screen.applyChangeSet' },
+  ])
+
+  assert.equal(receipt.status, 'applied')
+  assert.equal(harness.state.coreRuns, 1)
+  assert.deepEqual(harness.state.runs.get('skip-failed').originalCallIds, ['forward-1'])
+  assert.deepEqual(harness.document.exportRaw(), harness.beforeSchema)
 })
 
 test('compensation admission deduplicates restored local refs, ignores non-canonical refs, and retries before Core', async t => {

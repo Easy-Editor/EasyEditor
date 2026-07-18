@@ -75,7 +75,10 @@ export interface OnlineComponentSurfaceController {
   register(input: OnlineComponentSurfaceRegistration): Promise<boolean>
   update(instanceId: string, patch: OnlineComponentSurfaceUpdate): Promise<boolean>
   unregister(instanceId: string): boolean
+  whenReady(input: Readonly<{ expectedInstanceIds: readonly string[] }>): Promise<boolean>
+  matchesReadyCensus(input: Readonly<{ expectedInstanceIds: readonly string[] }>): boolean
   clearQuarantine(): boolean
+  abortOwnedActivation(): boolean
   dispose(): void
   getDiagnostics(): OnlineComponentSurfaceControllerDiagnostics
 }

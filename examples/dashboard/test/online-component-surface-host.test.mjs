@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createOnlineComponentActivationLifecycle } from '../src/runtime/online-components/activation-lifecycle.mjs'
 import { createOnlineComponentSurfaceHost } from '../src/runtime/online-components/surface-host.mjs'
 import { ONLINE_COMPONENT_PROTOCOL_VERSION } from '../src/runtime/online-components/surface-protocol.mjs'
 
@@ -350,6 +351,223 @@ test('twenty instances share one iframe and one render batch per animation frame
   assert.equal(runtimeEvents.length, 0)
 })
 
+test('activation readiness settles only after the matching render batch clears the pending marker', async () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment,
+    markerStore,
+  })
+
+  host.register(createInstance(1))
+  let settled = false
+  const readiness = host.whenReady({ expectedInstanceIds: ['node-1'] }).then(value => {
+    settled = true
+    return value
+  })
+  const frame = makeReady(environment)
+  await Promise.resolve()
+  assert.equal(settled, false)
+  assert.equal(markerStore.markers.size, 1)
+  assert.equal(host.getDiagnostics().pendingActivationCount, 1)
+
+  acknowledgeLastBatch(environment, frame)
+  assert.equal(await readiness, true)
+  assert.equal(markerStore.markers.size, 0)
+  assert.equal(host.getDiagnostics().pendingActivationCount, 0)
+  assert.equal(await host.whenReady({ expectedInstanceIds: ['node-1'] }), true)
+})
+
+test('abortPending clears only its captured marker identity and never a replacement marker', () => {
+  const markers = new Map()
+  const store = {
+    read: key => markers.get(key),
+    write: (key, marker) => markers.set(key, marker),
+    clear: (key, marker) => {
+      if (markers.get(key) === marker) markers.delete(key)
+    },
+    quarantine: () => undefined,
+  }
+  const lifecycle = createOnlineComponentActivationLifecycle({
+    markerStore: store,
+    revisionKey: 'artifact-owned-revision',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    nonce: 'nonce-owned-0000000001',
+    now: () => 1,
+  })
+  const decision = lifecycle.begin()
+  assert.equal(decision.activate, true)
+  const replacement = Object.freeze({ ...decision.marker, nonce: 'nonce-foreign-000000001' })
+  markers.set('artifact-owned-revision::editor-surface', replacement)
+
+  assert.equal(lifecycle.abortPending(), true)
+  assert.equal(markers.get('artifact-owned-revision::editor-surface'), replacement)
+  assert.equal(lifecycle.getDiagnostics().state, 'disposed')
+  lifecycle.dispose()
+  assert.equal(markers.get('artifact-owned-revision::editor-surface'), replacement)
+})
+
+test('abortOwnedActivation retires shells before clearing owned pending markers and ignores late ACKs', async () => {
+  const environment = createFakeEnvironment()
+  const markerStore = createMarkerStore()
+  const createHost = () =>
+    createOnlineComponentSurfaceHost({
+      enabled: true,
+      mount: {},
+      mode: 'editor',
+      surfaceId: 'editor-surface',
+      activationId: 'tab-a',
+      environment,
+      markerStore,
+    })
+  const host = createHost()
+  host.register(createInstance(1))
+  const frame = makeReady(environment)
+  const port = environment.channels.at(-1).port1
+  const batch = port.messages.at(-1)
+  assert.equal(markerStore.markers.size, 1)
+  assert.equal(host.getDiagnostics().shellCount, 1)
+
+  assert.equal(host.abortOwnedActivation(), true)
+  assert.equal(markerStore.markers.size, 0)
+  assert.equal(host.getDiagnostics().instanceCount, 0)
+  assert.equal(host.getDiagnostics().iframeCount, 0)
+  assert.equal(frame.disposed, true)
+  port.emit({
+    kind: 'online-component.batch-applied',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: frame.options.nonce,
+    surfaceId: frame.options.surfaceId,
+    generation: frame.options.generation,
+    sequence: batch.sequence,
+    resources: sandboxResources(frame),
+  })
+  assert.equal(markerStore.markers.size, 0)
+  assert.equal(host.getDiagnostics().state, 'idle')
+  host.dispose()
+
+  const remounted = createHost()
+  assert.equal(typeof remounted.register(createInstance(1)), 'function')
+  const remountedFrame = makeReady(environment)
+  acknowledgeLastBatch(environment, remountedFrame)
+  assert.equal(await remounted.whenReady({ expectedInstanceIds: ['node-1'] }), true)
+  remounted.dispose()
+})
+
+test('generic dispose preserves a pending marker so a reload quarantines the revision', () => {
+  const markerStore = createMarkerStore()
+  const first = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment: createFakeEnvironment(),
+    markerStore,
+  })
+  first.register(createInstance(1))
+  assert.equal(markerStore.markers.size, 1)
+  first.dispose()
+  assert.equal(markerStore.markers.size, 1)
+
+  const reloaded = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'editor',
+    surfaceId: 'editor-surface',
+    activationId: 'tab-a',
+    environment: createFakeEnvironment(),
+    markerStore,
+  })
+  assert.equal(reloaded.register(createInstance(1)), false)
+  assert.equal(reloaded.getDiagnostics().state, 'quarantined')
+  assert.equal(markerStore.quarantined.has('artifact-kpi@revision-1'), true)
+  reloaded.dispose()
+})
+
+test('pending activation readiness resolves false on unregister, dispose, fault, and quarantine', async t => {
+  const createHost = (environment, markerStore = createMarkerStore()) =>
+    createOnlineComponentSurfaceHost({
+      enabled: true,
+      mount: {},
+      mode: 'editor',
+      surfaceId: 'editor-surface',
+      activationId: 'tab-a',
+      environment,
+      markerStore,
+    })
+
+  await t.test('unregister', async () => {
+    const environment = createFakeEnvironment()
+    const markerStore = createMarkerStore()
+    const host = createHost(environment, markerStore)
+    host.register(createInstance(1))
+    assert.equal(markerStore.markers.size, 1)
+    const readiness = host.whenReady({ expectedInstanceIds: ['node-1'] })
+    assert.equal(host.unregister('node-1'), true)
+    assert.equal(await readiness, false)
+    assert.equal(await host.whenReady({ expectedInstanceIds: [] }), true)
+    assert.equal(markerStore.markers.size, 0)
+  })
+
+  await t.test('dispose', async () => {
+    const environment = createFakeEnvironment()
+    const host = createHost(environment)
+    host.register(createInstance(1))
+    const readiness = host.whenReady({ expectedInstanceIds: ['node-1'] })
+    host.dispose()
+    assert.equal(await readiness, false)
+    assert.equal(await host.whenReady({ expectedInstanceIds: [] }), false)
+  })
+
+  await t.test('fault', async () => {
+    const environment = createFakeEnvironment()
+    const host = createHost(environment)
+    host.register(createInstance(1))
+    const readiness = host.whenReady({ expectedInstanceIds: ['node-1'] })
+    const frame = makeReady(environment)
+    environment.channels[0].port1.emit({
+      kind: 'online-component.fault',
+      protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+      nonce: frame.options.nonce,
+      surfaceId: frame.options.surfaceId,
+      generation: frame.options.generation,
+      code: 'render-failed',
+      instanceId: 'node-1',
+      resources: sandboxResources(frame, 0),
+    })
+    assert.equal(await readiness, false)
+    assert.equal(host.getDiagnostics().state, 'quarantined')
+  })
+
+  await t.test('quarantine', async () => {
+    const environment = createFakeEnvironment()
+    const revisionKey = 'artifact-bad@revision-1'
+    const markerStore = createMarkerStore([
+      [
+        `${revisionKey}::editor-surface`,
+        {
+          state: 'pending',
+          revisionKey,
+          surfaceId: 'editor-surface',
+          activationId: 'tab-a',
+          nonce: 'nonce-stale-0000000000',
+          startedAt: 1,
+        },
+      ],
+    ])
+    const host = createHost(environment, markerStore)
+    assert.equal(host.register(createInstance(1, revisionKey)), false)
+    assert.equal(await host.whenReady({ expectedInstanceIds: ['node-1'] }), false)
+  })
+})
+
 test('editor trusted shell bindings are surface-owned across restart, unregister, and dispose', () => {
   const environment = createFakeEnvironment()
   const events = []
@@ -417,6 +635,7 @@ test('editor trusted shell bindings are surface-owned across restart, unregister
 test('out-of-order acknowledgements are rejected and reported object URL leaks quarantine activation', () => {
   const environment = createFakeEnvironment()
   const markerStore = createMarkerStore()
+  const telemetry = []
   const host = createOnlineComponentSurfaceHost({
     enabled: true,
     mount: {},
@@ -425,6 +644,8 @@ test('out-of-order acknowledgements are rejected and reported object URL leaks q
     activationId: 'tab-b',
     environment,
     markerStore,
+    telemetry: { record: event => telemetry.push(structuredClone(event)) },
+    telemetryNow: () => 123,
   })
   host.register(createInstance(1))
   const frame = makeReady(environment)
@@ -457,6 +678,51 @@ test('out-of-order acknowledgements are rejected and reported object URL leaks q
   assert.equal(host.getDiagnostics().objectUrlCount, 0)
   assert.equal(markerStore.markers.size, 1)
   assert.equal(frame.disposed, true)
+  assert.deepEqual(
+    telemetry.map(event => [event.eventType, event.status]),
+    [
+      ['dashboard.iframe.batch', 'scheduled'],
+      ['dashboard.iframe.fault', 'failed'],
+    ],
+  )
+  assert.equal(telemetry[0].batchSize, 1)
+  assert.equal(telemetry[0].instanceCount, 1)
+  assert.equal(telemetry[1].diagnosticCode, 'resource-leak')
+  assert.doesNotMatch(JSON.stringify(telemetry), /payload|sourceText|cssText/u)
+})
+
+test('unknown sandbox fault codes collapse to a finite telemetry diagnostic', () => {
+  const environment = createFakeEnvironment()
+  const telemetry = []
+  const host = createOnlineComponentSurfaceHost({
+    enabled: true,
+    mount: {},
+    mode: 'preview',
+    surfaceId: 'preview-surface',
+    activationId: 'tab-b',
+    environment,
+    markerStore: createMarkerStore(),
+    telemetry: { record: event => telemetry.push(structuredClone(event)) },
+    telemetryNow: () => 123,
+  })
+  host.register(createInstance(1))
+  const frame = makeReady(environment)
+
+  environment.channels[0].port1.emit({
+    kind: 'online-component.fault',
+    protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+    nonce: frame.options.nonce,
+    surfaceId: frame.options.surfaceId,
+    generation: frame.options.generation,
+    code: 'sk-live-secret',
+    instanceId: null,
+    resources: sandboxResources(frame, 1),
+  })
+
+  const fault = telemetry.find(event => event.eventType === 'dashboard.iframe.fault')
+  assert.equal(fault?.diagnosticCode, 'sandbox-fault')
+  assert.doesNotMatch(JSON.stringify(telemetry), /sk-live-secret/u)
+  host.dispose()
 })
 
 test('editor and preview allocate independent iframe, port, generation, and fault state', () => {

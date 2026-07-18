@@ -30,6 +30,7 @@ export interface OnlineComponentActivationLifecycle {
   begin(): OnlineComponentActivationDecision
   heartbeat(): false
   completeRehydrate(): boolean
+  abortPending(): boolean
   fail(): boolean
   dispose(): void
   getDiagnostics(): Readonly<{
