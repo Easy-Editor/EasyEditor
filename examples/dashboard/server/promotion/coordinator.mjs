@@ -6,6 +6,9 @@ import { promotionError, runPromotionPhase, throwIfPromotionAborted } from './pr
 import {
   validateMaterialCatalogList,
   validateMaterialCatalogRead,
+  validateMaterialGcPlanRequest,
+  validateMaterialGcReleaseRequest,
+  validateMaterialGcSweepRequest,
   validateMaterialPromotionCall,
   validateMaterialPromotionQuery,
 } from './request-contract.mjs'
@@ -153,6 +156,45 @@ export const createMaterialPromotionCoordinator = ({ authorizePrincipal, author,
         throw promotionError('material-not-found', 404, 'Material was not found')
       }
       return createMaterialCatalogItem(record)
+    },
+  })
+}
+
+export const createMaterialGcCoordinator = ({ authorizePrincipal, registry } = {}) => {
+  if (typeof authorizePrincipal !== 'function') throw new TypeError('authorizePrincipal must be a function')
+  requireMethod(registry, 'planGarbageCollection', 'registry')
+  requireMethod(registry, 'sweepGarbageCollection', 'registry')
+  requireMethod(registry, 'releaseGarbageCollectionRoot', 'registry')
+
+  const authorize = async (headers, projectId, signal) => {
+    const principal = await runPromotionPhase(() => authorizePrincipal({ headers, projectId, signal }), signal)
+    if (!principal || typeof principal.tenantId !== 'string' || typeof principal.userId !== 'string') {
+      throw new TypeError('authorizePrincipal must return tenantId and userId')
+    }
+    return Object.freeze({ tenantId: principal.tenantId, userId: principal.userId })
+  }
+
+  return Object.freeze({
+    async planGc({ headers, request: requestValue, signal } = {}) {
+      throwIfPromotionAborted(signal)
+      const request = validateMaterialGcPlanRequest(requestValue)
+      const principal = await authorize(headers, request.projectId, signal)
+      throwIfPromotionAborted(signal)
+      return runPromotionPhase(() => registry.planGarbageCollection({ principal, request }), signal)
+    },
+    async sweepGc({ headers, request: requestValue, signal } = {}) {
+      throwIfPromotionAborted(signal)
+      const request = validateMaterialGcSweepRequest(requestValue)
+      const principal = await authorize(headers, request.plan.projectId, signal)
+      throwIfPromotionAborted(signal)
+      return runPromotionPhase(() => registry.sweepGarbageCollection({ principal, request }), signal)
+    },
+    async releaseGc({ headers, request: requestValue, signal } = {}) {
+      throwIfPromotionAborted(signal)
+      const request = validateMaterialGcReleaseRequest(requestValue)
+      const principal = await authorize(headers, request.projectId, signal)
+      throwIfPromotionAborted(signal)
+      return runPromotionPhase(() => registry.releaseGarbageCollectionRoot({ principal, request }), signal)
     },
   })
 }

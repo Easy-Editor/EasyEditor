@@ -2,6 +2,7 @@ import {
   createPromotionErrorEnvelope,
   invalidPromotionRequest,
   normalizePromotionError,
+  promotionError,
   runPromotionPhase,
   unavailablePromotion,
 } from './promotion-error.mjs'
@@ -12,6 +13,9 @@ export const MATERIAL_PROMOTION_QUERY_ROUTE = '/api/materials/promotion/query'
 export const MATERIAL_PROMOTION_AVAILABILITY_ROUTE = '/api/materials/promotion/availability'
 export const MATERIAL_CATALOG_LIST_ROUTE = '/api/materials/catalog/list'
 export const MATERIAL_CATALOG_READ_ROUTE = '/api/materials/catalog/read'
+export const MATERIAL_GC_PLAN_ROUTE = '/api/materials/gc/plan'
+export const MATERIAL_GC_SWEEP_ROUTE = '/api/materials/gc/sweep'
+export const MATERIAL_GC_RELEASE_ROUTE = '/api/materials/gc/release'
 export const MATERIAL_PROMOTION_MAX_INBOUND_BYTES = 3 * 1024 * 1024
 
 const parseJsonBody = request => {
@@ -63,6 +67,9 @@ const parseTransportRequest = request => {
   if (request.path === MATERIAL_PROMOTION_QUERY_ROUTE) return { operation: 'query', headers, value }
   if (request.path === MATERIAL_CATALOG_LIST_ROUTE) return { operation: 'listCatalog', headers, value }
   if (request.path === MATERIAL_CATALOG_READ_ROUTE) return { operation: 'readCatalog', headers, value }
+  if (request.path === MATERIAL_GC_PLAN_ROUTE) return { operation: 'planGc', headers, value }
+  if (request.path === MATERIAL_GC_SWEEP_ROUTE) return { operation: 'sweepGc', headers, value }
+  if (request.path === MATERIAL_GC_RELEASE_ROUTE) return { operation: 'releaseGc', headers, value }
   throw invalidPromotionRequest(404)
 }
 
@@ -72,6 +79,9 @@ const readyAvailability = Object.freeze({
   reason: 'ready',
   minimumNodeMajor: 20,
 })
+
+const unavailableMaterialGc = () =>
+  promotionError('material-gc-unavailable', 503, 'Durable material garbage collection is unavailable')
 
 export const createMaterialPromotionHandler = ({ coordinator, checkAvailability } = {}) => {
   if (!coordinator || typeof coordinator.promote !== 'function' || typeof coordinator.query !== 'function') {
@@ -98,8 +108,14 @@ export const createMaterialPromotionHandler = ({ coordinator, checkAvailability 
         if (operation === 'promote') body = await coordinator.promote(input)
         else if (operation === 'query') body = await coordinator.query(input)
         else if (operation === 'listCatalog') body = await coordinator.listCatalog?.(input)
-        else body = await coordinator.readCatalog?.(input)
-        if (body === undefined) throw unavailablePromotion()
+        else if (operation === 'readCatalog') body = await coordinator.readCatalog?.(input)
+        else if (operation === 'planGc') body = await coordinator.planGc?.(input)
+        else if (operation === 'sweepGc') body = await coordinator.sweepGc?.(input)
+        else body = await coordinator.releaseGc?.(input)
+        if (body === undefined) {
+          if (operation.endsWith('Gc')) throw unavailableMaterialGc()
+          throw unavailablePromotion()
+        }
         return { status: 200, body }
       } catch (error) {
         return createPromotionErrorEnvelope(normalizePromotionError(error))
@@ -122,6 +138,15 @@ export const createDisabledMaterialPromotionHandler = () =>
       },
       async readCatalog() {
         throw unavailablePromotion()
+      },
+      async planGc() {
+        throw unavailableMaterialGc()
+      },
+      async sweepGc() {
+        throw unavailableMaterialGc()
+      },
+      async releaseGc() {
+        throw unavailableMaterialGc()
       },
     }),
     checkAvailability: async () => ({

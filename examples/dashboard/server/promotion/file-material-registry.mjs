@@ -5,6 +5,15 @@ import { hostname } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import {
+  createMaterialGcPlanHashInput,
+  createMaterialGcPlanRequestDigestInput,
+  createMaterialGcReleaseRequestDigestInput,
+  validateMaterialGcPlan,
+  validateMaterialGcPlanRequest,
+  validateMaterialGcReleaseRequest,
+  validateMaterialGcSweepRequest,
+} from '../../shared/material-gc-contract.mjs'
+import {
   createMaterialPromotionBinding,
   validateMaterialIdentity,
   validateMaterialPromotionRequest,
@@ -12,6 +21,8 @@ import {
 import { MaterialRegistryError, normalizeRegistryError, registryError } from './errors.mjs'
 
 const REGISTRY_SCHEMA_VERSION = 1
+const REGISTRY_INDEX_SCHEMA_VERSION = 2
+const REGISTRY_BACKUP_SCHEMA_VERSION = 2
 const STAGED_MANIFEST_NAME = 'staged.json'
 const PUBLISHED_MANIFEST_NAME = 'published.json'
 const BACKUP_MANIFEST_NAME = 'backup-manifest.json'
@@ -168,21 +179,14 @@ const parsePublishedManifest = value => {
   return validateBinding(value.binding)
 }
 
-const parseBackupManifest = value => {
-  requireObject(value, ['createdAt', 'kind', 'materials', 'schemaVersion'], 'backup manifest')
-  if (
-    value.schemaVersion !== REGISTRY_SCHEMA_VERSION ||
-    value.kind !== 'material-registry-backup' ||
-    !Number.isSafeInteger(value.createdAt) ||
-    value.createdAt < 0 ||
-    !Array.isArray(value.materials)
-  ) {
-    throw registryError('backup-invalid', 'Backup manifest has an unsupported schema', { status: 400 })
+const parseBackupMaterials = materials => {
+  if (!Array.isArray(materials)) {
+    throw registryError('backup-invalid', 'Backup manifest materials must be an array', { status: 400 })
   }
   const promotionIds = new Set()
   const storageKeys = new Set()
   const identities = new Set()
-  return value.materials.map(entry => {
+  return materials.map(entry => {
     requireObject(entry, ['binding', 'storageKey'], 'backup material')
     const binding = validateBinding(entry.binding)
     if (entry.storageKey !== storageKeyForPromotion(binding.promotionId)) {
@@ -198,6 +202,74 @@ const parseBackupManifest = value => {
     storageKeys.add(entry.storageKey)
     identities.add(durableIdentity)
     return { binding, storageKey: entry.storageKey }
+  })
+}
+
+const parseBackupManifest = value => {
+  if (value?.schemaVersion === REGISTRY_SCHEMA_VERSION) {
+    requireObject(value, ['createdAt', 'kind', 'materials', 'schemaVersion'], 'backup manifest')
+    if (value.kind !== 'material-registry-backup' || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) {
+      throw registryError('backup-invalid', 'Backup manifest has an unsupported schema', { status: 400 })
+    }
+    return Object.freeze({
+      schemaVersion: REGISTRY_SCHEMA_VERSION,
+      entries: parseBackupMaterials(value.materials),
+      gcState: null,
+      sourceGeneration: null,
+      sourceSnapshotHash: null,
+    })
+  }
+  requireObject(
+    value,
+    [
+      'createdAt',
+      'gcState',
+      'gcStateHash',
+      'kind',
+      'materials',
+      'schemaVersion',
+      'sourceGeneration',
+      'sourceSnapshotHash',
+    ],
+    'backup manifest',
+  )
+  if (
+    value.schemaVersion !== REGISTRY_BACKUP_SCHEMA_VERSION ||
+    value.kind !== 'material-registry-backup' ||
+    !Number.isSafeInteger(value.createdAt) ||
+    value.createdAt < 0 ||
+    !Number.isSafeInteger(value.sourceGeneration) ||
+    value.sourceGeneration <= 0 ||
+    typeof value.sourceSnapshotHash !== 'string' ||
+    !/^sha256:[\da-f]{64}$/u.test(value.sourceSnapshotHash) ||
+    typeof value.gcStateHash !== 'string' ||
+    !/^sha256:[\da-f]{64}$/u.test(value.gcStateHash)
+  ) {
+    throw registryError('backup-invalid', 'Backup manifest has an unsupported schema', { status: 400 })
+  }
+  let gcState
+  try {
+    gcState = normalizeGcState(value.gcState)
+  } catch {
+    throw registryError('backup-invalid', 'Backup GC state is invalid', { status: 400 })
+  }
+  if (
+    sha256(
+      JSON.stringify({
+        sourceGeneration: value.sourceGeneration,
+        sourceSnapshotHash: value.sourceSnapshotHash,
+        gcState,
+      }),
+    ) !== value.gcStateHash
+  ) {
+    throw registryError('backup-invalid', 'Backup GC state hash does not match its durable roots', { status: 400 })
+  }
+  return Object.freeze({
+    schemaVersion: REGISTRY_BACKUP_SCHEMA_VERSION,
+    entries: parseBackupMaterials(value.materials),
+    gcState,
+    sourceGeneration: value.sourceGeneration,
+    sourceSnapshotHash: value.sourceSnapshotHash,
   })
 }
 
@@ -227,6 +299,167 @@ const normalizeRetainedMaterialRefs = value => {
     seen.add(key)
   }
   return identities
+}
+
+const gcIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u
+const gcDigestPattern = /^sha256:[\da-f]{64}$/u
+
+const requireGcIdentifier = (value, label) => {
+  if (typeof value !== 'string' || !gcIdentifierPattern.test(value)) {
+    throw registryError('invalid-request', `${label} must be a bounded identifier`, { status: 400 })
+  }
+  return value
+}
+
+const requireGcDigest = (value, label) => {
+  if (typeof value !== 'string' || !gcDigestPattern.test(value)) {
+    throw registryError('invalid-request', `${label} must be a sha256 digest`, { status: 400 })
+  }
+  return value
+}
+
+const requireGcGeneration = (value, label) => {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw registryError('invalid-request', `${label} must be a positive safe integer`, { status: 400 })
+  }
+  return value
+}
+
+const normalizePrincipal = value => {
+  if (!exactObject(value, ['tenantId', 'userId'])) {
+    throw registryError('invalid-request', 'trusted principal must contain tenantId and userId', { status: 400 })
+  }
+  return Object.freeze({
+    tenantId: requireGcIdentifier(value.tenantId, 'principal.tenantId'),
+    userId: requireGcIdentifier(value.userId, 'principal.userId'),
+  })
+}
+
+const rootKey = root => [root.tenantId, root.userId, root.projectId, root.replicaId].join('\0')
+const rootKeyDigest = root => sha256(rootKey(root))
+
+const normalizeResolvedPromotions = value => {
+  if (!Array.isArray(value) || value.length > 4096) {
+    throw registryError('invalid-request', 'resolvedPromotions must be a bounded array', { status: 400 })
+  }
+  const resolved = value
+    .map(entry => {
+      if (!exactObject(entry, ['materialRef', 'promotionId'])) {
+        throw registryError('invalid-request', 'resolved promotion does not match its schema', { status: 400 })
+      }
+      return Object.freeze({
+        promotionId: requireGcDigest(entry.promotionId, 'resolvedPromotions.promotionId'),
+        materialRef: validateMaterialIdentity(entry.materialRef),
+      })
+    })
+    .sort((left, right) => left.promotionId.localeCompare(right.promotionId))
+  if (resolved.some((entry, index) => index > 0 && entry.promotionId === resolved[index - 1].promotionId)) {
+    throw registryError('invalid-request', 'resolvedPromotions must not contain duplicates', { status: 400 })
+  }
+  return Object.freeze(resolved)
+}
+
+const normalizeUnresolvedPromotionIds = value => {
+  if (!Array.isArray(value) || value.length > 4096) {
+    throw registryError('invalid-request', 'unresolvedPromotionIds must be a bounded array', { status: 400 })
+  }
+  const result = value.map(id => requireGcDigest(id, 'unresolvedPromotionIds entry')).sort()
+  if (result.some((id, index) => index > 0 && id === result[index - 1])) {
+    throw registryError('invalid-request', 'unresolvedPromotionIds must not contain duplicates', { status: 400 })
+  }
+  return Object.freeze(result)
+}
+
+const normalizeReplicaRoot = value => {
+  requireObject(
+    value,
+    [
+      'acceptedRequestDigest',
+      'materialRefs',
+      'projectId',
+      'releasedAt',
+      'replicaGeneration',
+      'replicaId',
+      'resolvedPromotions',
+      'snapshotDigest',
+      'state',
+      'tenantId',
+      'unresolvedPromotionIds',
+      'updatedAt',
+      'userId',
+    ],
+    'replica root',
+  )
+  if (!['active', 'released'].includes(value.state)) {
+    throw registryError('invalid-request', 'replica root state is invalid', { status: 400 })
+  }
+  if (!Number.isSafeInteger(value.updatedAt) || value.updatedAt < 0) {
+    throw registryError('invalid-request', 'replica root updatedAt is invalid', { status: 400 })
+  }
+  if (value.releasedAt !== null && (!Number.isSafeInteger(value.releasedAt) || value.releasedAt < 0)) {
+    throw registryError('invalid-request', 'replica root releasedAt is invalid', { status: 400 })
+  }
+  const root = {
+    tenantId: requireGcIdentifier(value.tenantId, 'replicaRoot.tenantId'),
+    userId: requireGcIdentifier(value.userId, 'replicaRoot.userId'),
+    projectId: requireGcIdentifier(value.projectId, 'replicaRoot.projectId'),
+    replicaId: requireGcIdentifier(value.replicaId, 'replicaRoot.replicaId'),
+    state: value.state,
+    replicaGeneration: requireGcGeneration(value.replicaGeneration, 'replicaRoot.replicaGeneration'),
+    acceptedRequestDigest: requireGcDigest(value.acceptedRequestDigest, 'replicaRoot.acceptedRequestDigest'),
+    snapshotDigest: requireGcDigest(value.snapshotDigest, 'replicaRoot.snapshotDigest'),
+    materialRefs: normalizeRetainedMaterialRefs(value.materialRefs),
+    unresolvedPromotionIds: normalizeUnresolvedPromotionIds(value.unresolvedPromotionIds),
+    resolvedPromotions: normalizeResolvedPromotions(value.resolvedPromotions),
+    updatedAt: value.updatedAt,
+    releasedAt: value.releasedAt,
+  }
+  if (root.state === 'active' && root.releasedAt !== null) {
+    throw registryError('invalid-request', 'active replica root must not have releasedAt', { status: 400 })
+  }
+  if (
+    root.state === 'released' &&
+    (root.releasedAt === null ||
+      root.materialRefs.length !== 0 ||
+      root.unresolvedPromotionIds.length !== 0 ||
+      root.resolvedPromotions.length !== 0)
+  ) {
+    throw registryError('invalid-request', 'released replica root must be an empty tombstone', { status: 400 })
+  }
+  return Object.freeze(root)
+}
+
+const normalizeReplicaRoots = value => {
+  if (!Array.isArray(value) || value.length > 16384) {
+    throw registryError('invalid-request', 'replicaRoots must be a bounded array', { status: 400 })
+  }
+  const roots = value.map(normalizeReplicaRoot).sort((left, right) => rootKey(left).localeCompare(rootKey(right)))
+  if (roots.some((root, index) => index > 0 && rootKey(root) === rootKey(roots[index - 1]))) {
+    throw registryError('invalid-request', 'replicaRoots must not contain duplicate authorities', { status: 400 })
+  }
+  return Object.freeze(roots)
+}
+
+const normalizeGcState = value => {
+  requireObject(value, ['legacyRetainedMaterialRefs', 'replicaRoots'], 'registry GC state')
+  return Object.freeze({
+    legacyRetainedMaterialRefs: Object.freeze(normalizeRetainedMaterialRefs(value.legacyRetainedMaterialRefs)),
+    replicaRoots: normalizeReplicaRoots(value.replicaRoots),
+  })
+}
+
+const activeRootMaterialRefs = root => [
+  ...root.materialRefs,
+  ...root.resolvedPromotions.map(resolution => resolution.materialRef),
+]
+
+const retainedMaterialRefsForGcState = gcState => {
+  const refs = new Map(gcState.legacyRetainedMaterialRefs.map(ref => [identityKey(ref), ref]))
+  for (const root of gcState.replicaRoots) {
+    if (root.state !== 'active') continue
+    for (const ref of activeRootMaterialRefs(root)) refs.set(identityKey(ref), ref)
+  }
+  return sortIdentities(refs.values())
 }
 
 export const createFileMaterialRegistry = async (options = {}) => {
@@ -1036,59 +1269,94 @@ export const createFileMaterialRegistry = async (options = {}) => {
     })
   }
 
-  const registrySnapshotHash = retainedMaterialRefs =>
+  const registrySnapshotHash = gcState =>
     sha256(
       JSON.stringify({
         materials: sortRecords(materialIndex.values()).map(bindingFromRecord),
         pendingPromotions: sortRecords(pendingIndex.values()).map(bindingFromRecord),
-        retainedMaterialRefs: sortIdentities(retainedMaterialRefs).map(cloneJson),
+        gcState: normalizeGcState(gcState),
       }),
     )
 
   const parseDurableIndex = value => {
     if (value === null) return null
-    requireObject(
-      value,
-      ['fence', 'generation', 'kind', 'retainedMaterialRefs', 'schemaVersion', 'snapshotHash'],
-      'registry index',
-    )
+    let gcState
+    try {
+      if (value.schemaVersion === REGISTRY_SCHEMA_VERSION) {
+        requireObject(
+          value,
+          ['fence', 'generation', 'kind', 'retainedMaterialRefs', 'schemaVersion', 'snapshotHash'],
+          'registry index',
+        )
+        gcState = normalizeGcState({
+          legacyRetainedMaterialRefs: value.retainedMaterialRefs,
+          replicaRoots: [],
+        })
+      } else {
+        requireObject(
+          value,
+          [
+            'fence',
+            'gcStateHash',
+            'generation',
+            'kind',
+            'legacyRetainedMaterialRefs',
+            'replicaRoots',
+            'schemaVersion',
+            'snapshotHash',
+          ],
+          'registry index',
+        )
+        if (value.schemaVersion !== REGISTRY_INDEX_SCHEMA_VERSION) {
+          throw registryError('registry-corrupt', 'Registry index has an unsupported schema', { status: 500 })
+        }
+        gcState = normalizeGcState({
+          legacyRetainedMaterialRefs: value.legacyRetainedMaterialRefs,
+          replicaRoots: value.replicaRoots,
+        })
+        if (typeof value.gcStateHash !== 'string' || value.gcStateHash !== sha256(JSON.stringify(gcState))) {
+          throw registryError('registry-corrupt', 'Registry index GC state hash is invalid', { status: 500 })
+        }
+      }
+    } catch {
+      throw registryError('registry-corrupt', 'Registry index durable GC roots are invalid', { status: 500 })
+    }
     if (
-      value.schemaVersion !== REGISTRY_SCHEMA_VERSION ||
       value.kind !== 'material-registry-index' ||
       !Number.isSafeInteger(value.fence) ||
       value.fence <= 0 ||
       !Number.isSafeInteger(value.generation) ||
       value.generation <= 0 ||
       typeof value.snapshotHash !== 'string' ||
-      !/^sha256:[\da-f]{64}$/u.test(value.snapshotHash)
+      !gcDigestPattern.test(value.snapshotHash)
     ) {
       throw registryError('registry-corrupt', 'Registry index has an unsupported schema', { status: 500 })
     }
-    let retainedMaterialRefs
-    try {
-      retainedMaterialRefs = normalizeRetainedMaterialRefs(value.retainedMaterialRefs)
-    } catch {
-      throw registryError('registry-corrupt', 'Registry index retained roots are invalid', { status: 500 })
-    }
     return Object.freeze({
+      schemaVersion: value.schemaVersion,
       fence: value.fence,
       generation: value.generation,
-      retainedMaterialRefs,
+      legacyRetainedMaterialRefs: gcState.legacyRetainedMaterialRefs,
+      replicaRoots: gcState.replicaRoots,
+      gcStateHash: value.schemaVersion === REGISTRY_INDEX_SCHEMA_VERSION ? value.gcStateHash : null,
       snapshotHash: value.snapshotHash,
     })
   }
 
   const readDurableIndex = async () => parseDurableIndex(await readJson(indexPath))
 
-  const persistDurableIndex = async ({ generation, retainedMaterialRefs, snapshotHash }) => {
+  const persistDurableIndex = async ({ generation, gcState: gcStateValue, snapshotHash }) => {
     if (!activeLease) throw leaseLostError()
+    const gcState = normalizeGcState(gcStateValue)
     const value = {
-      schemaVersion: REGISTRY_SCHEMA_VERSION,
+      schemaVersion: REGISTRY_INDEX_SCHEMA_VERSION,
       kind: 'material-registry-index',
       fence: activeLease.fence,
       generation,
       snapshotHash,
-      retainedMaterialRefs: sortIdentities(retainedMaterialRefs).map(cloneJson),
+      gcStateHash: sha256(JSON.stringify(gcState)),
+      legacyRetainedMaterialRefs: gcState.legacyRetainedMaterialRefs.map(cloneJson),
+      replicaRoots: gcState.replicaRoots.map(cloneJson),
     }
     await writeAtomicJson({
       path: indexPath,
@@ -1102,28 +1370,32 @@ export const createFileMaterialRegistry = async (options = {}) => {
   const reconcileDurableIndex = async signal => {
     await scanRegistry(signal)
     const durable = await readDurableIndex()
-    const retainedMaterialRefs = durable?.retainedMaterialRefs ?? []
-    const snapshotHash = registrySnapshotHash(retainedMaterialRefs)
-    if (durable && durable.snapshotHash === snapshotHash) return durable
+    const gcState = normalizeGcState({
+      legacyRetainedMaterialRefs: durable?.legacyRetainedMaterialRefs ?? [],
+      replicaRoots: durable?.replicaRoots ?? [],
+    })
+    const snapshotHash = registrySnapshotHash(gcState)
+    if (durable && durable.schemaVersion === REGISTRY_INDEX_SCHEMA_VERSION && durable.snapshotHash === snapshotHash) {
+      return durable
+    }
     return persistDurableIndex({
       generation: (durable?.generation ?? 0) + 1,
-      retainedMaterialRefs,
+      gcState,
       snapshotHash,
     })
   }
 
-  const setDurableRetainedRoots = async retainedMaterialRefs => {
+  const setDurableGcState = async gcStateValue => {
     const durable = await reconcileDurableIndex()
-    const snapshotHash = registrySnapshotHash(retainedMaterialRefs)
+    const gcState = normalizeGcState(gcStateValue)
+    const snapshotHash = registrySnapshotHash(gcState)
     if (durable.snapshotHash === snapshotHash) return durable
     return persistDurableIndex({
       generation: durable.generation + 1,
-      retainedMaterialRefs,
+      gcState,
       snapshotHash,
     })
   }
-
-  const durableGenerationToken = durable => `${durable.generation}:${durable.snapshotHash}`
 
   const stagePromotionInternal = async (requestValue, signal) => {
     throwIfAborted(signal)
@@ -1290,7 +1562,7 @@ export const createFileMaterialRegistry = async (options = {}) => {
     return sortRecords(pendingIndex.values()).map(cloneJson)
   }
 
-  const exportBackupInternal = async destinationValue => {
+  const exportBackupInternal = async (destinationValue, durable) => {
     const destinationDir = requireDirectoryPath(destinationValue, 'destinationDir')
     if (confinedPath(rootDir, destinationDir) || confinedPath(destinationDir, rootDir)) {
       throw registryError('backup-path-conflict', 'Backup destination must be outside the registry root', {
@@ -1316,20 +1588,38 @@ export const createFileMaterialRegistry = async (options = {}) => {
         })
         backupEntries.push({ binding, storageKey })
       }
+      const gcState = gcStateFromDurable(durable)
+      const gcStateHash = sha256(
+        JSON.stringify({
+          sourceGeneration: durable.generation,
+          sourceSnapshotHash: durable.snapshotHash,
+          gcState,
+        }),
+      )
       await writeDurableFile(
         join(temporaryDirectory, BACKUP_MANIFEST_NAME),
         `${JSON.stringify({
-          schemaVersion: REGISTRY_SCHEMA_VERSION,
+          schemaVersion: REGISTRY_BACKUP_SCHEMA_VERSION,
           kind: 'material-registry-backup',
           createdAt: now(),
           materials: backupEntries,
+          sourceGeneration: durable.generation,
+          sourceSnapshotHash: durable.snapshotHash,
+          gcState,
+          gcStateHash,
         })}\n`,
       )
       await syncDirectory(temporaryDirectory)
       await verifyMutationLease()
       await fileSystem.rename(temporaryDirectory, destinationDir)
       await syncDirectory(parentDirectory)
-      return { destinationDir, materials: materials.map(cloneJson), valid: true }
+      return {
+        destinationDir,
+        materials: materials.map(cloneJson),
+        valid: true,
+        sourceGeneration: durable.generation,
+        gcStateHash,
+      }
     } catch (error) {
       await cleanupTemporaryPath(temporaryDirectory, { force: true, recursive: true })
       throw error
@@ -1343,9 +1633,9 @@ export const createFileMaterialRegistry = async (options = {}) => {
     if (!manifestValue) {
       throw registryError('backup-invalid', 'Backup manifest is missing', { status: 400 })
     }
-    const entries = parseBackupManifest(manifestValue)
+    const manifest = parseBackupManifest(manifestValue)
     const materials = []
-    for (const entry of entries) {
+    for (const entry of manifest.entries) {
       const relativeBuildDirectory = `materials/${entry.storageKey}/build`
       await assertConfinedDirectoryChain(backupDirectory, relativeBuildDirectory)
       await verifyOrCopyBuild(join(backupDirectory, ...relativeBuildDirectory.split('/')), entry.binding, {
@@ -1353,78 +1643,181 @@ export const createFileMaterialRegistry = async (options = {}) => {
       })
       materials.push(publishedRecord(entry.binding))
     }
-    return { valid: true, materials: sortRecords(materials).map(cloneJson) }
-  }
-
-  const planGarbageCollectionInternal = async retainedMaterialRefsValue => {
-    const retained = normalizeRetainedMaterialRefs(retainedMaterialRefsValue)
-    const durable = await setDurableRetainedRoots(retained)
-    const retainedKeys = new Set(retained.map(identityKey))
-    const materials = sortRecords(materialIndex.values())
-    const deletionCandidates = materials
-      .filter(material => !retainedKeys.has(identityKey(material)))
-      .map(material =>
-        validateMaterialIdentity({
-          materialId: material.materialId,
-          materialVersion: material.materialVersion,
-          buildIntegrity: material.buildIntegrity,
-        }),
-      )
     return {
-      schemaVersion: REGISTRY_SCHEMA_VERSION,
-      registryId,
-      generation: durableGenerationToken(durable),
-      retainedMaterialRefs: retained.map(cloneJson),
-      deletionCandidates: deletionCandidates.map(cloneJson),
+      valid: true,
+      materials: sortRecords(materials).map(cloneJson),
+      schemaVersion: manifest.schemaVersion,
+      sourceGeneration: manifest.sourceGeneration,
+      sourceSnapshotHash: manifest.sourceSnapshotHash,
+      gcState: manifest.gcState,
     }
   }
 
-  const sweepGarbageCollectionInternal = async plan => {
-    requireObject(
-      plan,
-      ['deletionCandidates', 'generation', 'registryId', 'retainedMaterialRefs', 'schemaVersion'],
-      'garbage collection plan',
+  const gcStateFromDurable = durable =>
+    normalizeGcState({
+      legacyRetainedMaterialRefs: durable.legacyRetainedMaterialRefs,
+      replicaRoots: durable.replicaRoots,
+    })
+
+  const resolvePromotionRoots = (projectId, promotionIds) =>
+    promotionIds.map(promotionId => {
+      const active = [...materialIndex.values()].find(material => material.promotionId === promotionId)
+      if (!active || active.projectId !== projectId || active.state !== 'active') {
+        throw registryError(
+          'gc-promotion-unresolved',
+          'An unresolved promotion is not an active material in the authorized project',
+          { status: 409, retryable: true },
+        )
+      }
+      return Object.freeze({
+        promotionId,
+        materialRef: validateMaterialIdentity({
+          materialId: active.materialId,
+          materialVersion: active.materialVersion,
+          buildIntegrity: active.buildIntegrity,
+        }),
+      })
+    })
+
+  const gcCandidatesForProject = (projectId, retainedMaterialRefs) => {
+    const retainedKeys = new Set(retainedMaterialRefs.map(identityKey))
+    return sortIdentities(
+      sortRecords(materialIndex.values())
+        .filter(material => material.projectId === projectId && !retainedKeys.has(identityKey(material)))
+        .map(material =>
+          validateMaterialIdentity({
+            materialId: material.materialId,
+            materialVersion: material.materialVersion,
+            buildIntegrity: material.buildIntegrity,
+          }),
+        ),
     )
-    if (plan.schemaVersion !== REGISTRY_SCHEMA_VERSION || plan.registryId !== registryId) {
-      throw registryError('gc-plan-invalid', 'Garbage collection plan belongs to another registry', { status: 400 })
+  }
+
+  const createGcPlan = ({ durable, principal, request, requestDigest, root }) => {
+    const globalRetainedMaterialRefs = retainedMaterialRefsForGcState(gcStateFromDurable(durable))
+    const base = {
+      schemaVersion: REGISTRY_SCHEMA_VERSION,
+      kind: 'material-gc-plan',
+      registryId,
+      registryGeneration: durable.generation,
+      rootKeyDigest: rootKeyDigest({ ...principal, projectId: request.projectId, replicaId: request.replicaId }),
+      projectId: request.projectId,
+      replicaId: request.replicaId,
+      replicaGeneration: root.replicaGeneration,
+      requestDigest,
+      snapshotDigest: request.snapshotDigest,
+      globalRetainedMaterialRefs,
+      deletionCandidates: gcCandidatesForProject(request.projectId, globalRetainedMaterialRefs),
     }
-    if (!Array.isArray(plan.retainedMaterialRefs) || !Array.isArray(plan.deletionCandidates)) {
-      throw registryError('gc-plan-invalid', 'Garbage collection plan arrays are invalid', { status: 400 })
+    return validateMaterialGcPlan({ ...base, planHash: sha256(JSON.stringify(base)) })
+  }
+
+  const planGarbageCollectionInternal = async input => {
+    if (!exactObject(input, ['principal', 'request'])) {
+      throw registryError('invalid-request', 'planGarbageCollection input is invalid', { status: 400 })
+    }
+    const { principal: principalValue, request: requestValue } = input
+    const principal = normalizePrincipal(principalValue)
+    const request = validateMaterialGcPlanRequest(requestValue)
+    const durable = await reconcileDurableIndex()
+    const gcState = gcStateFromDurable(durable)
+    const key = rootKey({ ...principal, projectId: request.projectId, replicaId: request.replicaId })
+    const current = gcState.replicaRoots.find(root => rootKey(root) === key) ?? null
+    const requestDigest = sha256(JSON.stringify(createMaterialGcPlanRequestDigestInput(request)))
+    const isExactReplay =
+      current?.state === 'active' &&
+      current.acceptedRequestDigest === requestDigest &&
+      current.snapshotDigest === request.snapshotDigest &&
+      (request.expectedReplicaGeneration === current.replicaGeneration ||
+        request.expectedReplicaGeneration === current.replicaGeneration - 1)
+    if (isExactReplay) {
+      return createGcPlan({ durable, principal, request, requestDigest, root: current })
+    }
+    if (
+      (!current && request.expectedReplicaGeneration !== 0) ||
+      (current && request.expectedReplicaGeneration !== current.replicaGeneration)
+    ) {
+      throw registryError('gc-replica-generation-conflict', 'Replica GC generation does not match durable state', {
+        status: 409,
+        retryable: true,
+      })
+    }
+    const resolvedPromotions = resolvePromotionRoots(request.projectId, request.unresolvedPromotionIds)
+    const nextRoot = normalizeReplicaRoot({
+      ...principal,
+      projectId: request.projectId,
+      replicaId: request.replicaId,
+      state: 'active',
+      replicaGeneration: (current?.replicaGeneration ?? 0) + 1,
+      acceptedRequestDigest: requestDigest,
+      snapshotDigest: request.snapshotDigest,
+      materialRefs: request.materialRefs,
+      unresolvedPromotionIds: request.unresolvedPromotionIds,
+      resolvedPromotions,
+      updatedAt: now(),
+      releasedAt: null,
+    })
+    const nextGcState = normalizeGcState({
+      legacyRetainedMaterialRefs: gcState.legacyRetainedMaterialRefs,
+      replicaRoots: [...gcState.replicaRoots.filter(root => rootKey(root) !== key), nextRoot],
+    })
+    const nextDurable = await setDurableGcState(nextGcState)
+    return createGcPlan({ durable: nextDurable, principal, request, requestDigest, root: nextRoot })
+  }
+
+  const sweepGarbageCollectionInternal = async input => {
+    if (!exactObject(input, ['principal', 'request'])) {
+      throw registryError('invalid-request', 'sweepGarbageCollection input is invalid', { status: 400 })
+    }
+    const { principal: principalValue, request: requestValue } = input
+    const principal = normalizePrincipal(principalValue)
+    const request = validateMaterialGcSweepRequest(requestValue)
+    const plan = request.plan
+    if (
+      plan.registryId !== registryId ||
+      plan.planHash !== sha256(JSON.stringify(createMaterialGcPlanHashInput(plan)))
+    ) {
+      throw registryError('gc-plan-invalid', 'Garbage collection plan integrity is invalid', { status: 400 })
     }
     const durable = await reconcileDurableIndex()
-    const materials = sortRecords(materialIndex.values())
-    if (typeof plan.generation !== 'string' || plan.generation !== durableGenerationToken(durable)) {
+    const gcState = gcStateFromDurable(durable)
+    const authority = { ...principal, projectId: plan.projectId, replicaId: plan.replicaId }
+    const root = gcState.replicaRoots.find(candidate => rootKey(candidate) === rootKey(authority)) ?? null
+    if (
+      plan.rootKeyDigest !== rootKeyDigest(authority) ||
+      !root ||
+      root.state !== 'active' ||
+      root.replicaGeneration !== plan.replicaGeneration ||
+      root.snapshotDigest !== plan.snapshotDigest ||
+      root.acceptedRequestDigest !== plan.requestDigest
+    ) {
+      throw registryError('gc-replica-generation-conflict', 'Replica GC root changed after planning', {
+        status: 409,
+        retryable: true,
+      })
+    }
+    if (durable.generation !== plan.registryGeneration) {
       throw registryError('gc-generation-conflict', 'Registry changed after garbage collection was planned', {
         status: 409,
         retryable: true,
       })
     }
-    const retained = normalizeRetainedMaterialRefs(plan.retainedMaterialRefs)
-    if (!sameJson(retained, durable.retainedMaterialRefs)) {
-      throw registryError('gc-generation-conflict', 'Durable garbage collection roots changed after planning', {
-        status: 409,
-        retryable: true,
-      })
-    }
-    const retainedKeys = new Set(retained.map(identityKey))
-    const expectedCandidates = materials
-      .filter(material => !retainedKeys.has(identityKey(material)))
-      .map(material => ({
-        materialId: material.materialId,
-        materialVersion: material.materialVersion,
-        buildIntegrity: material.buildIntegrity,
-      }))
-    const suppliedCandidates = plan.deletionCandidates.map(validateMaterialIdentity)
-    if (!sameJson(expectedCandidates, suppliedCandidates)) {
-      throw registryError('gc-plan-invalid', 'Garbage collection candidates were modified after planning', {
+    const globalRetainedMaterialRefs = retainedMaterialRefsForGcState(gcState)
+    const expectedCandidates = gcCandidatesForProject(plan.projectId, globalRetainedMaterialRefs)
+    if (
+      !sameJson(globalRetainedMaterialRefs, plan.globalRetainedMaterialRefs) ||
+      !sameJson(expectedCandidates, plan.deletionCandidates)
+    ) {
+      throw registryError('gc-plan-invalid', 'Garbage collection plan roots or candidates were modified', {
         status: 400,
       })
     }
 
     const deletedMaterials = []
-    for (const identity of suppliedCandidates) {
+    for (const identity of expectedCandidates) {
       const record = materialIndex.get(identityKey(identity))
-      if (!record) continue
+      if (!record || record.projectId !== plan.projectId) continue
       const sourceDirectory = promotionDirectoryFor(record.promotionId)
       const trashPath = join(trashDirectory, `${storageKeyForPromotion(record.promotionId)}.${randomUUID()}`)
       await callCheckpoint('before-gc-rename', { promotionId: record.promotionId })
@@ -1435,17 +1828,88 @@ export const createFileMaterialRegistry = async (options = {}) => {
       await callCheckpoint('after-gc-rename-before-removal', { promotionId: record.promotionId })
       materialIndex.delete(identityKey(identity))
       pendingIndex.delete(record.promotionId)
-      deletedMaterials.push(cloneJson(identity))
+      deletedMaterials.push(Object.freeze(cloneJson(identity)))
       await verifyMutationLease()
       await fileSystem.rm(trashPath, { force: true, recursive: true })
       await syncDirectory(trashDirectory)
       await callCheckpoint('after-gc-removal-before-index-activation', { promotionId: record.promotionId })
     }
     const nextDurable = await reconcileDurableIndex()
-    return {
-      deletedMaterials,
-      generation: durableGenerationToken(nextDurable),
+    return Object.freeze({
+      schemaVersion: REGISTRY_SCHEMA_VERSION,
+      deletedMaterials: Object.freeze(deletedMaterials),
+      registryGeneration: nextDurable.generation,
+      replicaGeneration: root.replicaGeneration,
+      planHash: plan.planHash,
+    })
+  }
+
+  const releaseGarbageCollectionRootInternal = async input => {
+    if (!exactObject(input, ['principal', 'request'])) {
+      throw registryError('invalid-request', 'releaseGarbageCollectionRoot input is invalid', { status: 400 })
     }
+    const { principal: principalValue, request: requestValue } = input
+    const principal = normalizePrincipal(principalValue)
+    const request = validateMaterialGcReleaseRequest(requestValue)
+    const durable = await reconcileDurableIndex()
+    const gcState = gcStateFromDurable(durable)
+    const authority = { ...principal, projectId: request.projectId, replicaId: request.replicaId }
+    const key = rootKey(authority)
+    const current = gcState.replicaRoots.find(root => rootKey(root) === key) ?? null
+    const requestDigest = sha256(JSON.stringify(createMaterialGcReleaseRequestDigestInput(request)))
+    const exactReplay =
+      current?.state === 'released' &&
+      current.acceptedRequestDigest === requestDigest &&
+      current.snapshotDigest === request.snapshotDigest &&
+      request.expectedReplicaGeneration === current.replicaGeneration - 1
+    if (exactReplay) {
+      return Object.freeze({
+        schemaVersion: REGISTRY_SCHEMA_VERSION,
+        status: 'released',
+        projectId: request.projectId,
+        replicaId: request.replicaId,
+        replicaGeneration: current.replicaGeneration,
+        requestDigest,
+        registryGeneration: durable.generation,
+      })
+    }
+    if (
+      !current ||
+      current.state !== 'active' ||
+      current.replicaGeneration !== request.expectedReplicaGeneration ||
+      current.snapshotDigest !== request.snapshotDigest
+    ) {
+      throw registryError('gc-replica-generation-conflict', 'Replica GC root cannot be released from stale state', {
+        status: 409,
+        retryable: true,
+      })
+    }
+    const releasedAt = now()
+    const tombstone = normalizeReplicaRoot({
+      ...authority,
+      state: 'released',
+      replicaGeneration: current.replicaGeneration + 1,
+      acceptedRequestDigest: requestDigest,
+      snapshotDigest: current.snapshotDigest,
+      materialRefs: [],
+      unresolvedPromotionIds: [],
+      resolvedPromotions: [],
+      updatedAt: releasedAt,
+      releasedAt,
+    })
+    const nextDurable = await setDurableGcState({
+      legacyRetainedMaterialRefs: gcState.legacyRetainedMaterialRefs,
+      replicaRoots: [...gcState.replicaRoots.filter(root => rootKey(root) !== key), tombstone],
+    })
+    return Object.freeze({
+      schemaVersion: REGISTRY_SCHEMA_VERSION,
+      status: 'released',
+      projectId: request.projectId,
+      replicaId: request.replicaId,
+      replicaGeneration: tombstone.replicaGeneration,
+      requestDigest,
+      registryGeneration: nextDurable.generation,
+    })
   }
 
   await ensureDirectory(workspaceRoot)
@@ -1518,8 +1982,8 @@ export const createFileMaterialRegistry = async (options = {}) => {
           if (!exactObject(request, ['destinationDir'])) {
             throw registryError('invalid-request', 'exportBackup requires exactly destinationDir', { status: 400 })
           }
-          await reconcileDurableIndex()
-          return exportBackupInternal(request.destinationDir)
+          const durable = await reconcileDurableIndex()
+          return exportBackupInternal(request.destinationDir, durable)
         }),
       ).catch(error => throwFailure(error)),
     verifyBackup: request =>
@@ -1529,18 +1993,11 @@ export const createFileMaterialRegistry = async (options = {}) => {
         }
         return verifyBackupInternal(request.backupDirectory)
       }).catch(error => throwFailure(error)),
-    planGarbageCollection: request =>
-      enqueue(() =>
-        withLease(() => {
-          if (!exactObject(request, ['retainedMaterialRefs'])) {
-            throw registryError('invalid-request', 'planGarbageCollection requires retainedMaterialRefs', {
-              status: 400,
-            })
-          }
-          return planGarbageCollectionInternal(request.retainedMaterialRefs)
-        }),
-      ).catch(error => throwFailure(error)),
-    sweepGarbageCollection: plan =>
-      enqueue(() => withLease(() => sweepGarbageCollectionInternal(plan))).catch(error => throwFailure(error)),
+    planGarbageCollection: input =>
+      enqueue(() => withLease(() => planGarbageCollectionInternal(input))).catch(error => throwFailure(error)),
+    sweepGarbageCollection: input =>
+      enqueue(() => withLease(() => sweepGarbageCollectionInternal(input))).catch(error => throwFailure(error)),
+    releaseGarbageCollectionRoot: input =>
+      enqueue(() => withLease(() => releaseGarbageCollectionRootInternal(input))).catch(error => throwFailure(error)),
   })
 }

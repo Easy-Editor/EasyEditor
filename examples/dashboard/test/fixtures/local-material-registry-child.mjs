@@ -29,7 +29,10 @@ try {
       result = await registry.publishPromotion({ promotionId: config.request.promotionId })
       break
     case 'sweep':
-      result = await registry.sweepGarbageCollection(config.plan)
+      result = await registry.sweepGarbageCollection({
+        principal: config.principal,
+        request: { schemaVersion: 1, plan: config.plan },
+      })
       break
     default:
       throw new Error(`unsupported child action: ${config.action}`)

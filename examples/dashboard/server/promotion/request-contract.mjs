@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto'
 
+import {
+  validateMaterialGcPlanRequest,
+  validateMaterialGcReleaseRequest,
+  validateMaterialGcSweepRequest,
+} from '../../shared/material-gc-contract.mjs'
 import { validateArtifactRecord } from '../../src/lib/storage/artifact-contracts.mjs'
 import { canonicalJsonStringify } from '../../src/lib/storage/canonical-json.mjs'
 import { invalidPromotionRequest, promotionError } from './promotion-error.mjs'
@@ -156,3 +161,5 @@ export const validateMaterialCatalogRead = value => {
     buildIntegrity: requireDigest(value.buildIntegrity),
   })
 }
+
+export { validateMaterialGcPlanRequest, validateMaterialGcReleaseRequest, validateMaterialGcSweepRequest }

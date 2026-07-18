@@ -13,6 +13,8 @@ const childFixturePath = fileURLToPath(new URL('./fixtures/local-material-regist
 const ENTRY_SOURCE = `export default { mount(root) { root.textContent = 'durable KPI' }, update() {}, destroy() {} }`
 const sha256 = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const digest = character => `sha256:${character.repeat(64)}`
+const GC_TEST_PRINCIPAL = Object.freeze({ tenantId: 'crash-test-tenant', userId: 'crash-test-user' })
+const gcReplicaGenerations = new Map()
 const ATOMIC_TEMPORARY_PATTERNS = Object.freeze({
   fence: /^\.registry-fence\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
   index: /^\.registry-index\.json\.\d+\.[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u,
@@ -53,6 +55,30 @@ const identityFor = request => ({
   materialVersion: request.materialVersion,
   buildIntegrity: request.buildIntegrity,
 })
+
+const planGcForTest = async (registry, retainedMaterialRefs) => {
+  const generationKey = registry.rootDir
+  const plan = await registry.planGarbageCollection({
+    principal: GC_TEST_PRINCIPAL,
+    request: {
+      schemaVersion: 1,
+      projectId: 'project-1',
+      replicaId: 'crash-test-replica',
+      expectedReplicaGeneration: gcReplicaGenerations.get(generationKey) ?? 0,
+      snapshotDigest: sha256(JSON.stringify(retainedMaterialRefs)),
+      materialRefs: retainedMaterialRefs,
+      unresolvedPromotionIds: [],
+    },
+  })
+  gcReplicaGenerations.set(generationKey, plan.replicaGeneration)
+  return plan
+}
+
+const sweepGcForTest = (registry, plan) =>
+  registry.sweepGarbageCollection({
+    principal: GC_TEST_PRINCIPAL,
+    request: { schemaVersion: 1, plan },
+  })
 
 const assertRegistryError = code => error => {
   assert.equal(error?.code, code)
@@ -363,12 +389,13 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   await registry.publishPromotion({ promotionId: v1.promotionId })
   await registry.stagePromotion(v2)
   await registry.publishPromotion({ promotionId: v2.promotionId })
-  const planBeforeRemoval = await registry.planGarbageCollection({ retainedMaterialRefs: [identityFor(v2)] })
+  const planBeforeRemoval = await planGcForTest(registry, [identityFor(v2)])
 
   const beforeRemoval = startChild(children, {
     action: 'sweep',
     rootDir,
     plan: planBeforeRemoval,
+    principal: GC_TEST_PRINCIPAL,
     pauseAtCheckpoint: 'after-gc-rename-before-removal',
   })
   await waitForMessage(
@@ -384,7 +411,7 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   await afterRenameRestart.recoverPendingPromotions()
   assert.deepEqual(await readdir(join(rootDir, 'trash')), [])
   await assert.rejects(
-    afterRenameRestart.sweepGarbageCollection(planBeforeRemoval),
+    sweepGcForTest(afterRenameRestart, planBeforeRemoval),
     assertRegistryError('gc-generation-conflict'),
   )
 
@@ -396,13 +423,12 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   })
   await afterRenameRestart.stagePromotion(v3)
   await afterRenameRestart.publishPromotion({ promotionId: v3.promotionId })
-  const planAfterRemoval = await afterRenameRestart.planGarbageCollection({
-    retainedMaterialRefs: [identityFor(v3)],
-  })
+  const planAfterRemoval = await planGcForTest(afterRenameRestart, [identityFor(v3)])
   const afterRemoval = startChild(children, {
     action: 'sweep',
     rootDir,
     plan: planAfterRemoval,
+    principal: GC_TEST_PRINCIPAL,
     pauseAtCheckpoint: 'after-gc-removal-before-index-activation',
   })
   await waitForMessage(
@@ -417,7 +443,7 @@ test('SIGKILL around GC rename and removal never restores deleted visibility', a
   assert.equal((await afterRemovalRestart.readMaterial(identityFor(v3))).promotionId, v3.promotionId)
   assert.deepEqual(await readdir(join(rootDir, 'trash')), [])
   await assert.rejects(
-    afterRemovalRestart.sweepGarbageCollection(planAfterRemoval),
+    sweepGcForTest(afterRemovalRestart, planAfterRemoval),
     assertRegistryError('gc-generation-conflict'),
   )
 })

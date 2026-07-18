@@ -2,6 +2,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { MaterialCatalogItemV1, MaterialCatalogListResponseV1 } from '../../shared/material-catalog-contract.mjs'
 import type {
+  MaterialGcPlanRequestV1,
+  MaterialGcPlanV1,
+  MaterialGcReleaseRequestV1,
+  MaterialGcReleaseResultV1,
+  MaterialGcSweepRequestV1,
+  MaterialGcSweepResultV1,
+} from '../../shared/material-gc-contract.mjs'
+import type {
   MaterialIdentityV1,
   MaterialPromotionBindingV1,
   MaterialPromotionRequestV1,
@@ -24,6 +32,24 @@ export {
   validateMaterialCatalogItem,
   validateMaterialCatalogListResponse,
 } from '../../shared/material-catalog-contract.mjs'
+export type {
+  MaterialGcPlanRequestV1,
+  MaterialGcPlanV1,
+  MaterialGcReleaseRequestV1,
+  MaterialGcReleaseResultV1,
+  MaterialGcSweepRequestV1,
+  MaterialGcSweepResultV1,
+} from '../../shared/material-gc-contract.mjs'
+export {
+  MATERIAL_GC_SCHEMA_VERSION,
+  createMaterialGcPlanHashInput,
+  createMaterialGcPlanRequestDigestInput,
+  createMaterialGcReleaseRequestDigestInput,
+  validateMaterialGcPlan,
+  validateMaterialGcPlanRequest,
+  validateMaterialGcReleaseRequest,
+  validateMaterialGcSweepRequest,
+} from '../../shared/material-gc-contract.mjs'
 
 export type Sha256Digest = `sha256:${string}`
 export type MaybePromise<T> = T | PromiseLike<T>
@@ -109,6 +135,9 @@ export interface MaterialPromotionSuccessTransportResult {
     | MaterialPromotionAvailabilityV1
     | MaterialCatalogItemV1
     | MaterialCatalogListResponseV1
+    | MaterialGcPlanV1
+    | MaterialGcSweepResultV1
+    | MaterialGcReleaseResultV1
 }
 
 export interface MaterialPromotionErrorTransportResult {
@@ -218,24 +247,41 @@ export interface MaterialRegistryBackupExportV1 {
   readonly destinationDir: string
   readonly materials: readonly ActiveMaterialPromotionRecordV1[]
   readonly valid: true
+  readonly sourceGeneration: number
+  readonly gcStateHash: Sha256Digest
 }
 
 export interface MaterialRegistryBackupVerificationV1 {
   readonly valid: true
   readonly materials: readonly ActiveMaterialPromotionRecordV1[]
+  readonly schemaVersion: 1 | 2
+  readonly sourceGeneration: number | null
+  readonly sourceSnapshotHash: Sha256Digest | null
+  readonly gcState: Readonly<MaterialRegistryGcStateV2> | null
 }
 
-export interface MaterialRegistryGarbageCollectionPlanV1 {
-  readonly schemaVersion: 1
-  readonly registryId: Sha256Digest
-  readonly generation: `${number}:sha256:${string}`
-  readonly retainedMaterialRefs: readonly MaterialIdentityV1[]
-  readonly deletionCandidates: readonly MaterialIdentityV1[]
+export interface MaterialRegistryResolvedPromotionV2 {
+  readonly promotionId: Sha256Digest
+  readonly materialRef: Readonly<MaterialIdentityV1>
 }
 
-export interface MaterialRegistryGarbageCollectionResultV1 {
-  readonly deletedMaterials: readonly MaterialIdentityV1[]
-  readonly generation: `${number}:sha256:${string}`
+export interface MaterialRegistryReplicaRootV2 extends MaterialPromotionPrincipal {
+  readonly projectId: string
+  readonly replicaId: string
+  readonly state: 'active' | 'released'
+  readonly replicaGeneration: number
+  readonly acceptedRequestDigest: Sha256Digest
+  readonly snapshotDigest: Sha256Digest
+  readonly materialRefs: readonly Readonly<MaterialIdentityV1>[]
+  readonly unresolvedPromotionIds: readonly Sha256Digest[]
+  readonly resolvedPromotions: readonly Readonly<MaterialRegistryResolvedPromotionV2>[]
+  readonly updatedAt: number
+  readonly releasedAt: number | null
+}
+
+export interface MaterialRegistryGcStateV2 {
+  readonly legacyRetainedMaterialRefs: readonly Readonly<MaterialIdentityV1>[]
+  readonly replicaRoots: readonly Readonly<MaterialRegistryReplicaRootV2>[]
 }
 
 export interface MaterialPromotionRegistry {
@@ -265,13 +311,14 @@ export interface MaterialPromotionRegistry {
   exportBackup?(request: Readonly<{ destinationDir: string }>): MaybePromise<MaterialRegistryBackupExportV1>
   verifyBackup?(request: Readonly<{ backupDirectory: string }>): MaybePromise<MaterialRegistryBackupVerificationV1>
   planGarbageCollection?(
-    request: Readonly<{
-      retainedMaterialRefs: readonly MaterialIdentityV1[]
-    }>,
-  ): MaybePromise<MaterialRegistryGarbageCollectionPlanV1>
+    input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcPlanRequestV1 }>,
+  ): MaybePromise<MaterialGcPlanV1>
   sweepGarbageCollection?(
-    plan: MaterialRegistryGarbageCollectionPlanV1,
-  ): MaybePromise<MaterialRegistryGarbageCollectionResultV1>
+    input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcSweepRequestV1 }>,
+  ): MaybePromise<MaterialGcSweepResultV1>
+  releaseGarbageCollectionRoot?(
+    input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcReleaseRequestV1 }>,
+  ): MaybePromise<MaterialGcReleaseResultV1>
 }
 
 export interface FileMaterialRegistry extends MaterialPromotionRegistry {
@@ -293,13 +340,14 @@ export interface FileMaterialRegistry extends MaterialPromotionRegistry {
   exportBackup(request: Readonly<{ destinationDir: string }>): MaybePromise<MaterialRegistryBackupExportV1>
   verifyBackup(request: Readonly<{ backupDirectory: string }>): MaybePromise<MaterialRegistryBackupVerificationV1>
   planGarbageCollection(
-    request: Readonly<{
-      retainedMaterialRefs: readonly MaterialIdentityV1[]
-    }>,
-  ): MaybePromise<MaterialRegistryGarbageCollectionPlanV1>
+    input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcPlanRequestV1 }>,
+  ): MaybePromise<MaterialGcPlanV1>
   sweepGarbageCollection(
-    plan: MaterialRegistryGarbageCollectionPlanV1,
-  ): MaybePromise<MaterialRegistryGarbageCollectionResultV1>
+    input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcSweepRequestV1 }>,
+  ): MaybePromise<MaterialGcSweepResultV1>
+  releaseGarbageCollectionRoot(
+    input: Readonly<{ principal: MaterialPromotionPrincipal; request: MaterialGcReleaseRequestV1 }>,
+  ): MaybePromise<MaterialGcReleaseResultV1>
 }
 
 export interface MaterialPromotionCoordinator {
@@ -333,10 +381,45 @@ export interface MaterialPromotionCoordinator {
   ): Promise<Readonly<MaterialCatalogItemV1>>
 }
 
+export interface MaterialGcCoordinator {
+  planGc(
+    input: Readonly<{
+      headers: Readonly<Record<string, string>>
+      request: MaterialGcPlanRequestV1
+      signal?: AbortSignal
+    }>,
+  ): Promise<Readonly<MaterialGcPlanV1>>
+  sweepGc(
+    input: Readonly<{
+      headers: Readonly<Record<string, string>>
+      request: MaterialGcSweepRequestV1
+      signal?: AbortSignal
+    }>,
+  ): Promise<Readonly<MaterialGcSweepResultV1>>
+  releaseGc(
+    input: Readonly<{
+      headers: Readonly<Record<string, string>>
+      request: MaterialGcReleaseRequestV1
+      signal?: AbortSignal
+    }>,
+  ): Promise<Readonly<MaterialGcReleaseResultV1>>
+}
+
 export interface MaterialPromotionCoordinatorOptions {
   readonly authorizePrincipal: MaterialPromotionPrincipalAuthorizer
   readonly author: MaterialPromotionAuthor
   readonly registry: MaterialPromotionRegistry
+}
+
+export interface MaterialGcCoordinatorOptions {
+  readonly authorizePrincipal: MaterialPromotionPrincipalAuthorizer
+  readonly registry: MaterialPromotionRegistry &
+    Required<
+      Pick<
+        MaterialPromotionRegistry,
+        'planGarbageCollection' | 'sweepGarbageCollection' | 'releaseGarbageCollectionRoot'
+      >
+    >
 }
 
 export interface EasypackWorkspaceLeaseOptions {
@@ -378,7 +461,7 @@ export interface FileMaterialRegistryOptions {
 }
 
 export interface MaterialPromotionHandlerOptions {
-  readonly coordinator: MaterialPromotionCoordinator
+  readonly coordinator: MaterialPromotionCoordinator & Partial<MaterialGcCoordinator>
   readonly checkAvailability?: (
     options?: MaterialPromotionPhaseOptions,
   ) => MaybePromise<MaterialPromotionAvailabilityV1>
@@ -424,11 +507,17 @@ export declare const MATERIAL_PROMOTION_QUERY_ROUTE: '/api/materials/promotion/q
 export declare const MATERIAL_PROMOTION_AVAILABILITY_ROUTE: '/api/materials/promotion/availability'
 export declare const MATERIAL_CATALOG_LIST_ROUTE: '/api/materials/catalog/list'
 export declare const MATERIAL_CATALOG_READ_ROUTE: '/api/materials/catalog/read'
+export declare const MATERIAL_GC_PLAN_ROUTE: '/api/materials/gc/plan'
+export declare const MATERIAL_GC_SWEEP_ROUTE: '/api/materials/gc/sweep'
+export declare const MATERIAL_GC_RELEASE_ROUTE: '/api/materials/gc/release'
 export declare const MATERIAL_PROMOTION_MAX_INBOUND_BYTES: number
 export declare const MATERIAL_PROMOTION_ENABLED_ENV: 'EASY_EDITOR_MATERIAL_PROMOTION_ENABLED'
+export declare const MATERIAL_GC_ENABLED_ENV: 'EASY_EDITOR_MATERIAL_GC_ENABLED'
 export declare const MATERIAL_PROMOTION_CONFIG_ENV: 'EASY_EDITOR_MATERIAL_PROMOTION_CONFIG_JSON'
 
 export declare const isEnvironmentMaterialPromotionEnabled: (env?: NodeJS.ProcessEnv) => boolean
+export declare const isEnvironmentMaterialGcEnabled: (env?: NodeJS.ProcessEnv) => boolean
+export declare const createMaterialGcCoordinator: (options: MaterialGcCoordinatorOptions) => MaterialGcCoordinator
 export declare const createMaterialPromotionCoordinator: (
   options: MaterialPromotionCoordinatorOptions,
 ) => MaterialPromotionCoordinator

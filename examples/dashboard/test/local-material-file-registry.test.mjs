@@ -32,6 +32,32 @@ export default {
 const sha256 = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const digest = character => `sha256:${character.repeat(64)}`
 const storageKeyForPromotion = promotionId => createHash('sha256').update(promotionId).digest('hex')
+const GC_TEST_PRINCIPAL = Object.freeze({ tenantId: 'registry-test-tenant', userId: 'registry-test-user' })
+const gcReplicaGenerations = new Map()
+
+const planGcForTest = async (registry, retainedMaterialRefs, replicaId = 'registry-test-replica') => {
+  const generationKey = `${registry.rootDir}\0${replicaId}`
+  const plan = await registry.planGarbageCollection({
+    principal: GC_TEST_PRINCIPAL,
+    request: {
+      schemaVersion: 1,
+      projectId: 'project-1',
+      replicaId,
+      expectedReplicaGeneration: gcReplicaGenerations.get(generationKey) ?? 0,
+      snapshotDigest: sha256(JSON.stringify(retainedMaterialRefs)),
+      materialRefs: retainedMaterialRefs,
+      unresolvedPromotionIds: [],
+    },
+  })
+  gcReplicaGenerations.set(generationKey, plan.replicaGeneration)
+  return plan
+}
+
+const sweepGcForTest = (registry, plan) =>
+  registry.sweepGarbageCollection({
+    principal: GC_TEST_PRINCIPAL,
+    request: { schemaVersion: 1, plan },
+  })
 
 const materialIdentity = (
   materialId = 'material-kpi',
@@ -283,13 +309,13 @@ test('GC is dry-run fenced and deletes an old build only after every caller-prov
 
   const v1Identity = materialIdentity()
   const v2Identity = materialIdentity('material-kpi', '2.0.0')
-  const retainedPlan = await registry.planGarbageCollection({ retainedMaterialRefs: [v2Identity, v1Identity] })
+  const retainedPlan = await planGcForTest(registry, [v2Identity, v1Identity])
   assert.deepEqual(retainedPlan.deletionCandidates, [])
 
-  const releasedPlan = await registry.planGarbageCollection({ retainedMaterialRefs: [v2Identity] })
+  const releasedPlan = await planGcForTest(registry, [v2Identity])
   assert.deepEqual(releasedPlan.deletionCandidates, [v1Identity])
   assert.notEqual(await registry.readMaterial(v1Identity), null, 'dry-run must not mutate the registry')
-  const swept = await registry.sweepGarbageCollection(releasedPlan)
+  const swept = await sweepGcForTest(registry, releasedPlan)
   assert.deepEqual(swept.deletedMaterials, [v1Identity])
   assert.equal(await registry.readMaterial(v1Identity), null)
   assert.notEqual(await registry.readMaterial(v2Identity), null)
@@ -371,9 +397,11 @@ test('read and list retry a concurrent GC rename but still surface stable record
     await registry.publishPromotion({ promotionId: v1.promotionId })
     await registry.stagePromotion(v2)
     await registry.publishPromotion({ promotionId: v2.promotionId })
-    const plan = await registry.planGarbageCollection({
-      retainedMaterialRefs: [materialIdentity('material-kpi', '2.0.0')],
-    })
+    const plan = await planGcForTest(
+      registry,
+      [materialIdentity('material-kpi', '2.0.0')],
+      `registry-race-${racePoint}-${operation}`,
+    )
 
     const v1EntryPath = join(rootDir, 'promotions', storageKeyForPromotion(v1.promotionId), 'build', 'index.mjs')
     const v2EntryPath = join(rootDir, 'promotions', storageKeyForPromotion(v2.promotionId), 'build', 'index.mjs')
@@ -384,7 +412,7 @@ test('read and list retry a concurrent GC rename but still surface stable record
     const triggerGc = async path => {
       if (!triggerConcurrentGc || gcTriggered || path !== v1EntryPath) return
       gcTriggered = true
-      await registry.sweepGarbageCollection(plan)
+      await sweepGcForTest(registry, plan)
     }
     const observer = await createFileMaterialRegistry({
       rootDir,
@@ -454,7 +482,7 @@ test('GC generation includes pending promotions and durable retained roots', asy
 
   const v1Identity = materialIdentity()
   const v2Identity = materialIdentity('material-kpi', '2.0.0')
-  const beforePending = await registry.planGarbageCollection({ retainedMaterialRefs: [v2Identity] })
+  const beforePending = await planGcForTest(registry, [v2Identity], 'registry-generation')
 
   const v3Directory = join(buildDirectory, 'generation-v3')
   await mkdir(v3Directory)
@@ -466,14 +494,17 @@ test('GC generation includes pending promotions and durable retained roots', asy
     sourceRevision: 'revision-generation-v3',
   })
   await registry.stagePromotion(v3)
-  await assert.rejects(registry.sweepGarbageCollection(beforePending), assertRegistryError('gc-generation-conflict'))
+  await assert.rejects(sweepGcForTest(registry, beforePending), assertRegistryError('gc-generation-conflict'))
 
-  const pendingAware = await registry.planGarbageCollection({ retainedMaterialRefs: [v2Identity] })
+  const pendingAware = await planGcForTest(registry, [v2Identity], 'registry-generation')
   assert.deepEqual(pendingAware.deletionCandidates, [v1Identity])
   const restarted = await createFileMaterialRegistry({ rootDir })
-  const rootsChanged = await restarted.planGarbageCollection({ retainedMaterialRefs: [v2Identity, v1Identity] })
-  assert.notEqual(rootsChanged.generation, pendingAware.generation)
-  await assert.rejects(registry.sweepGarbageCollection(pendingAware), assertRegistryError('gc-generation-conflict'))
+  const rootsChanged = await planGcForTest(restarted, [v2Identity, v1Identity], 'registry-generation')
+  assert.notEqual(rootsChanged.registryGeneration, pendingAware.registryGeneration)
+  await assert.rejects(
+    sweepGcForTest(registry, pendingAware),
+    assertRegistryError('gc-generation-conflict', 'gc-replica-generation-conflict'),
+  )
 })
 
 test('build budgets reject before source I/O and accepted builds are streamed', async t => {
