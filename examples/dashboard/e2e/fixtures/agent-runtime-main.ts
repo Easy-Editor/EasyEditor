@@ -21,7 +21,7 @@ type ControllableRuntime = AgentRuntime &
 
 export type BrowserAgentRuntimeHarness = Readonly<{
   runtime: ControllableRuntime
-  crashActiveWorker(): void
+  crashActiveWorker(): Promise<void>
   getWorkerCount(): number
   getLiveWorkerCount(): number
   getStatuses(): readonly AgentRuntimeSnapshot['status'][]
@@ -85,8 +85,41 @@ export const createBrowserAgentRuntimeHarness = (options: {
     runtime,
     crashActiveWorker() {
       const worker = workers.at(-1)
-      if (!worker) throw new Error('No module Worker is active')
-      worker.postMessage({ kind: 'crash' })
+      if (!worker) return Promise.reject(new Error('No module Worker is active'))
+      return new Promise<void>((resolve, reject) => {
+        let unsubscribe: (() => void) | undefined
+        let postSucceeded = false
+        let recoveringSeen = false
+        let settled = false
+        const cleanup = () => {
+          const active = unsubscribe
+          unsubscribe = undefined
+          try {
+            active?.()
+          } catch {}
+        }
+        const resolveIfRecovered = () => {
+          if (settled || !postSucceeded || !recoveringSeen) return
+          settled = true
+          cleanup()
+          resolve()
+        }
+        try {
+          unsubscribe = runtime.subscribe(snapshot => {
+            if (snapshot.status !== 'recovering') return
+            recoveringSeen = true
+            resolveIfRecovered()
+          })
+          worker.postMessage({ kind: 'crash' })
+          postSucceeded = true
+          resolveIfRecovered()
+        } catch (error) {
+          if (settled) return
+          settled = true
+          cleanup()
+          reject(error)
+        }
+      })
     },
     getWorkerCount: () => workers.length,
     getLiveWorkerCount: () => liveWorkerCount,

@@ -203,24 +203,57 @@ const dashboardE2EPostIntentGate =
     ? createDashboardE2EPostIntentGate()
     : null
 
-export const armDashboardAgentPostIntentGate = (): void => {
-  if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
-  dashboardE2EPostIntentGate.arm()
+const createDashboardE2EPostCommitGate = () => {
+  let gate:
+    | {
+        readonly reached: Promise<string>
+        readonly release: Promise<void>
+        markReached(callId: string): void
+        releaseGate(): void
+      }
+    | undefined
+  return Object.freeze({
+    arm() {
+      if (gate) throw new Error('Dashboard Agent post-commit gate is already armed')
+      let markReached: (callId: string) => void = () => {}
+      let releaseGate: () => void = () => {}
+      const reached = new Promise<string>(resolve => {
+        markReached = resolve
+      })
+      const release = new Promise<void>(resolve => {
+        releaseGate = resolve
+      })
+      gate = { reached, release, markReached, releaseGate }
+    },
+    waitUntilReached() {
+      if (!gate) throw new Error('Dashboard Agent post-commit gate is not armed')
+      return gate.reached
+    },
+    release() {
+      if (!gate) throw new Error('Dashboard Agent post-commit gate is not armed')
+      gate.releaseGate()
+    },
+    async holdAfterCommit(callId: string) {
+      const active = gate
+      if (!active) return
+      active.markReached(callId)
+      await active.release
+      if (gate === active) gate = undefined
+    },
+  })
 }
 
-export const waitForDashboardAgentPostIntent = (): Promise<string> => {
-  if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
-  return dashboardE2EPostIntentGate.waitUntilReached()
-}
-
-export const releaseDashboardAgentPostIntentGate = (): void => {
-  if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
-  dashboardE2EPostIntentGate.release()
-}
+const dashboardE2EPostCommitGate =
+  import.meta.env.VITE_E2E === '1' && dashboardAgentRuntimeFeatureFlags.runtime
+    ? createDashboardE2EPostCommitGate()
+    : null
 
 const dashboardHostPersistence = createDashboardHostPersistenceFacade(dashboardPersistence, {
   ...(dashboardE2EPostIntentGate
     ? { afterRecordIntent: intent => dashboardE2EPostIntentGate.holdAfterIntent(intent.callId) }
+    : {}),
+  ...(dashboardE2EPostCommitGate
+    ? { afterCommitBatch: result => dashboardE2EPostCommitGate.holdAfterCommit(result.receipt.callId) }
     : {}),
 })
 
@@ -420,29 +453,68 @@ export const composeDashboardAgentSessionHost = (
   })
 
 if (import.meta.env.VITE_E2E === '1') {
+  const e2eProbe = {
+    getEngineState: () => engine.lifecycleState,
+    getPersistenceState: () => dashboardPersistence.getSnapshot(),
+    getAgentWorkspaceState: () => dashboardAgentWorkspaceE2EProbe?.() ?? null,
+    getAgentTelemetryState: (query: DashboardAgentTelemetryQuery) =>
+      dashboardAgentTelemetryLedger
+        ? {
+            events: structuredClone(dashboardAgentTelemetryLedger.query(query)),
+            stats: structuredClone(dashboardAgentTelemetryLedger.stats()),
+          }
+        : null,
+    flushPersistence: () => dashboardPersistence.flush(),
+    ...(dashboardMaterialGcEnabled
+      ? {
+          getMaterialGcState: () => dashboardMaterialGcRuntime.getSnapshot(),
+          triggerMaterialGc: async () => {
+            dashboardMaterialGcRuntime.trigger('manual-save')
+            return dashboardMaterialGcRuntime.waitForIdle()
+          },
+        }
+      : {}),
+  }
+  Object.defineProperties(e2eProbe, {
+    armDashboardAgentPostIntentGate: {
+      value: () => {
+        if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
+        dashboardE2EPostIntentGate.arm()
+      },
+    },
+    waitForDashboardAgentPostIntent: {
+      value: () => {
+        if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
+        return dashboardE2EPostIntentGate.waitUntilReached()
+      },
+    },
+    releaseDashboardAgentPostIntentGate: {
+      value: () => {
+        if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
+        dashboardE2EPostIntentGate.release()
+      },
+    },
+    armDashboardAgentPostCommitGate: {
+      value: () => {
+        if (!dashboardE2EPostCommitGate) throw new Error('Dashboard Agent post-commit gate is E2E-only')
+        dashboardE2EPostCommitGate.arm()
+      },
+    },
+    waitForDashboardAgentPostCommit: {
+      value: () => {
+        if (!dashboardE2EPostCommitGate) throw new Error('Dashboard Agent post-commit gate is E2E-only')
+        return dashboardE2EPostCommitGate.waitUntilReached()
+      },
+    },
+    releaseDashboardAgentPostCommitGate: {
+      value: () => {
+        if (!dashboardE2EPostCommitGate) throw new Error('Dashboard Agent post-commit gate is E2E-only')
+        dashboardE2EPostCommitGate.release()
+      },
+    },
+  })
   Object.defineProperty(window, '__EASY_EDITOR_E2E__', {
     configurable: true,
-    value: Object.freeze({
-      getEngineState: () => engine.lifecycleState,
-      getPersistenceState: () => dashboardPersistence.getSnapshot(),
-      getAgentWorkspaceState: () => dashboardAgentWorkspaceE2EProbe?.() ?? null,
-      getAgentTelemetryState: (query: DashboardAgentTelemetryQuery) =>
-        dashboardAgentTelemetryLedger
-          ? {
-              events: structuredClone(dashboardAgentTelemetryLedger.query(query)),
-              stats: structuredClone(dashboardAgentTelemetryLedger.stats()),
-            }
-          : null,
-      flushPersistence: () => dashboardPersistence.flush(),
-      ...(dashboardMaterialGcEnabled
-        ? {
-            getMaterialGcState: () => dashboardMaterialGcRuntime.getSnapshot(),
-            triggerMaterialGc: async () => {
-              dashboardMaterialGcRuntime.trigger('manual-save')
-              return dashboardMaterialGcRuntime.waitForIdle()
-            },
-          }
-        : {}),
-    }),
+    value: Object.freeze(e2eProbe),
   })
 }

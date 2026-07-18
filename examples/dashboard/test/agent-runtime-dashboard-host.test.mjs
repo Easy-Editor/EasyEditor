@@ -478,6 +478,106 @@ test('Host persistence facade exposes only frozen required methods and gates the
   assert.doesNotMatch(runtimeSource, /new\s+Proxy\s*\(\s*dashboardPersistence/u)
 })
 
+test('Host persistence facade gates only successful commit results before they reach the Host', async () => {
+  const events = []
+  const commitFailure = new Error('commit failed')
+  const committedResult = Object.freeze({
+    status: 'committed',
+    receipt: Object.freeze({ callId: 'committed-call' }),
+  })
+  let markReached
+  let releaseGate
+  const reached = new Promise(resolvePromise => {
+    markReached = resolvePromise
+  })
+  const release = new Promise(resolvePromise => {
+    releaseGate = resolvePromise
+  })
+  const persistence = {
+    runAgentMutation(_callId, operation) {
+      return operation()
+    },
+    async readCompensationRun() {
+      return null
+    },
+    async readCompensationTargetClaim() {
+      return null
+    },
+    async commitCompensationRunState() {
+      return { committed: true }
+    },
+    async recoverDurableAgentReceipt() {
+      return { classification: 'missing' }
+    },
+    async runDurableAgentWrite(operation) {
+      return operation(
+        Object.freeze({
+          draft: Object.freeze({ draftGeneration: 3 }),
+          async recordIntent(intent) {
+            return intent
+          },
+          async readReceiptLineage() {
+            return { records: [] }
+          },
+          async readMutationProvenance() {
+            return { records: [] }
+          },
+          async commitBatch(batch) {
+            events.push(`commit:${batch.callId}:start`)
+            if (batch.callId === 'failed-call') {
+              events.push('commit:failed-call:failed')
+              throw commitFailure
+            }
+            events.push(`commit:${batch.callId}:succeeded`)
+            return committedResult
+          },
+        }),
+      )
+    },
+  }
+  const facade = createDashboardHostPersistenceFacade(persistence, {
+    afterCommitBatch: async result => {
+      events.push(`hook:${result.receipt.callId}:start`)
+      markReached(result)
+      await release
+      events.push(`hook:${result.receipt.callId}:released`)
+    },
+  })
+
+  let settled = false
+  const committed = facade
+    .runDurableAgentWrite(session => session.commitBatch({ callId: 'committed-call' }))
+    .then(result => {
+      events.push(`host:${result.receipt.callId}:result`)
+      return result
+    })
+    .finally(() => {
+      settled = true
+    })
+  assert.strictEqual(await reached, committedResult)
+  assert.equal(settled, false)
+  assert.deepEqual(events, [
+    'commit:committed-call:start',
+    'commit:committed-call:succeeded',
+    'hook:committed-call:start',
+  ])
+  releaseGate()
+  assert.strictEqual(await committed, committedResult)
+  assert.deepEqual(events, [
+    'commit:committed-call:start',
+    'commit:committed-call:succeeded',
+    'hook:committed-call:start',
+    'hook:committed-call:released',
+    'host:committed-call:result',
+  ])
+
+  await assert.rejects(
+    facade.runDurableAgentWrite(session => session.commitBatch({ callId: 'failed-call' })),
+    error => error === commitFailure,
+  )
+  assert.deepEqual(events.slice(-2), ['commit:failed-call:start', 'commit:failed-call:failed'])
+})
+
 test('Host gates and routes online artifact create/revise plus receipt recovery through the injected service', async t => {
   const calls = []
   const receipt = {

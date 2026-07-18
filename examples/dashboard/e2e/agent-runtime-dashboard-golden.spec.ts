@@ -835,7 +835,9 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         import('/src/editor/runtime.ts').then(runtime => {
           const rect = runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect()
           if (!rect) throw new Error('Golden online node has no rect before human move')
-          runtime.armDashboardAgentPostIntentGate()
+          const e2eProbe = window.__EASY_EDITOR_E2E__
+          if (!e2eProbe) throw new Error('Golden E2E probe is unavailable')
+          e2eProbe.armDashboardAgentPostIntentGate()
           return {
             rect,
             activityGeneration: runtime.getDashboardHumanActivityGeneration(),
@@ -847,9 +849,10 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
 
     await page.locator('#agent-workspace-response').fill('确认保留当前 KPI 布局')
     await raceWorkspace.getByRole('button', { name: '提交回答' }).click()
-    const gatedCallId = await page.evaluate(async () => {
-      const runtime = await import('/src/editor/runtime.ts')
-      return runtime.waitForDashboardAgentPostIntent()
+    const gatedCallId = await page.evaluate(() => {
+      const e2eProbe = window.__EASY_EDITOR_E2E__
+      if (!e2eProbe) throw new Error('Golden E2E probe is unavailable')
+      return e2eProbe.waitForDashboardAgentPostIntent()
     })
     expect(gatedCallId).toEqual(expect.any(String))
     const reached = await page.evaluate(async () => {
@@ -922,9 +925,10 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         ),
       ),
     ).toBe(false)
-    await page.evaluate(async () => {
-      const runtime = await import('/src/editor/runtime.ts')
-      runtime.releaseDashboardAgentPostIntentGate()
+    await page.evaluate(() => {
+      const e2eProbe = window.__EASY_EDITOR_E2E__
+      if (!e2eProbe) throw new Error('Golden E2E probe is unavailable')
+      e2eProbe.releaseDashboardAgentPostIntentGate()
     })
 
     initialTask = await waitForTask(page, tasks =>

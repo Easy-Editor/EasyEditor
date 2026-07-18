@@ -13,8 +13,12 @@ export const createDashboardHostPersistenceFacade = (persistence, options = {}) 
   const recoverDurableAgentReceipt = requireMethod(persistence, 'recoverDurableAgentReceipt')
   const runDurableAgentWrite = requireMethod(persistence, 'runDurableAgentWrite')
   const afterRecordIntent = options.afterRecordIntent
+  const afterCommitBatch = options.afterCommitBatch
   if (afterRecordIntent !== undefined && typeof afterRecordIntent !== 'function') {
     throw new TypeError('Dashboard Host persistence afterRecordIntent must be a function')
+  }
+  if (afterCommitBatch !== undefined && typeof afterCommitBatch !== 'function') {
+    throw new TypeError('Dashboard Host persistence afterCommitBatch must be a function')
   }
 
   return Object.freeze({
@@ -38,7 +42,11 @@ export const createDashboardHostPersistenceFacade = (persistence, options = {}) 
             },
             readReceiptLineage: request => session.readReceiptLineage(request),
             readMutationProvenance: request => session.readMutationProvenance(request),
-            commitBatch: batch => session.commitBatch(batch),
+            async commitBatch(batch) {
+              const committed = await session.commitBatch(batch)
+              await afterCommitBatch?.(committed)
+              return committed
+            },
           }),
         ),
       )

@@ -1,4 +1,8 @@
-import type { DashboardDurableAgentWriteSession, DashboardPersistenceRuntime } from '../../persistence-runtime.js'
+import type {
+  DashboardDurableAgentCommitResult,
+  DashboardDurableAgentWriteSession,
+  DashboardPersistenceRuntime,
+} from '../../persistence-runtime.js'
 import type { ReceiptIntentV1 } from '../persistence/receipt-ledger.mjs'
 import type { DashboardAgentHostPersistence } from './index.mjs'
 
@@ -14,6 +18,7 @@ export declare const createDashboardHostPersistenceFacade: (
   >,
   options?: Readonly<{
     afterRecordIntent?: (intent: ReceiptIntentV1) => void | PromiseLike<void>
+    afterCommitBatch?: (result: DashboardDurableAgentCommitResult) => void | PromiseLike<void>
   }>,
 ) => DashboardAgentHostPersistence &
   Readonly<{

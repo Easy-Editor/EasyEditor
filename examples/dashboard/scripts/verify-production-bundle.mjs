@@ -18,6 +18,10 @@ const forbiddenMarkers = Object.freeze([
   'armDashboardAgentPostIntentGate',
   'waitForDashboardAgentPostIntent',
   'releaseDashboardAgentPostIntentGate',
+  'createDashboardE2EPostCommitGate',
+  'armDashboardAgentPostCommitGate',
+  'waitForDashboardAgentPostCommit',
+  'releaseDashboardAgentPostCommitGate',
 ])
 
 const listFiles = async directory => {

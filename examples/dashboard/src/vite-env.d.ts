@@ -30,6 +30,12 @@ declare global {
       getMaterialGcState?: () => DashboardMaterialGcRuntimeSnapshotV1
       flushPersistence: () => Promise<void>
       triggerMaterialGc?: () => Promise<DashboardMaterialGcRuntimeSnapshotV1>
+      armDashboardAgentPostIntentGate: () => void
+      waitForDashboardAgentPostIntent: () => Promise<string>
+      releaseDashboardAgentPostIntentGate: () => void
+      armDashboardAgentPostCommitGate: () => void
+      waitForDashboardAgentPostCommit: () => Promise<string>
+      releaseDashboardAgentPostCommitGate: () => void
     }>
   }
 }

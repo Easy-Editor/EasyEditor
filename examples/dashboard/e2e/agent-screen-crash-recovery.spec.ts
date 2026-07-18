@@ -66,6 +66,8 @@ const startInterruptedApply = (
 ): Promise<CrashSetup> =>
   page.evaluate(async options => {
     const runtime = await import('/src/editor/runtime.ts')
+    const e2eProbe = window.__EASY_EDITOR_E2E__
+    if (!e2eProbe) throw new Error('Dashboard Agent E2E probe is unavailable')
     await runtime.dashboardPersistence.flush()
     await runtime.persistDashboardProject('manual-save')
     await runtime.dashboardPersistence.flush()
@@ -89,44 +91,16 @@ const startInterruptedApply = (
       invocationError: null as string | null,
     }
     Object.assign(window, { [options.stateKey]: state })
-
-    type DurableSession = Readonly<{
-      draft: unknown
-      recordIntent(intent: unknown): Promise<unknown>
-      readReceiptLineage(request: unknown): Promise<unknown>
-      readMutationProvenance(request: unknown): Promise<unknown>
-      commitBatch(batch: unknown): Promise<unknown>
-    }>
-    type DurablePersistence = {
-      runDurableAgentWrite<T>(operation: (session: DurableSession) => Promise<T>): Promise<T>
-    }
-    const persistence = runtime.dashboardPersistence as unknown as DurablePersistence
-    const originalRunDurableAgentWrite = persistence.runDurableAgentWrite.bind(persistence)
-    persistence.runDurableAgentWrite = operation =>
-      originalRunDurableAgentWrite(session => {
-        const interruptedSession: DurableSession = Object.freeze({
-          ...session,
-          recordIntent: async intent => {
-            const recorded = await session.recordIntent(intent)
-            state.intentRecorded = true
-            if (options.interruptAt === 'intent') await new Promise<never>(() => {})
-            return recorded
-          },
-          commitBatch: async batch => {
-            const committed = await session.commitBatch(batch)
-            state.commitCompleted = true
-            if (options.interruptAt === 'commit') await new Promise<never>(() => {})
-            return committed
-          },
-        })
-        return operation(interruptedSession)
-      })
+    if (options.interruptAt === 'intent') e2eProbe.armDashboardAgentPostIntentGate()
+    else e2eProbe.armDashboardAgentPostCommitGate()
 
     const host = runtime.composeDashboardAgentHost(authority)
     if (!host) throw new Error('Dashboard Agent Host is disabled in the browser gate')
     const observed = await host.observe({ schemaVersion: 1, ...authority, mode: 'full' })
     const beforeColor = document.root.getPropValue('backgroundColor')
     if (typeof beforeColor !== 'string') throw new Error('Dashboard root backgroundColor is unavailable')
+    const beforeSchema = document.exportRaw()
+    const beforeMutationVersion = document.mutationVersion
 
     const call = {
       schemaVersion: 1 as const,
@@ -160,12 +134,21 @@ const startInterruptedApply = (
       },
     )
 
+    const reachedCallId = await (options.interruptAt === 'intent'
+      ? e2eProbe.waitForDashboardAgentPostIntent()
+      : e2eProbe.waitForDashboardAgentPostCommit())
+    if (reachedCallId !== options.callId) {
+      throw new Error(`Dashboard Agent crash gate reached unexpected call ${reachedCallId}`)
+    }
+    if (options.interruptAt === 'intent') state.intentRecorded = true
+    else state.commitCompleted = true
+
     return {
       authority,
       call,
       beforeColor,
-      beforeSchema: document.exportRaw(),
-      beforeMutationVersion: document.mutationVersion,
+      beforeSchema,
+      beforeMutationVersion,
     }
   }, options)
 
@@ -298,6 +281,8 @@ test('real module Worker crash after the durable Host commit auto-recovers witho
     async ({ stateKey, targetColor }) => {
       const runtime = await import('/src/editor/runtime.ts')
       const { createBrowserAgentRuntimeHarness } = await import('/e2e/fixtures/agent-runtime-main.ts')
+      const e2eProbe = window.__EASY_EDITOR_E2E__
+      if (!e2eProbe) throw new Error('Dashboard Agent E2E probe is unavailable')
       await runtime.dashboardPersistence.flush()
       await runtime.persistDashboardProject('manual-save')
       await runtime.dashboardPersistence.flush()
@@ -322,38 +307,7 @@ test('real module Worker crash after the durable Host commit auto-recovers witho
         call: null as ScreenApplyCall | null,
       }
       Object.assign(window, { [stateKey]: state })
-
-      type DurableSession = Readonly<{
-        draft: unknown
-        recordIntent(intent: unknown): Promise<unknown>
-        readReceiptLineage(request: unknown): Promise<unknown>
-        readMutationProvenance(request: unknown): Promise<unknown>
-        commitBatch(batch: unknown): Promise<unknown>
-      }>
-      type DurablePersistence = {
-        runDurableAgentWrite<T>(operation: (session: DurableSession) => Promise<T>): Promise<T>
-      }
-      const persistence = runtime.dashboardPersistence as unknown as DurablePersistence
-      const originalRunDurableAgentWrite = persistence.runDurableAgentWrite.bind(persistence)
-      persistence.runDurableAgentWrite = async operation => {
-        const result = await originalRunDurableAgentWrite(session =>
-          operation(
-            Object.freeze({
-              ...session,
-              commitBatch: async batch => {
-                const committed = await session.commitBatch(batch)
-                state.commitCompleted = true
-                return committed
-              },
-            }),
-          ),
-        )
-        if (state.commitCompleted) {
-          state.hostAckBlocked = true
-          await new Promise<never>(() => {})
-        }
-        return result
-      }
+      e2eProbe.armDashboardAgentPostCommitGate()
 
       const host = runtime.composeDashboardAgentHost(authority)
       if (!host) throw new Error('Dashboard Agent Host is disabled in the Worker crash gate')
@@ -419,6 +373,12 @@ test('real module Worker crash after the durable Host commit auto-recovers witho
       await harness.runtime.ready()
       const task = await harness.runtime.submit({ text: 'Update the dashboard background' })
       if (task.taskId !== authority.taskId) throw new Error(`Unexpected Worker task id ${task.taskId}`)
+      const reachedCallId = await e2eProbe.waitForDashboardAgentPostCommit()
+      if (reachedCallId !== call.callId) {
+        throw new Error(`Dashboard Agent Worker crash gate reached unexpected call ${reachedCallId}`)
+      }
+      state.commitCompleted = true
+      state.hostAckBlocked = true
 
       return {
         authority,
@@ -443,11 +403,15 @@ test('real module Worker crash after the durable Host commit auto-recovers witho
     )
     .toBe(true)
 
-  await page.evaluate(stateKey => {
-    const state = (window as unknown as Record<string, { harness?: { crashActiveWorker(): void } } | undefined>)[
-      stateKey
-    ]
-    state?.harness?.crashActiveWorker()
+  await page.evaluate(async stateKey => {
+    const e2eProbe = window.__EASY_EDITOR_E2E__
+    if (!e2eProbe) throw new Error('Dashboard Agent E2E probe is unavailable')
+    const state = (
+      window as unknown as Record<string, { harness?: { crashActiveWorker(): Promise<void> } } | undefined>
+    )[stateKey]
+    if (!state?.harness) throw new Error('Dashboard Agent crash harness is unavailable')
+    await state.harness.crashActiveWorker()
+    e2eProbe.releaseDashboardAgentPostCommitGate()
   }, stateKey)
   await expect
     .poll(() =>

@@ -392,6 +392,10 @@ test('production Worker modules are isolated from testing/E2E imports and the bu
     'armDashboardAgentPostIntentGate',
     'waitForDashboardAgentPostIntent',
     'releaseDashboardAgentPostIntentGate',
+    'createDashboardE2EPostCommitGate',
+    'armDashboardAgentPostCommitGate',
+    'waitForDashboardAgentPostCommit',
+    'releaseDashboardAgentPostCommitGate',
   ]) {
     assert.match(verifierSource, new RegExp(marker, 'u'))
   }
