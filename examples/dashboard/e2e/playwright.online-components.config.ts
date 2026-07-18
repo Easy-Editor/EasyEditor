@@ -13,10 +13,24 @@ const appUrl = `http://127.0.0.1:${appPort}`
 const dashboardRoot = new URL('..', import.meta.url).pathname
 const dataRoot = join(tmpdir(), `easy-editor-online-e2e-${process.pid}-${randomUUID()}`)
 process.env.DASHBOARD_ONLINE_E2E_DATA_ROOT = dataRoot
+const goldenAuthConfig = {
+  ...LOCAL_MATERIAL_E2E_AUTH_CONFIG,
+  auth: {
+    ...LOCAL_MATERIAL_E2E_AUTH_CONFIG.auth,
+    sessions: LOCAL_MATERIAL_E2E_AUTH_CONFIG.auth.sessions.map(session => ({
+      ...session,
+      projectIds: [...session.projectIds, 'agent-runtime-golden-project'],
+    })),
+  },
+}
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['generated-material-host-online.spec.ts', 'generated-material-host-durable-lifecycle.spec.ts'],
+  testMatch: [
+    'generated-material-host-online.spec.ts',
+    'generated-material-host-durable-lifecycle.spec.ts',
+    'agent-runtime-dashboard-golden.spec.ts',
+  ],
   globalTeardown: './fixtures/online-components-global-teardown.ts',
   expect: { timeout: 15_000 },
   forbidOnly: true,
@@ -56,7 +70,7 @@ export default defineConfig({
     cwd: dashboardRoot,
     env: {
       EASY_EDITOR_DASHBOARD_DATA_DIR: dataRoot,
-      EASY_EDITOR_MATERIAL_PROMOTION_CONFIG_JSON: JSON.stringify(LOCAL_MATERIAL_E2E_AUTH_CONFIG),
+      EASY_EDITOR_MATERIAL_PROMOTION_CONFIG_JSON: JSON.stringify(goldenAuthConfig),
       EASY_EDITOR_MATERIAL_PROMOTION_ENABLED: '1',
       EASY_EDITOR_MATERIAL_GC_ENABLED: '1',
       VITE_DASHBOARD_AGENT_DATA: '1',
