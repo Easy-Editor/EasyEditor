@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { chromium } from '@playwright/test'
 import { createOnlineComponentActivationLifecycle } from '../src/runtime/online-components/activation-lifecycle.mjs'
+import { resolveDashboardOnlineComponentContext } from '../src/runtime/online-components/context-resolver.mjs'
 import { createOnlineComponentSandboxDocument } from '../src/runtime/online-components/sandbox-document.mjs'
 import {
   ONLINE_COMPONENT_PROTOCOL_VERSION,
@@ -29,26 +31,58 @@ const resources = Object.freeze({
   objectUrlCount: 0,
 })
 
+const DASHBOARD_PARENT_FRAME_CSP = "frame-src 'none'"
+
+const readDashboardParentFrameCsp = async () => {
+  const indexDocument = await readFile(new URL('../index.html', import.meta.url), 'utf8')
+  const match = indexDocument.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"\s*\/?>/i)
+  assert.ok(match, 'dashboard index must declare its parent frame CSP')
+  const metaIndex = match.index
+  const firstLinkOrScriptIndex = indexDocument.search(/<(?:link|script)\b/i)
+  assert.ok(metaIndex !== undefined && metaIndex >= 0)
+  assert.ok(firstLinkOrScriptIndex === -1 || metaIndex < firstLinkOrScriptIndex)
+  assert.equal(match[1], DASHBOARD_PARENT_FRAME_CSP)
+  return match[1]
+}
+
 const expectProtocolError = callback => {
   assert.throws(callback, error => error instanceof OnlineComponentProtocolError)
 }
 
 const runSandboxBatchInChromium = async (
   page,
-  { removeAfterMount = false, source, surfaceId, waitForFaultAfterApply = false },
+  {
+    disableNativeAnimationFrame = false,
+    removeAfterMount = false,
+    source,
+    surfaceId,
+    waitForEventType,
+    waitForFaultAfterApply = false,
+  },
 ) => {
   const browserIdentity = Object.freeze({
     nonce: `nonce-${surfaceId}-0123456789`,
     surfaceId,
     generation: 1,
   })
-  const sandboxDocument = createOnlineComponentSandboxDocument(browserIdentity)
+  const scriptOpening = `<script nonce="${browserIdentity.nonce}">`
+  const sandboxDocument = disableNativeAnimationFrame
+    ? createOnlineComponentSandboxDocument(browserIdentity).replace(
+        scriptOpening,
+        `${scriptOpening}
+          Object.defineProperty(globalThis, 'requestAnimationFrame', { value: undefined, configurable: true })
+          Object.defineProperty(globalThis, 'cancelAnimationFrame', { value: undefined, configurable: true })
+        </script>
+        ${scriptOpening}`,
+      )
+    : createOnlineComponentSandboxDocument(browserIdentity)
   return page.evaluate(
     async ({
       identity: currentIdentity,
       removeAfterMount: shouldRemoveAfterMount,
       sandboxDocument: currentDocument,
       source: currentSource,
+      waitForEventType: currentWaitForEventType,
       waitForFaultAfterApply: shouldWaitForFaultAfterApply,
     }) => {
       const frame = document.createElement('iframe')
@@ -110,8 +144,16 @@ const runSandboxBatchInChromium = async (
       if (shouldWaitForFaultAfterApply && messages.some(message => message.kind === 'online-component.batch-applied')) {
         await waitForMessage(message => message.kind === 'online-component.fault')
       }
+      if (currentWaitForEventType && messages.some(message => message.kind === 'online-component.batch-applied')) {
+        await waitForMessage(
+          message =>
+            message.kind === 'online-component.fault' ||
+            (message.kind === 'online-component.event' && message.event?.type === currentWaitForEventType),
+        )
+      }
       if (
         shouldRemoveAfterMount &&
+        !messages.some(message => message.kind === 'online-component.fault') &&
         messages.some(message => message.kind === 'online-component.batch-applied' && message.sequence === 1)
       ) {
         channel.port1.postMessage({
@@ -137,7 +179,352 @@ const runSandboxBatchInChromium = async (
       removeAfterMount,
       sandboxDocument,
       source,
+      waitForEventType,
       waitForFaultAfterApply,
+    },
+  )
+}
+
+const runHostileSandboxInChromium = async (page, payload) => {
+  const browserIdentity = Object.freeze({
+    nonce: 'nonce-hostile-boundary-0123456789',
+    surfaceId: 'hostile-boundary',
+    generation: 1,
+  })
+  const sandboxDocument = createOnlineComponentSandboxDocument(browserIdentity)
+  const source = `
+    const attempt = callback => {
+      try {
+        return { blocked: false, value: String(callback()) }
+      } catch (error) {
+        return { blocked: true, name: String(error?.name ?? 'Error') }
+      }
+    }
+    export default {
+      mount(root, context) {
+        root.textContent = 'hostile-mounted'
+        const results = {
+          opaqueOrigin: location.origin,
+          parentDom: attempt(() => parent.document.querySelector('#host-secret').textContent),
+          topDom: attempt(() => top.document.documentElement.outerHTML),
+          openerIsNull: opener === null,
+          parentAuthority: attempt(() => parent.__G008_HOST_AUTHORITY__.accessToken),
+          localStorage: attempt(() => localStorage.getItem('g008-host-token')),
+          sessionStorage: attempt(() => sessionStorage.getItem('g008-host-token')),
+          topNavigation: attempt(() => { top.location.href = 'https://attacker.invalid/g008-navigation'; return top.location.href }),
+          popupBlocked: open('https://attacker.invalid/g008-popup', '_blank') === null,
+          contextContainsAuthority: JSON.stringify({
+            props: context.props,
+            data: context.data,
+            theme: context.theme,
+            assets: context.assets,
+          }).includes('g008-secret'),
+          safeContextValue: context.props.public.safe,
+        }
+        const navigationLink = document.createElement('a')
+        navigationLink.href = 'https://attacker.invalid/g008-anchor-navigation'
+        navigationLink.target = '_top'
+        navigationLink.click()
+        const downloadLink = document.createElement('a')
+        downloadLink.href = 'data:text/plain,g008-download'
+        downloadLink.download = 'g008-hostile.txt'
+        downloadLink.click()
+        parent.postMessage({ kind: 'online-component.fault', nonce: 'forged-from-sandbox' }, '*')
+        fetch('https://attacker.invalid/g008-fetch')
+          .then(() => false, () => true)
+          .then(networkBlocked => context.emit('hostile-probe', { ...results, networkBlocked }))
+      },
+      update(root, context) {
+        root.textContent = 'hostile-updated'
+        context.emit('hostile-update', { usable: true })
+      },
+      destroy() {}
+    }
+  `
+
+  return page.evaluate(
+    async ({ currentDocument, currentIdentity, currentPayload, currentSource }) => {
+      document.body.replaceChildren()
+      const hostSecret = document.createElement('div')
+      hostSecret.id = 'host-secret'
+      hostSecret.textContent = 'host-usable'
+      hostSecret.style.color = 'rgb(1, 2, 3)'
+      hostSecret.style.backgroundColor = 'rgb(4, 5, 6)'
+      const hostButton = document.createElement('button')
+      hostButton.textContent = '0'
+      hostButton.addEventListener('click', () => {
+        hostButton.textContent = String(Number(hostButton.textContent) + 1)
+      })
+      document.body.append(hostSecret, hostButton)
+      window.__G008_HOST_AUTHORITY__ = { accessToken: 'g008-secret-host-access-token' }
+
+      const windowMessages = []
+      const onWindowMessage = event => windowMessages.push(event.data)
+      window.addEventListener('message', onWindowMessage)
+
+      const frame = document.createElement('iframe')
+      frame.setAttribute('sandbox', 'allow-scripts')
+      frame.srcdoc = currentDocument
+      const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }))
+      document.body.append(frame)
+      await loaded
+
+      const forgedChannel = new MessageChannel()
+      const forgedReplies = []
+      forgedChannel.port1.onmessage = event => forgedReplies.push(event.data)
+      forgedChannel.port1.start()
+      frame.contentWindow?.postMessage(
+        {
+          kind: 'online-component.connect',
+          protocolVersion: 1,
+          ...currentIdentity,
+          nonce: 'nonce-forged-0123456789',
+        },
+        '*',
+        [forgedChannel.port2],
+      )
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      const channel = new MessageChannel()
+      const messages = []
+      channel.port1.onmessage = event => messages.push(event.data)
+      channel.port1.start()
+      frame.contentWindow?.postMessage(
+        {
+          kind: 'online-component.connect',
+          protocolVersion: 1,
+          ...currentIdentity,
+        },
+        '*',
+        [channel.port2],
+      )
+
+      const waitForMessage = async predicate => {
+        const timeoutAt = performance.now() + 5_000
+        while (!messages.some(predicate)) {
+          if (performance.now() >= timeoutAt) throw new Error('hostile sandbox browser regression timed out')
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      }
+      await waitForMessage(message => message.kind === 'online-component.ready')
+
+      const createBatch = sequence => ({
+        kind: 'online-component.render-batch',
+        protocolVersion: 1,
+        ...currentIdentity,
+        sequence,
+        updates: [
+          {
+            instanceId: 'node-hostile',
+            revisionKey: 'artifact-hostile@revision-1',
+            rect: { x: 0, y: 0, width: 100, height: 100 },
+            visible: true,
+            generatedZ: 1,
+            payload: {
+              artifact: {
+                source: currentSource,
+                css:
+                  '@import url("https://attacker.invalid/g008-css-import");' +
+                  ':root,html,body,#host-secret{color:rgb(255,0,0)!important;background:rgb(255,0,0)!important}',
+                dependencies: [],
+              },
+              ...currentPayload,
+              size: { width: 100, height: 100 },
+            },
+          },
+        ],
+        removals: [],
+      })
+
+      channel.port1.postMessage({
+        ...createBatch(99),
+        nonce: 'nonce-forged-0123456789',
+      })
+      await new Promise(resolve => setTimeout(resolve, 50))
+      channel.port1.postMessage(createBatch(1))
+      await waitForMessage(message => message.kind === 'online-component.batch-applied' && message.sequence === 1)
+      await waitForMessage(
+        message => message.kind === 'online-component.event' && message.event?.type === 'hostile-probe',
+      )
+
+      channel.port1.postMessage(createBatch(2))
+      await waitForMessage(message => message.kind === 'online-component.batch-applied' && message.sequence === 2)
+      await waitForMessage(
+        message => message.kind === 'online-component.event' && message.event?.type === 'hostile-update',
+      )
+      hostButton.click()
+
+      const result = {
+        acceptedSequences: messages
+          .filter(message => message.kind === 'online-component.batch-applied')
+          .map(message => message.sequence),
+        faultCodes: messages.filter(message => message.kind === 'online-component.fault').map(message => message.code),
+        forgedReplies,
+        hostileProbe: messages.find(
+          message => message.kind === 'online-component.event' && message.event?.type === 'hostile-probe',
+        )?.event.payload,
+        hostileUpdate: messages.find(
+          message => message.kind === 'online-component.event' && message.event?.type === 'hostile-update',
+        )?.event.payload,
+        forgedWindowMessageSeen: windowMessages.some(message => message?.nonce === 'forged-from-sandbox'),
+        hostButtonText: hostButton.textContent,
+        hostSecretText: hostSecret.textContent,
+        hostSecretColor: getComputedStyle(hostSecret).color,
+        hostSecretBackground: getComputedStyle(hostSecret).backgroundColor,
+      }
+
+      channel.port1.close()
+      forgedChannel.port1.close()
+      frame.remove()
+      window.removeEventListener('message', onWindowMessage)
+      window.__G008_HOST_AUTHORITY__ = undefined
+      return result
+    },
+    {
+      currentDocument: sandboxDocument,
+      currentIdentity: browserIdentity,
+      currentPayload: payload,
+      currentSource: source,
+    },
+  )
+}
+
+const runSelfNavigationVectorInChromium = async (page, { attackUrl, navigationBody, surfaceId }) => {
+  const browserIdentity = Object.freeze({
+    nonce: `nonce-${surfaceId}-0123456789`,
+    surfaceId,
+    generation: 1,
+  })
+  const sandboxDocument = createOnlineComponentSandboxDocument(browserIdentity)
+  const source = `
+    export default {
+      mount(root, context) {
+        root.textContent = 'navigation-mounted'
+        context.emit('navigation-mounted', { vector: '${surfaceId}' })
+        ${navigationBody}
+      },
+      update() {},
+      destroy() {}
+    }
+  `
+
+  return page.evaluate(
+    async ({ currentAttackUrl, currentDocument, currentIdentity, currentSource }) => {
+      document.body.replaceChildren()
+      const hostMarker = document.createElement('div')
+      hostMarker.id = 'navigation-host-marker'
+      hostMarker.textContent = 'host-usable'
+      const hostButton = document.createElement('button')
+      hostButton.textContent = '0'
+      hostButton.addEventListener('click', () => {
+        hostButton.textContent = String(Number(hostButton.textContent) + 1)
+      })
+      document.body.append(hostMarker, hostButton)
+
+      const violations = []
+      const onViolation = event => {
+        violations.push({
+          blockedURI: event.blockedURI,
+          effectiveDirective: event.effectiveDirective,
+        })
+      }
+      window.addEventListener('securitypolicyviolation', onViolation)
+
+      const frame = document.createElement('iframe')
+      frame.setAttribute('sandbox', 'allow-scripts')
+      frame.srcdoc = currentDocument
+      const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }))
+      document.body.append(frame)
+      await loaded
+
+      const channel = new MessageChannel()
+      const messages = []
+      channel.port1.onmessage = event => messages.push(event.data)
+      channel.port1.start()
+      frame.contentWindow?.postMessage(
+        {
+          kind: 'online-component.connect',
+          protocolVersion: 1,
+          ...currentIdentity,
+        },
+        '*',
+        [channel.port2],
+      )
+
+      const waitFor = async (predicate, label) => {
+        const timeoutAt = performance.now() + 5_000
+        while (!predicate()) {
+          if (performance.now() >= timeoutAt) throw new Error(`navigation containment timed out: ${label}`)
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      }
+      await waitFor(() => messages.some(message => message.kind === 'online-component.ready'), 'sandbox ready')
+
+      channel.port1.postMessage({
+        kind: 'online-component.render-batch',
+        protocolVersion: 1,
+        ...currentIdentity,
+        sequence: 1,
+        updates: [
+          {
+            instanceId: 'node-navigation',
+            revisionKey: `artifact-${currentIdentity.surfaceId}@revision-1`,
+            rect: { x: 0, y: 0, width: 100, height: 100 },
+            visible: true,
+            generatedZ: 1,
+            payload: {
+              artifact: { source: currentSource, css: '', dependencies: [] },
+              props: {},
+              data: null,
+              theme: {},
+              size: { width: 100, height: 100 },
+              assets: [],
+            },
+          },
+        ],
+        removals: [],
+      })
+      await waitFor(
+        () =>
+          messages.some(
+            message => message.kind === 'online-component.event' && message.event?.type === 'navigation-mounted',
+          ),
+        'artifact mount',
+      )
+      await waitFor(
+        () =>
+          violations.some(
+            violation =>
+              violation.effectiveDirective === 'frame-src' &&
+              violation.blockedURI.startsWith(new URL(currentAttackUrl).origin),
+          ),
+        'parent frame-src violation',
+      )
+      await new Promise(resolve => setTimeout(resolve, 100))
+      hostButton.click()
+
+      const result = {
+        ready: messages.some(message => message.kind === 'online-component.ready'),
+        mounted: messages.some(
+          message => message.kind === 'online-component.event' && message.event?.type === 'navigation-mounted',
+        ),
+        hostButtonText: hostButton.textContent,
+        hostMarkerText: hostMarker.textContent,
+        iframeCount: document.querySelectorAll('iframe').length,
+        parentUrl: location.href,
+        violations,
+      }
+
+      channel.port1.close()
+      frame.remove()
+      window.removeEventListener('securitypolicyviolation', onViolation)
+      return result
+    },
+    {
+      currentAttackUrl: attackUrl,
+      currentDocument: sandboxDocument,
+      currentIdentity: browserIdentity,
+      currentSource: source,
     },
   )
 }
@@ -304,6 +691,11 @@ test('sandbox document freezes the opaque-origin no-network boundary and per-ins
   assert.match(document, /componentResourceSnapshot/)
   assert.match(document, /assertOwnedResourcesReleased/)
   assert.match(document, /pendingTaskCount/)
+  assert.match(document, /const stopEventBudgetEpoch/)
+  assert.match(document, /eventBudgetEpochCancel = nativeCancelAnimationFrame/)
+  assert.match(document, /eventBudgetEpochCancel = nativeClearTimeout/)
+  assert.match(document, /advanceEpoch, 16/)
+  assert.match(document, /if \(readMapSize\(instances\) === 0\) stopEventBudgetEpoch\(\)/)
   assert.match(document, /captureRealm/)
   assert.match(document, /global-pollution/)
   assert.match(document, /const sameValue = Object\.is/)
@@ -316,6 +708,145 @@ test('sandbox document freezes the opaque-origin no-network boundary and per-ins
   assert.doesNotMatch(document, /unsafe-eval/)
   assert.doesNotMatch(document, /allow-same-origin/)
   assert.doesNotMatch(document, /window\.parent\.document/)
+})
+
+test('Chromium opaque sandbox contains hostile DOM, authority, storage, network, navigation, message, and CSS probes', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+  const startUrl = page.url()
+  const externalRequests = []
+  const popups = []
+  const downloads = []
+  page.on('request', request => {
+    if (request.url().includes('attacker.invalid')) externalRequests.push(request.url())
+  })
+  page.on('popup', popup => {
+    popups.push(popup.url())
+    void popup.close()
+  })
+  page.on('download', download => downloads.push(download.suggestedFilename()))
+
+  const context = resolveDashboardOnlineComponentContext({
+    public: {
+      safe: 'retained',
+      nested: { accessToken: 'g008-secret-prop-access-token' },
+    },
+    data: { nested: { authorization: 'g008-secret-data-authorization' } },
+    theme: { nested: { refreshToken: 'g008-secret-theme-refresh-token' } },
+    assets: [{ nested: { credentialRef: 'g008-secret-asset-credential' } }],
+  })
+  const result = await runHostileSandboxInChromium(page, context)
+  await page.waitForTimeout(100)
+
+  assert.deepEqual(result.acceptedSequences, [1, 2])
+  assert.deepEqual(result.faultCodes, [])
+  assert.deepEqual(result.forgedReplies, [])
+  assert.equal(result.forgedWindowMessageSeen, true)
+  assert.deepEqual(result.hostileProbe, {
+    opaqueOrigin: 'null',
+    parentDom: { blocked: true, name: 'SecurityError' },
+    topDom: { blocked: true, name: 'SecurityError' },
+    openerIsNull: true,
+    parentAuthority: { blocked: true, name: 'SecurityError' },
+    localStorage: { blocked: true, name: 'SecurityError' },
+    sessionStorage: { blocked: true, name: 'SecurityError' },
+    topNavigation: { blocked: true, name: 'SecurityError' },
+    popupBlocked: true,
+    contextContainsAuthority: false,
+    safeContextValue: 'retained',
+    networkBlocked: true,
+  })
+  assert.deepEqual(result.hostileUpdate, { usable: true })
+  assert.equal(result.hostButtonText, '1')
+  assert.equal(result.hostSecretText, 'host-usable')
+  assert.equal(result.hostSecretColor, 'rgb(1, 2, 3)')
+  assert.equal(result.hostSecretBackground, 'rgb(4, 5, 6)')
+  assert.equal(page.url(), startUrl)
+  assert.deepEqual(externalRequests, [])
+  assert.deepEqual(popups, [])
+  assert.deepEqual(downloads, [])
+})
+
+test('Dashboard parent CSP contains every generated sandbox self-navigation vector without a request', async t => {
+  const parentFrameCsp = await readDashboardParentFrameCsp()
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+  const externalRequests = []
+  page.on('request', request => {
+    if (request.url().includes('attacker.invalid')) externalRequests.push(request.url())
+  })
+  await page.setContent(`<!doctype html>
+    <html>
+      <head>
+        <meta http-equiv="Content-Security-Policy" content="${parentFrameCsp}" />
+      </head>
+      <body></body>
+    </html>`)
+  assert.equal(
+    await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content'),
+    DASHBOARD_PARENT_FRAME_CSP,
+  )
+  const parentUrl = page.url()
+
+  const vectors = [
+    {
+      surfaceId: 'navigation-href',
+      attackUrl: 'https://attacker.invalid/g008-navigation-href',
+      navigationBody: `location.href = 'https://attacker.invalid/g008-navigation-href'`,
+    },
+    {
+      surfaceId: 'navigation-assign',
+      attackUrl: 'https://attacker.invalid/g008-navigation-assign',
+      navigationBody: `location.assign('https://attacker.invalid/g008-navigation-assign')`,
+    },
+    {
+      surfaceId: 'navigation-replace',
+      attackUrl: 'https://attacker.invalid/g008-navigation-replace',
+      navigationBody: `location.replace('https://attacker.invalid/g008-navigation-replace')`,
+    },
+    {
+      surfaceId: 'navigation-anchor-self',
+      attackUrl: 'https://attacker.invalid/g008-navigation-anchor-self',
+      navigationBody: `
+        const link = document.createElement('a')
+        link.href = 'https://attacker.invalid/g008-navigation-anchor-self'
+        link.target = '_self'
+        document.body.append(link)
+        link.click()
+      `,
+    },
+    {
+      surfaceId: 'navigation-open-self',
+      attackUrl: 'https://attacker.invalid/g008-navigation-open-self',
+      navigationBody: `open('https://attacker.invalid/g008-navigation-open-self', '_self')`,
+    },
+  ]
+
+  for (const vector of vectors) {
+    const requestCountBeforeVector = externalRequests.length
+    const result = await runSelfNavigationVectorInChromium(page, vector)
+
+    assert.equal(result.ready, true, `${vector.surfaceId} must preserve initial srcdoc readiness`)
+    assert.equal(result.mounted, true, `${vector.surfaceId} must mount through the artifact protocol`)
+    assert.equal(result.iframeCount, 1, `${vector.surfaceId} must use exactly one child frame`)
+    assert.equal(result.hostMarkerText, 'host-usable')
+    assert.equal(result.hostButtonText, '1')
+    assert.equal(result.parentUrl, parentUrl)
+    assert.ok(
+      result.violations.some(
+        violation =>
+          violation.effectiveDirective === 'frame-src' &&
+          violation.blockedURI.startsWith(new URL(vector.attackUrl).origin),
+      ),
+      `${vector.surfaceId} must report the parent frame-src violation`,
+    )
+    assert.deepEqual(externalRequests.slice(requestCountBeforeVector), [])
+  }
+
+  assert.deepEqual(externalRequests, [])
+  assert.equal(page.url(), parentUrl)
 })
 
 test('Chromium bounded realm checks accept clean code and fault mutations across reachable intrinsic families', async t => {
@@ -461,6 +992,245 @@ test('Chromium fault reporting survives polluted error intrinsics and guards obj
       },
     )
   }
+})
+
+test('Chromium event budget recovers across animation frames and releases resources on destroy', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  const messages = await runSandboxBatchInChromium(page, {
+    removeAfterMount: true,
+    surfaceId: 'event-budget-frames',
+    waitForEventType: 'event-budget-complete',
+    source: `
+      let frame
+      export default {
+        mount(root, context) {
+          let emitted = 0
+          const emitFrame = () => {
+            for (let index = 0; index < 300; index += 1) {
+              context.emit('event-budget-tick', { index: emitted })
+              emitted += 1
+            }
+            if (emitted < 1_200) {
+              frame = requestAnimationFrame(emitFrame)
+              return
+            }
+            context.emit('event-budget-complete', { emitted })
+          }
+          frame = requestAnimationFrame(emitFrame)
+        },
+        update() {},
+        destroy() {
+          if (frame !== undefined) cancelAnimationFrame(frame)
+        }
+      }
+    `,
+  })
+
+  assert.deepEqual(
+    messages.filter(message => message.kind === 'online-component.fault'),
+    [],
+  )
+  assert.equal(
+    messages.filter(message => message.kind === 'online-component.event' && message.event.type === 'event-budget-tick')
+      .length,
+    1_200,
+  )
+  assert.deepEqual(
+    messages.find(
+      message => message.kind === 'online-component.event' && message.event.type === 'event-budget-complete',
+    )?.event.payload,
+    { emitted: 1_200 },
+  )
+  assert.deepEqual(
+    messages.filter(message => message.kind === 'online-component.batch-applied').map(message => message.resources),
+    [
+      { instanceCount: 1, listenerCount: 1, pendingTaskCount: 1, objectUrlCount: 0 },
+      { instanceCount: 0, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+    ],
+  )
+})
+
+test('Chromium event budget resets before schedule-first animation callbacks', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  const messages = await runSandboxBatchInChromium(page, {
+    removeAfterMount: true,
+    surfaceId: 'event-budget-schedule-first',
+    waitForEventType: 'event-budget-complete',
+    source: `
+      let frame
+      export default {
+        mount(root, context) {
+          let emitted = 0
+          const emitFrame = () => {
+            if (emitted >= 1_200) return
+            frame = requestAnimationFrame(emitFrame)
+            const target = emitted + 600
+            while (emitted < target) {
+              context.emit('event-budget-tick', { index: emitted })
+              emitted += 1
+            }
+            if (emitted === 1_200) context.emit('event-budget-complete', { emitted })
+          }
+          frame = requestAnimationFrame(emitFrame)
+        },
+        update() {},
+        destroy() {
+          if (frame !== undefined) cancelAnimationFrame(frame)
+        }
+      }
+    `,
+  })
+
+  assert.deepEqual(
+    messages.filter(message => message.kind === 'online-component.fault'),
+    [],
+  )
+  assert.equal(
+    messages.filter(message => message.kind === 'online-component.event' && message.event.type === 'event-budget-tick')
+      .length,
+    1_200,
+  )
+  assert.deepEqual(
+    messages.find(
+      message => message.kind === 'online-component.event' && message.event.type === 'event-budget-complete',
+    )?.event.payload,
+    { emitted: 1_200 },
+  )
+  assert.deepEqual(
+    messages.filter(message => message.kind === 'online-component.batch-applied').map(message => message.resources),
+    [
+      { instanceCount: 1, listenerCount: 1, pendingTaskCount: 1, objectUrlCount: 0 },
+      { instanceCount: 0, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+    ],
+  )
+})
+
+test('Chromium event budget uses a leak-free trusted timer epoch without animation-frame APIs', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  const messages = await runSandboxBatchInChromium(page, {
+    disableNativeAnimationFrame: true,
+    removeAfterMount: true,
+    surfaceId: 'event-budget-timer-fallback',
+    waitForEventType: 'event-budget-complete',
+    source: `
+      let timer
+      export default {
+        mount(root, context) {
+          let emitted = 0
+          const emit = count => {
+            const target = emitted + count
+            while (emitted < target) {
+              context.emit('event-budget-tick', { index: emitted })
+              emitted += 1
+            }
+          }
+          timer = setTimeout(() => {
+            emit(600)
+            timer = setTimeout(() => {
+              emit(600)
+              context.emit('event-budget-complete', { emitted })
+            }, 40)
+          }, 20)
+        },
+        update() {},
+        destroy() {
+          if (timer !== undefined) clearTimeout(timer)
+        }
+      }
+    `,
+  })
+
+  assert.deepEqual(
+    messages.filter(message => message.kind === 'online-component.fault'),
+    [],
+  )
+  assert.equal(
+    messages.filter(message => message.kind === 'online-component.event' && message.event.type === 'event-budget-tick')
+      .length,
+    1_200,
+  )
+  assert.deepEqual(
+    messages.find(
+      message => message.kind === 'online-component.event' && message.event.type === 'event-budget-complete',
+    )?.event.payload,
+    { emitted: 1_200 },
+  )
+  assert.deepEqual(
+    messages.filter(message => message.kind === 'online-component.batch-applied').map(message => message.resources),
+    [
+      { instanceCount: 1, listenerCount: 1, pendingTaskCount: 1, objectUrlCount: 0 },
+      { instanceCount: 0, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+    ],
+  )
+})
+
+test('Chromium event budget faults a same-frame storm and starts clean in a replacement sandbox', async t => {
+  const browser = await chromium.launch({ headless: true })
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+
+  const stormMessages = await runSandboxBatchInChromium(page, {
+    surfaceId: 'event-budget-storm',
+    source: `export default {
+      mount(root, context) {
+        for (let index = 0; index < 1_025; index += 1) context.emit('storm-tick', { index })
+      },
+      update() {},
+      destroy() {}
+    }`,
+  })
+  assert.equal(
+    stormMessages.filter(message => message.kind === 'online-component.event' && message.event.type === 'storm-tick')
+      .length,
+    1_024,
+  )
+  assert.deepEqual(
+    stormMessages.find(message => message.kind === 'online-component.fault'),
+    {
+      kind: 'online-component.fault',
+      protocolVersion: ONLINE_COMPONENT_PROTOCOL_VERSION,
+      nonce: 'nonce-event-budget-storm-0123456789',
+      surfaceId: 'event-budget-storm',
+      generation: 1,
+      code: 'message-storm',
+      instanceId: 'node-1',
+      resources: { instanceCount: 1, listenerCount: 1, pendingTaskCount: 1, objectUrlCount: 0 },
+    },
+  )
+
+  const restartedMessages = await runSandboxBatchInChromium(page, {
+    removeAfterMount: true,
+    surfaceId: 'event-budget-restarted',
+    waitForEventType: 'restart-ok',
+    source: `export default {
+      mount(root, context) { context.emit('restart-ok', { accepted: true }) },
+      update() {},
+      destroy() {}
+    }`,
+  })
+  assert.equal(
+    restartedMessages.some(message => message.kind === 'online-component.fault'),
+    false,
+  )
+  assert.deepEqual(
+    restartedMessages.find(message => message.kind === 'online-component.event' && message.event.type === 'restart-ok')
+      ?.event.payload,
+    { accepted: true },
+  )
+  assert.deepEqual(
+    restartedMessages.find(message => message.kind === 'online-component.batch-applied' && message.sequence === 2)
+      ?.resources,
+    { instanceCount: 0, listenerCount: 1, pendingTaskCount: 0, objectUrlCount: 0 },
+  )
 })
 
 test('Chromium resource ledger allows owned mounted resources, cleans destroy, and faults explicit leaks', async t => {

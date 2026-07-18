@@ -22,14 +22,25 @@ test('production server serves static assets and falls back to the SPA document'
   assert.ok(address && typeof address === 'object')
   const origin = `http://127.0.0.1:${address.port}`
 
-  const asset = await fetch(`${origin}/app.js`)
-  assert.equal(asset.status, 200)
-  assert.match(asset.headers.get('content-type'), /text\/javascript/)
-  assert.equal(await asset.text(), 'console.log("asset")')
+  for (const method of ['GET', 'HEAD']) {
+    const asset = await fetch(`${origin}/app.js`, { method })
+    assert.equal(asset.status, 200)
+    assert.match(asset.headers.get('content-type'), /text\/javascript/)
+    assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable')
+    assert.equal(asset.headers.get('content-security-policy'), null)
+    assert.equal(await asset.text(), method === 'GET' ? 'console.log("asset")' : '')
+  }
 
-  const spa = await fetch(`${origin}/editor/project/page`)
-  assert.equal(spa.status, 200)
-  assert.match(await spa.text(), /dashboard shell/)
+  for (const pathname of ['/', '/editor/project/page', '/index.html']) {
+    for (const method of ['GET', 'HEAD']) {
+      const document = await fetch(`${origin}${pathname}`, { method })
+      assert.equal(document.status, 200)
+      assert.match(document.headers.get('content-type'), /text\/html/)
+      assert.equal(document.headers.get('cache-control'), 'no-store')
+      assert.equal(document.headers.get('content-security-policy'), "frame-src 'none'")
+      assert.equal(await document.text(), method === 'GET' ? '<!doctype html><main>dashboard shell</main>' : '')
+    }
+  }
 
   const missingAsset = await fetch(`${origin}/missing.js`)
   assert.equal(missingAsset.status, 404)

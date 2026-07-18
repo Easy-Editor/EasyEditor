@@ -16,8 +16,18 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308])
 const REQUEST_KEYS = new Set(['package', 'range'])
 const METADATA_KEYS = new Set(['exactVersion', 'bundleUrl', 'format', 'installScripts', 'integrity'])
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,63}\/)?[a-z0-9][a-z0-9._-]{0,127}$/
+const NUMERIC_IDENTIFIER = '(?:0|[1-9]\\d*)'
+const PRERELEASE_IDENTIFIER = `(?:${NUMERIC_IDENTIFIER}|\\d*[A-Za-z-][0-9A-Za-z-]*)`
+const BUILD_IDENTIFIER = '[0-9A-Za-z-]+'
 const VERSION_SOURCE =
-  '(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?'
+  `${NUMERIC_IDENTIFIER}\\.${NUMERIC_IDENTIFIER}\\.${NUMERIC_IDENTIFIER}` +
+  `(?:-${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*)?` +
+  `(?:\\+${BUILD_IDENTIFIER}(?:\\.${BUILD_IDENTIFIER})*)?`
+const VERSION_PATTERN = new RegExp(
+  `^(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})` +
+    `(?:-(${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*))?` +
+    `(?:\\+${BUILD_IDENTIFIER}(?:\\.${BUILD_IDENTIFIER})*)?$`,
+)
 const EXACT_VERSION = new RegExp(`^${VERSION_SOURCE}$`)
 const SIMPLE_RANGE = new RegExp(`^[~^]?${VERSION_SOURCE}$`)
 const COMPARATOR = new RegExp(`^(?:>=|<=|>|<|=)?${VERSION_SOURCE}$`)
@@ -58,20 +68,40 @@ const isValidRange = value => {
   return tokens.length >= 2 && tokens.length <= 4 && tokens.every(token => token && COMPARATOR.test(token))
 }
 
+const compareNumericIdentifiers = (left, right) => {
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+const incrementNumericIdentifier = value => {
+  const digits = [...value]
+  for (let index = digits.length - 1; index >= 0; index -= 1) {
+    if (digits[index] === '9') {
+      digits[index] = '0'
+      continue
+    }
+    digits[index] = String(Number(digits[index]) + 1)
+    return digits.join('')
+  }
+  return `1${digits.join('')}`
+}
+
 const parseVersion = value => {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value)
+  const match = VERSION_PATTERN.exec(value)
   if (!match) return null
   return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
+    major: match[1],
+    minor: match[2],
+    patch: match[3],
     prerelease: match[4]?.split('.') ?? [],
   }
 }
 
 const compareVersions = (left, right) => {
   for (const key of ['major', 'minor', 'patch']) {
-    if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1
+    const comparison = compareNumericIdentifiers(left[key], right[key])
+    if (comparison !== 0) return comparison
   }
   if (left.prerelease.length === 0 || right.prerelease.length === 0) {
     return left.prerelease.length === right.prerelease.length ? 0 : left.prerelease.length === 0 ? 1 : -1
@@ -84,7 +114,7 @@ const compareVersions = (left, right) => {
     if (leftPart === rightPart) continue
     const leftNumeric = /^\d+$/.test(leftPart)
     const rightNumeric = /^\d+$/.test(rightPart)
-    if (leftNumeric && rightNumeric) return Number(leftPart) < Number(rightPart) ? -1 : 1
+    if (leftNumeric && rightNumeric) return compareNumericIdentifiers(leftPart, rightPart)
     if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1
     return leftPart < rightPart ? -1 : 1
   }
@@ -103,24 +133,44 @@ const satisfiesComparator = (version, comparator) => {
   return comparison === 0
 }
 
+const comparatorVersion = comparator => parseVersion(comparator.replace(/^(?:>=|<=|>|<|=)/, ''))
+
+const admitsPrerelease = (version, range) => {
+  if (version.prerelease.length === 0) return true
+  const comparators = X_RANGE.test(range)
+    ? []
+    : range.startsWith('^') || range.startsWith('~')
+      ? [range.slice(1)]
+      : range.split(' ')
+  return comparators.some(comparator => {
+    const required = comparatorVersion(comparator)
+    return (
+      required?.prerelease.length > 0 &&
+      required.major === version.major &&
+      required.minor === version.minor &&
+      required.patch === version.patch
+    )
+  })
+}
+
 const satisfiesRange = (exactVersion, range) => {
   const version = parseVersion(exactVersion)
-  if (!version) return false
+  if (!version || !admitsPrerelease(version, range)) return false
   if (X_RANGE.test(range)) {
     const [major, minor] = range.split('.')
-    return version.major === Number(major) && version.minor === Number(minor)
+    return version.major === major && version.minor === minor
   }
   if (range.startsWith('^') || range.startsWith('~')) {
     const required = parseVersion(range.slice(1))
     if (!required || compareVersions(version, required) < 0) return false
     const upper =
       range[0] === '~'
-        ? { major: required.major, minor: required.minor + 1, patch: 0, prerelease: [] }
-        : required.major > 0
-          ? { major: required.major + 1, minor: 0, patch: 0, prerelease: [] }
-          : required.minor > 0
-            ? { major: 0, minor: required.minor + 1, patch: 0, prerelease: [] }
-            : { major: 0, minor: 0, patch: required.patch + 1, prerelease: [] }
+        ? { major: required.major, minor: incrementNumericIdentifier(required.minor), patch: '0', prerelease: [] }
+        : required.major !== '0'
+          ? { major: incrementNumericIdentifier(required.major), minor: '0', patch: '0', prerelease: [] }
+          : required.minor !== '0'
+            ? { major: '0', minor: incrementNumericIdentifier(required.minor), patch: '0', prerelease: [] }
+            : { major: '0', minor: '0', patch: incrementNumericIdentifier(required.patch), prerelease: [] }
     return compareVersions(version, upper) < 0
   }
   if (SIMPLE_RANGE.test(range)) return satisfiesComparator(version, range)

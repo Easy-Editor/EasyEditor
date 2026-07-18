@@ -20,7 +20,7 @@ const INTERNAL_PROP_KEYS = new Set([
   '__id',
   '__schema',
 ])
-const ROOT_HOST_AUTHORITY_KEYS = new Set([
+const HOST_AUTHORITY_KEYS = new Set([
   'accesstoken',
   'authorization',
   'credentialref',
@@ -33,7 +33,7 @@ const ROOT_HOST_AUTHORITY_KEYS = new Set([
 const UNSAFE_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 const textEncoder = new TextEncoder()
 
-const isRootHostAuthorityKey = key => ROOT_HOST_AUTHORITY_KEYS.has(key.toLowerCase().replaceAll(/[-_.]/gu, ''))
+const isHostAuthorityKey = key => HOST_AUTHORITY_KEYS.has(key.toLowerCase().replaceAll(/[-_.]/gu, ''))
 
 const isPlainRecord = value => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -112,6 +112,7 @@ const cloneStrictJson = (value, state, depth) => {
     if (entries.length > MAX_OBJECT_KEYS) return OMIT
     const cloned = {}
     for (const [key, descriptor] of entries) {
+      if (isHostAuthorityKey(key)) continue
       if (!('value' in descriptor) || UNSAFE_JSON_KEYS.has(key)) return OMIT
       state.entries += 1
       if (state.entries > MAX_ENTRIES || !consumeText(key, state)) return OMIT
@@ -148,7 +149,7 @@ export const sanitizeDashboardOnlineComponentProps = props => {
   const projected = {}
   for (const [key, descriptor] of Object.entries(descriptors)) {
     if (!descriptor.enumerable) continue
-    if (INTERNAL_PROP_KEYS.has(key) || key.startsWith('__') || isRootHostAuthorityKey(key)) continue
+    if (INTERNAL_PROP_KEYS.has(key) || key.startsWith('__') || isHostAuthorityKey(key)) continue
     if (!('value' in descriptor)) return Object.freeze({})
     if (UNSAFE_JSON_KEYS.has(key)) continue
     const child = descriptor.value

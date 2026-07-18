@@ -198,6 +198,34 @@ test('locked dependencies accept only the canonical resolver DTO without invokin
   assert.equal(getterRuns, 0)
 })
 
+test('locked dependency exact versions use strict SemVer prerelease identifiers', () => {
+  const dependency = artifactRecord().lockedDependencies[0]
+
+  for (const exactVersion of ['01.2.0', '1.02.0', '1.2.00', '1.2.0-01', '1.2.0-alpha.01']) {
+    assert.throws(
+      () => validateLockedArtifactDependency({ ...dependency, exactVersion }),
+      error =>
+        error.code === 'validation-failed' && error.reason === 'artifact-locked-dependency.exactVersion-is-invalid',
+      exactVersion,
+    )
+  }
+
+  assert.throws(
+    () =>
+      validateArtifactRecord(
+        artifactRecord({
+          lockedDependencies: [{ ...dependency, exactVersion: '1.2.0-01' }],
+        }),
+      ),
+    error =>
+      error.code === 'validation-failed' && error.reason === 'artifact-locked-dependency.exactVersion-is-invalid',
+  )
+
+  for (const exactVersion of ['1.2.0-0', '1.2.0-alpha', '1.2.0-alpha.01a', '1.2.0-0A+build.001']) {
+    assert.equal(validateLockedArtifactDependency({ ...dependency, exactVersion }).exactVersion, exactVersion)
+  }
+})
+
 test('artifact records reject duplicate dependency packages', () => {
   const dependency = artifactRecord().lockedDependencies[0]
   assert.throws(

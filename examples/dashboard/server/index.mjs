@@ -9,6 +9,7 @@ import { createEnvironmentOnlineComponentDependencyMiddleware } from './online-c
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultDistDirectory = resolve(moduleDirectory, '..', 'dist')
+const DASHBOARD_DOCUMENT_CSP = "frame-src 'none'"
 
 const CONTENT_TYPES = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -25,15 +26,19 @@ const CONTENT_TYPES = new Map([
   ['.woff2', 'font/woff2'],
 ])
 
-const sendFile = async (request, response, filePath, cacheControl) => {
+const sendFile = async (request, response, filePath) => {
   const file = await stat(filePath)
   if (!file.isFile()) return false
-  response.writeHead(200, {
-    'Cache-Control': cacheControl,
+  const extension = extname(filePath).toLowerCase()
+  const isDashboardDocument = extension === '.html'
+  const headers = {
+    'Cache-Control': isDashboardDocument ? 'no-store' : 'public, max-age=31536000, immutable',
     'Content-Length': file.size,
-    'Content-Type': CONTENT_TYPES.get(extname(filePath).toLowerCase()) ?? 'application/octet-stream',
+    'Content-Type': CONTENT_TYPES.get(extension) ?? 'application/octet-stream',
     'X-Content-Type-Options': 'nosniff',
-  })
+  }
+  if (isDashboardDocument) headers['Content-Security-Policy'] = DASHBOARD_DOCUMENT_CSP
+  response.writeHead(200, headers)
   if (request.method === 'HEAD') response.end()
   else createReadStream(filePath).pipe(response)
   return true
@@ -61,7 +66,7 @@ const serveDashboard = async (request, response, distDirectory) => {
   }
 
   try {
-    if (pathname !== '/' && (await sendFile(request, response, requestedPath, 'public, max-age=31536000, immutable'))) {
+    if (pathname !== '/' && (await sendFile(request, response, requestedPath))) {
       return
     }
   } catch (error) {
@@ -77,7 +82,7 @@ const serveDashboard = async (request, response, distDirectory) => {
   }
 
   try {
-    await sendFile(request, response, join(normalizedRoot, 'index.html'), 'no-store')
+    await sendFile(request, response, join(normalizedRoot, 'index.html'))
   } catch {
     response.writeHead(503, { 'Cache-Control': 'no-store' }).end('Dashboard build is unavailable')
   }

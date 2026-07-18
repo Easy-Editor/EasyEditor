@@ -84,6 +84,7 @@ export const createOnlineComponentSandboxDocument = identity => {
         const resolvePromise = Promise.resolve.bind(Promise)
         const monotonicNow = performance.now.bind(performance)
         const lifecycleBudgetMs = 50
+        const maxEmittedEventsPerFrame = 1024
         let nextInstanceStyleId = 1
         let port
         let sendToHost
@@ -95,6 +96,9 @@ export const createOnlineComponentSandboxDocument = identity => {
         let faulted = false
         let componentResourcesFaulted = false
         let emittedEventCount = 0
+        let eventBudgetEpochHandle
+        let eventBudgetEpochCancel
+        let eventBudgetEpochGeneration = 0
 
         const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
         const hasExactKeys = (value, keys) => {
@@ -679,6 +683,7 @@ export const createOnlineComponentSandboxDocument = identity => {
           const code = lifecycleFaultCode(failure)
           const resources = capturedResources ?? resourceSnapshot()
           faulted = true
+          stopEventBudgetEpoch()
           sendToHost({
             kind: 'online-component.fault',
             protocolVersion,
@@ -712,6 +717,7 @@ export const createOnlineComponentSandboxDocument = identity => {
             cleanupOwnedResources(instanceId)
             current.layoutStyle.remove()
             current.host.remove()
+            if (readMapSize(instances) === 0) stopEventBudgetEpoch()
           }
           if (failure) throw failure
         }
@@ -810,13 +816,59 @@ export const createOnlineComponentSandboxDocument = identity => {
             mounted: false,
           }
           applyFunction(mapSet, instances, [update.instanceId, instance])
+          ensureEventBudgetEpoch()
           return instance
+        }
+
+        const stopEventBudgetEpoch = () => {
+          eventBudgetEpochGeneration += 1
+          if (eventBudgetEpochHandle !== undefined && eventBudgetEpochCancel) {
+            applyFunction(eventBudgetEpochCancel, globalThis, [eventBudgetEpochHandle])
+          }
+          eventBudgetEpochHandle = undefined
+          eventBudgetEpochCancel = undefined
+          emittedEventCount = 0
+        }
+        const scheduleEventBudgetEpoch = generation => {
+          if (
+            generation !== eventBudgetEpochGeneration ||
+            eventBudgetEpochHandle !== undefined ||
+            faulted ||
+            readMapSize(instances) === 0
+          ) {
+            return
+          }
+          const advanceEpoch = () => {
+            if (generation !== eventBudgetEpochGeneration) return
+            eventBudgetEpochHandle = undefined
+            eventBudgetEpochCancel = undefined
+            if (faulted || readMapSize(instances) === 0) {
+              emittedEventCount = 0
+              return
+            }
+            emittedEventCount = 0
+            scheduleEventBudgetEpoch(generation)
+          }
+          if (
+            typeof nativeRequestAnimationFrame === 'function' &&
+            typeof nativeCancelAnimationFrame === 'function'
+          ) {
+            eventBudgetEpochCancel = nativeCancelAnimationFrame
+            eventBudgetEpochHandle = applyFunction(nativeRequestAnimationFrame, globalThis, [advanceEpoch])
+            return
+          }
+          eventBudgetEpochCancel = nativeClearTimeout
+          eventBudgetEpochHandle = applyFunction(nativeSetTimeout, globalThis, [advanceEpoch, 16])
+        }
+        const ensureEventBudgetEpoch = () => {
+          if (faulted || readMapSize(instances) === 0 || eventBudgetEpochHandle !== undefined) return
+          scheduleEventBudgetEpoch(eventBudgetEpochGeneration)
         }
 
         const emit = (instanceId, type, payload) => {
           if (!isIdentifier(instanceId) || !isEventType(type) || faulted) return false
           emittedEventCount += 1
-          if (emittedEventCount > 1024) {
+          if (emittedEventCount > maxEmittedEventsPerFrame) {
             postFault(new TrustedError('message-storm'), instanceId)
             return false
           }
