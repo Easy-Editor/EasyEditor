@@ -156,7 +156,7 @@ export interface LocalMaterialPromotionAdmissionInputV1 extends DashboardMateria
   readonly projectId: string
   readonly materialRefs: readonly Readonly<ArtifactMaterialIdentityV1>[]
   readonly unresolvedPromotionIds: readonly Sha256Digest[]
-  readonly reason: 'promotion-activation'
+  readonly reason: 'promotion-stage-retention' | 'promotion-activation'
 }
 
 export interface DashboardLocalMaterialPromotionCapabilityServiceOptions {

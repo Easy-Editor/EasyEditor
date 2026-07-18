@@ -596,24 +596,44 @@ test('promoteLocal binds the server identity to the canonical call digest and co
   assert.equal(DASHBOARD_STORAGE_STORE_NAMES.includes('promotionSagas'), false)
 })
 
-test('promotion waits for shared-mutation material admission after server activation and before Core switch', async () => {
+test('promotion retains its staged identity before server activation and admits the active material before Core switch', async () => {
+  const retentionStarted = deferred()
+  const retentionGate = deferred()
   const admissionStarted = deferred()
   const gate = deferred()
   const admissionCalls = []
   const harness = await createServiceHarness({
     admitMaterialRefsUnderSharedMutation: async request => {
       admissionCalls.push(structuredClone(request))
+      if (request.reason === 'promotion-stage-retention') {
+        retentionStarted.resolve()
+        await retentionGate.promise
+        return
+      }
       admissionStarted.resolve()
       await gate.promise
     },
   })
   const pending = harness.service.promoteLocal(createPromotionCall())
 
+  await retentionStarted.promise
+  assert.equal(harness.clientCalls.length, 0)
+  assert.equal(harness.queryCalls.length, 0)
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 0)
+  assert.equal(harness.lineage.size, 1, 'the durable intent is recorded before staged retention')
+  retentionGate.resolve()
   await admissionStarted.promise
   assert.equal(harness.clientCalls.length, 1)
-  assert.equal(admissionCalls.length, 1)
+  assert.equal(admissionCalls.length, 2)
   assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 0)
   assert.deepEqual(admissionCalls[0], {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    materialRefs: [],
+    unresolvedPromotionIds: [harness.clientCalls[0].promotionId],
+    reason: 'promotion-stage-retention',
+  })
+  assert.deepEqual(admissionCalls[1], {
     schemaVersion: 1,
     projectId: authority.projectId,
     materialRefs: [
@@ -632,12 +652,44 @@ test('promotion waits for shared-mutation material admission after server activa
   assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 1)
 })
 
+test('failed staged-retention admission preserves the prepared journal and durable intent without server or Core effects', async () => {
+  const admissionCalls = []
+  const harness = await createServiceHarness({
+    admitMaterialRefsUnderSharedMutation: async request => {
+      admissionCalls.push(structuredClone(request))
+      throw new Error('retention admission unavailable')
+    },
+  })
+
+  const result = await harness.service.promoteLocal(createPromotionCall())
+  assert.equal(result.status, 'not-applied')
+  assert.equal(result.failure.code, LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed)
+  assert.equal(harness.clientCalls.length, 0)
+  assert.equal(harness.queryCalls.length, 0)
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 0)
+  assert.equal(harness.batches.length, 0)
+  assert.equal(harness.lineage.size, 1, 'the durable receipt intent must exist before retention admission')
+  const [journal] = harness.promotionJournals.values()
+  assert.equal(journal.value.stage, 'prepared')
+  assert.deepEqual(admissionCalls, [
+    {
+      schemaVersion: 1,
+      projectId: authority.projectId,
+      materialRefs: [],
+      unresolvedPromotionIds: [journal.value.promotionId],
+      reason: 'promotion-stage-retention',
+    },
+  ])
+})
+
 test('failed promotion admission preserves the active saga and resumePending retries admission without reactivation', async () => {
   const admissionCalls = []
   const harness = await createServiceHarness({
     admitMaterialRefsUnderSharedMutation: async request => {
       admissionCalls.push(structuredClone(request))
-      if (admissionCalls.length === 1) throw new Error('admission unavailable')
+      if (request.reason === 'promotion-activation' && admissionCalls.length === 2) {
+        throw new Error('admission unavailable')
+      }
     },
   })
 
@@ -652,7 +704,10 @@ test('failed promotion admission preserves the active saga and resumePending ret
   const resumed = await harness.service.resumePending()
   assert.equal(resumed.results.length, 1)
   assert.equal(resumed.results[0].status, 'applied')
-  assert.equal(admissionCalls.length, 2)
+  assert.deepEqual(
+    admissionCalls.map(call => call.reason),
+    ['promotion-stage-retention', 'promotion-activation', 'promotion-activation'],
+  )
   assert.equal(harness.clientCalls.length, 1)
   assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 1)
 })

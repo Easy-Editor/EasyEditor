@@ -330,7 +330,7 @@ test('promotion runtime is inert under default-off feature flags and does not to
   assert.equal(optionalReads, 0)
 })
 
-test('promotion runtime passes admission through and a rejection prevents the Core ref switch', async () => {
+test('promotion runtime passes staged-retention admission through before server activation', async () => {
   const rejection = new Error('material admission unavailable')
   const harness = await createAdmissionRuntimeHarness(async () => {
     throw rejection
@@ -344,15 +344,9 @@ test('promotion runtime passes admission through and a rejection prevents the Co
   assert.deepEqual(harness.admissionCalls[0], {
     schemaVersion: 1,
     projectId: authority.projectId,
-    materialRefs: [
-      {
-        materialId: 'material-admission-runtime',
-        materialVersion: '1.0.0',
-        buildIntegrity: `sha256:${'b'.repeat(64)}`,
-      },
-    ],
+    materialRefs: [],
     unresolvedPromotionIds: [harness.admissionCalls[0].unresolvedPromotionIds[0]],
-    reason: 'promotion-activation',
+    reason: 'promotion-stage-retention',
   })
   assert.match(harness.admissionCalls[0].unresolvedPromotionIds[0], /^sha256:[a-f0-9]{64}$/u)
   assert.equal(harness.coreMutationCalls, 0)

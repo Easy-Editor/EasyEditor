@@ -490,6 +490,16 @@ const retainedMaterialRefsForGcState = gcState => {
   return sortIdentities(refs.values())
 }
 
+const retainedPromotionIdsForProject = (gcState, projectId) => {
+  const promotionIds = new Set()
+  for (const root of gcState.replicaRoots) {
+    if (root.state !== 'active' || root.projectId !== projectId) continue
+    for (const promotionId of root.unresolvedPromotionIds) promotionIds.add(promotionId)
+    for (const resolution of root.resolvedPromotions) promotionIds.add(resolution.promotionId)
+  }
+  return promotionIds
+}
+
 const createGcSweepResult = ({ deletedMaterials, plan, registryGeneration }) =>
   Object.freeze({
     schemaVersion: REGISTRY_SCHEMA_VERSION,
@@ -1856,25 +1866,35 @@ export const createFileMaterialRegistry = async (options = {}) => {
       replicaRoots: durable.replicaRoots,
     })
 
+  const promotionRecords = () => [...materialIndex.values(), ...pendingIndex.values()]
+
+  const recordsForIdentity = identity => {
+    const key = identityKey(identity)
+    return promotionRecords().filter(record => identityKey(record) === key)
+  }
+
   const resolvePromotionRoots = (projectId, promotionIds) =>
-    promotionIds.map(promotionId => {
-      const active = [...materialIndex.values()].find(material => material.promotionId === promotionId)
-      if (!active || active.projectId !== projectId || active.state !== 'active') {
-        throw registryError(
-          'gc-promotion-unresolved',
-          'An unresolved promotion is not an active material in the authorized project',
-          { status: 409, retryable: true },
-        )
-      }
-      return Object.freeze({
-        promotionId,
-        materialRef: validateMaterialIdentity({
-          materialId: active.materialId,
-          materialVersion: active.materialVersion,
-          buildIntegrity: active.buildIntegrity,
-        }),
+    promotionIds
+      .map(promotionId => {
+        const record = promotionRecords().find(material => material.promotionId === promotionId)
+        if (!record) return null
+        if (record.projectId !== projectId) {
+          throw registryError(
+            'gc-promotion-unresolved',
+            'An unresolved promotion belongs to a different authorized project',
+            { status: 409, retryable: true },
+          )
+        }
+        return Object.freeze({
+          promotionId,
+          materialRef: validateMaterialIdentity({
+            materialId: record.materialId,
+            materialVersion: record.materialVersion,
+            buildIntegrity: record.buildIntegrity,
+          }),
+        })
       })
-    })
+      .filter(resolution => resolution !== null)
 
   const validateNewMaterialAdmissions = (projectId, current, requestedRefs) => {
     const alreadyRetained = new Set((current ? activeRootMaterialRefs(current) : []).map(identityKey))
@@ -1903,23 +1923,33 @@ export const createFileMaterialRegistry = async (options = {}) => {
     return normalizeResolvedPromotions([...byPromotionId.values()])
   }
 
-  const gcCandidatesForProject = (projectId, retainedMaterialRefs) => {
+  const gcCandidatesForProject = (projectId, retainedMaterialRefs, retainedPromotionIds) => {
     const retainedKeys = new Set(retainedMaterialRefs.map(identityKey))
-    return sortIdentities(
-      sortRecords(materialIndex.values())
-        .filter(material => material.projectId === projectId && !retainedKeys.has(identityKey(material)))
-        .map(material =>
-          validateMaterialIdentity({
-            materialId: material.materialId,
-            materialVersion: material.materialVersion,
-            buildIntegrity: material.buildIntegrity,
-          }),
-        ),
-    )
+    const recordsByIdentity = new Map()
+    for (const material of sortRecords(promotionRecords()).filter(record => record.projectId === projectId)) {
+      const key = identityKey(material)
+      const records = recordsByIdentity.get(key) ?? []
+      records.push(material)
+      recordsByIdentity.set(key, records)
+    }
+    const candidates = new Map()
+    for (const [key, records] of recordsByIdentity) {
+      if (retainedKeys.has(key) || records.some(record => retainedPromotionIds.has(record.promotionId))) continue
+      const [material] = records
+      const identity = validateMaterialIdentity({
+        materialId: material.materialId,
+        materialVersion: material.materialVersion,
+        buildIntegrity: material.buildIntegrity,
+      })
+      candidates.set(key, identity)
+    }
+    return sortIdentities(candidates.values())
   }
 
   const createGcPlan = ({ durable, principal, request, requestDigest, root }) => {
-    const globalRetainedMaterialRefs = retainedMaterialRefsForGcState(gcStateFromDurable(durable))
+    const gcState = gcStateFromDurable(durable)
+    const globalRetainedMaterialRefs = retainedMaterialRefsForGcState(gcState)
+    const retainedPromotionIds = retainedPromotionIdsForProject(gcState, request.projectId)
     const base = {
       schemaVersion: REGISTRY_SCHEMA_VERSION,
       kind: 'material-gc-plan',
@@ -1932,7 +1962,7 @@ export const createFileMaterialRegistry = async (options = {}) => {
       requestDigest,
       snapshotDigest: request.snapshotDigest,
       globalRetainedMaterialRefs,
-      deletionCandidates: gcCandidatesForProject(request.projectId, globalRetainedMaterialRefs),
+      deletionCandidates: gcCandidatesForProject(request.projectId, globalRetainedMaterialRefs, retainedPromotionIds),
     }
     return validateMaterialGcPlan({ ...base, planHash: sha256(JSON.stringify(base)) })
   }
@@ -2037,8 +2067,8 @@ export const createFileMaterialRegistry = async (options = {}) => {
   const completeStartedGcSweep = async (plan, durableValue = undefined) => {
     const durable = durableValue ?? (await reconcileDurableIndex())
     const deletedMaterials = plan.deletionCandidates.filter(identity => {
-      const active = materialIndex.get(identityKey(identity))
-      return !active || active.projectId !== plan.projectId
+      const records = recordsForIdentity(identity)
+      return !records.some(record => record.projectId === plan.projectId)
     })
     let receipt
     try {
@@ -2115,7 +2145,8 @@ export const createFileMaterialRegistry = async (options = {}) => {
       })
     }
     const globalRetainedMaterialRefs = retainedMaterialRefsForGcState(gcState)
-    const expectedCandidates = gcCandidatesForProject(plan.projectId, globalRetainedMaterialRefs)
+    const retainedPromotionIds = retainedPromotionIdsForProject(gcState, plan.projectId)
+    const expectedCandidates = gcCandidatesForProject(plan.projectId, globalRetainedMaterialRefs, retainedPromotionIds)
     if (
       !sameJson(globalRetainedMaterialRefs, plan.globalRetainedMaterialRefs) ||
       !sameJson(expectedCandidates, plan.deletionCandidates)
@@ -2145,32 +2176,34 @@ export const createFileMaterialRegistry = async (options = {}) => {
       }
 
       for (const identity of expectedCandidates) {
-        const record = materialIndex.get(identityKey(identity))
-        if (!record || record.projectId !== plan.projectId) continue
-        const sourceDirectory = promotionDirectoryFor(record.promotionId)
-        const trashPath = join(trashDirectory, `${storageKeyForPromotion(record.promotionId)}.${randomUUID()}`)
-        await callCheckpoint('before-gc-rename', { promotionId: record.promotionId })
-        await verifyMutationLease()
-        if (!deletionStarted) {
-          throwIfAborted(signal)
-          await persistGcSweepReceipt({ state: 'started', plan })
-          receiptStarted = true
-          throwIfAborted(signal)
+        const records = recordsForIdentity(identity).filter(record => record.projectId === plan.projectId)
+        if (records.length === 0) continue
+        for (const record of records) {
+          const sourceDirectory = promotionDirectoryFor(record.promotionId)
+          const trashPath = join(trashDirectory, `${storageKeyForPromotion(record.promotionId)}.${randomUUID()}`)
+          await callCheckpoint('before-gc-rename', { promotionId: record.promotionId })
           await verifyMutationLease()
+          if (!deletionStarted) {
+            throwIfAborted(signal)
+            await persistGcSweepReceipt({ state: 'started', plan })
+            receiptStarted = true
+            throwIfAborted(signal)
+            await verifyMutationLease()
+          }
+          if (!deletionStarted) throwIfAborted(signal)
+          await fileSystem.rename(sourceDirectory, trashPath)
+          deletionStarted = true
+          await syncDirectory(promotionsDirectory)
+          await syncDirectory(trashDirectory)
+          await callCheckpoint('after-gc-rename-before-removal', { promotionId: record.promotionId })
+          materialIndex.delete(identityKey(record))
+          pendingIndex.delete(record.promotionId)
+          await verifyMutationLease()
+          await fileSystem.rm(trashPath, { force: true, recursive: true })
+          await syncDirectory(trashDirectory)
+          await callCheckpoint('after-gc-removal-before-index-activation', { promotionId: record.promotionId })
         }
-        if (!deletionStarted) throwIfAborted(signal)
-        await fileSystem.rename(sourceDirectory, trashPath)
-        deletionStarted = true
-        await syncDirectory(promotionsDirectory)
-        await syncDirectory(trashDirectory)
-        await callCheckpoint('after-gc-rename-before-removal', { promotionId: record.promotionId })
-        materialIndex.delete(identityKey(identity))
-        pendingIndex.delete(record.promotionId)
         deletedMaterials.push(Object.freeze(cloneJson(identity)))
-        await verifyMutationLease()
-        await fileSystem.rm(trashPath, { force: true, recursive: true })
-        await syncDirectory(trashDirectory)
-        await callCheckpoint('after-gc-removal-before-index-activation', { promotionId: record.promotionId })
       }
       const nextDurable = await reconcileDurableIndex()
       const receipt = await persistGcSweepReceipt({

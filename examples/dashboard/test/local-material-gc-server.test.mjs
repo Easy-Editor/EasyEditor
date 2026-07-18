@@ -333,7 +333,7 @@ test('legacy released tombstones remain readable without fabricating exact relea
   assert.equal(freshReplica.replicaGeneration, 1)
 })
 
-test('unresolved promotions resolve only to active same-project materials and failures do not write roots', async t => {
+test('unresolved promotions accept absent declarations, resolve same-project pending or active records, and reject cross-project records', async t => {
   const { addMaterial, registry, rootDir } = await createFixture(t)
   const active = await addMaterial({
     projectId: 'project-a',
@@ -355,18 +355,17 @@ test('unresolved promotions resolve only to active same-project materials and fa
     promotionId: digest('6'),
   })
 
-  for (const [replicaId, promotionId] of [
-    ['replica-missing', digest('7')],
-    ['replica-pending', pending.promotionId],
-    ['replica-cross', crossProject.promotionId],
-  ]) {
-    await assert.rejects(
-      planGc(registry, { replicaId, unresolvedPromotionIds: [promotionId] }),
-      assertCode('gc-promotion-unresolved'),
-    )
-  }
-  const indexAfterFailures = JSON.parse(await readFile(join(rootDir, 'registry-index.json'), 'utf8'))
-  assert.deepEqual(indexAfterFailures.replicaRoots, [])
+  const missingPromotionId = digest('7')
+  await planGc(registry, { replicaId: 'replica-missing', unresolvedPromotionIds: [missingPromotionId] })
+  const pendingPlan = await planGc(registry, {
+    replicaId: 'replica-pending',
+    unresolvedPromotionIds: [pending.promotionId],
+  })
+  assert.ok(!pendingPlan.deletionCandidates.some(ref => ref.materialId === pending.materialId))
+  await assert.rejects(
+    planGc(registry, { replicaId: 'replica-cross', unresolvedPromotionIds: [crossProject.promotionId] }),
+    assertCode('gc-promotion-unresolved'),
+  )
 
   const resolved = await planGc(registry, {
     replicaId: 'replica-resolved',
@@ -374,10 +373,101 @@ test('unresolved promotions resolve only to active same-project materials and fa
   })
   assert.ok(resolved.globalRetainedMaterialRefs.some(ref => ref.materialId === active.materialId))
   const durable = JSON.parse(await readFile(join(rootDir, 'registry-index.json'), 'utf8'))
-  assert.deepEqual(durable.replicaRoots[0].unresolvedPromotionIds, [active.promotionId])
-  assert.deepEqual(durable.replicaRoots[0].resolvedPromotions, [
+  const roots = new Map(durable.replicaRoots.map(root => [root.replicaId, root]))
+  assert.deepEqual(roots.get('replica-missing').unresolvedPromotionIds, [missingPromotionId])
+  assert.deepEqual(roots.get('replica-missing').resolvedPromotions, [])
+  assert.deepEqual(roots.get('replica-pending').unresolvedPromotionIds, [pending.promotionId])
+  assert.deepEqual(roots.get('replica-pending').resolvedPromotions, [
+    { promotionId: pending.promotionId, materialRef: identityFor(pending) },
+  ])
+  assert.equal(roots.has('replica-cross'), false)
+  assert.deepEqual(roots.get('replica-resolved').unresolvedPromotionIds, [active.promotionId])
+  assert.deepEqual(roots.get('replica-resolved').resolvedPromotions, [
     { promotionId: active.promotionId, materialRef: identityFor(active) },
   ])
+})
+
+test('a staged promotion remains protected by any active replica root and becomes sweepable only after every retaining root releases', async t => {
+  const { addMaterial, registry } = await createFixture(t)
+  const pending = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-pending-retained',
+    materialVersion: '1.0.0',
+    promotionId: digest('8'),
+    publish: false,
+  })
+
+  const replicaA = await planGc(registry, {
+    replicaId: 'replica-pending-a',
+    unresolvedPromotionIds: [pending.promotionId],
+  })
+  const replicaB = await planGc(registry, {
+    replicaId: 'replica-pending-b',
+    snapshotDigest: digest('d'),
+    unresolvedPromotionIds: [pending.promotionId],
+  })
+  assert.deepEqual(replicaA.deletionCandidates, [])
+  assert.deepEqual(replicaB.deletionCandidates, [])
+
+  await releaseGc(registry, replicaA)
+  const oneRootRemaining = await planGc(registry, {
+    replicaId: 'replica-pending-observer',
+    snapshotDigest: digest('e'),
+  })
+  assert.deepEqual(oneRootRemaining.deletionCandidates, [])
+
+  await releaseGc(registry, replicaB)
+  const released = await planGc(registry, {
+    replicaId: 'replica-pending-sweeper',
+    snapshotDigest: digest('f'),
+  })
+  assert.deepEqual(released.deletionCandidates, [identityFor(pending)])
+  assert.notEqual(
+    await registry.queryPromotion({ schemaVersion: 1, projectId: pending.projectId, promotionId: pending.promotionId }),
+    null,
+  )
+
+  const swept = await sweepGc(registry, released)
+  assert.deepEqual(swept.deletedMaterials, [identityFor(pending)])
+  assert.equal(
+    await registry.queryPromotion({ schemaVersion: 1, projectId: pending.projectId, promotionId: pending.promotionId }),
+    null,
+  )
+  assert.deepEqual(await registry.recoverPendingPromotions(), [])
+})
+
+test('an absent promotion declaration protects a matching stage created later until its original root releases', async t => {
+  const { addMaterial, registry } = await createFixture(t)
+  const promotionId = digest('9')
+  const declaredBeforeStage = await planGc(registry, {
+    replicaId: 'replica-pre-stage-owner',
+    unresolvedPromotionIds: [promotionId],
+  })
+  assert.deepEqual(declaredBeforeStage.deletionCandidates, [])
+
+  const pending = await addMaterial({
+    projectId: 'project-a',
+    materialId: 'material-staged-after-root',
+    materialVersion: '1.0.0',
+    promotionId,
+    publish: false,
+  })
+  const observedAfterStage = await planGc(registry, {
+    replicaId: 'replica-post-stage-observer',
+    snapshotDigest: digest('d'),
+  })
+  assert.deepEqual(
+    observedAfterStage.deletionCandidates,
+    [],
+    'the earlier opaque promotion root must protect a later staged record',
+  )
+
+  await releaseGc(registry, declaredBeforeStage)
+  const afterRelease = await planGc(registry, {
+    replicaId: 'replica-post-stage-sweeper',
+    snapshotDigest: digest('e'),
+  })
+  assert.deepEqual(afterRelease.deletionCandidates, [identityFor(pending)])
 })
 
 test('active replica admissions are monotonic across omitted material and promotion roots', async t => {

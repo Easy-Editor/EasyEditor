@@ -513,7 +513,8 @@ test('GC generation includes pending promotions and durable retained roots', asy
   await assert.rejects(sweepGcForTest(registry, beforePending), assertRegistryError('gc-generation-conflict'))
 
   const pendingAware = await planGcForTest(registry, [v2Identity], 'registry-generation')
-  assert.deepEqual(pendingAware.deletionCandidates, [v1Identity])
+  const v3Identity = materialIdentity('material-kpi', '3.0.0')
+  assert.deepEqual(pendingAware.deletionCandidates, [v1Identity, v3Identity])
   const restarted = await createFileMaterialRegistry({ rootDir })
   const rootsChanged = await planGcForTest(restarted, [v2Identity, v1Identity], 'registry-generation')
   assert.notEqual(rootsChanged.registryGeneration, pendingAware.registryGeneration)

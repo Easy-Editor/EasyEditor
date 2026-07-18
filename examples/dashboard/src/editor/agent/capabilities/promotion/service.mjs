@@ -830,6 +830,27 @@ const createService = options => {
         { requiredPause: true },
       )
     }
+    if (admitMaterialRefsUnderSharedMutation !== null && hydrated.state.stage === 'prepared') {
+      try {
+        await admitMaterialRefsUnderSharedMutation(
+          freezeDto({
+            schemaVersion: 1,
+            projectId: call.projectId,
+            materialRefs: [],
+            unresolvedPromotionIds: [hydrated.state.promotionId],
+            reason: 'promotion-stage-retention',
+          }),
+        )
+      } catch {
+        return invocationFailure(
+          call.callId,
+          'not-applied',
+          LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed,
+          'The prepared promotion could not be retained before server activation',
+          { stage: 'material-admission' },
+        )
+      }
+    }
     try {
       return await applyState(hydrated)
     } catch (error) {

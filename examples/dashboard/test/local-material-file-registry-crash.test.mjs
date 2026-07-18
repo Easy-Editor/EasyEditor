@@ -396,6 +396,42 @@ test('a new replica generation reconciles a crashed started sweep before admissi
   assert.deepEqual(await sweepGcForTest(replayRestart, nextPlan), latestResult)
 })
 
+test('restart recovery consults pending promotions before completing a started GC receipt', async t => {
+  const { children, makeBuild, registry, rootDir } = await createFixture(t)
+  const request = promotionRequest({
+    buildDirectory: await makeBuild('gc-started-pending'),
+    promotionId: 'promotion-gc-started-pending',
+    materialVersion: '3.0.0',
+    sourceRevision: 'revision-gc-started-pending',
+  })
+  await registry.stagePromotion(request)
+  const startedPlan = await planGcForTest(registry, [])
+  assert.deepEqual(startedPlan.deletionCandidates, [identityFor(request)])
+  const child = startChild(children, {
+    action: 'sweep',
+    rootDir,
+    plan: startedPlan,
+    principal: GC_TEST_PRINCIPAL,
+    pauseAtCheckpoint: 'after-gc-sweep-receipt-rename',
+  })
+  await waitForMessage(
+    child,
+    message => message?.type === 'checkpoint' && message.checkpoint?.name === 'after-gc-sweep-receipt-rename',
+  )
+  await killChild(child)
+
+  const restarted = await createFileMaterialRegistry({ rootDir })
+  assert.ok((await restarted.recoverPendingPromotions()).some(entry => entry.promotionId === request.promotionId))
+  const replay = await sweepGcForTest(restarted, startedPlan)
+  assert.deepEqual(replay.deletedMaterials, [], 'a still-present pending record must not be reported as deleted')
+  assert.ok((await restarted.recoverPendingPromotions()).some(entry => entry.promotionId === request.promotionId))
+
+  const retryPlan = await planGcForTest(restarted, [], 'crash-pending-retry')
+  assert.deepEqual(retryPlan.deletionCandidates, [identityFor(request)])
+  assert.deepEqual((await sweepGcForTest(restarted, retryPlan)).deletedMaterials, [identityFor(request)])
+  assert.deepEqual(await restarted.recoverPendingPromotions(), [])
+})
+
 test('SIGKILL around stage rename recovers nested orphans and durable pending state', async t => {
   const { children, makeBuild, rootDir } = await createFixture(t)
 
