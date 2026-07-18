@@ -36,7 +36,8 @@ import {
   parseAgentSessionContextDigest,
 } from '../session-context/index.js'
 import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
-import type { WorkerTelemetrySink } from '../telemetry.js'
+import { createAgentTelemetryChangeSetId } from '../telemetry-change-set-id.js'
+import type { WorkerTelemetryPhase, WorkerTelemetrySink } from '../telemetry.js'
 import { createSafeWorkerTelemetryEmitter } from '../telemetry.js'
 
 type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
@@ -68,6 +69,7 @@ export interface WorkerStateMachineOptions {
   readonly persistence: AgentPersistencePort
   readonly clock: Clock
   readonly idFactory: IdFactory
+  readonly modelTokenBudget?: number
   readonly repairBudget?: number
   readonly sessionContextBudget?: AgentSessionContextBudget
   readonly telemetrySink?: WorkerTelemetrySink
@@ -632,6 +634,13 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const tasks = new Map<string, MutableTask>()
   const runs = new Set<Promise<void>>()
   const repairBudget = options.repairBudget ?? 2
+  const modelTokenBudget = options.modelTokenBudget
+  if (
+    modelTokenBudget !== undefined &&
+    (!Number.isSafeInteger(modelTokenBudget) || modelTokenBudget < 1 || modelTokenBudget > 1_000_000)
+  ) {
+    throw new TypeError('modelTokenBudget must be a safe integer between 1 and 1000000')
+  }
   const sessionContextBudget = normalizeAgentSessionContextBudget(options.sessionContextBudget)
   let activeTask: MutableTask | undefined
   let currentSnapshot: AgentRuntimeSnapshot
@@ -647,6 +656,41 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const telemetry = createSafeWorkerTelemetryEmitter(options.telemetrySink)
   const terminalTelemetryTasks = new Set<string>()
   const toolTelemetryStarts = new Map<string, number>()
+  const telemetryStepPhases = new Map<string, WorkerTelemetryPhase>()
+
+  const ownDataRecord = (value: unknown): Record<string, unknown> | undefined => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+    const record = value as Record<string, unknown>
+    if (
+      Reflect.ownKeys(record).some(key => {
+        const descriptor = Object.getOwnPropertyDescriptor(record, key)
+        return typeof key !== 'string' || descriptor?.enumerable !== true || !Object.hasOwn(descriptor, 'value')
+      })
+    ) {
+      return undefined
+    }
+    return record
+  }
+
+  const telemetryIdentifier = (value: unknown) =>
+    typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\p{C}\p{Z}]/u.test(value)
+      ? value
+      : undefined
+
+  const artifactLineage = (call: SemanticCall, result: InvocationResult) => {
+    if (
+      call.capability !== 'artifact.createOnline' &&
+      call.capability !== 'artifact.reviseOnline' &&
+      call.capability !== 'artifact.promoteLocal'
+    ) {
+      return undefined
+    }
+    const output = ownDataRecord(result.output)
+    const artifactRef = ownDataRecord(output?.artifactRef)
+    const artifactId = telemetryIdentifier(artifactRef?.artifactId)
+    const artifactRevision = telemetryIdentifier(artifactRef?.sourceRevision)
+    return artifactId && artifactRevision ? { artifactId, artifactRevision } : undefined
+  }
 
   const safeTelemetryErrorCode = (value: unknown, fallback: string) =>
     typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value) ? value : fallback
@@ -681,8 +725,10 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     call: SemanticCall,
     eventType: 'tool-call.completed' | 'tool-call.failed',
     status: 'completed' | 'failed',
-    errorCode?: string,
+    details: { readonly errorCode?: string; readonly result?: InvocationResult } = {},
   ) => {
+    const resultRevision = telemetryIdentifier(details.result?.revision)
+    const artifact = details.result ? artifactLineage(call, details.result) : undefined
     emitTelemetry(
       task,
       {
@@ -690,12 +736,56 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         status,
         stepId: call.stepId,
         callId: call.callId,
-        ...(errorCode ? { errorCode } : {}),
+        ...(details.errorCode ? { errorCode: details.errorCode } : {}),
+        ...(resultRevision ? { resultRevision } : {}),
+        ...(call.capability === 'screen.applyChangeSet'
+          ? { changeSetId: createAgentTelemetryChangeSetId(call.callId) }
+          : {}),
+        ...(artifact ?? {}),
       },
       toolTelemetryStarts.get(call.callId),
     )
     toolTelemetryStarts.delete(call.callId)
   }
+
+  const emitExecutionDisposition = (
+    task: MutableTask,
+    call: SemanticCall,
+    disposition: 'yielded' | 'repair' | 'paused',
+    reason:
+      | 'HUMAN_ACTIVITY'
+      | 'STALE_REVISION'
+      | 'SNAPSHOT_REVISION_MISMATCH'
+      | 'RESULT_REVISION_MISMATCH'
+      | 'TOOL_FAILURE'
+      | 'INDETERMINATE'
+      | 'YIELD_LIMIT'
+      | 'REPAIR_BUDGET_EXHAUSTED'
+      | 'PERSISTENCE_FAILURE',
+  ) =>
+    emitTelemetry(task, {
+      eventType: 'execution.disposition',
+      status: 'completed',
+      stepId: call.stepId,
+      callId: call.callId,
+      disposition,
+      reason,
+    })
+
+  const emitReceiptDisposition = (
+    task: MutableTask,
+    call: SemanticCall,
+    disposition: 'missing' | 'applied' | 'not-applied' | 'rejected' | 'indeterminate' | 'resume-safe-retry',
+    revision?: string,
+  ) =>
+    emitTelemetry(task, {
+      eventType: 'receipt-recovery.disposition',
+      status: 'completed',
+      stepId: call.stepId,
+      callId: call.callId,
+      receiptDisposition: disposition,
+      ...(telemetryIdentifier(revision) ? { resultRevision: revision } : {}),
+    })
 
   const refreshSessionContext = (task: MutableTask) => {
     task.sessionContext = cloneFrozen(createAgentSessionContext([...tasks.values()], sessionContextBudget))
@@ -1043,12 +1133,20 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task.nextModelPhase = phase
     const stepId = nextRuntimeId('step')
     const modelRequestId = nextRuntimeId('request')
-    const phaseStartedAt = emitTelemetry(task, { eventType: 'phase.started', status: 'started', stepId })
+    const phaseStartedAt = emitTelemetry(task, {
+      eventType: 'phase.started',
+      status: 'started',
+      stepId,
+      phase,
+    })
+    if (phaseStartedAt !== undefined) telemetryStepPhases.set(stepId, phase)
     const modelRequestStartedAt = emitTelemetry(task, {
       eventType: 'model-request.started',
       status: 'started',
       stepId,
       modelRequestId,
+      phase,
+      ...(modelTokenBudget === undefined ? {} : { tokenBudget: modelTokenBudget }),
     })
     try {
       const events = await collectModelEvents(
@@ -1059,10 +1157,17 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       const outcome = interpretEvents(events, phase)
       emitTelemetry(
         task,
-        { eventType: 'model-request.completed', status: 'completed', stepId, modelRequestId },
+        {
+          eventType: 'model-request.completed',
+          status: 'completed',
+          stepId,
+          modelRequestId,
+          phase,
+          ...(modelTokenBudget === undefined ? {} : { tokenBudget: modelTokenBudget }),
+        },
         modelRequestStartedAt,
       )
-      emitTelemetry(task, { eventType: 'phase.completed', status: 'completed', stepId }, phaseStartedAt)
+      emitTelemetry(task, { eventType: 'phase.completed', status: 'completed', stepId, phase }, phaseStartedAt)
       return { ...outcome, stepId, modelRequestId }
     } catch (error) {
       const errorCode = safeTelemetryErrorCode(
@@ -1071,10 +1176,18 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       )
       emitTelemetry(
         task,
-        { eventType: 'model-request.failed', status: 'failed', errorCode, stepId, modelRequestId },
+        {
+          eventType: 'model-request.failed',
+          status: 'failed',
+          errorCode,
+          stepId,
+          modelRequestId,
+          phase,
+          ...(modelTokenBudget === undefined ? {} : { tokenBudget: modelTokenBudget }),
+        },
         modelRequestStartedAt,
       )
-      emitTelemetry(task, { eventType: 'phase.failed', status: 'failed', errorCode, stepId }, phaseStartedAt)
+      emitTelemetry(task, { eventType: 'phase.failed', status: 'failed', errorCode, stepId, phase }, phaseStartedAt)
       throw error
     }
   }
@@ -1212,10 +1325,12 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
 
     const receipt = await queryInvocationReceipt(task, call)
     const recovered = invocationFromReceipt(receipt)
+    emitReceiptDisposition(task, call, recovered?.status ?? 'missing', recovered?.revision)
     if (recovered && recovered.status !== 'indeterminate') return recovered
     const safeToResume =
       (invokeThrew && receipt === null) || (recovered !== null && isResumeSafeCompensation(call, recovered))
     if (allowSafeResume && safeToResume) {
+      emitReceiptDisposition(task, call, 'resume-safe-retry')
       setPhase(task, 'EXECUTE')
       return invokeWithReceiptRecovery(task, call, context, false)
     }
@@ -1274,13 +1389,14 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
 
   const persistRepairTransition = async (
     task: MutableTask,
-    options: { readonly clearPendingInvocation: boolean },
+    options: { readonly clearPendingInvocation: boolean; readonly call?: SemanticCall },
   ): Promise<ExecutionDisposition> => {
     const persist = async (phase: 'REPAIR' | 'PAUSED') => {
       setPhase(task, phase)
       if (options.clearPendingInvocation) return clearPendingAndPersist(task, phase)
       const persisted = await persistTask(task, phase)
       if (!persisted) setPhase(task, 'PAUSED')
+      if (!persisted && options.call) emitExecutionDisposition(task, options.call, 'paused', 'PERSISTENCE_FAILURE')
       return persisted
     }
 
@@ -1290,6 +1406,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         message: `repair budget ${repairBudget} exhausted`,
         retryable: true,
       }
+      if (options.call) emitExecutionDisposition(task, options.call, 'paused', 'REPAIR_BUDGET_EXHAUSTED')
       await persist('PAUSED')
       return 'paused'
     }
@@ -1312,7 +1429,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     const code = failureCode(result)
     const satisfied = result.status === 'applied' || (result.status === 'not-applied' && code === 'NO_CHANGE')
     if (satisfied) {
-      emitToolTelemetryEnd(task, call, 'tool-call.completed', 'completed')
+      emitToolTelemetryEnd(task, call, 'tool-call.completed', 'completed', { result })
       task.failure = undefined
       task.consecutiveYields = 0
       setPhase(task, 'VERIFY')
@@ -1323,13 +1440,18 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         if (!(await clearPendingAndPersist(task, 'VERIFY'))) return 'paused'
         return 'satisfied'
       }
-      return persistRepairTransition(task, { clearPendingInvocation: true })
+      emitExecutionDisposition(task, call, 'repair', 'RESULT_REVISION_MISMATCH')
+      return persistRepairTransition(task, { clearPendingInvocation: true, call })
     }
 
     if (result.status === 'not-applied' && (code === 'STALE_REVISION' || code === 'HUMAN_ACTIVITY')) {
-      emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', safeTelemetryErrorCode(code, 'tool-call-failed'))
+      emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', {
+        errorCode: safeTelemetryErrorCode(code, 'tool-call-failed'),
+        result,
+      })
       task.consecutiveYields += 1
       if (task.consecutiveYields > 1) {
+        emitExecutionDisposition(task, call, 'paused', 'YIELD_LIMIT')
         task.failure = {
           code: 'human-priority-yield-limit',
           message: 'The Agent yielded twice without a successful intervening commit',
@@ -1339,26 +1461,32 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         await clearPendingAndPersist(task, 'PAUSED')
         return 'paused'
       }
+      emitExecutionDisposition(task, call, 'yielded', code)
       setPhase(task, 'YIELDED')
       await observeFull(task)
-      if (!(await clearPendingAndPersist(task, 'YIELDED'))) return 'paused'
+      if (!(await clearPendingAndPersist(task, 'YIELDED'))) {
+        emitExecutionDisposition(task, call, 'paused', 'PERSISTENCE_FAILURE')
+        return 'paused'
+      }
       return 'yielded'
     }
 
     if (result.status === 'indeterminate') {
-      emitToolTelemetryEnd(
-        task,
-        call,
-        'tool-call.failed',
-        'failed',
-        safeTelemetryErrorCode(code, 'tool-call-indeterminate'),
-      )
+      emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', {
+        errorCode: safeTelemetryErrorCode(code, 'tool-call-indeterminate'),
+        result,
+      })
+      emitExecutionDisposition(task, call, 'paused', 'INDETERMINATE')
       return pauseIndeterminateInvocation(task, result)
     }
 
-    emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', safeTelemetryErrorCode(code, 'tool-call-failed'))
+    emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', {
+      errorCode: safeTelemetryErrorCode(code, 'tool-call-failed'),
+      result,
+    })
+    emitExecutionDisposition(task, call, 'repair', 'TOOL_FAILURE')
     task.failure = result.failure
-    return persistRepairTransition(task, { clearPendingInvocation: true })
+    return persistRepairTransition(task, { clearPendingInvocation: true, call })
   }
 
   const persistPendingInvocation = async (
@@ -1404,7 +1532,12 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     completionSummary?: string,
   ): Promise<ExecutionDisposition> => {
     assertCallContext(task, call)
-    if (call.expectedRevision !== task.latestSnapshot?.revision) return 'repair'
+    if (call.expectedRevision !== task.latestSnapshot?.revision) {
+      ensureToolTelemetryStart(task, call)
+      emitToolTelemetryEnd(task, call, 'tool-call.failed', 'failed', { errorCode: 'snapshot-revision-mismatch' })
+      emitExecutionDisposition(task, call, 'repair', 'SNAPSHOT_REVISION_MISMATCH')
+      return 'repair'
+    }
 
     return withCommitLock(task, async () => {
       const context = hostInvocationContext(task, call)
@@ -1420,41 +1553,79 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (!pending) return 'repair'
     const call = pending.call
     assertCallContext(task, call)
+    const recoveryPhaseStartedAt = telemetryStepPhases.has(call.stepId)
+      ? undefined
+      : emitTelemetry(task, {
+          eventType: 'phase.started',
+          status: 'started',
+          stepId: call.stepId,
+          phase: 'RECOVERY',
+        })
+    if (recoveryPhaseStartedAt !== undefined) telemetryStepPhases.set(call.stepId, 'RECOVERY')
     ensureToolTelemetryStart(task, call)
-    return withCommitLock(task, async () => {
-      if (!task.pendingInvocationDurable) {
-        setPhase(task, 'EXECUTE')
-        if (!(await persistTask(task, 'EXECUTE'))) {
+    try {
+      const disposition = await withCommitLock(task, async () => {
+        if (!task.pendingInvocationDurable) {
+          setPhase(task, 'EXECUTE')
+          if (!(await persistTask(task, 'EXECUTE'))) {
+            setPhase(task, 'PAUSED')
+            return 'paused'
+          }
+        }
+        if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
+        const reconciled = task.reconciledInvocation
+        if (reconciled) {
+          if (reconciled.callId !== call.callId || reconciled.status === 'indeterminate') {
+            throw new WorkerStateMachineError(
+              'invalid-tool-call-context',
+              'reconciled receipt result does not match the pending terminal invocation',
+            )
+          }
+          task.reconciledInvocation = undefined
+          return handleInvocationResult(task, call, reconciled, pending.completeAfterTool)
+        }
+        if (task.failure?.code === 'APPLIED_UNDURABLE') {
           setPhase(task, 'PAUSED')
           return 'paused'
         }
-      }
-      if (task.controller?.signal.aborted || activeTask !== task) return 'paused'
-      const reconciled = task.reconciledInvocation
-      if (reconciled) {
-        if (reconciled.callId !== call.callId || reconciled.status === 'indeterminate') {
-          throw new WorkerStateMachineError(
-            'invalid-tool-call-context',
-            'reconciled receipt result does not match the pending terminal invocation',
-          )
+        const context = hostInvocationContext(task, call)
+        const receipt = await queryInvocationReceipt(task, call)
+        const recovered = invocationFromReceipt(receipt)
+        emitReceiptDisposition(task, call, recovered?.status ?? 'missing', recovered?.revision)
+        if (recovered && !isResumeSafeCompensation(call, recovered)) {
+          return handleInvocationResult(task, call, recovered, pending.completeAfterTool)
         }
-        task.reconciledInvocation = undefined
-        return handleInvocationResult(task, call, reconciled, pending.completeAfterTool)
+        setPhase(task, 'EXECUTE')
+        const result = await invokeWithReceiptRecovery(task, call, context)
+        return handleInvocationResult(task, call, result, pending.completeAfterTool)
+      })
+      if (recoveryPhaseStartedAt !== undefined) {
+        emitTelemetry(
+          task,
+          { eventType: 'phase.completed', status: 'completed', stepId: call.stepId, phase: 'RECOVERY' },
+          recoveryPhaseStartedAt,
+        )
       }
-      if (task.failure?.code === 'APPLIED_UNDURABLE') {
-        setPhase(task, 'PAUSED')
-        return 'paused'
+      return disposition
+    } catch (error) {
+      if (recoveryPhaseStartedAt !== undefined) {
+        emitTelemetry(
+          task,
+          {
+            eventType: 'phase.failed',
+            status: 'failed',
+            errorCode: safeTelemetryErrorCode(
+              error instanceof WorkerStateMachineError ? error.code : undefined,
+              'receipt-recovery-failed',
+            ),
+            stepId: call.stepId,
+            phase: 'RECOVERY',
+          },
+          recoveryPhaseStartedAt,
+        )
       }
-      const context = hostInvocationContext(task, call)
-      const receipt = await queryInvocationReceipt(task, call)
-      const recovered = invocationFromReceipt(receipt)
-      if (recovered && !isResumeSafeCompensation(call, recovered)) {
-        return handleInvocationResult(task, call, recovered, pending.completeAfterTool)
-      }
-      setPhase(task, 'EXECUTE')
-      const result = await invokeWithReceiptRecovery(task, call, context)
-      return handleInvocationResult(task, call, result, pending.completeAfterTool)
-    })
+      throw error
+    }
   }
 
   const persistTaskNow = async (task: MutableTask, persistedPhase: AgentPhase) => {
@@ -1544,6 +1715,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task: MutableTask,
     disposition: ExecutionDisposition,
     completeAfterTool: boolean,
+    call?: SemanticCall,
   ): Promise<ModelTurnPhase | undefined> => {
     if (disposition === 'paused') return undefined
     if (disposition === 'completed') return undefined
@@ -1557,7 +1729,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (disposition === 'yielded') return 'PLAN_STEP'
     if (disposition === 'repair-durable') return 'REPAIR'
 
-    const repair = await persistRepairTransition(task, { clearPendingInvocation: false })
+    const repair = await persistRepairTransition(task, { clearPendingInvocation: false, call })
     return repair === 'repair-durable' ? 'REPAIR' : undefined
   }
 
@@ -1569,7 +1741,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     if (task.pendingInvocation) {
       const pending = task.pendingInvocation
       const disposition = await recoverPendingInvocation(task)
-      const nextPhase = await consumeDisposition(task, disposition, pending.completeAfterTool)
+      const nextPhase = await consumeDisposition(task, disposition, pending.completeAfterTool, pending.call)
       if (!nextPhase) return
       task.nextModelPhase = nextPhase
     }
@@ -1623,7 +1795,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
 
       const call = createRuntimeOwnedCall(task, outcome.toolCall, outcome.stepId)
       const disposition = await executeAndVerify(task, call, outcome.complete, outcome.completionSummary)
-      const nextPhase = await consumeDisposition(task, disposition, outcome.complete)
+      const nextPhase = await consumeDisposition(task, disposition, outcome.complete, call)
       if (!nextPhase) return
       phase = nextPhase
     }
@@ -1633,7 +1805,13 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     setPhase(task, 'OBSERVE')
     const observed = await observeFull(task)
     const stepId = nextRuntimeId('step')
-    const phaseStartedAt = emitTelemetry(task, { eventType: 'phase.started', status: 'started', stepId })
+    const phaseStartedAt = emitTelemetry(task, {
+      eventType: 'phase.started',
+      status: 'started',
+      stepId,
+      phase: 'COMPENSATION',
+    })
+    if (phaseStartedAt !== undefined) telemetryStepPhases.set(stepId, 'COMPENSATION')
     const call = createRuntimeOwnedCall(
       task,
       {
@@ -1644,6 +1822,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       },
       stepId,
     )
+    ensureToolTelemetryStart(task, call)
     const compensationStartedAt = emitTelemetry(task, {
       eventType: 'compensation.started',
       status: 'started',
@@ -1663,7 +1842,11 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         { eventType: 'compensation.failed', status: 'failed', errorCode, stepId, callId: call.callId },
         compensationStartedAt,
       )
-      emitTelemetry(task, { eventType: 'phase.failed', status: 'failed', errorCode, stepId }, phaseStartedAt)
+      emitTelemetry(
+        task,
+        { eventType: 'phase.failed', status: 'failed', errorCode, stepId, phase: 'COMPENSATION' },
+        phaseStartedAt,
+      )
       throw error
     }
     if (disposition === 'completed') {
@@ -1672,7 +1855,11 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         { eventType: 'compensation.completed', status: 'compensated', stepId, callId: call.callId },
         compensationStartedAt,
       )
-      emitTelemetry(task, { eventType: 'phase.completed', status: 'completed', stepId }, phaseStartedAt)
+      emitTelemetry(
+        task,
+        { eventType: 'phase.completed', status: 'completed', stepId, phase: 'COMPENSATION' },
+        phaseStartedAt,
+      )
       return
     }
     emitTelemetry(
@@ -1688,7 +1875,13 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     )
     emitTelemetry(
       task,
-      { eventType: 'phase.failed', status: 'failed', errorCode: 'compensation-incomplete', stepId },
+      {
+        eventType: 'phase.failed',
+        status: 'failed',
+        errorCode: 'compensation-incomplete',
+        stepId,
+        phase: 'COMPENSATION',
+      },
       phaseStartedAt,
     )
     if (task.controller?.signal.aborted || task.phase === 'CANCELLED' || activeTask !== task) {
@@ -1955,13 +2148,15 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
             throw new WorkerStateMachineError('invalid-task-phase', `cannot reconcile task in ${task.phase}`)
           }
           const receipt = await queryExactInvocationReceipt(task, call)
+          const recoveredReceipt = invocationFromReceipt(receipt)
+          emitReceiptDisposition(task, call, recoveredReceipt?.status ?? 'missing', recoveredReceipt?.revision)
           assertUsable()
           if (!isAppliedUndurableRecoveryTask(task) || task.pendingInvocation.call.callId !== call.callId) {
             const remainingLock = recoveryLockedTasks()[0]
             if (remainingLock) throw recoveryLockedError(remainingLock)
             throw new WorkerStateMachineError('invalid-task-phase', `cannot reconcile task in ${task.phase}`)
           }
-          const reconciled = invocationFromReceipt(receipt)
+          const reconciled = recoveredReceipt
           if (!reconciled || reconciled.status === 'indeterminate') {
             throw recoveryLockedError(task, reconciled ? 'indeterminate' : 'missing')
           }
@@ -2044,7 +2239,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       assertUniqueSessionCallIds([...mergedTasks.values()])
       for (const task of recoveredTasks) {
         tasks.set(task.taskId, task)
-        emitTelemetry(task, { eventType: 'task.started', status: 'started' })
+        emitTelemetry(task, { eventType: 'task.recovered', status: 'recovered' })
       }
       for (const task of recoveredTasks) {
         if (!task.sessionContext) refreshSessionContext(task)

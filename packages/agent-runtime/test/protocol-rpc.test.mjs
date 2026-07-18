@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test, { after, before } from 'node:test'
@@ -15,6 +15,7 @@ let runtimeContracts
 
 before(async () => {
   emittedRoot = await mkdtemp(path.join(tmpdir(), 'easy-editor-agent-protocol-'))
+  await writeFile(path.join(emittedRoot, 'package.json'), '{"type":"module"}\n')
   const configPath = path.join(packageRoot, 'tsconfig.build.json')
   const config = ts.readConfigFile(configPath, ts.sys.readFile)
   assert.equal(config.error, undefined)

@@ -50,10 +50,12 @@
       "ToolReceipt",
       "UserIntent",
       "UserResponse",
-      "createAgentRuntime"
+      "createAgentRuntime",
+      "createAgentTelemetryChangeSetId"
     ],
     "runtime": [
-      "createAgentRuntime"
+      "createAgentRuntime",
+      "createAgentTelemetryChangeSetId"
     ]
   },
   "@easy-editor/agent-runtime/testing": {
@@ -97,22 +99,37 @@
       "ModelTurnPhase",
       "ModelTurnRequest",
       "WORKER_TELEMETRY_SCHEMA_VERSION",
+      "WorkerTelemetryDispositionReason",
       "WorkerTelemetryEvent",
       "WorkerTelemetryEventType",
+      "WorkerTelemetryExecutionDisposition",
       "WorkerTelemetryLedger",
+      "WorkerTelemetryPhase",
+      "WorkerTelemetryQuery",
+      "WorkerTelemetryReceiptDisposition",
       "WorkerTelemetrySink",
       "WorkerTelemetryStatus",
+      "createAgentTelemetryChangeSetId",
       "createWorkerTelemetryEvent",
       "createWorkerTelemetryLedger",
       "startAgentWorker",
-      "workerTelemetryEventTypes"
+      "workerTelemetryDispositionReasons",
+      "workerTelemetryEventTypes",
+      "workerTelemetryExecutionDispositions",
+      "workerTelemetryPhases",
+      "workerTelemetryReceiptDispositions"
     ],
     "runtime": [
       "WORKER_TELEMETRY_SCHEMA_VERSION",
+      "createAgentTelemetryChangeSetId",
       "createWorkerTelemetryEvent",
       "createWorkerTelemetryLedger",
       "startAgentWorker",
-      "workerTelemetryEventTypes"
+      "workerTelemetryDispositionReasons",
+      "workerTelemetryEventTypes",
+      "workerTelemetryExecutionDispositions",
+      "workerTelemetryPhases",
+      "workerTelemetryReceiptDispositions"
     ]
   },
   "@easy-editor/easypack": {

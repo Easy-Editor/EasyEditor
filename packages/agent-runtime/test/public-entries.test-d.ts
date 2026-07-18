@@ -1,4 +1,4 @@
-import { createAgentRuntime } from '../src/index.js'
+import { createAgentRuntime, createAgentTelemetryChangeSetId } from '../src/index.js'
 import type {
   AgentAcceptedBlueprint,
   AgentHost,
@@ -53,6 +53,7 @@ const runtime: AgentRuntime = createAgentRuntime({
   host,
   persistence,
 })
+const telemetryChangeSetId: string = createAgentTelemetryChangeSetId('call-1')
 type PublicCompensationEligibilityIsRequired = AgentTaskSnapshot extends {
   readonly compensationEligible: boolean
 }
@@ -70,6 +71,7 @@ const workerBudget: AgentSessionContextBudget = {
 const worker: Promise<void> = startAgentWorker({
   port: new MessageChannel().port1,
   model,
+  modelTokenBudget: 4_096,
   sessionContextBudget: workerBudget,
   telemetry: { emit: () => undefined },
 })
@@ -84,6 +86,8 @@ const telemetryEvent: WorkerTelemetryEvent = {
   taskId: 'task-1',
   stepId: 'step-1',
   modelRequestId: 'request-1',
+  phase: 'PLAN_STEP',
+  tokenBudget: 4_096,
 }
 const completedTelemetryEvent: WorkerTelemetryEvent = {
   ...telemetryEvent,
@@ -134,6 +138,7 @@ type RootProtocolEnvelope = import('../src/index.js').ProtocolEnvelope
 type RootTelemetrySink = import('../src/index.js').WorkerTelemetrySink
 
 void runtime
+void telemetryChangeSetId
 void publicModelTurnCorrelationIsRequired
 void publicModelStepId
 void publicModelRequestId

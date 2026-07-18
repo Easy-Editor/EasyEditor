@@ -445,6 +445,7 @@ export interface ModelAdapter {
 export interface AgentWorkerOptions {
   readonly port: MessagePort
   readonly model: ModelAdapter
+  readonly modelTokenBudget?: number
   readonly clock?: Clock
   readonly idFactory?: IdFactory
   readonly sessionContextBudget?: AgentSessionContextBudget

@@ -124,6 +124,7 @@ export const startAgentWorkerInternal = (options: AgentWorkerOptions): StartedAg
           persistence,
           clock,
           idFactory,
+          modelTokenBudget: options.modelTokenBudget,
           sessionContextBudget: options.sessionContextBudget,
           telemetrySink: options.telemetry,
           onSnapshot: publish,

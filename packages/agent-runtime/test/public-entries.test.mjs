@@ -36,7 +36,7 @@ test('source entries expose finite profile-specific APIs', () => {
   const worker = readEntry('src/worker.ts')
   const testing = readEntry('src/testing.ts')
 
-  assert.deepEqual(root.runtime, ['createAgentRuntime'])
+  assert.deepEqual(root.runtime, ['createAgentRuntime', 'createAgentTelemetryChangeSetId'])
   for (const name of [
     'AgentRuntime',
     'AgentWorkerEndpoint',
@@ -45,6 +45,7 @@ test('source entries expose finite profile-specific APIs', () => {
     'HostInvocationContextV1',
     'RuntimeTaskCompensationTargetV1',
     'JsonValue',
+    'createAgentTelemetryChangeSetId',
   ]) {
     assert.ok(root.all.includes(name), `root entry must export ${name}`)
   }
@@ -78,22 +79,37 @@ test('source entries expose finite profile-specific APIs', () => {
       'ModelTurnPhase',
       'ModelTurnRequest',
       'WORKER_TELEMETRY_SCHEMA_VERSION',
+      'WorkerTelemetryDispositionReason',
       'WorkerTelemetryEvent',
       'WorkerTelemetryEventType',
+      'WorkerTelemetryExecutionDisposition',
       'WorkerTelemetryLedger',
+      'WorkerTelemetryPhase',
+      'WorkerTelemetryQuery',
+      'WorkerTelemetryReceiptDisposition',
       'WorkerTelemetrySink',
       'WorkerTelemetryStatus',
+      'createAgentTelemetryChangeSetId',
       'createWorkerTelemetryEvent',
       'createWorkerTelemetryLedger',
       'startAgentWorker',
+      'workerTelemetryDispositionReasons',
       'workerTelemetryEventTypes',
+      'workerTelemetryExecutionDispositions',
+      'workerTelemetryPhases',
+      'workerTelemetryReceiptDispositions',
     ],
     runtime: [
       'WORKER_TELEMETRY_SCHEMA_VERSION',
+      'createAgentTelemetryChangeSetId',
       'createWorkerTelemetryEvent',
       'createWorkerTelemetryLedger',
       'startAgentWorker',
+      'workerTelemetryDispositionReasons',
       'workerTelemetryEventTypes',
+      'workerTelemetryExecutionDispositions',
+      'workerTelemetryPhases',
+      'workerTelemetryReceiptDispositions',
     ],
   })
   assert.deepEqual(testing, {
@@ -125,13 +141,18 @@ test('source entries expose finite profile-specific APIs', () => {
 
 test('publish entries mirror runtime exports and keep the model stack out of root', async () => {
   const expected = {
-    index: ['createAgentRuntime'],
+    index: ['createAgentRuntime', 'createAgentTelemetryChangeSetId'],
     worker: [
       'WORKER_TELEMETRY_SCHEMA_VERSION',
+      'createAgentTelemetryChangeSetId',
       'createWorkerTelemetryEvent',
       'createWorkerTelemetryLedger',
       'startAgentWorker',
+      'workerTelemetryDispositionReasons',
       'workerTelemetryEventTypes',
+      'workerTelemetryExecutionDispositions',
+      'workerTelemetryPhases',
+      'workerTelemetryReceiptDispositions',
     ],
     testing: [
       'DeterministicClock',

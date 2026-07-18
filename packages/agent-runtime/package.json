@@ -49,7 +49,7 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "types": "tsc --project tsconfig.build.json",
-    "test": "pnpm build:js && node --test test/*.test.mjs && pnpm test-types",
+    "test": "pnpm build:js && node --experimental-global-webcrypto --test test/*.test.mjs && pnpm test-types",
     "test-types": "tsc --project tsconfig.test.json"
   }
 }

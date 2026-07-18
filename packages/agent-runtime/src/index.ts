@@ -50,3 +50,4 @@ export type {
   UserResponse,
 } from './contracts.js'
 export { createAgentRuntime } from './internal/runtime/runtime.js'
+export { createAgentTelemetryChangeSetId } from './internal/telemetry-change-set-id.js'

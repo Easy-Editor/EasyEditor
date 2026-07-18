@@ -51,6 +51,9 @@ const { createAgentSessionContext } = await import(
 const { createSafeWorkerTelemetryEmitter, createWorkerTelemetryEvent, createWorkerTelemetryLedger } = await import(
   pathToFileURL(join(compiledRoot, 'internal/telemetry.js'))
 )
+const { createAgentTelemetryChangeSetId } = await import(
+  pathToFileURL(join(compiledRoot, 'internal/telemetry-change-set-id.js'))
+)
 
 const binding = { projectId: 'project-1', branchId: 'branch-1' }
 
@@ -144,6 +147,7 @@ class TestHost {
       status: behavior.status ?? 'applied',
       ...(behavior.resultRevision === null ? {} : { revision: behavior.resultRevision ?? this.revision }),
       ...(behavior.failure ? { failure: structuredClone(behavior.failure) } : {}),
+      ...(Object.hasOwn(behavior, 'output') ? { output: structuredClone(behavior.output) } : {}),
     }
   }
 
@@ -229,6 +233,7 @@ const createMachine = (steps, overrides = {}) => {
     persistence,
     clock: overrides.clock ?? createClock(),
     idFactory: overrides.idFactory ?? createIds(),
+    modelTokenBudget: overrides.modelTokenBudget,
     repairBudget: overrides.repairBudget,
     sessionContextBudget: overrides.sessionContextBudget,
     telemetrySink: overrides.telemetrySink,
@@ -377,12 +382,16 @@ test('runs the deterministic happy path and commits a serializable checkpoint', 
 test('emits bounded Worker-only telemetry with queryable task, step, model request, and call lineage', async () => {
   const secret = 'RAW_PROMPT_CREDENTIAL_SOURCE_MUST_NOT_APPEAR'
   const ledger = createWorkerTelemetryLedger({ capacity: 64 })
+  const screenCall = call({
+    capability: 'screen.applyChangeSet',
+    args: { schemaVersion: 1, operations: [] },
+  })
   const fixture = createMachine(
     [
       { expectedPhase: 'BLUEPRINT', events: [blueprint] },
-      { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(screenCall), complete] },
     ],
-    { telemetrySink: { emit: event => ledger.append(event) } },
+    { modelTokenBudget: 4_096, telemetrySink: { emit: event => ledger.append(event) } },
   )
 
   const ref = await fixture.machine.submit({ text: secret, metadata: { credential: secret } })
@@ -398,8 +407,33 @@ test('emits bounded Worker-only telemetry with queryable task, step, model reque
     sessionId: ref.sessionId,
     taskId: ref.taskId,
   })
-  assert.ok(events.some(event => event.eventType === 'model-request.started' && event.modelRequestId === 'request-1'))
-  assert.ok(events.some(event => event.eventType === 'tool-call.completed' && event.callId === scopedCallId()))
+  assert.ok(
+    events.some(
+      event =>
+        event.eventType === 'model-request.started' &&
+        event.modelRequestId === 'request-1' &&
+        event.phase === 'BLUEPRINT' &&
+        event.tokenBudget === 4_096,
+    ),
+  )
+  assert.ok(
+    events.some(
+      event => event.eventType === 'phase.started' && event.stepId === 'step-2' && event.phase === 'PLAN_STEP',
+    ),
+  )
+  const toolCompleted = events.find(
+    event => event.eventType === 'tool-call.completed' && event.callId === scopedCallId(),
+  )
+  assert.ok(toolCompleted)
+  assert.equal(toolCompleted.resultRevision, 'r1')
+  assert.equal(toolCompleted.changeSetId, createAgentTelemetryChangeSetId(scopedCallId()))
+  assert.deepEqual(ledger.query({ taskId: ref.taskId }), events)
+  assert.deepEqual(ledger.query({ stepId: 'step-2' }), events)
+  assert.deepEqual(ledger.query({ callId: scopedCallId() }), events)
+  assert.deepEqual(ledger.query({ changeSetId: toolCompleted.changeSetId }), events)
+  assert.deepEqual(ledger.query({ modelRequestId: 'request-2' }), events)
+  assert.deepEqual(ledger.query({ sessionId: 'wrong-session', callId: scopedCallId() }), [])
+  assert.deepEqual(ledger.query({ callId: 'unknown-call' }), [])
   assert.equal(events.at(-1).eventType, 'runtime.terminal')
   for (let index = 1; index < events.length; index += 1) {
     assert.ok(events[index].timestampMs > events[index - 1].timestampMs)
@@ -423,6 +457,29 @@ test('emits bounded Worker-only telemetry with queryable task, step, model reque
     for (const forbidden of ['metadata', 'message', 'prompt', 'input', 'output', 'source', 'error', 'credential']) {
       assert.equal(Object.hasOwn(event, forbidden), false)
     }
+  }
+})
+
+test('canonical telemetry changeSet IDs are stable, collision-free for bounded call IDs, and byte-bijective', () => {
+  const callIds = [
+    'call:1:a:b',
+    'call:3:a:b',
+    'call:scope:雪:一',
+    'call:scope:雪:二',
+    ...Array.from({ length: 512 }, (_, index) => `call:session-${index}:local-${index * 17}`),
+  ]
+  const changeSetIds = callIds.map(createAgentTelemetryChangeSetId)
+  assert.equal(new Set(changeSetIds).size, callIds.length)
+  assert.equal(createAgentTelemetryChangeSetId(callIds[0]), changeSetIds[0])
+  for (const [index, changeSetId] of changeSetIds.entries()) {
+    assert.match(changeSetId, /^change-set-v1-[a-f0-9]+$/u)
+    assert.equal(changeSetId.includes(callIds[index]), false)
+    const hex = changeSetId.slice('change-set-v1-'.length)
+    const bytes = Uint8Array.from(hex.match(/.{2}/gu) ?? [], value => Number.parseInt(value, 16))
+    assert.equal(new TextDecoder().decode(bytes), callIds[index])
+  }
+  for (const invalid of ['', 'contains whitespace', 'contains\u0000control', 'x'.repeat(257)]) {
+    assert.throws(() => createAgentTelemetryChangeSetId(invalid), /callId is invalid/i)
   }
 })
 
@@ -450,6 +507,57 @@ test('telemetry sink failures and bounded pending emissions never break task exe
     })
   }
   assert.deepEqual(emitter.stats(), { pending: 2, dropped: 1, failed: 0 })
+})
+
+test('artifact telemetry extracts only the real artifact and source revision lineage from the Host result', async () => {
+  const secret = 'RAW_ARTIFACT_SOURCE_MUST_NOT_APPEAR'
+  const ledger = createWorkerTelemetryLedger({ capacity: 64 })
+  const host = new TestHost()
+  host.behaviors.push({
+    output: {
+      artifactRef: {
+        artifactId: 'artifact-1',
+        sourceRevision: 'source-revision-1',
+        source: secret,
+      },
+      source: secret,
+    },
+  })
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      {
+        expectedPhase: 'PLAN_STEP',
+        events: [
+          toolCall(
+            call({
+              capability: 'artifact.createOnline',
+              args: { schemaVersion: 1, source: secret },
+            }),
+          ),
+          complete,
+        ],
+      },
+    ],
+    { host, telemetrySink: { emit: event => ledger.append(event) } },
+  )
+
+  const ref = await fixture.machine.submit({ text: 'Create an online artifact' })
+  await fixture.machine.waitForIdle()
+  const events = ledger.query({ artifactId: 'artifact-1', artifactRevision: 'source-revision-1' })
+  assert.ok(events.length > 0)
+  assert.ok(
+    events.some(
+      event =>
+        event.eventType === 'tool-call.completed' &&
+        event.artifactId === 'artifact-1' &&
+        event.artifactRevision === 'source-revision-1' &&
+        event.resultRevision === 'r1',
+    ),
+  )
+  assert.deepEqual(events, ledger.query({ taskId: ref.taskId }))
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(secret))
+  assert.throws(() => ledger.query({ artifactId: 'artifact-1' }), /telemetry event is invalid/i)
 })
 
 test('telemetry reduces arbitrary model error text to a finite error code', async () => {
@@ -511,6 +619,7 @@ test('telemetry ledger rejects capacity overflow without changing accepted recor
         sessionId: 'session-1',
         taskId: 'orphan-task',
         stepId: 'step-1',
+        phase: 'PLAN_STEP',
       }),
     /telemetry event is invalid/i,
   )
@@ -530,6 +639,7 @@ test('telemetry ledger rejects capacity overflow without changing accepted recor
     sessionId: 'session-1',
     taskId: 'task-1',
     stepId: 'step-1',
+    phase: 'PLAN_STEP',
   })
   assert.throws(
     () =>
@@ -544,6 +654,7 @@ test('telemetry ledger rejects capacity overflow without changing accepted recor
         stepId: 'step-1',
         callId: 'orphan-call',
         artifactId: 'orphan-artifact',
+        artifactRevision: 'orphan-revision',
       }),
     /telemetry event is invalid/i,
   )
@@ -556,6 +667,7 @@ test('telemetry ledger rejects capacity overflow without changing accepted recor
     sessionId: 'session-1',
     taskId: 'task-1',
     stepId: 'step-1',
+    phase: 'PLAN_STEP',
   })
   const accepted = ledger.query({ sessionId: 'session-1', taskId: 'task-1' })
   assert.throws(
@@ -569,8 +681,6 @@ test('telemetry ledger rejects capacity overflow without changing accepted recor
         taskId: 'task-1',
         stepId: 'step-1',
         callId: 'capacity-rejected-call',
-        changeSetId: 'capacity-rejected-change-set',
-        artifactId: 'capacity-rejected-artifact',
       }),
     /telemetry event is invalid/i,
   )
@@ -604,6 +714,112 @@ test('telemetry event validation rejects raw payload fields, invalid enums, iden
   ]) {
     assert.throws(() => createWorkerTelemetryEvent(invalid), /telemetry event is invalid/i)
   }
+})
+
+test('telemetry ledger rejects duplicate and reparented task, step, model, call, change-set, and artifact lineage', () => {
+  const ledger = createWorkerTelemetryLedger({ capacity: 32 })
+  const taskStarted = taskId => ({
+    schemaVersion: 1,
+    eventType: 'task.started',
+    timestampMs: 1,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId,
+  })
+  const phaseStarted = (taskId, stepId) => ({
+    schemaVersion: 1,
+    eventType: 'phase.started',
+    timestampMs: 2,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId,
+    stepId,
+    phase: 'PLAN_STEP',
+  })
+  const modelStarted = (taskId, stepId, modelRequestId) => ({
+    schemaVersion: 1,
+    eventType: 'model-request.started',
+    timestampMs: 3,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId,
+    stepId,
+    modelRequestId,
+    phase: 'PLAN_STEP',
+  })
+  const toolStarted = (taskId, stepId, callId) => ({
+    schemaVersion: 1,
+    eventType: 'tool-call.started',
+    timestampMs: 4,
+    status: 'started',
+    sessionId: 'session-1',
+    taskId,
+    stepId,
+    callId,
+  })
+
+  ledger.append(taskStarted('task-1'))
+  ledger.append(taskStarted('task-2'))
+  assert.throws(() => ledger.append(taskStarted('task-1')), /telemetry event is invalid/i)
+  ledger.append(phaseStarted('task-1', 'step-1'))
+  ledger.append(phaseStarted('task-2', 'step-2'))
+  assert.throws(() => ledger.append(phaseStarted('task-1', 'step-1')), /telemetry event is invalid/i)
+  assert.throws(() => ledger.append(phaseStarted('task-2', 'step-1')), /telemetry event is invalid/i)
+  ledger.append(modelStarted('task-1', 'step-1', 'request-1'))
+  assert.throws(() => ledger.append(modelStarted('task-1', 'step-1', 'request-1')), /telemetry event is invalid/i)
+  assert.throws(() => ledger.append(modelStarted('task-2', 'step-2', 'request-1')), /telemetry event is invalid/i)
+  ledger.append(toolStarted('task-1', 'step-1', 'call-1'))
+  ledger.append(toolStarted('task-1', 'step-1', 'call-2'))
+  assert.throws(() => ledger.append(toolStarted('task-1', 'step-1', 'call-1')), /telemetry event is invalid/i)
+  assert.throws(() => ledger.append(toolStarted('task-2', 'step-2', 'call-1')), /telemetry event is invalid/i)
+  ledger.append({
+    schemaVersion: 1,
+    eventType: 'tool-call.completed',
+    timestampMs: 5,
+    durationMs: 1,
+    status: 'completed',
+    sessionId: 'session-1',
+    taskId: 'task-1',
+    stepId: 'step-1',
+    callId: 'call-1',
+    changeSetId: 'change-set-1',
+    artifactId: 'artifact-1',
+    artifactRevision: 'revision-1',
+  })
+  assert.throws(
+    () =>
+      ledger.append({
+        schemaVersion: 1,
+        eventType: 'tool-call.completed',
+        timestampMs: 6,
+        durationMs: 1,
+        status: 'completed',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        stepId: 'step-1',
+        callId: 'call-2',
+        changeSetId: 'change-set-1',
+      }),
+    /telemetry event is invalid/i,
+  )
+  assert.throws(
+    () =>
+      ledger.append({
+        schemaVersion: 1,
+        eventType: 'tool-call.completed',
+        timestampMs: 6,
+        durationMs: 1,
+        status: 'completed',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        stepId: 'step-1',
+        callId: 'call-2',
+        artifactId: 'artifact-1',
+        artifactRevision: 'revision-1',
+      }),
+    /telemetry event is invalid/i,
+  )
+  assert.deepEqual(ledger.query({ changeSetId: 'change-set-1' }), ledger.query({ taskId: 'task-1' }))
 })
 
 test('projects and recovers the submitted intent, accepted blueprint, completion summary, and model context', async () => {
@@ -1524,6 +1740,7 @@ test('a transport or protocol rejection propagates without being hidden by a ful
 
 test('correlates BLUEPRINT, PLAN_STEP, and REPAIR requests with their originating tool calls', async () => {
   const host = new TestHost()
+  const ledger = createWorkerTelemetryLedger({ capacity: 96 })
   const correlations = []
   const matchCorrelation = request => {
     correlations.push({
@@ -1547,7 +1764,7 @@ test('correlates BLUEPRINT, PLAN_STEP, and REPAIR requests with their originatin
         events: [toolCall(call({ step: 2, callId: 2, revision: 'r2' })), complete],
       },
     ],
-    { host, repairBudget: 1 },
+    { host, repairBudget: 1, telemetrySink: { emit: event => ledger.append(event) } },
   )
 
   await fixture.machine.submit({ text: 'Repair stale output' })
@@ -1578,10 +1795,21 @@ test('correlates BLUEPRINT, PLAN_STEP, and REPAIR requests with their originatin
   assert.equal(fixture.persistence.commits[1].records[0].value.repairAttempts, 1)
   assert.equal(Object.hasOwn(fixture.persistence.commits[1].records[0].value, 'pendingInvocation'), false)
   assertOrdered(fixture.phases, ['VERIFY', 'REPAIR', 'EXECUTE', 'VERIFY', 'CHECKPOINT'])
+  assert.ok(
+    ledger
+      .query({ taskId: 'task-1' })
+      .some(
+        event =>
+          event.eventType === 'execution.disposition' &&
+          event.disposition === 'repair' &&
+          event.reason === 'RESULT_REVISION_MISMATCH',
+      ),
+  )
   fixture.model.assertFullyConsumed()
 })
 
 test('persists a pre-invocation repair attempt before asking the model to repair', async () => {
+  const ledger = createWorkerTelemetryLedger({ capacity: 96 })
   const fixture = createMachine(
     [
       { expectedPhase: 'BLUEPRINT', events: [blueprint] },
@@ -1592,7 +1820,7 @@ test('persists a pre-invocation repair attempt before asking the model to repair
         events: [toolCall(call({ step: 2, callId: 2 })), complete],
       },
     ],
-    { repairBudget: 1 },
+    { repairBudget: 1, telemetrySink: { emit: event => ledger.append(event) } },
   )
 
   await fixture.machine.submit({ text: 'Persist a stale precondition repair' })
@@ -1607,18 +1835,29 @@ test('persists a pre-invocation repair attempt before asking the model to repair
   assert.equal(fixture.persistence.commits[0].records[0].value.repairAttempts, 1)
   assert.deepEqual(fixture.persistence.commits[0].records[0].value.callIds, [])
   assert.equal(Object.hasOwn(fixture.persistence.commits[0].records[0].value, 'pendingInvocation'), false)
+  assert.ok(
+    ledger
+      .query({ taskId: 'task-1' })
+      .some(
+        event =>
+          event.eventType === 'execution.disposition' &&
+          event.disposition === 'repair' &&
+          event.reason === 'SNAPSHOT_REVISION_MISMATCH',
+      ),
+  )
   fixture.model.assertFullyConsumed()
 })
 
 test('pauses after exhausting the repair budget', async () => {
   const host = new TestHost()
+  const ledger = createWorkerTelemetryLedger({ capacity: 64 })
   host.behaviors.push({ observedRevision: 'r2', resultRevision: 'r1' })
   const fixture = createMachine(
     [
       { expectedPhase: 'BLUEPRINT', events: [blueprint] },
       { expectedPhase: 'PLAN_STEP', events: [toolCall(call())] },
     ],
-    { host, repairBudget: 0 },
+    { host, repairBudget: 0, telemetrySink: { emit: event => ledger.append(event) } },
   )
 
   await fixture.machine.submit({ text: 'Do not repair forever' })
@@ -1633,6 +1872,16 @@ test('pauses after exhausting the repair budget', async () => {
   assert.deepEqual(
     fixture.persistence.commits.map(commit => commit.records[0].value.phase),
     ['EXECUTE', 'PAUSED'],
+  )
+  assert.ok(
+    ledger
+      .query({ taskId: 'task-1' })
+      .some(
+        event =>
+          event.eventType === 'execution.disposition' &&
+          event.disposition === 'paused' &&
+          event.reason === 'REPAIR_BUDGET_EXHAUSTED',
+      ),
   )
 
   const restarted = createMachine([], { persistence: fixture.persistence, repairBudget: 0 })
@@ -1740,7 +1989,10 @@ test('cancel stops future work and active submit records ancestry and supersessi
 })
 
 test('cancel aborts a pending model turn without executing tools', async () => {
-  const fixture = createMachine([{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }])
+  const ledger = createWorkerTelemetryLedger({ capacity: 32 })
+  const fixture = createMachine([{ expectedPhase: 'BLUEPRINT', events: [], fault: 'timeout' }], {
+    telemetrySink: { emit: event => ledger.append(event) },
+  })
   const ref = await fixture.machine.submit({ text: 'Cancel me' })
   await waitForPhase(fixture.machine, 'BLUEPRINT')
 
@@ -1749,6 +2001,11 @@ test('cancel aborts a pending model turn without executing tools', async () => {
 
   assert.equal(fixture.machine.getSnapshot().phase, 'CANCELLED')
   assert.equal(fixture.host.invocations.length, 0)
+  assert.ok(
+    ledger
+      .query({ taskId: ref.taskId })
+      .some(event => event.eventType === 'runtime.terminal' && event.status === 'cancelled'),
+  )
   fixture.model.assertFullyConsumed()
 })
 
@@ -1757,7 +2014,8 @@ test('recovery queries a durable pending call and invokes the same callId once w
   persistence.generation = 1
   persistence.records = [pendingTaskRecord()]
   const host = new TestHost()
-  const fixture = createMachine([], { host, persistence })
+  const ledger = createWorkerTelemetryLedger({ capacity: 32 })
+  const fixture = createMachine([], { host, persistence, telemetrySink: { emit: event => ledger.append(event) } })
 
   await fixture.machine.recover()
   await fixture.machine.waitForIdle()
@@ -1779,6 +2037,12 @@ test('recovery queries a durable pending call and invokes the same callId once w
   )
   assert.equal(Object.hasOwn(persistence.records[0].value, 'pendingInvocation'), false)
   assert.deepEqual(persistence.records[0].value.callIds, ['call-1'])
+  const events = ledger.query({ callId: 'call-1' })
+  assert.equal(events[0].eventType, 'task.recovered')
+  assert.ok(events.some(event => event.eventType === 'phase.started' && event.phase === 'RECOVERY'))
+  assert.ok(
+    events.some(event => event.eventType === 'receipt-recovery.disposition' && event.receiptDisposition === 'missing'),
+  )
   fixture.model.assertFullyConsumed()
 })
 
@@ -1813,7 +2077,8 @@ test('ACK-loss recovery fills a legacy task-call index before accepting an appli
     status: 'applied',
     revision: 'r0',
   })
-  const fixture = createMachine([], { host, persistence })
+  const ledger = createWorkerTelemetryLedger({ capacity: 32 })
+  const fixture = createMachine([], { host, persistence, telemetrySink: { emit: event => ledger.append(event) } })
 
   await fixture.machine.recover()
   await fixture.machine.waitForIdle()
@@ -1825,6 +2090,16 @@ test('ACK-loss recovery fills a legacy task-call index before accepting an appli
   assert.deepEqual(persistence.records[0].value.callIndex, [{ callId: 'call-1', capability: 'set-title' }])
   assert.equal(persistence.records[0].value.callIndexComplete, false)
   assert.equal(Object.hasOwn(persistence.records[0].value, 'pendingInvocation'), false)
+  assert.ok(
+    ledger
+      .query({ callId: 'call-1' })
+      .some(
+        event =>
+          event.eventType === 'receipt-recovery.disposition' &&
+          event.receiptDisposition === 'applied' &&
+          event.resultRevision === 'r0',
+      ),
+  )
   fixture.model.assertFullyConsumed()
 })
 
@@ -2913,8 +3188,9 @@ test('stale and human activity outcomes yield once, re-observe, and pause on a s
   const activityFailure = { code: 'HUMAN_ACTIVITY', message: 'The activity lease renewed', retryable: true }
 
   const completingHost = new TestHost()
+  const completingLedger = createWorkerTelemetryLedger({ capacity: 96 })
   completingHost.behaviors.push(
-    { status: 'not-applied', observedRevision: 'r1', resultRevision: 'r1', failure: staleFailure },
+    { status: 'not-applied', observedRevision: 'r1', resultRevision: 'r1', failure: activityFailure },
     { status: 'applied', observedRevision: 'r2', resultRevision: 'r2' },
   )
   const completing = createMachine(
@@ -2927,7 +3203,7 @@ test('stale and human activity outcomes yield once, re-observe, and pause on a s
         events: [toolCall(call({ step: 2, callId: 2, revision: 'r1' })), complete],
       },
     ],
-    { host: completingHost },
+    { host: completingHost, telemetrySink: { emit: event => completingLedger.append(event) } },
   )
 
   await completing.machine.submit({ text: 'Yield to a human once' })
@@ -2941,9 +3217,26 @@ test('stale and human activity outcomes yield once, re-observe, and pause on a s
     completingHost.observations.map(observation => observation.mode),
     ['full', 'full', 'full'],
   )
+  assert.ok(
+    completingLedger
+      .query({ taskId: 'task-1' })
+      .some(
+        event =>
+          event.eventType === 'execution.disposition' &&
+          event.disposition === 'yielded' &&
+          event.reason === 'HUMAN_ACTIVITY',
+      ),
+  )
+  assert.equal(
+    completingLedger
+      .query({ taskId: 'task-1' })
+      .some(event => event.eventType === 'execution.disposition' && event.disposition === 'repair'),
+    false,
+  )
   completing.model.assertFullyConsumed()
 
   const pausingHost = new TestHost()
+  const pausingLedger = createWorkerTelemetryLedger({ capacity: 96 })
   pausingHost.behaviors.push(
     { status: 'not-applied', observedRevision: 'r1', resultRevision: 'r1', failure: staleFailure },
     { status: 'not-applied', observedRevision: 'r2', resultRevision: 'r2', failure: activityFailure },
@@ -2958,7 +3251,7 @@ test('stale and human activity outcomes yield once, re-observe, and pause on a s
         events: [toolCall(call({ step: 2, callId: 2, revision: 'r1' }))],
       },
     ],
-    { host: pausingHost },
+    { host: pausingHost, telemetrySink: { emit: event => pausingLedger.append(event) } },
   )
 
   await pausing.machine.submit({ text: 'Do not loop against continuous human activity' })
@@ -2973,6 +3266,14 @@ test('stale and human activity outcomes yield once, re-observe, and pause on a s
   assert.deepEqual(pausing.persistence.records[0].value.callIndex, [
     { callId: scopedCallId(), capability: 'set-title' },
     { callId: scopedCallId('call-2'), capability: 'set-title' },
+  ])
+  const dispositions = pausingLedger
+    .query({ taskId: 'task-1' })
+    .filter(event => event.eventType === 'execution.disposition')
+    .map(event => [event.disposition, event.reason])
+  assert.deepEqual(dispositions, [
+    ['yielded', 'STALE_REVISION'],
+    ['paused', 'YIELD_LIMIT'],
   ])
   pausing.model.assertFullyConsumed()
 })
