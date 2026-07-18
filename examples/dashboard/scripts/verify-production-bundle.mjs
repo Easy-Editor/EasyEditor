@@ -22,6 +22,9 @@ const forbiddenMarkers = Object.freeze([
   'armDashboardAgentPostCommitGate',
   'waitForDashboardAgentPostCommit',
   'releaseDashboardAgentPostCommitGate',
+  'getDashboardHumanActivityGeneration',
+  'Dashboard human activity generation is E2E-only',
+  'getHumanActivityGeneration',
 ])
 
 const listFiles = async directory => {

@@ -396,6 +396,9 @@ test('production Worker modules are isolated from testing/E2E imports and the bu
     'armDashboardAgentPostCommitGate',
     'waitForDashboardAgentPostCommit',
     'releaseDashboardAgentPostCommitGate',
+    'getDashboardHumanActivityGeneration',
+    'Dashboard human activity generation is E2E-only',
+    'getHumanActivityGeneration',
   ]) {
     assert.match(verifierSource, new RegExp(marker, 'u'))
   }

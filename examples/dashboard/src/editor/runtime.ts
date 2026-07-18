@@ -129,10 +129,6 @@ export const registerDashboardAgentWorkspaceE2EProbe = (
 }
 
 const dashboardHumanActivityLease = createHumanActivityLease()
-export const getDashboardHumanActivityGeneration = (): number => {
-  if (import.meta.env.VITE_E2E !== '1') throw new Error('Dashboard human activity generation is E2E-only')
-  return dashboardHumanActivityLease.generation
-}
 export const dashboardInvocationActivity = createDashboardInvocationActivity()
 let releaseDashboardHumanActivityTracking: (() => void) | null =
   dashboardAgentRuntimeFeatureFlags.runtime === true || dashboardMaterialGcEnabled
@@ -455,6 +451,7 @@ export const composeDashboardAgentSessionHost = (
 if (import.meta.env.VITE_E2E === '1') {
   const e2eProbe = {
     getEngineState: () => engine.lifecycleState,
+    getHumanActivityGeneration: () => dashboardHumanActivityLease.generation,
     getPersistenceState: () => dashboardPersistence.getSnapshot(),
     getAgentWorkspaceState: () => dashboardAgentWorkspaceE2EProbe?.() ?? null,
     getAgentTelemetryState: (query: DashboardAgentTelemetryQuery) =>

@@ -1733,6 +1733,7 @@ test('Dashboard wiring keeps canonical writes and IndexedDB transactions behind 
   const e2eOnlyBlock = e2eOnlyBlockMatch[1]
   assert.match(e2eOnlyBlock, /^if \(import\.meta\.env\.VITE_E2E === '1'\) \{\s+const e2eProbe = \{/u)
   assert.match(e2eOnlyBlock, /\n\s+getEngineState:/u)
+  assert.match(e2eOnlyBlock, /\n\s+getHumanActivityGeneration:/u)
   assert.match(e2eOnlyBlock, /\n\s+getPersistenceState:/u)
   assert.match(e2eOnlyBlock, /\n\s+flushPersistence:/u)
   assert.match(
@@ -1740,11 +1741,15 @@ test('Dashboard wiring keeps canonical writes and IndexedDB transactions behind 
     /Object\.defineProperty\(window, '__EASY_EDITOR_E2E__', \{\s+configurable: true,\s+value: Object\.freeze\(e2eProbe\),\s+\}\)/u,
   )
   assert.doesNotMatch(e2eOnlyBlock, /\b(?:save|write|commit|loadProject|destroy)\w*:/iu)
+  assert.doesNotMatch(
+    runtimeSource,
+    /\bgetDashboardHumanActivityGeneration\b|Dashboard human activity generation is E2E-only/u,
+  )
 
   const productionRuntimeSource = runtimeSource.slice(0, e2eOnlyBlockMatch.index)
   assert.doesNotMatch(
     productionRuntimeSource,
-    /__EASY_EDITOR_E2E__|\be2eProbe\b|\bgetEngineState\b|\bflushPersistence\b/u,
+    /__EASY_EDITOR_E2E__|\be2eProbe\b|\bgetEngineState\b|\bgetHumanActivityGeneration\b|\bflushPersistence\b/u,
   )
 
   const persistenceSource = readFileSync(persistenceRuntimePath, 'utf8')

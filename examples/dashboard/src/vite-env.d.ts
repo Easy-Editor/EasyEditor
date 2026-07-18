@@ -26,6 +26,7 @@ declare global {
         stats: DashboardAgentTelemetryStats
       }> | null
       getEngineState: () => 'created' | 'initializing' | 'ready' | 'disposing' | 'disposed' | 'failed'
+      getHumanActivityGeneration: () => number
       getPersistenceState: () => DashboardPersistenceSnapshot
       getMaterialGcState?: () => DashboardMaterialGcRuntimeSnapshotV1
       flushPersistence: () => Promise<void>

@@ -840,7 +840,7 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
           e2eProbe.armDashboardAgentPostIntentGate()
           return {
             rect,
-            activityGeneration: runtime.getDashboardHumanActivityGeneration(),
+            activityGeneration: e2eProbe.getHumanActivityGeneration(),
             persistenceGeneration: runtime.dashboardPersistence.getSnapshot().draftGeneration,
           }
         }),
@@ -857,8 +857,10 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
     expect(gatedCallId).toEqual(expect.any(String))
     const reached = await page.evaluate(async () => {
       const runtime = await import('/src/editor/runtime.ts')
+      const e2eProbe = window.__EASY_EDITOR_E2E__
+      if (!e2eProbe) throw new Error('Golden E2E probe is unavailable')
       return {
-        activityGeneration: runtime.getDashboardHumanActivityGeneration(),
+        activityGeneration: e2eProbe.getHumanActivityGeneration(),
         persistenceGeneration: runtime.dashboardPersistence.getSnapshot().draftGeneration,
       }
     })
@@ -873,10 +875,12 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         const storage = await import('/src/lib/storage/index.mjs')
         const durable = await import('/src/editor/agent/persistence/durable-agent-commit.mjs')
         const rect = runtime.engine.project.currentDocument?.getNode(nodeId)?.getDashboardRect()
-        const task = window.__EASY_EDITOR_E2E__
-          ?.getAgentWorkspaceState()
+        const e2eProbe = window.__EASY_EDITOR_E2E__
+        if (!e2eProbe) throw new Error('Golden E2E probe is unavailable')
+        const task = e2eProbe
+          .getAgentWorkspaceState()
           ?.snapshot.remote.tasks.find(candidate => candidate.taskId === taskId)
-        const telemetry = window.__EASY_EDITOR_E2E__?.getAgentTelemetryState({ callId })
+        const telemetry = e2eProbe.getAgentTelemetryState({ callId })
         if (!telemetry) throw new Error('Golden held-call telemetry is unavailable')
         const coordinator = new storage.ProjectPersistenceCoordinator({
           backend: new storage.IndexedDbDashboardStorageBackend({ indexedDB, crypto }),
@@ -885,7 +889,7 @@ test('Agent Runtime dashboard Golden journey', async ({ context, page }) => {
         try {
           const authority = { projectId: binding.projectId, branchId: binding.branchId, callId }
           return {
-            activityGeneration: runtime.getDashboardHumanActivityGeneration(),
+            activityGeneration: e2eProbe.getHumanActivityGeneration(),
             persistenceGeneration: runtime.dashboardPersistence.getSnapshot().draftGeneration,
             phase: task?.phase,
             rect,
