@@ -57,12 +57,17 @@ test('safe data feature flag is independently default-off and strict', () => {
 test('editor, preview, and Agent Host use explicit data flag wiring', () => {
   const editorSource = readFileSync(resolve(dashboardRoot, 'src/editor/index.ts'), 'utf8')
   const previewSource = readFileSync(resolve(dashboardRoot, 'src/pages/preview/index.tsx'), 'utf8')
+  const previewMaterialGcSource = readFileSync(resolve(dashboardRoot, 'src/pages/preview/material-gc.mjs'), 'utf8')
   const runtimeSource = readFileSync(resolve(dashboardRoot, 'src/editor/runtime.ts'), 'utf8')
 
   assert.match(editorSource, /safeDataEnabled:\s*dashboardAgentRuntimeFeatureFlags\.data/u)
   assert.match(previewSource, /resolveDashboardSafeDataFeatureFlag\(import\.meta\.env\)/u)
   assert.match(previewSource, /composeDashboardRootSchema\([^)]*\{ safeDataEnabled \}/su)
-  assert.doesNotMatch(previewSource, /editor\/agent/u)
+  assert.doesNotMatch(
+    `${previewSource}\n${previewMaterialGcSource}`,
+    /@\/editor\/runtime|editor\/agent\/(?:host|capabilities\/data|data-runtime)/u,
+  )
+  assert.match(previewMaterialGcSource, /editor\/agent\/capabilities\/promotion\/material-gc/u)
   assert.match(runtimeSource, /dashboardAgentRuntimeFeatureFlags\.data\s*\?\s*createDashboardSameOriginDataResolver/su)
   assert.match(runtimeSource, /\.\.\.\(dataResolver \? \{ dataResolver \} : \{\}\)/u)
 })

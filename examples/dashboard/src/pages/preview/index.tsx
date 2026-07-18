@@ -6,7 +6,11 @@ import {
 } from '@/editor/data'
 import { dashboardExpressionEvaluator } from '@/editor/expression-policy'
 import { components } from '@/editor/materials'
-import { createDashboardPersistenceRuntime, selectDashboardActiveDocumentSchema } from '@/editor/persistence-runtime'
+import {
+  createDashboardPersistenceRuntime,
+  selectDashboardActiveDocumentSchema,
+  withDashboardMaterialAdmissionBeforeExposure,
+} from '@/editor/persistence-runtime'
 import {
   DASHBOARD_ONLINE_COMPONENT_BRIDGE_KEY,
   createDashboardOnlineComponentSurfaceBridge,
@@ -25,10 +29,13 @@ import {
 } from '@easy-editor/core/instance'
 import { Renderer } from '@easy-editor/react-renderer-dashboard'
 import { useEffect, useMemo, useState } from 'react'
+import { createDashboardPreviewMaterialGcComposition, resolveDashboardMaterialGcEnabled } from './material-gc.mjs'
+import type { DashboardPreviewMaterialGcComposition } from './material-gc.mjs'
 
 const previewOnlineComponentSurfaceEnabled = isDashboardOnlineComponentSurfaceEnabled(
   resolveDashboardOnlineComponentSurfaceFeatureFlags(import.meta.env),
 )
+const previewMaterialGcEnabled = resolveDashboardMaterialGcEnabled(import.meta.env)
 
 interface DashboardPreviewDocument {
   readonly dataSourceEngine: ReturnType<typeof createDashboardDataRuntime>['dataSourceEngine']
@@ -53,6 +60,7 @@ const Preview = () => {
     let active = true
     let projectId: string | null = null
     let onlineComponentSurface: ReturnType<typeof startDashboardOnlineComponentSurface> | null = null
+    let materialGcComposition: DashboardPreviewMaterialGcComposition | null = null
     const safeDataEnabled = resolveDashboardSafeDataFeatureFlag(import.meta.env)
     const dataRuntime = createDashboardDataRuntime({
       expressionEvaluator: dashboardExpressionEvaluator,
@@ -86,28 +94,56 @@ const Preview = () => {
         ) as unknown as RootSchema
         projectId = draft.projectId
         if (!active) return
-        if (previewOnlineComponentSurfaceEnabled && onlineComponentSurfaceBridge) {
-          onlineComponentSurface = startDashboardOnlineComponentSurface({
-            enabled: true,
-            safeBoot: resolveDashboardOnlineComponentSafeBoot(window.location.search),
-            mode: 'preview',
-            projectId: draft.projectId,
-            branchId: draft.branchId,
-            surfaceId: 'dashboard-preview-online',
-            bridge: onlineComponentSurfaceBridge,
-            markerStore: window.localStorage,
-            persistence,
-            document: window.document,
-            onRuntimeEvent: event => dispatchDashboardOnlineComponentRuntimeEvent(window, event),
+        const exposePreview = () => {
+          if (!active) return
+          if (previewOnlineComponentSurfaceEnabled && onlineComponentSurfaceBridge) {
+            onlineComponentSurface = startDashboardOnlineComponentSurface({
+              enabled: true,
+              safeBoot: resolveDashboardOnlineComponentSafeBoot(window.location.search),
+              mode: 'preview',
+              projectId: draft.projectId,
+              branchId: draft.branchId,
+              surfaceId: 'dashboard-preview-online',
+              bridge: onlineComponentSurfaceBridge,
+              markerStore: window.localStorage,
+              persistence,
+              document: window.document,
+              onRuntimeEvent: event => dispatchDashboardOnlineComponentRuntimeEvent(window, event),
+            })
+          }
+          setDocument({
+            dataSourceEngine: dataRuntime.dataSourceEngine,
+            project: validatedProject,
+            schema: composeDashboardRootSchema(validatedProject, activeSchema, { safeDataEnabled }),
           })
         }
-        setDocument({
-          dataSourceEngine: dataRuntime.dataSourceEngine,
-          project: validatedProject,
-          schema: composeDashboardRootSchema(validatedProject, activeSchema, { safeDataEnabled }),
+        if (!previewMaterialGcEnabled) {
+          exposePreview()
+          return
+        }
+        materialGcComposition = createDashboardPreviewMaterialGcComposition({
+          enabled: true,
+          environment: {
+            inputTarget: window,
+            lockManager: window.navigator.locks,
+            storage: window.localStorage,
+            crypto: window.crypto,
+            fetchImpl: window.fetch.bind(window),
+          },
+          persistence,
+          onError: cause => console.error('[EasyEditor] Dashboard preview Material GC failed closed:', cause),
+        })
+        await withDashboardMaterialAdmissionBeforeExposure({
+          projectId: draft.projectId,
+          reason: 'preview-load',
+          readMaterialGcSnapshot: id => persistence.readMaterialGcSnapshot(id),
+          withMaterialAdmission: materialGcComposition.withMaterialAdmission,
+          operation: exposePreview,
         })
       } catch (cause) {
         console.error('[EasyEditor] Failed to load canonical Dashboard preview:', cause)
+        materialGcComposition?.dispose()
+        materialGcComposition = null
         if (active) setError('预览加载失败：无法读取已保存的大屏项目。')
       }
     }
@@ -115,6 +151,7 @@ const Preview = () => {
     return () => {
       active = false
       onlineComponentSurface?.dispose()
+      materialGcComposition?.dispose()
       dataRuntime.dispose()
       void persistence.dispose().catch(cause => {
         console.error('[EasyEditor] Failed to dispose Dashboard preview persistence:', cause)
