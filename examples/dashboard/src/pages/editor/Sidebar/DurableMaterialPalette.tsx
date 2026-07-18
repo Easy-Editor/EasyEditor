@@ -28,10 +28,11 @@ const unavailableLabel = (reason: DashboardDurableCatalogMaterialV1['unavailable
 
 const DurableMaterialSnippet = ({ material }: { material: DashboardDurableCatalogMaterialV1 }) => {
   const ref = useRef<HTMLDivElement>(null)
-  const snippet = useMemo<Readonly<Snippet> | null>(
-    () => (material.availability === 'available' ? createDurableMaterialSnippet(material) : null),
-    [material],
-  )
+  const snippet = useMemo<Readonly<Snippet> | null>(() => {
+    if (material.availability !== 'available') return null
+    const durableSnippet = createDurableMaterialSnippet(material)
+    return { ...durableSnippet, schema: structuredClone(durableSnippet.schema) }
+  }, [material])
 
   useEffect(() => {
     const element = ref.current
@@ -44,7 +45,12 @@ const DurableMaterialSnippet = ({ material }: { material: DashboardDurableCatalo
   return (
     <Card
       ref={ref}
+      aria-label={`拖拽物料：${material.title}`}
       aria-disabled={unavailable}
+      data-testid='durable-material-card'
+      data-material-id={material.artifactRef.target.materialId}
+      data-material-version={material.artifactRef.target.materialVersion}
+      data-build-integrity={material.artifactRef.target.buildIntegrity}
       className={
         unavailable
           ? 'select-none aspect-square border-dashed opacity-55'
