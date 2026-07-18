@@ -1,7 +1,12 @@
 import type { InvocationResult, SemanticCall } from '@easy-editor/agent-runtime'
+import type { ArtifactMaterialIdentityV1 } from '../../../../lib/storage/artifact-contracts.mjs'
 import type { CanonicalActiveDocumentV1, CanonicalWorkingDraftV1 } from '../../../../lib/storage/contracts.mjs'
 import type { DurableAgentBatchV1 } from '../../persistence/durable-agent-commit.mjs'
 import type { ReceiptIntentV1, ReceiptRecoveryResult, ToolReceiptV1 } from '../../persistence/receipt-ledger.mjs'
+import type {
+  DashboardMaterialGcAdmissionInput,
+  DashboardMaterialGcRuntime,
+} from '../promotion/material-gc-runtime.mjs'
 import type {
   CompileScreenChangeSetInput,
   CompiledScreenChangeSet,
@@ -19,6 +24,8 @@ export declare const SCREEN_APPLY_CHANGESET_FAILURE_CODE: Readonly<{
   humanActivity: 'HUMAN_ACTIVITY'
   indeterminateCoreOutcome: 'INDETERMINATE_CORE_OUTCOME'
   indeterminateReceipt: 'INDETERMINATE_RECEIPT'
+  invalidMaterialRef: 'INVALID_MATERIAL_REF'
+  materialAdmissionFailed: 'MATERIAL_ADMISSION_FAILED'
   noChange: 'NO_CHANGE'
   persistenceFailure: 'PERSISTENCE_FAILURE'
   rollbackIncomplete: 'TRANSACTION_ROLLBACK_INCOMPLETE'
@@ -84,6 +91,13 @@ export interface ScreenApplyPersistencePort {
   runDurableAgentWrite<T>(operation: (session: ScreenApplyDurableWriteSession) => Promise<T>): Promise<T>
 }
 
+export interface ScreenApplyMaterialAdmissionInputV1 extends DashboardMaterialGcAdmissionInput {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly materialRefs: readonly Readonly<ArtifactMaterialIdentityV1>[]
+  readonly reason: 'screen-apply'
+}
+
 export interface ScreenApplyChangeSetDependencies<DocumentHandle = unknown> {
   readonly authority: ScreenApplyChangeSetAuthority
   readonly activityLease: Readonly<{
@@ -92,6 +106,9 @@ export interface ScreenApplyChangeSetDependencies<DocumentHandle = unknown> {
     waitUntilIdle(): Promise<Readonly<{ generation: number }>>
   }>
   readonly persistence: ScreenApplyPersistencePort
+  readonly admitMaterialRefsUnderSharedMutation?: (
+    input: Readonly<ScreenApplyMaterialAdmissionInputV1>,
+  ) => unknown | PromiseLike<unknown>
   captureFullSnapshot(): Promise<ScreenApplyFullSnapshot>
   capturePrepareContext(
     input: Readonly<{
@@ -119,6 +136,15 @@ export interface ScreenApplyChangeSetDependencies<DocumentHandle = unknown> {
   isTransactionRollbackIncompleteError(error: unknown): boolean
   now(): number
 }
+
+type AssertTrue<Value extends true> = Value
+type _DashboardScreenAdmissionPortCompatibility = AssertTrue<
+  DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation'] extends NonNullable<
+    ScreenApplyChangeSetDependencies['admitMaterialRefsUnderSharedMutation']
+  >
+    ? true
+    : false
+>
 
 export type ScreenApplyChangeSetHandler = (call: SemanticCall) => Promise<InvocationResult>
 

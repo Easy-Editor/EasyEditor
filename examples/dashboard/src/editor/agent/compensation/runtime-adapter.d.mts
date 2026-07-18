@@ -1,7 +1,19 @@
 import type { EngineInstance } from '@easy-editor/core/instance'
+import type { ArtifactMaterialIdentityV1 } from '../../../lib/storage/artifact-contracts.mjs'
+import type {
+  DashboardMaterialGcAdmissionInput,
+  DashboardMaterialGcRuntime,
+} from '../capabilities/promotion/material-gc-runtime.mjs'
 import type { ScreenJsonValue } from '../capabilities/screen/index.mjs'
 import type { SafeMaterialManifestCache } from '../manifest/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from './index.mjs'
+
+export interface DashboardCompensationMaterialAdmissionInputV1 extends DashboardMaterialGcAdmissionInput {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly materialRefs: readonly Readonly<ArtifactMaterialIdentityV1>[]
+  readonly reason: 'screen-compensation'
+}
 
 export interface DashboardTaskCompensationRuntimeAdapterOptions {
   readonly authority: Readonly<{
@@ -28,7 +40,19 @@ export interface DashboardTaskCompensationRuntimeAdapterOptions {
   readonly now: () => number
   readonly isTransactionCommittedError: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError: (error: unknown) => boolean
+  readonly admitMaterialRefsUnderSharedMutation?: (
+    input: Readonly<DashboardCompensationMaterialAdmissionInputV1>,
+  ) => unknown | PromiseLike<unknown>
 }
+
+type AssertTrue<Value extends true> = Value
+type _DashboardCompensationAdmissionPortCompatibility = AssertTrue<
+  DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation'] extends NonNullable<
+    DashboardTaskCompensationRuntimeAdapterOptions['admitMaterialRefsUnderSharedMutation']
+  >
+    ? true
+    : false
+>
 
 export declare const createDashboardTaskCompensationService: (
   options: DashboardTaskCompensationRuntimeAdapterOptions,

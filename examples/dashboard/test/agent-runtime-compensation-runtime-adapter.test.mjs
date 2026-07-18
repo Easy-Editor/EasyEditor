@@ -89,6 +89,51 @@ const baseSchema = () => ({
   ],
 })
 
+const artifactSource = suffix => ({
+  artifactId: `artifact-${suffix}`,
+  sourceRevision: `source-${suffix}`,
+  logicalComponentId: `logical-${suffix}`,
+  sourceIntegrity: `sha256:${suffix.repeat(64)}`,
+})
+
+const localArtifactRef = (materialId, suffix) => ({
+  ...artifactSource(suffix),
+  target: {
+    kind: 'local-material',
+    materialId,
+    materialVersion: '1.0.0',
+    buildIntegrity: `sha256:${suffix.repeat(64)}`,
+  },
+  rollbackTo: artifactSource(suffix),
+})
+
+const onlineArtifactRef = suffix => ({ ...artifactSource(suffix), target: { kind: 'online' } })
+
+const materialRestoreSchema = () => {
+  const schema = baseSchema()
+  const target = schema.children.find(node => node.id === 'target')
+  const first = localArtifactRef('material-a', 'c')
+  const second = localArtifactRef('material-b', 'd')
+  target.$agent = { schemaVersion: 1, artifactRef: structuredClone(first) }
+  target.props.artifactRef = structuredClone(second)
+  target.children[0].$agent = { schemaVersion: 1, artifactRef: structuredClone(first) }
+  target.children.push(
+    {
+      componentName: 'Text',
+      id: 'target-local-second',
+      props: { text: 'second' },
+      $agent: { schemaVersion: 1, artifactRef: structuredClone(second) },
+    },
+    {
+      componentName: 'Text',
+      id: 'target-online',
+      props: { text: 'online' },
+      $agent: { schemaVersion: 1, artifactRef: onlineArtifactRef('e') },
+    },
+  )
+  return schema
+}
+
 const moveSchema = () => ({
   componentName: 'Root',
   docId: 'page-home',
@@ -136,7 +181,14 @@ const payloadsFor = compiled => ({
 
 const createHarness = async (
   t,
-  { forwardOperation, afterIntent, extraManifests = [], initialSchema = baseSchema(), snapshotExtra = {} } = {},
+  {
+    admitMaterialRefsUnderSharedMutation,
+    forwardOperation,
+    afterIntent,
+    extraManifests = [],
+    initialSchema = baseSchema(),
+    snapshotExtra = {},
+  } = {},
 ) => {
   const core = await loadCore()
   const engine = core.createEngine({ trustPolicy: 'agentRestricted', hostWindow: null })
@@ -395,6 +447,7 @@ const createHarness = async (
     now: () => 1_700_000_000_000,
     isTransactionCommittedError: () => false,
     isTransactionRollbackIncompleteError: () => false,
+    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
   })
   const compensate = (outerCallId, callIndex = [{ callId: 'forward-1', capability: 'screen.applyChangeSet' }]) =>
     service.compensate({
@@ -462,6 +515,48 @@ test('production compensation adapter executes trusted raw restore without freez
   assert.deepEqual(harness.document.exportRaw(), harness.forwardSchema)
   assert.equal(harness.state.runs.get('restore').status, 'completed')
   assert.equal(harness.document.history.isUndoable(), true)
+})
+
+test('compensation admission deduplicates restored local refs, ignores non-canonical refs, and retries before Core', async t => {
+  const admissionCalls = []
+  let attempts = 0
+  const harness = await createHarness(t, {
+    initialSchema: materialRestoreSchema(),
+    admitMaterialRefsUnderSharedMutation: async input => {
+      attempts += 1
+      admissionCalls.push(structuredClone(input))
+      assert.equal(harness.state.coreRuns, 0)
+      if (attempts === 1) throw new Error('material admission unavailable')
+    },
+  })
+
+  await assert.rejects(harness.compensate('material-admission'), /material admission unavailable/u)
+  assert.equal(harness.state.coreRuns, 0)
+  assert.equal(harness.state.recoveries.size, 1, 'only the original forward receipt remains')
+  assert.equal(harness.state.runs.get('material-admission').status, 'running')
+  assert.deepEqual(admissionCalls[0], {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    materialRefs: [
+      {
+        materialId: 'material-a',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'c'.repeat(64)}`,
+      },
+      {
+        materialId: 'material-b',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'d'.repeat(64)}`,
+      },
+    ],
+    reason: 'screen-compensation',
+  })
+
+  const receipt = await harness.compensate('material-admission')
+  assert.equal(receipt.status, 'applied')
+  assert.equal(attempts, 2)
+  assert.equal(harness.state.coreRuns, 1)
+  assert.deepEqual(harness.document.exportRaw(), harness.beforeSchema)
 })
 
 test('production compensation adapter recompiles and executes an ordinary field inverse', async t => {

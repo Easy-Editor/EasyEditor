@@ -1,3 +1,4 @@
+import { validateArtifactRef } from '../../online-components/artifact-contracts.mjs'
 import { createMutationProvenanceBatch } from '../../persistence/provenance.mjs'
 import {
   createApplyWitness,
@@ -12,6 +13,7 @@ import {
   assertExactRecord,
   cloneJsonValue,
   freezeDto,
+  isPlainRecord,
   jsonEqual,
   ownDataValue,
   requireNonEmptyString,
@@ -46,6 +48,8 @@ export const SCREEN_APPLY_CHANGESET_FAILURE_CODE = Object.freeze({
   humanActivity: 'HUMAN_ACTIVITY',
   indeterminateCoreOutcome: 'INDETERMINATE_CORE_OUTCOME',
   indeterminateReceipt: 'INDETERMINATE_RECEIPT',
+  invalidMaterialRef: 'INVALID_MATERIAL_REF',
+  materialAdmissionFailed: 'MATERIAL_ADMISSION_FAILED',
   noChange: 'NO_CHANGE',
   persistenceFailure: 'PERSISTENCE_FAILURE',
   rollbackIncomplete: 'TRANSACTION_ROLLBACK_INCOMPLETE',
@@ -421,6 +425,47 @@ const createPreparedPayloads = compiled => ({
   }),
 })
 
+const materialIdentityKey = value =>
+  [value.materialId, value.materialVersion, value.buildIntegrity].map(encodeURIComponent).join('@')
+
+const compareMaterialIdentity = (left, right) => {
+  const leftKey = materialIdentityKey(left)
+  const rightKey = materialIdentityKey(right)
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+}
+
+const collectExpectedLocalMaterialRefs = expectedPostImages => {
+  const refs = new Map()
+  const visitNode = node => {
+    if (!isPlainRecord(node)) return
+    if (Object.hasOwn(node, '$agent')) {
+      const binding = node.$agent
+      if (
+        !isPlainRecord(binding) ||
+        binding.schemaVersion !== 1 ||
+        Object.keys(binding).length !== 2 ||
+        !Object.hasOwn(binding, 'artifactRef')
+      ) {
+        throw new TypeError('compiled node has a malformed canonical ArtifactRef binding')
+      }
+      const artifactRef = validateArtifactRef(binding.artifactRef)
+      if (artifactRef.target.kind === 'local-material') {
+        const materialRef = freezeDto({
+          materialId: artifactRef.target.materialId,
+          materialVersion: artifactRef.target.materialVersion,
+          buildIntegrity: artifactRef.target.buildIntegrity,
+        })
+        refs.set(materialIdentityKey(materialRef), materialRef)
+      }
+    }
+    if (Array.isArray(node.children)) node.children.forEach(visitNode)
+  }
+  for (const image of expectedPostImages) {
+    if (image?.kind === 'node' && image.existed === true) visitNode(image.node)
+  }
+  return freezeDto([...refs.values()].sort(compareMaterialIdentity))
+}
+
 const terminalJournal = ({ call, compiled, preparedHash, transactionFingerprint, status, failureCode }) => ({
   recordId: `call:${call.callId}`,
   kind: 'screen-change-set',
@@ -463,6 +508,10 @@ export const createScreenApplyChangeSetHandler = dependencies => {
   const captureDocumentState = requireMethod(dependencies, 'captureDocumentState', 'dependencies')
   const captureProject = requireMethod(dependencies, 'captureProject', 'dependencies')
   const compileChangeSet = requireMethod(dependencies, 'compileChangeSet', 'dependencies')
+  const admitMaterialRefsUnderSharedMutation =
+    dependencies.admitMaterialRefsUnderSharedMutation === undefined
+      ? null
+      : requireMethod(dependencies, 'admitMaterialRefsUnderSharedMutation', 'dependencies')
   const hashCanonicalJson = requireMethod(dependencies, 'hashCanonicalJson', 'dependencies')
   const runOnDocument = requireMethod(dependencies, 'runOnDocument', 'dependencies')
   const isTransactionCommittedError = requireMethod(dependencies, 'isTransactionCommittedError', 'dependencies')
@@ -523,6 +572,43 @@ export const createScreenApplyChangeSetHandler = dependencies => {
         { path: error.path, reason: error.reason },
         initialSnapshot.revision,
       )
+    }
+
+    if (admitMaterialRefsUnderSharedMutation !== null) {
+      let materialRefs
+      try {
+        materialRefs = collectExpectedLocalMaterialRefs(compiled.expectedPostImages)
+      } catch {
+        return invocationFailure(
+          call.callId,
+          'rejected',
+          SCREEN_APPLY_CHANGESET_FAILURE_CODE.invalidMaterialRef,
+          'The compiled Screen post-images contain an invalid canonical ArtifactRef',
+          { stage: 'material-ref-validation' },
+          initialSnapshot.revision,
+        )
+      }
+      if (materialRefs.length > 0) {
+        try {
+          await admitMaterialRefsUnderSharedMutation(
+            freezeDto({
+              schemaVersion: 1,
+              projectId: call.projectId,
+              materialRefs,
+              reason: 'screen-apply',
+            }),
+          )
+        } catch {
+          return invocationFailure(
+            call.callId,
+            'not-applied',
+            SCREEN_APPLY_CHANGESET_FAILURE_CODE.materialAdmissionFailed,
+            'The Screen local materials could not be admitted before mutation',
+            { stage: 'material-admission' },
+            initialSnapshot.revision,
+          )
+        }
+      }
     }
 
     const payloads = createPreparedPayloads(compiled)

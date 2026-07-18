@@ -58,6 +58,14 @@ const localRef = (overrides = {}) => ({
   ...overrides,
 })
 
+const deferred = () => {
+  let resolve
+  const promise = new Promise(resolvePromise => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 const createPromotionCall = (overrides = {}) => ({
   schemaVersion: 1,
   ...authority,
@@ -283,6 +291,7 @@ test('promotion Core adapter uses one updateProps and preserves node identity, s
 })
 
 const createServiceHarness = async ({
+  admitMaterialRefsUnderSharedMutation,
   artifactOverride = null,
   coreFailure = null,
   coreResultMutator = null,
@@ -506,6 +515,7 @@ const createServiceHarness = async ({
     core,
     persistence,
     client,
+    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
     now: () => 123,
   })
 
@@ -584,6 +594,67 @@ test('promoteLocal binds the server identity to the canonical call digest and co
     ),
   )
   assert.equal(DASHBOARD_STORAGE_STORE_NAMES.includes('promotionSagas'), false)
+})
+
+test('promotion waits for shared-mutation material admission after server activation and before Core switch', async () => {
+  const admissionStarted = deferred()
+  const gate = deferred()
+  const admissionCalls = []
+  const harness = await createServiceHarness({
+    admitMaterialRefsUnderSharedMutation: async request => {
+      admissionCalls.push(structuredClone(request))
+      admissionStarted.resolve()
+      await gate.promise
+    },
+  })
+  const pending = harness.service.promoteLocal(createPromotionCall())
+
+  await admissionStarted.promise
+  assert.equal(harness.clientCalls.length, 1)
+  assert.equal(admissionCalls.length, 1)
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 0)
+  assert.deepEqual(admissionCalls[0], {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    materialRefs: [
+      {
+        materialId: 'material-kpi',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'b'.repeat(64)}`,
+      },
+    ],
+    unresolvedPromotionIds: [harness.clientCalls[0].promotionId],
+    reason: 'promotion-activation',
+  })
+
+  gate.resolve()
+  assert.equal((await pending).status, 'applied')
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 1)
+})
+
+test('failed promotion admission preserves the active saga and resumePending retries admission without reactivation', async () => {
+  const admissionCalls = []
+  const harness = await createServiceHarness({
+    admitMaterialRefsUnderSharedMutation: async request => {
+      admissionCalls.push(structuredClone(request))
+      if (admissionCalls.length === 1) throw new Error('admission unavailable')
+    },
+  })
+
+  const first = await harness.service.promoteLocal(createPromotionCall())
+  assert.equal(first.status, 'not-applied')
+  assert.equal(first.failure.code, LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed)
+  assert.equal(harness.clientCalls.length, 1)
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 0)
+  assert.equal(harness.batches.length, 0)
+  assert.equal([...harness.promotionJournals.values()][0].value.stage, 'registry-active')
+
+  const resumed = await harness.service.resumePending()
+  assert.equal(resumed.results.length, 1)
+  assert.equal(resumed.results[0].status, 'applied')
+  assert.equal(admissionCalls.length, 2)
+  assert.equal(harness.clientCalls.length, 1)
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 1)
 })
 
 test('exact committed retries return byte-for-byte output while same callId with different semantics is rejected', async () => {

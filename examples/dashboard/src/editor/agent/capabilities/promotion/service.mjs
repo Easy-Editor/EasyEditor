@@ -37,6 +37,7 @@ export const LOCAL_MATERIAL_PROMOTION_FAILURE_CODE = Object.freeze({
   indeterminateCoreOutcome: 'INDETERMINATE_CORE_OUTCOME',
   indeterminateReceipt: 'INDETERMINATE_RECEIPT',
   indeterminateServerOutcome: 'INDETERMINATE_SERVER_OUTCOME',
+  materialAdmissionFailed: 'MATERIAL_ADMISSION_FAILED',
   persistenceFailure: 'PERSISTENCE_FAILURE',
   serverPromotionFailed: 'SERVER_PROMOTION_FAILED',
 })
@@ -282,6 +283,10 @@ const createService = options => {
     promote: requireMethod(options.client, 'promote', 'client'),
     queryPromotion: requireMethod(options.client, 'queryPromotion', 'client'),
   })
+  const admitMaterialRefsUnderSharedMutation =
+    options.admitMaterialRefsUnderSharedMutation === undefined
+      ? null
+      : requireMethod(options, 'admitMaterialRefsUnderSharedMutation', 'options')
   const now = typeof options.now === 'function' ? options.now : Date.now
   const crypto = options.crypto ?? globalThis.crypto
   if (!crypto?.subtle || typeof crypto.subtle.digest !== 'function') {
@@ -611,6 +616,27 @@ const createService = options => {
         'The promotion target no longer matches either canonical ref image',
         { requiredPause: true },
       )
+    }
+    if (admitMaterialRefsUnderSharedMutation !== null) {
+      try {
+        await admitMaterialRefsUnderSharedMutation(
+          freezeDto({
+            schemaVersion: 1,
+            projectId: call.projectId,
+            materialRefs: materialRefsOf(artifactRef),
+            unresolvedPromotionIds: [state.promotionId],
+            reason: 'promotion-activation',
+          }),
+        )
+      } catch {
+        return invocationFailure(
+          call.callId,
+          'not-applied',
+          LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed,
+          'The activated local material could not be admitted before the Core ref switch',
+          { stage: 'material-admission' },
+        )
+      }
     }
     const transactionFingerprint = await hashJson(
       transactionFingerprintInput({ call, prepare: state.prepare, artifactRef, promotionId: state.promotionId }),

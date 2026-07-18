@@ -1,5 +1,7 @@
 import type { AgentRuntimeFailure } from '@easy-editor/agent-runtime'
+import type { Sha256Digest } from '../../../../../shared/material-gc-contract.mjs'
 import type {
+  ArtifactMaterialIdentityV1,
   ArtifactReadRequestV1,
   ArtifactRecordV1,
   LocalMaterialArtifactRef,
@@ -19,6 +21,7 @@ import type {
   LocalMaterialPromotionJournalRecordV1,
   LocalMaterialPromotionServerResultV1,
 } from './contract.mjs'
+import type { DashboardMaterialGcAdmissionInput, DashboardMaterialGcRuntime } from './material-gc-runtime.mjs'
 
 export declare const LOCAL_MATERIAL_PROMOTION_FAILURE_CODE: Readonly<{
   appliedUndurable: 'APPLIED_UNDURABLE'
@@ -27,6 +30,7 @@ export declare const LOCAL_MATERIAL_PROMOTION_FAILURE_CODE: Readonly<{
   indeterminateCoreOutcome: 'INDETERMINATE_CORE_OUTCOME'
   indeterminateReceipt: 'INDETERMINATE_RECEIPT'
   indeterminateServerOutcome: 'INDETERMINATE_SERVER_OUTCOME'
+  materialAdmissionFailed: 'MATERIAL_ADMISSION_FAILED'
   persistenceFailure: 'PERSISTENCE_FAILURE'
   serverPromotionFailed: 'SERVER_PROMOTION_FAILED'
 }>
@@ -147,16 +151,36 @@ export interface DashboardLocalMaterialPromotionCapabilityService {
   resumePending(): Promise<Readonly<{ schemaVersion: 1; results: readonly LocalMaterialPromotionInvocationResult[] }>>
 }
 
+export interface LocalMaterialPromotionAdmissionInputV1 extends DashboardMaterialGcAdmissionInput {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly materialRefs: readonly Readonly<ArtifactMaterialIdentityV1>[]
+  readonly unresolvedPromotionIds: readonly Sha256Digest[]
+  readonly reason: 'promotion-activation'
+}
+
 export interface DashboardLocalMaterialPromotionCapabilityServiceOptions {
   readonly authority: LocalMaterialPromotionAuthority
   readonly core: LocalMaterialPromotionCorePort
   readonly persistence: LocalMaterialPromotionPersistencePort
   readonly client: LocalMaterialPromotionClientPort
+  readonly admitMaterialRefsUnderSharedMutation?: (
+    input: Readonly<LocalMaterialPromotionAdmissionInputV1>,
+  ) => unknown | PromiseLike<unknown>
   readonly now?: () => number
   readonly crypto?: Crypto
   readonly isTransactionCommittedError?: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
 }
+
+type AssertTrue<Value extends true> = Value
+type _DashboardPromotionAdmissionPortCompatibility = AssertTrue<
+  DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation'] extends NonNullable<
+    DashboardLocalMaterialPromotionCapabilityServiceOptions['admitMaterialRefsUnderSharedMutation']
+  >
+    ? true
+    : false
+>
 
 export declare const createDashboardLocalMaterialPromotionCapabilityService: (
   options: DashboardLocalMaterialPromotionCapabilityServiceOptions,

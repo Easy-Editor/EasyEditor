@@ -124,6 +124,66 @@ const compiled = Object.freeze({
   },
 })
 
+const artifactSource = suffix => ({
+  artifactId: `artifact-${suffix}`,
+  sourceRevision: `source-${suffix}`,
+  logicalComponentId: `logical-${suffix}`,
+  sourceIntegrity: `sha256:${suffix.repeat(64).slice(0, 64)}`,
+})
+
+const localArtifactRef = (materialId, suffix) => ({
+  ...artifactSource(suffix),
+  target: {
+    kind: 'local-material',
+    materialId,
+    materialVersion: '1.0.0',
+    buildIntegrity: `sha256:${suffix.repeat(64).slice(0, 64)}`,
+  },
+  rollbackTo: artifactSource(suffix),
+})
+
+const onlineArtifactRef = suffix => ({ ...artifactSource(suffix), target: { kind: 'online' } })
+
+const compiledWithMaterialRefs = () => {
+  const first = localArtifactRef('material-a', 'c')
+  const second = localArtifactRef('material-b', 'd')
+  return {
+    ...structuredClone(compiled),
+    expectedPostImages: [
+      ...structuredClone(compiled.expectedPostImages),
+      {
+        operationIndex: 0,
+        kind: 'node',
+        nodeId: 'generated-local-root',
+        existed: true,
+        node: {
+          id: 'generated-local-root',
+          componentName: 'GeneratedMaterialHost',
+          props: { artifactRef: second },
+          $agent: { schemaVersion: 1, artifactRef: first },
+          children: [
+            {
+              id: 'generated-local-duplicate',
+              componentName: 'GeneratedMaterialHost',
+              $agent: { schemaVersion: 1, artifactRef: first },
+            },
+            {
+              id: 'generated-local-second',
+              componentName: 'GeneratedMaterialHost',
+              $agent: { schemaVersion: 1, artifactRef: second },
+            },
+            {
+              id: 'generated-online',
+              componentName: 'GeneratedMaterialHost',
+              $agent: { schemaVersion: 1, artifactRef: onlineArtifactRef('e') },
+            },
+          ],
+        },
+      },
+    ],
+  }
+}
+
 class FakeTransactionCommittedError extends Error {}
 class FakeTransactionRollbackIncompleteError extends Error {}
 
@@ -239,8 +299,16 @@ const createHarness = (overrides = {}) => {
       events.push('compile')
       assert.deepEqual(input.changeSet, call.arguments)
       assert.equal(input.expectedMutationVersion, 4)
-      return structuredClone(compiled)
+      return structuredClone(overrides.compiled ?? compiled)
     },
+    ...(overrides.admitMaterialRefsUnderSharedMutation === undefined
+      ? {}
+      : {
+          admitMaterialRefsUnderSharedMutation: async input => {
+            events.push('material:admit')
+            return overrides.admitMaterialRefsUnderSharedMutation(input)
+          },
+        }),
     hashCanonicalJson: async input => {
       const kind = input?.kind
       events.push(`hash:${kind}`)
@@ -380,6 +448,81 @@ test('normal apply is recovery-first, persists the frozen prepared intent, and A
   )
   assert.equal(harness.committedBatch.journal.recordId, 'call:call-a')
   assert.equal(harness.committedBatch.checkpoint.checkpointId, 'call:call-a')
+})
+
+test('Screen admission deduplicates canonical local refs and resolves before intent or Core mutation', async () => {
+  const gate = deferred()
+  const admissionCalls = []
+  const harness = createHarness({
+    compiled: compiledWithMaterialRefs(),
+    admitMaterialRefsUnderSharedMutation: async input => {
+      admissionCalls.push(structuredClone(input))
+      await gate.promise
+    },
+  })
+  const pending = harness.handler(call)
+
+  await tick()
+  assert.equal(admissionCalls.length, 1)
+  assert.equal(harness.events.includes('intent:record'), false)
+  assert.equal(harness.events.includes('core:run'), false)
+  assert.deepEqual(admissionCalls[0], {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    materialRefs: [
+      {
+        materialId: 'material-a',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'c'.repeat(64)}`,
+      },
+      {
+        materialId: 'material-b',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'d'.repeat(64)}`,
+      },
+    ],
+    reason: 'screen-apply',
+  })
+
+  gate.resolve()
+  assert.equal((await pending).status, 'applied')
+  assert.ok(harness.events.indexOf('material:admit') < harness.events.indexOf('intent:record'))
+  assert.ok(harness.events.indexOf('material:admit') < harness.events.indexOf('core:run'))
+})
+
+test('failed Screen admission is not applied, records no intent, mutates no Core state, and retries cleanly', async () => {
+  let attempts = 0
+  const harness = createHarness({
+    compiled: compiledWithMaterialRefs(),
+    admitMaterialRefsUnderSharedMutation: async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('admission unavailable')
+    },
+  })
+
+  const failed = await harness.handler(call)
+  assert.equal(failed.status, 'not-applied')
+  assert.equal(failed.failure.code, SCREEN_APPLY_CHANGESET_FAILURE_CODE.materialAdmissionFailed)
+  assert.equal(harness.events.includes('intent:record'), false)
+  assert.equal(harness.events.includes('core:run'), false)
+  assert.equal(harness.storedIntent, null)
+
+  const retried = await harness.handler(call)
+  assert.equal(retried.status, 'applied')
+  assert.equal(attempts, 2)
+  assert.equal(harness.events.filter(event => event === 'core:run').length, 1)
+})
+
+test('Screen admission callback is not called when compiled post-images contain no canonical local refs', async () => {
+  let calls = 0
+  const harness = createHarness({
+    admitMaterialRefsUnderSharedMutation: async () => {
+      calls += 1
+    },
+  })
+
+  assert.equal((await harness.handler(call)).status, 'applied')
+  assert.equal(calls, 0)
 })
 
 test('an existing durable outcome or indeterminate lineage returns before lease, compile, intent, or Core effects', async () => {

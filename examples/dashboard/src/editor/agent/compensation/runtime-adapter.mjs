@@ -7,6 +7,7 @@ import {
 } from '../capabilities/screen/contract.mjs'
 import { compileScreenChangeSet } from '../capabilities/screen/index.mjs'
 import { verifyScreenReceiptIntentRecovery } from '../capabilities/screen/receipt-intent.mjs'
+import { validateArtifactRef } from '../online-components/artifact-contracts.mjs'
 import { createMutationProvenanceBatch } from '../persistence/provenance.mjs'
 import {
   PersistenceLineageContractError,
@@ -92,6 +93,47 @@ const jsonEqual = (left, right) => {
   } catch {
     return false
   }
+}
+
+const materialIdentityKey = value =>
+  [value.materialId, value.materialVersion, value.buildIntegrity].map(encodeURIComponent).join('@')
+
+const compareMaterialIdentity = (left, right) => {
+  const leftKey = materialIdentityKey(left)
+  const rightKey = materialIdentityKey(right)
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+}
+
+const collectRestoredLocalMaterialRefs = preImages => {
+  const refs = new Map()
+  const visitNode = node => {
+    if (!isPlainRecord(node)) return
+    if (Object.hasOwn(node, '$agent')) {
+      const binding = node.$agent
+      if (
+        !isPlainRecord(binding) ||
+        binding.schemaVersion !== 1 ||
+        Object.keys(binding).length !== 2 ||
+        !Object.hasOwn(binding, 'artifactRef')
+      ) {
+        return fail('verified compensation node has a malformed canonical ArtifactRef binding')
+      }
+      const artifactRef = validateArtifactRef(binding.artifactRef)
+      if (artifactRef.target.kind === 'local-material') {
+        const materialRef = freezeDto({
+          materialId: artifactRef.target.materialId,
+          materialVersion: artifactRef.target.materialVersion,
+          buildIntegrity: artifactRef.target.buildIntegrity,
+        })
+        refs.set(materialIdentityKey(materialRef), materialRef)
+      }
+    }
+    if (Array.isArray(node.children)) node.children.forEach(visitNode)
+  }
+  for (const image of preImages) {
+    if (image?.kind === 'node' && image.existed === true) visitNode(image.node)
+  }
+  return freezeDto([...refs.values()].sort(compareMaterialIdentity))
 }
 
 const sameStrings = (left, right) =>
@@ -653,6 +695,10 @@ export const createDashboardTaskCompensationService = options => {
   const now = requireMethod(input, 'now', 'options')
   const isTransactionCommittedError = requireMethod(input, 'isTransactionCommittedError', 'options')
   const isTransactionRollbackIncompleteError = requireMethod(input, 'isTransactionRollbackIncompleteError', 'options')
+  const admitMaterialRefsUnderSharedMutation =
+    input.admitMaterialRefsUnderSharedMutation === undefined
+      ? null
+      : requireMethod(input, 'admitMaterialRefsUnderSharedMutation', 'options')
 
   const permits = new Map()
   const verifiedLineages = new Map()
@@ -733,6 +779,27 @@ export const createDashboardTaskCompensationService = options => {
   })
 
   const beforeInverse = async value => {
+    if (admitMaterialRefsUnderSharedMutation !== null) {
+      const verified = await verifyRecovery(
+        await recoverReceipt({
+          projectId: authority.projectId,
+          branchId: authority.branchId,
+          callId: value.originalCallId,
+        }),
+        value.originalCallId,
+      )
+      const materialRefs = collectRestoredLocalMaterialRefs(verified.payloads.preImages.images)
+      if (materialRefs.length > 0) {
+        await admitMaterialRefsUnderSharedMutation(
+          freezeDto({
+            schemaVersion: 1,
+            projectId: authority.projectId,
+            materialRefs,
+            reason: 'screen-compensation',
+          }),
+        )
+      }
+    }
     const idle = await waitUntilIdle()
     const generation = requireNonNegativeInteger(idle?.generation, 'compensation.idle.generation')
     const snapshot = await captureSnapshotFence(captureFullSnapshot)
