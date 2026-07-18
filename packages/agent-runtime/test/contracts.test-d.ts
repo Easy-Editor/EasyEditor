@@ -29,6 +29,16 @@ declare const model: ModelAdapter
 declare const request: ModelTurnRequest
 declare const call: SemanticCall
 
+type ModelTurnCorrelationIsRequired = ModelTurnRequest extends {
+  readonly stepId: string
+  readonly modelRequestId: string
+}
+  ? true
+  : false
+const modelTurnCorrelationIsRequired: ModelTurnCorrelationIsRequired = true
+const modelStepId: string = request.stepId
+const modelRequestId: string = request.modelRequestId
+
 const snapshot: AgentRuntimeSnapshot = runtime.getSnapshot()
 type CompensationEligibilityIsRequired = AgentTaskSnapshot extends { readonly compensationEligible: boolean }
   ? true
@@ -135,6 +145,9 @@ const invalidJson: JsonObject = { callback: () => undefined }
 const invalidOptions: AgentRuntimeOptions = { ...options, model }
 
 void snapshot
+void modelTurnCorrelationIsRequired
+void modelStepId
+void modelRequestId
 void compensationEligibilityIsRequired
 void compensationEligible
 void recovery

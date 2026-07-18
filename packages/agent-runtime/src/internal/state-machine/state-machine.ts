@@ -132,6 +132,8 @@ interface PendingInvocationV1 {
 type ExecutionDisposition = 'satisfied' | 'completed' | 'repair' | 'repair-durable' | 'yielded' | 'paused'
 
 interface TurnOutcome {
+  readonly stepId: string
+  readonly modelRequestId: string
   readonly complete: boolean
   readonly acceptedBlueprint?: AgentAcceptedBlueprint
   readonly completionSummary?: string
@@ -653,7 +655,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     return callIds
   }
 
-  const nextRuntimeId = (kind: 'task' | 'step' | 'call' | 'batch') => {
+  const nextRuntimeId = (kind: 'task' | 'step' | 'call' | 'request' | 'batch') => {
     const value = options.idFactory.next(kind)
     if (typeof value !== 'string' || value.length === 0 || value.length > MAX_RUNTIME_ID_LENGTH) {
       throw new WorkerStateMachineError(
@@ -703,14 +705,14 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     return scopeRuntimeId('batch', scope, nextRuntimeId('batch'))
   }
 
-  const createRuntimeOwnedCall = (task: MutableTask, proposal: ModelToolCallProposal): SemanticCall =>
+  const createRuntimeOwnedCall = (task: MutableTask, proposal: ModelToolCallProposal, stepId: string): SemanticCall =>
     cloneFrozen({
       schemaVersion: 1,
       projectId: binding.projectId,
       branchId: binding.branchId,
       sessionId: task.sessionId,
       taskId: task.taskId,
-      stepId: nextRuntimeId('step'),
+      stepId,
       callId: nextUniqueCallId(),
       capability: proposal.capability,
       arguments: proposal.arguments,
@@ -875,7 +877,12 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     }
   }
 
-  const turnRequest = (task: MutableTask, phase: ModelTurnPhase): ModelTurnRequest => {
+  const turnRequest = (
+    task: MutableTask,
+    phase: ModelTurnPhase,
+    stepId: string,
+    modelRequestId: string,
+  ): ModelTurnRequest => {
     if (!task.latestSnapshot) {
       throw new WorkerStateMachineError('invalid-model-turn', 'model turn requires a full host snapshot')
     }
@@ -885,6 +892,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       branchId: binding.branchId,
       sessionId: task.sessionId,
       taskId: task.taskId,
+      stepId,
+      modelRequestId,
       phase,
       intent: task.intent,
       snapshot: task.latestSnapshot,
@@ -894,7 +903,10 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     }
   }
 
-  const interpretEvents = (events: readonly ModelEvent[], phase: ModelTurnPhase): TurnOutcome => {
+  const interpretEvents = (
+    events: readonly ModelEvent[],
+    phase: ModelTurnPhase,
+  ): Omit<TurnOutcome, 'stepId' | 'modelRequestId'> => {
     let complete = false
     let acceptedBlueprint: AgentAcceptedBlueprint | undefined
     let completionSummary: string | undefined
@@ -952,14 +964,16 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     return { complete, acceptedBlueprint, completionSummary, question, pauseReason, toolCall }
   }
 
-  const runTurn = async (task: MutableTask, phase: ModelTurnPhase) => {
+  const runTurn = async (task: MutableTask, phase: ModelTurnPhase): Promise<TurnOutcome> => {
     task.nextModelPhase = phase
+    const stepId = nextRuntimeId('step')
+    const modelRequestId = nextRuntimeId('request')
     const events = await collectModelEvents(
       options.model,
-      turnRequest(task, phase),
+      turnRequest(task, phase, stepId, modelRequestId),
       task.controller?.signal ?? new AbortController().signal,
     )
-    return interpretEvents(events, phase)
+    return { ...interpretEvents(events, phase), stepId, modelRequestId }
   }
 
   const assertCallContext = (task: MutableTask, call: SemanticCall) => {
@@ -1490,7 +1504,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         return
       }
 
-      const call = createRuntimeOwnedCall(task, outcome.toolCall)
+      const call = createRuntimeOwnedCall(task, outcome.toolCall, outcome.stepId)
       const disposition = await executeAndVerify(task, call, outcome.complete, outcome.completionSummary)
       const nextPhase = await consumeDisposition(task, disposition, outcome.complete)
       if (!nextPhase) return
@@ -1501,12 +1515,16 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const driveCompensation = async (task: MutableTask, targetTaskId: string) => {
     setPhase(task, 'OBSERVE')
     const observed = await observeFull(task)
-    const call = createRuntimeOwnedCall(task, {
-      schemaVersion: 1,
-      capability: 'task.compensate',
-      arguments: { schemaVersion: 1, targetTaskId },
-      expectedRevision: observed.revision,
-    })
+    const call = createRuntimeOwnedCall(
+      task,
+      {
+        schemaVersion: 1,
+        capability: 'task.compensate',
+        arguments: { schemaVersion: 1, targetTaskId },
+        expectedRevision: observed.revision,
+      },
+      nextRuntimeId('step'),
+    )
     const disposition = await executeAndVerify(task, call, true, `Compensated task ${targetTaskId}`)
     if (disposition === 'completed') return
     if (task.controller?.signal.aborted || task.phase === 'CANCELLED' || activeTask !== task) {

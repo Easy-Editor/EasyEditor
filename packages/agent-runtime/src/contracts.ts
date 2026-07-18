@@ -393,6 +393,8 @@ export interface ModelTurnRequest {
   readonly branchId: string
   readonly sessionId: string
   readonly taskId: string
+  readonly stepId: string
+  readonly modelRequestId: string
   readonly phase: ModelTurnPhase
   readonly intent: UserIntent
   readonly snapshot: HostSnapshot

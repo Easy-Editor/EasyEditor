@@ -571,7 +571,7 @@ test('persists the full pending invocation and append-only call index before ent
 
   assert.equal(observedPending.phase, 'EXECUTE')
   assert.equal(observedPending.pendingInvocation.state, 'invoked')
-  assert.deepEqual(observedPending.pendingInvocation.call, runtimeCall())
+  assert.deepEqual(observedPending.pendingInvocation.call, runtimeCall({ step: 2 }))
   assert.deepEqual(observedPending.callIds, [scopedCallId()])
   assert.deepEqual(observedPending.callIndex, [{ callId: scopedCallId(), capability: 'set-title' }])
   assert.equal(Object.hasOwn(persistence.records[0].value, 'pendingInvocation'), false)
@@ -1286,18 +1286,28 @@ test('a transport or protocol rejection propagates without being hidden by a ful
   fixture.model.assertFullyConsumed()
 })
 
-test('repairs a verification mismatch within the configured budget', async () => {
+test('correlates BLUEPRINT, PLAN_STEP, and REPAIR requests with their originating tool calls', async () => {
   const host = new TestHost()
+  const correlations = []
+  const matchCorrelation = request => {
+    correlations.push({
+      phase: request.phase,
+      stepId: request.stepId,
+      modelRequestId: request.modelRequestId,
+    })
+    return true
+  }
   host.behaviors.push(
     { observedRevision: 'r2', resultRevision: 'r1' },
     { observedRevision: 'r3', resultRevision: 'r3' },
   )
   const fixture = createMachine(
     [
-      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
-      { expectedPhase: 'PLAN_STEP', events: [toolCall(call())] },
+      { expectedPhase: 'BLUEPRINT', matchRequest: matchCorrelation, events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', matchRequest: matchCorrelation, events: [toolCall(call())] },
       {
         expectedPhase: 'REPAIR',
+        matchRequest: matchCorrelation,
         events: [toolCall(call({ step: 2, callId: 2, revision: 'r2' })), complete],
       },
     ],
@@ -1310,9 +1320,24 @@ test('repairs a verification mismatch within the configured budget', async () =>
   assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
   assert.equal(fixture.machine.getSnapshot().activeTask.repairAttempts, 1)
   assert.equal(host.invocations.length, 2)
+  assert.deepEqual(correlations, [
+    { phase: 'BLUEPRINT', stepId: 'step-1', modelRequestId: 'request-1' },
+    { phase: 'PLAN_STEP', stepId: 'step-2', modelRequestId: 'request-2' },
+    { phase: 'REPAIR', stepId: 'step-3', modelRequestId: 'request-3' },
+  ])
+  assert.deepEqual(
+    host.invocations.map(({ stepId }) => stepId),
+    ['step-2', 'step-3'],
+  )
   assert.deepEqual(
     fixture.persistence.commits.map(commit => commit.records[0].value.phase),
     ['EXECUTE', 'REPAIR', 'EXECUTE', 'COMPLETED'],
+  )
+  assert.deepEqual(
+    fixture.persistence.commits
+      .filter(commit => commit.records[0].value.phase === 'EXECUTE')
+      .map(commit => commit.records[0].value.pendingInvocation.call.stepId),
+    ['step-2', 'step-3'],
   )
   assert.equal(fixture.persistence.commits[1].records[0].value.repairAttempts, 1)
   assert.equal(Object.hasOwn(fixture.persistence.commits[1].records[0].value, 'pendingInvocation'), false)
@@ -1999,8 +2024,8 @@ test('Runtime owns unique step and call identities across model turns', async ()
   assert.deepEqual(
     host.invocations.map(({ stepId, callId }) => ({ stepId, callId })),
     [
-      { stepId: 'step-1', callId: scopedCallId() },
-      { stepId: 'step-2', callId: scopedCallId('call-2') },
+      { stepId: 'step-2', callId: scopedCallId() },
+      { stepId: 'step-3', callId: scopedCallId('call-2') },
     ],
   )
   assert.deepEqual(fixture.persistence.records[0].value.callIds, [scopedCallId(), scopedCallId('call-2')])
@@ -2045,8 +2070,8 @@ test('Runtime allocates distinct callIds for independent tasks in one session', 
   assert.deepEqual(
     host.invocations.map(({ taskId, stepId, callId }) => ({ taskId, stepId, callId })),
     [
-      { taskId: 'task-1', stepId: 'step-1', callId: scopedCallId() },
-      { taskId: 'task-2', stepId: 'step-2', callId: scopedCallId('call-2') },
+      { taskId: 'task-1', stepId: 'step-2', callId: scopedCallId() },
+      { taskId: 'task-2', stepId: 'step-4', callId: scopedCallId('call-2') },
     ],
   )
   fixture.model.assertFullyConsumed()
@@ -2192,6 +2217,24 @@ test('scoped call identities are injective for delimiter and Unicode sessions an
   assert.equal(oversizedLocal.machine.getSnapshot().phase, 'FAILED')
   assert.equal(oversizedLocal.machine.getSnapshot().activeTask.failure.code, 'invalid-tool-call-context')
   assert.equal(host.invocations.length, 0)
+})
+
+test('model turn correlation IDs fail closed at the Runtime ID boundary before model.run', async () => {
+  for (const oversizedKind of ['step', 'request']) {
+    const fixture = createMachine([{ expectedPhase: 'BLUEPRINT', events: [blueprint] }], {
+      idFactory: {
+        next: kind => (kind === oversizedKind ? 'x'.repeat(97) : `${kind}-1`),
+      },
+    })
+
+    await fixture.machine.submit({ text: `Reject oversized ${oversizedKind} identity` })
+    await fixture.machine.waitForIdle()
+
+    assert.equal(fixture.machine.getSnapshot().phase, 'FAILED', oversizedKind)
+    assert.equal(fixture.machine.getSnapshot().activeTask.failure.code, 'invalid-tool-call-context', oversizedKind)
+    assert.equal(fixture.model.consumedSteps, 0, oversizedKind)
+    assert.equal(fixture.host.invocations.length, 0, oversizedKind)
+  }
 })
 
 test('recovery rejects duplicate call ownership across persisted tasks', async () => {
@@ -2846,6 +2889,8 @@ test('ScriptedModelAdapter rejects phase mismatches and unconsumed steps', async
     branchId: binding.branchId,
     sessionId: 'session-1',
     taskId: 'task-1',
+    stepId: 'step-1',
+    modelRequestId: 'request-1',
     phase: 'PLAN_STEP',
     intent: { text: 'Mismatch' },
     snapshot: { schemaVersion: 1, revision: 'r0', providerGenerations: {}, projection: {} },

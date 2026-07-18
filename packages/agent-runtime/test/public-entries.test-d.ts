@@ -30,6 +30,16 @@ declare const persistence: AgentPersistencePort
 declare const model: ModelAdapter
 declare const request: ModelTurnRequest
 
+type PublicModelTurnCorrelationIsRequired = ModelTurnRequest extends {
+  readonly stepId: string
+  readonly modelRequestId: string
+}
+  ? true
+  : false
+const publicModelTurnCorrelationIsRequired: PublicModelTurnCorrelationIsRequired = true
+const publicModelStepId: string = request.stepId
+const publicModelRequestId: string = request.modelRequestId
+
 const runtime: AgentRuntime = createAgentRuntime({
   binding: { projectId: 'project-1', branchId: 'branch-1' },
   worker: endpoint,
@@ -87,6 +97,9 @@ type RootModelAdapter = import('../src/index.js').ModelAdapter
 type RootProtocolEnvelope = import('../src/index.js').ProtocolEnvelope
 
 void runtime
+void publicModelTurnCorrelationIsRequired
+void publicModelStepId
+void publicModelRequestId
 void publicCompensationEligibilityIsRequired
 void compensation
 void recovery
