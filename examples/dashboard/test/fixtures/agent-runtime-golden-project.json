@@ -28,15 +28,6 @@
   "dataSource": {
     "list": [
       {
-        "id": "mock-city-summary",
-        "isInit": true,
-        "type": "mock",
-        "options": {
-          "uri": "mock://city/summary",
-          "method": "GET"
-        }
-      },
-      {
         "id": "http-traffic-flow",
         "isInit": false,
         "type": "http",
@@ -56,7 +47,18 @@
       "isRoot": true,
       "props": {
         "backgroundColor": "#08111f",
-        "className": "agent-runtime-golden-dashboard"
+        "className": "agent-runtime-golden-dashboard",
+        "dataSources": {
+          "schemaVersion": 1,
+          "sources": [
+            {
+              "schemaVersion": 1,
+              "id": "mock-city-summary",
+              "kind": "mock",
+              "fixture": null
+            }
+          ]
+        }
       },
       "$dashboard": {
         "rect": {

@@ -7,6 +7,7 @@ import {
   DEFAULT_AGENT_RUNTIME_FEATURE_FLAGS,
   resolveAgentRuntimeFeatureFlags,
 } from '../src/editor/agent/feature-flags.mjs'
+import { parseSafeDataCatalog } from '../src/editor/data/contract.mjs'
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url))
 const readRepositoryFile = relativePath => readFile(new URL(relativePath, `file://${repositoryRoot}/`), 'utf8')
@@ -91,6 +92,9 @@ test('Golden project fixture is deterministic and keeps the KPI material missing
   const nodeIds = root.children.map(node => node.id)
   const roles = Object.fromEntries(root.children.map(node => [node.$dashboard.fixtureRole, node]))
   const endpoints = Object.fromEntries(fixture.dataSource.list.map(endpoint => [endpoint.type, endpoint]))
+  const safeSources = Object.fromEntries(
+    parseSafeDataCatalog(root.props.dataSources).sources.map(source => [source.id, source]),
+  )
 
   assert.equal(fixture.id, 'agent-runtime-golden-project')
   assert.equal(fixture.version, '1.0.0')
@@ -101,7 +105,13 @@ test('Golden project fixture is deterministic and keeps the KPI material missing
   assert.equal(roles.title.componentName, 'Text')
   assert.equal(roles.map.componentName, 'Image')
   assert.equal(roles.chart.componentName, 'BarChart')
-  assert.equal(endpoints.mock.options.uri, 'mock://city/summary')
+  assert.equal(Object.hasOwn(endpoints, 'mock'), false)
+  assert.deepEqual(safeSources['mock-city-summary'], {
+    schemaVersion: 1,
+    id: 'mock-city-summary',
+    kind: 'mock',
+    fixture: null,
+  })
   assert.equal(endpoints.http.options.uri, 'https://fixtures.easy-editor.invalid/api/traffic-flow')
   assert.equal(contract.createdAt, '2026-07-15T00:00:00.000Z')
   assert.equal(contract.modelScriptStartedAt, '2026-07-15T00:00:01.000Z')

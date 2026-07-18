@@ -127,7 +127,7 @@ test('editor and preview runtime unwrap credentialed proxy data and apply the sa
   instance.dispose()
 })
 
-test('manual datasource fetch and inert legacy mock handling remain explicit beside the safe handler', async () => {
+test('manual datasource fetch remains explicit without registering a scripted mock fallback', () => {
   const captures = {}
   const { legacyFetch, runtime } = loadRuntime(captures)
   let fetchCalls = 0
@@ -142,18 +142,10 @@ test('manual datasource fetch and inert legacy mock handling remain explicit bes
   connectPageRenderer(instance)
 
   assert.strictEqual(captures.pluginOptions.requestHandlersMap.fetch, legacyFetch)
-  assert.deepEqual(
-    await captures.pluginOptions.requestHandlersMap.mock({ uri: 'mock://city/summary', method: 'GET' }),
-    { data: null },
-  )
+  assert.equal(Object.hasOwn(captures.pluginOptions.requestHandlersMap, 'mock'), false)
   assert.equal(fetchCalls, 0)
-  await assert.rejects(
-    captures.pluginOptions.requestHandlersMap.mock({ uri: 'https://fixtures.example.test/summary' }),
-    /requires a mock:\/\/ URI/iu,
-  )
   assert.equal(typeof captures.pluginOptions.requestHandlersMap[SAFE_TYPE], 'function')
   instance.dispose()
-  await assert.rejects(captures.pluginOptions.requestHandlersMap.mock({ uri: 'mock://city/summary' }), /disposed/iu)
 })
 
 test('editor data runtime refreshes through the current renderer-owned datasource closure', async () => {
