@@ -14,3 +14,4 @@ export {
   createDashboardOnlineArtifactCapabilityService,
 } from './service.mjs'
 export { createDashboardOnlineArtifactCoreAdapter } from './core-adapter.mjs'
+export { createDashboardOnlineArtifactPersistenceAdapter } from './persistence-adapter.mjs'

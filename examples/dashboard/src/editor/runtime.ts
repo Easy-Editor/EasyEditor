@@ -14,6 +14,7 @@ import {
 import {
   createDashboardOnlineArtifactCapabilityService,
   createDashboardOnlineArtifactCoreAdapter,
+  createDashboardOnlineArtifactPersistenceAdapter,
 } from './agent/capabilities/artifact/index.mjs'
 import {
   type LocalMaterialPromotionGrantIdentity,
@@ -178,7 +179,7 @@ const createBoundDashboardAgentHost = (
             isTransactionCommittedError: error => error instanceof TransactionCommittedError,
             isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
           }),
-          persistence: dashboardPersistence,
+          persistence: createDashboardOnlineArtifactPersistenceAdapter(dashboardPersistence),
           resolver: createDashboardOnlineComponentDependencyResolver({ fetchImpl: window.fetch.bind(window) }),
           crypto: window.crypto,
           isTransactionCommittedError: error => error instanceof TransactionCommittedError,

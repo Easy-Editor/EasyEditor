@@ -5,6 +5,7 @@ import {
   ONLINE_ARTIFACT_FAILURE_CODE,
   classifyOnlineArtifactCoreFailure,
   createDashboardOnlineArtifactCapabilityService,
+  createDashboardOnlineArtifactPersistenceAdapter,
 } from '../src/editor/agent/capabilities/artifact/index.mjs'
 import { validateArtifactRecord } from '../src/editor/agent/online-components/artifact-contracts.mjs'
 import { scanArtifactSource } from '../src/editor/agent/online-components/artifact-source.mjs'
@@ -90,6 +91,49 @@ const onlineRef = (overrides = {}) => ({
   sourceIntegrity: `sha256:${'a'.repeat(64)}`,
   target: { kind: 'online' },
   ...overrides,
+})
+
+test('artifact persistence adapter exposes bound prototype methods as a frozen own-method port', async () => {
+  const calls = []
+  class PersistenceRuntime {
+    async createArtifact(value) {
+      calls.push(['createArtifact', value])
+      return value
+    }
+
+    async readArtifact(value) {
+      calls.push(['readArtifact', value])
+      return value
+    }
+
+    async recoverDurableAgentReceipt(value) {
+      calls.push(['recoverDurableAgentReceipt', value])
+      return value
+    }
+
+    async runDurableAgentWrite(operation) {
+      calls.push(['runDurableAgentWrite'])
+      return operation({ draft: { draftGeneration: 0 } })
+    }
+  }
+
+  const adapter = createDashboardOnlineArtifactPersistenceAdapter(new PersistenceRuntime())
+  assert.equal(Object.isFrozen(adapter), true)
+  for (const method of ['createArtifact', 'readArtifact', 'recoverDurableAgentReceipt', 'runDurableAgentWrite']) {
+    assert.equal(Object.hasOwn(adapter, method), true)
+    assert.equal(typeof Object.getOwnPropertyDescriptor(adapter, method)?.value, 'function')
+  }
+
+  await adapter.createArtifact('artifact')
+  await adapter.readArtifact('read')
+  await adapter.recoverDurableAgentReceipt('receipt')
+  assert.equal(await adapter.runDurableAgentWrite(session => session.draft.draftGeneration), 0)
+  assert.deepEqual(calls, [
+    ['createArtifact', 'artifact'],
+    ['readArtifact', 'read'],
+    ['recoverDurableAgentReceipt', 'receipt'],
+    ['runDurableAgentWrite'],
+  ])
 })
 
 const createHarness = async ({
