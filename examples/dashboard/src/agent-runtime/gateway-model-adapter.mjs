@@ -173,30 +173,25 @@ const readFrames = async (reader, correlation, options, signal) => {
   const frames = []
   let responseBytes = 0
   let buffer = ''
-  try {
-    while (true) {
-      const next = await waitWithSignal(reader.read(), signal)
-      if (next.done) break
-      if (!(next.value instanceof Uint8Array)) fail('invalid-gateway-stream')
-      responseBytes += next.value.byteLength
-      if (responseBytes > options.maxResponseBytes) fail('response-budget-exceeded')
-      buffer += decoder.decode(next.value, { stream: true })
-      let newline = buffer.indexOf('\n')
-      while (newline >= 0) {
-        let line = buffer.slice(0, newline)
-        buffer = buffer.slice(newline + 1)
-        if (line.endsWith('\r')) line = line.slice(0, -1)
-        if (!line) fail('invalid-gateway-stream')
-        if (frames.length >= options.maxResponseLines) fail('response-budget-exceeded')
-        frames.push(parseFrame(line, correlation))
-        newline = buffer.indexOf('\n')
-      }
+  while (true) {
+    const next = await waitWithSignal(reader.read(), signal)
+    if (next.done) break
+    if (!(next.value instanceof Uint8Array)) fail('invalid-gateway-stream')
+    responseBytes += next.value.byteLength
+    if (responseBytes > options.maxResponseBytes) fail('response-budget-exceeded')
+    buffer += decoder.decode(next.value, { stream: true })
+    let newline = buffer.indexOf('\n')
+    while (newline >= 0) {
+      let line = buffer.slice(0, newline)
+      buffer = buffer.slice(newline + 1)
+      if (line.endsWith('\r')) line = line.slice(0, -1)
+      if (!line) fail('invalid-gateway-stream')
+      if (frames.length >= options.maxResponseLines) fail('response-budget-exceeded')
+      frames.push(parseFrame(line, correlation))
+      newline = buffer.indexOf('\n')
     }
-    buffer += decoder.decode()
-  } catch (error) {
-    if (error instanceof GatewayModelAdapterError) throw error
-    throw error
   }
+  buffer += decoder.decode()
   if (buffer.length > 0 || frames.length === 0) fail('invalid-gateway-stream')
   return frames
 }

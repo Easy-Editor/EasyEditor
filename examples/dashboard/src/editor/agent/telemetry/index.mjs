@@ -179,7 +179,6 @@ const STATUSES = new Set([
   'indeterminate',
   'committed',
   'missing',
-  'recovered',
   'scheduled',
   'restarted',
 ])
