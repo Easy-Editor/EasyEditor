@@ -29,6 +29,18 @@ const requireString = (value, label) => {
   return value
 }
 
+const optionalOwnDataValue = (value, key, label) => {
+  let descriptor
+  try {
+    descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+  } catch {
+    throw new TypeError(`${label}.${String(key)} could not be inspected`)
+  }
+  if (!descriptor) return undefined
+  if (!('value' in descriptor)) throw new TypeError(`${label}.${String(key)} must be a data property`)
+  return descriptor.value
+}
+
 const requirePolicyVersion = value => {
   if (typeof value === 'string' && value.trim().length > 0) return value
   if (Number.isSafeInteger(value) && value >= 0) return value
@@ -88,6 +100,11 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
   const client = options.client
   const persistence = options.persistence
   const grantIdentity = options.grantIdentity
+  const admitMaterialRefsUnderSharedMutation = optionalOwnDataValue(
+    options,
+    'admitMaterialRefsUnderSharedMutation',
+    'options',
+  )
   const checkAvailability = requireMethod(client, 'checkAvailability', 'client')
   const checkLocalGrant = requireMethod(persistence, 'checkLocalGrant', 'persistence')
   const rawPromotionService = createDashboardLocalMaterialPromotionCapabilityService({
@@ -96,6 +113,7 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
     core: options.core,
     persistence,
     crypto: options.crypto,
+    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
     ...(typeof options.now === 'function' ? { now: options.now } : {}),
     ...(typeof options.isTransactionCommittedError === 'function'
       ? { isTransactionCommittedError: options.isTransactionCommittedError }

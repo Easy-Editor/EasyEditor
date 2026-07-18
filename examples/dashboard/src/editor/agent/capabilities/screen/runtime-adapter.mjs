@@ -33,6 +33,18 @@ const requireNonNegativeInteger = (value, path) => {
   return value
 }
 
+const optionalOwnDataValue = (value, key, path) => {
+  let descriptor
+  try {
+    descriptor = Reflect.getOwnPropertyDescriptor(value, key)
+  } catch {
+    return fail(`${path}.${String(key)} could not be inspected`)
+  }
+  if (!descriptor) return undefined
+  if (!('value' in descriptor)) return fail(`${path}.${String(key)} must be a data property`)
+  return descriptor.value
+}
+
 const requireRegistryVersion = value => {
   if ((typeof value === 'string' && value.length > 0) || (Number.isSafeInteger(value) && value >= 0)) return value
   return fail('engine.materials.version must be a non-empty string or non-negative safe integer')
@@ -224,6 +236,11 @@ export const createDashboardScreenApplyChangeSetHandler = options => {
   const captureFullSnapshot = requireMethod(input, 'captureFullSnapshot', 'options')
   const isTransactionCommittedError = requireMethod(input, 'isTransactionCommittedError', 'options')
   const isTransactionRollbackIncompleteError = requireMethod(input, 'isTransactionRollbackIncompleteError', 'options')
+  const admitMaterialRefsUnderSharedMutation = optionalOwnDataValue(
+    input,
+    'admitMaterialRefsUnderSharedMutation',
+    'options',
+  )
   const runAgentMutation =
     typeof input.persistence?.runAgentMutation === 'function'
       ? input.persistence.runAgentMutation.bind(input.persistence)
@@ -235,6 +252,7 @@ export const createDashboardScreenApplyChangeSetHandler = options => {
     authority: input.authority,
     activityLease: input.activityLease,
     persistence: input.persistence,
+    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
     captureFullSnapshot: captureSnapshot,
     capturePrepareContext: async ({ snapshot }) => {
       const normalizedSnapshot = freezeDto({

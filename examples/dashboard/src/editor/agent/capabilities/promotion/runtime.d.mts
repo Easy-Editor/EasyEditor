@@ -1,6 +1,7 @@
 import type { DashboardLocalGrantCheckV1, DashboardLocalGrantDecisionV1 } from '../../../../lib/storage/lifecycle.mjs'
 import type { AgentRuntimeFeatureFlags } from '../../feature-flags.mjs'
 import type { DashboardSameOriginLocalMaterialPromotionClient } from './client.mjs'
+import type { DashboardMaterialGcRuntime } from './material-gc-runtime.mjs'
 import type {
   DashboardLocalMaterialPromotionCapabilityService,
   DashboardLocalMaterialPromotionCapabilityServiceOptions,
@@ -57,6 +58,16 @@ export declare const createDashboardLocalMaterialPromotionRuntime: (options: {
   }
   readonly now?: () => number
   readonly onPromotionApplied?: () => void | Promise<void>
+  readonly admitMaterialRefsUnderSharedMutation?: DashboardLocalMaterialPromotionCapabilityServiceOptions['admitMaterialRefsUnderSharedMutation']
   readonly isTransactionCommittedError?: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
 }) => DashboardLocalMaterialPromotionRuntime
+
+type AssertTrue<Value extends true> = Value
+type _DashboardPromotionRuntimeAdmissionPortCompatibility = AssertTrue<
+  DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation'] extends NonNullable<
+    DashboardLocalMaterialPromotionCapabilityServiceOptions['admitMaterialRefsUnderSharedMutation']
+  >
+    ? true
+    : false
+>

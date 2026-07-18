@@ -5,10 +5,12 @@ import test from 'node:test'
 import {
   DashboardLocalMaterialPromotionClientError,
   LOCAL_MATERIAL_PROMOTION_AVAILABILITY_REASON,
+  LOCAL_MATERIAL_PROMOTION_FAILURE_CODE,
   LOCAL_MATERIAL_PROMOTION_POLICY,
   createDashboardLocalMaterialPromotionRuntime,
   createDashboardSameOriginLocalMaterialPromotionClient,
 } from '../src/editor/agent/capabilities/promotion/index.mjs'
+import { hashCanonicalJson } from '../src/lib/storage/canonical-json.mjs'
 
 const authority = Object.freeze({
   projectId: 'project-promotion-runtime',
@@ -65,6 +67,7 @@ const createPersistence = checkLocalGrant =>
   })
 
 const createRuntime = ({
+  admitMaterialRefsUnderSharedMutation,
   checkAvailability,
   checkLocalGrant,
   featureFlags = enabledFlags,
@@ -84,12 +87,171 @@ const createRuntime = ({
     core: serviceCore,
     crypto,
     featureFlags,
+    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
     ...(runtimeGrantIdentity ? { grantIdentity: runtimeGrantIdentity } : {}),
     persistence: createPersistence(
       checkLocalGrant ??
         (async () => ({ schemaVersion: 1, granted: true, reason: 'granted', grant: { status: 'granted' } })),
     ),
   })
+
+const digestText = async value => {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+  return `sha256:${Buffer.from(digest).toString('hex')}`
+}
+
+const createAdmissionRuntimeHarness = async admitMaterialRefsUnderSharedMutation => {
+  const source = "export default { mount(root) { root.textContent = 'runtime admission' } }"
+  const artifactSource = {
+    artifactId: 'artifact-admission-runtime',
+    sourceRevision: 'source-admission-runtime-1',
+    logicalComponentId: 'logical-admission-runtime',
+    sourceIntegrity: await digestText(source),
+  }
+  const artifact = {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    ...artifactSource,
+    source,
+    css: '',
+    safeManifest: { schemaVersion: 1, title: 'Runtime admission' },
+    lockedDependencies: [],
+    dependencyLockDigest: await hashCanonicalJson([]),
+    diagnostics: [],
+    provenance: { actor: 'runtime-admission-test' },
+    createdAt: 1,
+    supersedes: null,
+  }
+  const onlineArtifactRef = { ...artifactSource, target: { kind: 'online' } }
+  const journals = new Map()
+  const admissionCalls = []
+  let coreMutationCalls = 0
+  let durableIntentCalls = 0
+  const runtime = createDashboardLocalMaterialPromotionRuntime({
+    authority,
+    client: {
+      async checkAvailability() {
+        return { schemaVersion: 1, available: true, reason: null }
+      },
+      async promote(request) {
+        return {
+          schemaVersion: 1,
+          status: 'active',
+          promotionId: request.promotionId,
+          materialId: 'material-admission-runtime',
+          materialVersion: '1.0.0',
+          buildIntegrity: `sha256:${'b'.repeat(64)}`,
+          rollbackTo: artifactSource,
+        }
+      },
+      async queryPromotion() {
+        assert.fail('a successful activation must not query promotion state')
+      },
+    },
+    core: {
+      async prepareSwitch(input) {
+        return {
+          schemaVersion: 1,
+          baseRevision: input.expectedRevision,
+          documentId: 'document-admission-runtime',
+          nodeId: input.nodeId,
+          baseMutationVersion: 0,
+          previousArtifactRef: onlineArtifactRef,
+        }
+      },
+      async switchRef() {
+        coreMutationCalls += 1
+        assert.fail('rejected admission must not switch a Core material ref')
+      },
+      async restoreOnline() {
+        assert.fail('rejected admission must not restore a Core material ref')
+      },
+      async captureProject() {
+        return {
+          schemaVersion: 1,
+          revision: 'host-revision-0',
+          documentId: 'document-admission-runtime',
+          coreMutationVersion: 0,
+          activeDocument: { documentId: 'document-admission-runtime', fileName: 'dashboard', index: 0 },
+          projectSchema: {
+            componentsTree: [
+              {
+                id: 'root-admission-runtime',
+                componentName: 'Root',
+                children: [
+                  {
+                    id: 'generated-admission-runtime',
+                    componentName: 'GeneratedMaterialHost',
+                    $agent: { schemaVersion: 1, artifactRef: onlineArtifactRef },
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      },
+    },
+    crypto,
+    featureFlags: enabledFlags,
+    grantIdentity,
+    admitMaterialRefsUnderSharedMutation: async input => {
+      admissionCalls.push(structuredClone(input))
+      return admitMaterialRefsUnderSharedMutation(input)
+    },
+    persistence: {
+      async checkLocalGrant() {
+        return { schemaVersion: 1, granted: true, reason: 'granted', grant: { status: 'granted' } }
+      },
+      async readArtifact() {
+        return structuredClone(artifact)
+      },
+      async recoverDurableAgentReceipt() {
+        return { classification: 'missing' }
+      },
+      async readPromotionJournal({ callId }) {
+        return structuredClone(journals.get(callId) ?? null)
+      },
+      async listPromotionJournals() {
+        return [...journals.values()].map(value => structuredClone(value))
+      },
+      async writePromotionJournal(journal) {
+        journals.set(journal.callId, structuredClone(journal))
+        return structuredClone(journal)
+      },
+      async runDurableAgentWrite(operation) {
+        return operation({
+          draft: { draftGeneration: 0 },
+          async recordIntent(intent) {
+            durableIntentCalls += 1
+            return structuredClone(intent)
+          },
+          async commitBatch() {
+            assert.fail('rejected admission must not commit a mutation batch')
+          },
+        })
+      },
+    },
+  })
+  return {
+    admissionCalls,
+    call: {
+      schemaVersion: 1,
+      ...authority,
+      stepId: 'step-admission-runtime',
+      callId: 'call-admission-runtime',
+      capability: 'artifact.promoteLocal',
+      expectedRevision: 'host-revision-0',
+      arguments: { schemaVersion: 1, nodeId: 'generated-admission-runtime' },
+    },
+    get coreMutationCalls() {
+      return coreMutationCalls
+    },
+    get durableIntentCalls() {
+      return durableIntentCalls
+    },
+    runtime,
+  }
+}
 
 const streamingJsonResponse = ({ chunks, contentLength }) => {
   let cancelCount = 0
@@ -142,7 +304,14 @@ test('promotion runtime is inert under default-off feature flags and does not to
     authority,
     featureFlags: { runtime: false, data: false, online: false, promotion: false },
   }
-  for (const key of ['client', 'core', 'crypto', 'grantIdentity', 'persistence']) {
+  for (const key of [
+    'admitMaterialRefsUnderSharedMutation',
+    'client',
+    'core',
+    'crypto',
+    'grantIdentity',
+    'persistence',
+  ]) {
     Object.defineProperty(options, key, {
       enumerable: true,
       get() {
@@ -159,6 +328,35 @@ test('promotion runtime is inert under default-off feature flags and does not to
     reason: LOCAL_MATERIAL_PROMOTION_AVAILABILITY_REASON.runtimeDisabled,
   })
   assert.equal(optionalReads, 0)
+})
+
+test('promotion runtime passes admission through and a rejection prevents the Core ref switch', async () => {
+  const rejection = new Error('material admission unavailable')
+  const harness = await createAdmissionRuntimeHarness(async () => {
+    throw rejection
+  })
+
+  const result = await harness.runtime.promotionService.promoteLocal(harness.call)
+
+  assert.equal(result.status, 'not-applied')
+  assert.equal(result.failure.code, LOCAL_MATERIAL_PROMOTION_FAILURE_CODE.materialAdmissionFailed)
+  assert.equal(harness.admissionCalls.length, 1)
+  assert.deepEqual(harness.admissionCalls[0], {
+    schemaVersion: 1,
+    projectId: authority.projectId,
+    materialRefs: [
+      {
+        materialId: 'material-admission-runtime',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'b'.repeat(64)}`,
+      },
+    ],
+    unresolvedPromotionIds: [harness.admissionCalls[0].unresolvedPromotionIds[0]],
+    reason: 'promotion-activation',
+  })
+  assert.match(harness.admissionCalls[0].unresolvedPromotionIds[0], /^sha256:[a-f0-9]{64}$/u)
+  assert.equal(harness.coreMutationCalls, 0)
+  assert.equal(harness.durableIntentCalls, 1, 'the pre-activation durable intent remains resumable')
 })
 
 test('promotion availability requires all flags, a Node-20 trusted server, and the durable local policy grant', async () => {

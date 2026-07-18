@@ -36,6 +36,7 @@ const notReadyTextManifest = (version, componentName, title) => ({
 })
 
 const createHarness = ({
+  admitMaterialRefsUnderSharedMutation,
   coreMode = 'applied',
   mutateAfterIntent,
   nonStableDocumentFacade = false,
@@ -202,6 +203,7 @@ const createHarness = ({
     persistence,
     captureFullSnapshot,
     manifestCache,
+    ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
     hashCanonicalJson: async () => `sha256:${String(++hashIndex).padStart(64, '0')}`,
     now: () => 1_700_000_000_000,
     isTransactionCommittedError(error) {
@@ -265,6 +267,29 @@ test('production adapter captures real document/project data and runs the Engine
     componentsTree: [harness.state.schema],
     version: '1.0.0',
   })
+})
+
+test('adapter conditionally passes the admission dependency to the semantic handler without eager calls', async () => {
+  let admissionCalls = 0
+  const harness = createHarness({
+    admitMaterialRefsUnderSharedMutation: async () => {
+      admissionCalls += 1
+    },
+  })
+
+  const result = await harness.handler(harness.call)
+
+  assert.equal(result.status, 'applied')
+  assert.equal(admissionCalls, 0, 'a ChangeSet without new canonical local refs must not call admission')
+  assert.ok(harness.events.includes('intent:record'))
+  assert.ok(harness.events.includes('core:run'))
+})
+
+test('adapter forwards a configured admission value directly to lower dependency validation', () => {
+  assert.throws(
+    () => createHarness({ admitMaterialRefsUnderSharedMutation: 1 }),
+    /dependencies\.admitMaterialRefsUnderSharedMutation is required/u,
+  )
 })
 
 test('an unrelated not-ready material stays fenced without blocking a ready target', async () => {

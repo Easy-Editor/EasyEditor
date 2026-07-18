@@ -1,7 +1,12 @@
 import type { InvocationResult, SemanticCall } from '@easy-editor/agent-runtime'
 import type { EngineInstance } from '@easy-editor/core/instance'
 import type { SafeMaterialManifestCache } from '../../manifest/index.mjs'
-import type { ScreenApplyChangeSetAuthority, ScreenApplyPersistencePort } from './apply.mjs'
+import type { DashboardMaterialGcRuntime } from '../promotion/material-gc-runtime.mjs'
+import type {
+  ScreenApplyChangeSetAuthority,
+  ScreenApplyChangeSetDependencies,
+  ScreenApplyPersistencePort,
+} from './apply.mjs'
 import type { ScreenJsonValue } from './index.mjs'
 
 export interface DashboardScreenApplyRuntimeAdapterOptions {
@@ -25,7 +30,17 @@ export interface DashboardScreenApplyRuntimeAdapterOptions {
   readonly now: () => number
   readonly isTransactionCommittedError: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError: (error: unknown) => boolean
+  readonly admitMaterialRefsUnderSharedMutation?: ScreenApplyChangeSetDependencies['admitMaterialRefsUnderSharedMutation']
 }
+
+type AssertTrue<Value extends true> = Value
+type _DashboardScreenRuntimeAdmissionPortCompatibility = AssertTrue<
+  DashboardMaterialGcRuntime['admitMaterialRefsUnderSharedMutation'] extends NonNullable<
+    DashboardScreenApplyRuntimeAdapterOptions['admitMaterialRefsUnderSharedMutation']
+  >
+    ? true
+    : false
+>
 
 export declare const createDashboardScreenApplyChangeSetHandler: (
   options: DashboardScreenApplyRuntimeAdapterOptions,
