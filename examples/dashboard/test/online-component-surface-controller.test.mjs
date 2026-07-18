@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
+import { canonicalJsonStringify } from '../src/lib/storage/canonical-json.mjs'
 import {
   createOnlineComponentSurfaceController,
   createOnlineComponentSurfaceMarkerStorageKey,
@@ -72,24 +73,27 @@ const lockedDependency = (overrides = {}) => {
   }
 }
 
-const artifact = (artifactRef = ref(), overrides = {}) => ({
-  schemaVersion: 1,
-  projectId: 'project-a',
-  artifactId: artifactRef.artifactId,
-  logicalComponentId: artifactRef.logicalComponentId,
-  sourceIntegrity: artifactRef.sourceIntegrity,
-  sourceRevision: artifactRef.sourceRevision,
-  source,
-  css: artifactCss,
-  safeManifest: { schemaVersion: 1 },
-  lockedDependencies: [lockedDependency()],
-  dependencyLockDigest: `sha256:${'d'.repeat(64)}`,
-  diagnostics: [],
-  provenance: { actor: 'agent' },
-  createdAt: 1,
-  supersedes: null,
-  ...overrides,
-})
+const artifact = (artifactRef = ref(), overrides = {}) => {
+  const lockedDependencies = overrides.lockedDependencies ?? [lockedDependency()]
+  return {
+    schemaVersion: 1,
+    projectId: 'project-a',
+    artifactId: artifactRef.artifactId,
+    logicalComponentId: artifactRef.logicalComponentId,
+    sourceIntegrity: artifactRef.sourceIntegrity,
+    sourceRevision: artifactRef.sourceRevision,
+    source,
+    css: artifactCss,
+    safeManifest: { schemaVersion: 1 },
+    lockedDependencies,
+    dependencyLockDigest: hexDigest(canonicalJsonStringify(lockedDependencies)),
+    diagnostics: [],
+    provenance: { actor: 'agent' },
+    createdAt: 1,
+    supersedes: null,
+    ...overrides,
+  }
+}
 
 const node = artifactRef => ({
   componentName: 'GeneratedMaterialHost',
@@ -257,7 +261,7 @@ test('twenty canonical instances share one host and receive only verified sandbo
   )
 
   assert.equal(harness.reads(), 1)
-  assert.equal(hashes, 3)
+  assert.equal(hashes, 4)
   assert.equal(harness.hosts.calls.length, 1)
   assert.equal(harness.hosts.hosts[0].instances.size, 20)
   assert.equal(harness.hosts.hosts[0].getDiagnostics().iframeCount, 1)
@@ -289,7 +293,7 @@ test('geometry, visibility, and context updates reuse the verified immutable pro
   })
 
   assert.equal(harness.reads(), 1)
-  assert.equal(hashes, 3)
+  assert.equal(hashes, 4)
   assert.equal(harness.hosts.hosts[0].updates.length, 3)
 })
 
@@ -319,7 +323,7 @@ test('a rejected verification is evicted so a corrected immutable read can retry
   await assert.rejects(controller.register(registration('retry')), /source digest/i)
   assert.equal(await controller.update('retry', { visible: false }), true)
   assert.equal(reads, 2)
-  assert.equal(hashes, 4)
+  assert.equal(hashes, 5)
   assert.equal(hosts.calls.length, 1)
 })
 

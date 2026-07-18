@@ -37,6 +37,10 @@ export interface ArtifactRecordV1 extends ArtifactSourceRevision {
   readonly supersedes: ArtifactSourceRevision | null
 }
 
+export interface ArtifactRecordIntegrityOptions {
+  readonly hashBytes?: (bytes: Uint8Array) => ArrayBuffer | ArrayBufferView | Promise<ArrayBuffer | ArrayBufferView>
+}
+
 export interface LockedArtifactDependencyModuleV1 {
   readonly format: 'bundled-esm'
   readonly contentType: 'text/javascript'
@@ -144,6 +148,10 @@ export declare const validateLockedArtifactDependency: (value: unknown) => Locke
 export declare const validateArtifactRef: (value: unknown) => ArtifactRef
 export declare const createArtifactRevisionKey: (value: unknown) => string
 export declare const validateArtifactRecord: (value: unknown) => ArtifactRecordV1
+export declare const verifyArtifactRecordIntegrity: (
+  value: unknown,
+  options?: ArtifactRecordIntegrityOptions,
+) => Promise<ArtifactRecordV1>
 export declare const validateArtifactReadRequest: (value: unknown) => ArtifactReadRequestV1
 export declare const validateArtifactRootRecord: (value: unknown) => ArtifactRootRecordV1
 export declare const validateArtifactRootReadRequest: (value: unknown) => ArtifactRootRecordV1

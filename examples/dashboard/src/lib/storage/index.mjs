@@ -23,6 +23,7 @@ export {
   validateArtifactSourceRevision,
   validateArtifactSweepRequest,
   validateLockedArtifactDependency,
+  verifyArtifactRecordIntegrity,
   writeCanonicalNodeArtifactRef,
 } from './artifact-contracts.mjs'
 export {

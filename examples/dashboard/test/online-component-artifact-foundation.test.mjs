@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
   createArtifactRevisionKey,
@@ -8,10 +9,12 @@ import {
   validateArtifactRef,
   validateArtifactSourceRevision,
   validateLockedArtifactDependency,
+  verifyArtifactRecordIntegrity,
   writeCanonicalNodeArtifactRef,
 } from '../src/editor/agent/online-components/artifact-contracts.mjs'
 import { scanArtifactSource } from '../src/editor/agent/online-components/artifact-source.mjs'
 import { ArtifactStore } from '../src/editor/agent/online-components/artifact-store.mjs'
+import { canonicalJsonStringify } from '../src/lib/storage/canonical-json.mjs'
 import { MemoryDashboardStorageBackend } from '../src/lib/storage/memory-backend.mjs'
 import { ProjectPersistenceCoordinator } from '../src/lib/storage/project-persistence-coordinator.mjs'
 
@@ -77,6 +80,30 @@ const artifactRecord = (overrides = {}) => ({
   ...overrides,
 })
 
+const hashBytes = async bytes => new Uint8Array(createHash('sha256').update(bytes).digest())
+const sha256Digest = value => `sha256:${createHash('sha256').update(value).digest('hex')}`
+const sha256Sri = value => `sha256-${createHash('sha256').update(value).digest('base64')}`
+
+const integrityArtifactRecord = () => {
+  const dependencyBytes = Buffer.from('export default {}')
+  const lockedDependencies = [
+    {
+      ...artifactRecord().lockedDependencies[0],
+      integrity: sha256Sri(dependencyBytes),
+      module: {
+        ...artifactRecord().lockedDependencies[0].module,
+        byteLength: dependencyBytes.byteLength,
+        bytes: dependencyBytes.toString('base64'),
+      },
+    },
+  ]
+  return artifactRecord({
+    sourceIntegrity: sha256Digest(validSource),
+    lockedDependencies,
+    dependencyLockDigest: sha256Digest(canonicalJsonStringify(lockedDependencies)),
+  })
+}
+
 const assertDeeplyFrozen = value => {
   assert.equal(Object.isFrozen(value), true)
   if (value && typeof value === 'object') {
@@ -129,6 +156,69 @@ test('ArtifactSourceRevision, ArtifactRef, and ArtifactRecord are strict detache
     () => validateArtifactRecord(artifactRecord({ provenance: { value: undefined } })),
     error => error.code === 'validation-failed' && error.reason === 'value-is-not-json',
   )
+})
+
+test('ArtifactRecord integrity verification binds source, dependency bytes, SRI, and canonical lock digest', async t => {
+  const valid = integrityArtifactRecord()
+  const verified = await verifyArtifactRecordIntegrity(valid, { hashBytes })
+
+  assert.deepEqual(verified, valid)
+  assertDeeplyFrozen(verified)
+
+  await t.test('source tamper fails', async () => {
+    await assert.rejects(
+      verifyArtifactRecordIntegrity({ ...valid, source: `${valid.source}\n// tampered` }, { hashBytes }),
+      error => error.code === 'integrity-mismatch' && /source digest/iu.test(error.reason),
+    )
+  })
+
+  await t.test('dependency bytes tamper fails', async () => {
+    const bytes = Buffer.from('export default { tampered: true }')
+    await assert.rejects(
+      verifyArtifactRecordIntegrity(
+        {
+          ...valid,
+          lockedDependencies: [
+            {
+              ...valid.lockedDependencies[0],
+              module: {
+                ...valid.lockedDependencies[0].module,
+                byteLength: bytes.byteLength,
+                bytes: bytes.toString('base64'),
+              },
+            },
+          ],
+        },
+        { hashBytes },
+      ),
+      error => error.code === 'integrity-mismatch' && /dependency integrity/iu.test(error.reason),
+    )
+  })
+
+  await t.test('dependency SRI tamper fails', async () => {
+    await assert.rejects(
+      verifyArtifactRecordIntegrity(
+        {
+          ...valid,
+          lockedDependencies: [
+            {
+              ...valid.lockedDependencies[0],
+              integrity: `sha256-${'A'.repeat(43)}=`,
+            },
+          ],
+        },
+        { hashBytes },
+      ),
+      error => error.code === 'integrity-mismatch' && /dependency integrity/iu.test(error.reason),
+    )
+  })
+
+  await t.test('dependency lock digest mismatch fails', async () => {
+    await assert.rejects(
+      verifyArtifactRecordIntegrity({ ...valid, dependencyLockDigest: digest('f') }, { hashBytes }),
+      error => error.code === 'integrity-mismatch' && /lock digest/iu.test(error.reason),
+    )
+  })
 })
 
 test('locked dependencies accept only the canonical resolver DTO without invoking accessors', () => {

@@ -347,6 +347,22 @@ test('createOnline locks dependencies, persists the immutable artifact first, an
   assert.deepEqual(batch.artifactRefDeletes, [])
 })
 
+test('idempotent existing artifact recovery delegates full ArtifactRecord integrity verification', async () => {
+  const harness = await createHarness()
+  await harness.service.createOnline(createCall())
+  const [key, artifact] = [...harness.artifacts.entries()][0]
+
+  harness.lineage.clear()
+  harness.artifacts.set(key, { ...artifact, dependencyLockDigest: `sha256:${'f'.repeat(64)}` })
+
+  await assert.rejects(
+    harness.service.createOnline(createCall()),
+    error => error.code === 'integrity-mismatch' && /lock digest/iu.test(error.reason),
+  )
+  assert.equal(harness.resolverCalls.length, 1)
+  assert.equal(harness.coreCalls.filter(call => call.method === 'createOnline').length, 1)
+})
+
 test('resolver outputs are exact data DTOs and forged module SRI is rejected before artifact or Core mutation', async () => {
   const valid = await dependency()
   const accessor = { ...valid }

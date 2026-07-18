@@ -76,6 +76,8 @@ const sriSha256Pattern = /^sha256-[A-Za-z0-9+/]{43}=$/u
 
 const validationFailure = reason => new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.validationFailed, reason)
 
+const integrityFailure = reason => new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch, reason)
+
 const isPlainObject = value => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)
@@ -127,6 +129,71 @@ const decodedBase64ByteLength = value => {
   if (padding === 2 && (base64Alphabet.indexOf(value.at(-3)) & 15) !== 0) return null
   if (padding === 1 && (base64Alphabet.indexOf(value.at(-2)) & 3) !== 0) return null
   return (value.length / 4) * 3 - padding
+}
+
+const decodeCanonicalBase64 = value => {
+  const byteLength = decodedBase64ByteLength(value)
+  if (byteLength === null) {
+    throw validationFailure('artifact-locked-dependency.module.bytes-is-not-canonical-base64')
+  }
+  const bytes = new Uint8Array(byteLength)
+  let offset = 0
+  for (let index = 0; index < value.length; index += 4) {
+    const first = base64Alphabet.indexOf(value[index])
+    const second = base64Alphabet.indexOf(value[index + 1])
+    const third = value[index + 2] === '=' ? 0 : base64Alphabet.indexOf(value[index + 2])
+    const fourth = value[index + 3] === '=' ? 0 : base64Alphabet.indexOf(value[index + 3])
+    const packed = (first << 18) | (second << 12) | (third << 6) | fourth
+    if (offset < byteLength) bytes[offset++] = (packed >>> 16) & 255
+    if (offset < byteLength) bytes[offset++] = (packed >>> 8) & 255
+    if (offset < byteLength) bytes[offset++] = packed & 255
+  }
+  return bytes
+}
+
+const normalizeSha256Bytes = value => {
+  const bytes =
+    value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : ArrayBuffer.isView(value)
+        ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+        : null
+  if (!bytes || bytes.byteLength !== 32) {
+    throw new TypeError('artifact integrity hashBytes must return exactly 32 bytes')
+  }
+  return new Uint8Array(bytes)
+}
+
+const bytesToHex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+
+const bytesToBase64 = bytes => {
+  let value = ''
+  for (let index = 0; index < bytes.byteLength; index += 3) {
+    const first = bytes[index]
+    const second = index + 1 < bytes.byteLength ? bytes[index + 1] : 0
+    const third = index + 2 < bytes.byteLength ? bytes[index + 2] : 0
+    const packed = (first << 16) | (second << 8) | third
+    value += base64Alphabet[(packed >>> 18) & 63]
+    value += base64Alphabet[(packed >>> 12) & 63]
+    value += index + 1 < bytes.byteLength ? base64Alphabet[(packed >>> 6) & 63] : '='
+    value += index + 2 < bytes.byteLength ? base64Alphabet[packed & 63] : '='
+  }
+  return value
+}
+
+const resolveArtifactIntegrityHashBytes = options => {
+  if (options !== undefined && (typeof options !== 'object' || options === null || Array.isArray(options))) {
+    throw new TypeError('artifact integrity options must be an object')
+  }
+  if (options?.hashBytes !== undefined) {
+    if (typeof options.hashBytes !== 'function') throw new TypeError('artifact integrity hashBytes must be a function')
+    return options.hashBytes
+  }
+  const crypto = globalThis.crypto
+  if (!crypto?.subtle || typeof crypto.subtle.digest !== 'function') {
+    throw new DashboardStorageError(DASHBOARD_STORAGE_ERROR_CODE.storageUnavailable, 'webcrypto-sha-256-is-unavailable')
+  }
+  return async bytes => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
 }
 
 const requireHttpsUrl = (value, label) => {
@@ -329,6 +396,31 @@ export const validateArtifactRecord = value => {
     createdAt: requireTimestamp(value.createdAt, 'artifact-record.createdAt'),
     supersedes,
   })
+}
+
+export const verifyArtifactRecordIntegrity = async (value, options) => {
+  const artifact = validateArtifactRecord(value)
+  const hashBytes = resolveArtifactIntegrityHashBytes(options)
+  const digest = async bytes => normalizeSha256Bytes(await hashBytes(bytes))
+
+  const sourceDigest = await digest(textEncoder.encode(artifact.source))
+  if (`sha256:${bytesToHex(sourceDigest)}` !== artifact.sourceIntegrity) {
+    throw integrityFailure('artifact source digest does not match sourceIntegrity')
+  }
+
+  for (const dependency of artifact.lockedDependencies) {
+    const dependencyDigest = await digest(decodeCanonicalBase64(dependency.module.bytes))
+    if (`sha256-${bytesToBase64(dependencyDigest)}` !== dependency.integrity) {
+      throw integrityFailure(`artifact dependency integrity does not match SRI for ${dependency.package}`)
+    }
+  }
+
+  const lockDigest = await digest(textEncoder.encode(canonicalJsonStringify(artifact.lockedDependencies)))
+  if (`sha256:${bytesToHex(lockDigest)}` !== artifact.dependencyLockDigest) {
+    throw integrityFailure('artifact dependency lock digest does not match lockedDependencies')
+  }
+
+  return artifact
 }
 
 export const validateArtifactReadRequest = value => {

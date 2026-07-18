@@ -1,9 +1,8 @@
 import {
   cloneFrozenJson,
   readCanonicalNodeArtifactRef,
-  validateArtifactRecord,
   validateArtifactRef,
-  validateLockedArtifactDependency,
+  verifyArtifactRecordIntegrity,
 } from '../../lib/storage/artifact-contracts.mjs'
 import { createOnlineComponentSurfaceHost } from './surface-host.mjs'
 import { normalizeRenderUpdate } from './surface-protocol.mjs'
@@ -342,28 +341,15 @@ export const createOnlineComponentSurfaceController = options => {
   const verifyArtifact = async normalizedRef => {
     const rawArtifact = await readArtifact(normalizedRef)
     if (rawArtifact === null || rawArtifact === undefined) throw new Error('artifact could not be read')
-    const record = validateArtifactRecord(rawArtifact)
+    const record = await verifyArtifactRecordIntegrity(rawArtifact, { hashBytes })
     if (record.projectId !== projectId) throw new Error('artifact is outside project authority')
     for (const field of ['artifactId', 'logicalComponentId', 'sourceRevision', 'sourceIntegrity']) {
       if (record[field] !== normalizedRef[field]) throw new Error(`artifact identity does not match ref field ${field}`)
     }
 
-    const sourceHash = normalizeHash(await hashBytes(textEncoder.encode(record.source)))
-    if (`sha256:${hashHex(sourceHash)}` !== record.sourceIntegrity) {
-      throw new Error('artifact source digest does not match sourceIntegrity')
-    }
-
     const dependencies = []
-    const dependencyPackages = new Set()
-    for (const candidate of record.lockedDependencies) {
-      const dependency = validateLockedArtifactDependency(candidate)
-      if (dependencyPackages.has(dependency.package)) throw new Error('artifact dependency package is duplicated')
-      dependencyPackages.add(dependency.package)
+    for (const dependency of record.lockedDependencies) {
       const bytes = decodeCanonicalBase64(dependency.module.bytes)
-      const dependencyHash = normalizeHash(await hashBytes(bytes))
-      if (`sha256-${encodeBase64(dependencyHash)}` !== dependency.integrity) {
-        throw new Error(`artifact dependency integrity does not match SRI for ${dependency.package}`)
-      }
       dependencies.push(Object.freeze({ specifier: dependency.package, source: decodeUtf8(bytes) }))
     }
 

@@ -3,6 +3,7 @@ import {
   validateArtifactRecord,
   validateArtifactRef,
   validateLockedArtifactDependency,
+  verifyArtifactRecordIntegrity,
 } from '../../online-components/artifact-contracts.mjs'
 import { scanArtifactSource } from '../../online-components/artifact-source.mjs'
 import {
@@ -112,6 +113,7 @@ const createHasher = crypto => {
   }
   const digest = async value => new Uint8Array(await crypto.subtle.digest('SHA-256', value))
   return Object.freeze({
+    hashBytes: digest,
     bytes: async value => `sha256:${bytesToHex(await digest(value))}`,
     sri: async value => `sha256-${bytesToBase64(await digest(value))}`,
   })
@@ -387,8 +389,8 @@ const createArtifactIdentity = async ({ call, prepare, hashJson }) => {
   })
 }
 
-const assertArtifactMatchesCall = async ({ artifact, call, prepare, identity, sourceIntegrity, hasher, hashJson }) => {
-  const validated = validateArtifactRecord(artifact)
+const assertArtifactMatchesCall = async ({ artifact, call, prepare, identity, sourceIntegrity, hasher }) => {
+  const validated = await verifyArtifactRecordIntegrity(artifact, { hashBytes: hasher.hashBytes })
   if (
     validated.artifactId !== identity.artifactId ||
     validated.sourceRevision !== identity.sourceRevision ||
@@ -411,15 +413,6 @@ const assertArtifactMatchesCall = async ({ artifact, call, prepare, identity, so
   }))
   if (!jsonDataEqual(actualRequests, call.arguments.dependencies)) {
     return failContract('existing-artifact-dependency-request-mismatch', 'OnlineArtifact.artifact')
-  }
-  for (const dependency of validated.lockedDependencies) {
-    if ((await hasher.sri(base64ToBytes(dependency.module.bytes))) !== dependency.integrity) {
-      return failContract('existing-artifact-dependency-integrity-mismatch', 'OnlineArtifact.artifact')
-    }
-  }
-  const dependencyLockDigest = await hashJson(validated.lockedDependencies)
-  if (dependencyLockDigest !== validated.dependencyLockDigest) {
-    return failContract('existing-artifact-lock-digest-mismatch', 'OnlineArtifact.artifact')
   }
   const expectedSupersedes =
     call.capability === 'artifact.createOnline' ? null : artifactSourceRevision(prepare.previousArtifactRef)
@@ -481,7 +474,7 @@ const createOrRecoverArtifact = async ({
   }
   const existing = await persistence.readArtifact(readRequest)
   if (existing !== null) {
-    return assertArtifactMatchesCall({ artifact: existing, call, prepare, identity, sourceIntegrity, hasher, hashJson })
+    return assertArtifactMatchesCall({ artifact: existing, call, prepare, identity, sourceIntegrity, hasher })
   }
   const lockedDependencies = []
   for (const request of call.arguments.dependencies) {

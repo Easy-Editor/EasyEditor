@@ -1,4 +1,5 @@
 export type {
+  ArtifactRecordIntegrityOptions,
   ArtifactRecordV1,
   ArtifactRef,
   ArtifactSourceRevision,
@@ -17,5 +18,6 @@ export {
   validateArtifactRef,
   validateArtifactSourceRevision,
   validateLockedArtifactDependency,
+  verifyArtifactRecordIntegrity,
   writeCanonicalNodeArtifactRef,
 } from '../../../lib/storage/artifact-contracts.mjs'
