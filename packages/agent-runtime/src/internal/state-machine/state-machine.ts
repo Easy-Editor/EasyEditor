@@ -37,7 +37,7 @@ import {
 } from '../session-context/index.js'
 import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
 import { createAgentTelemetryChangeSetId } from '../telemetry-change-set-id.js'
-import type { WorkerTelemetryPhase, WorkerTelemetrySink } from '../telemetry.js'
+import type { WorkerTelemetrySink } from '../telemetry.js'
 import { createSafeWorkerTelemetryEmitter, workerTelemetryErrorCodes } from '../telemetry.js'
 
 type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
@@ -75,6 +75,8 @@ export interface WorkerStateMachineOptions {
   readonly repairBudget?: number
   readonly sessionContextBudget?: AgentSessionContextBudget
   readonly telemetrySink?: WorkerTelemetrySink
+  /** @internal Test-only observation of retained telemetry correlation state. */
+  readonly onTelemetryStepRetentionChange?: (retainedStepCount: number) => void
   readonly onSnapshot?: (snapshot: AgentRuntimeSnapshot) => void
 }
 
@@ -658,7 +660,30 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   const telemetry = createSafeWorkerTelemetryEmitter(options.telemetrySink)
   const terminalTelemetryTasks = new Set<string>()
   const toolTelemetryStarts = new Map<string, number>()
-  const telemetryStepPhases = new Map<string, WorkerTelemetryPhase>()
+  const telemetryStepPhases = new Map<string, string>()
+
+  const notifyTelemetryStepRetentionChange = () => options.onTelemetryStepRetentionChange?.(telemetryStepPhases.size)
+
+  const retainTelemetryStep = (task: MutableTask, stepId: string) => {
+    if (telemetryStepPhases.has(stepId)) return
+    telemetryStepPhases.set(stepId, task.taskId)
+    notifyTelemetryStepRetentionChange()
+  }
+
+  const releaseTelemetryStep = (stepId: string) => {
+    if (!telemetryStepPhases.delete(stepId)) return
+    notifyTelemetryStepRetentionChange()
+  }
+
+  const releaseTelemetryStepUnlessPending = (task: MutableTask, stepId: string) => {
+    if (task.pendingInvocation?.call.stepId !== stepId) releaseTelemetryStep(stepId)
+  }
+
+  const releaseTaskTelemetrySteps = (taskId: string) => {
+    for (const [stepId, retainedTaskId] of telemetryStepPhases) {
+      if (retainedTaskId === taskId) releaseTelemetryStep(stepId)
+    }
+  }
 
   const ownDataRecord = (value: unknown): Record<string, unknown> | undefined => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
@@ -974,6 +999,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         ...(phase === 'FAILED' ? { errorCode: safeTelemetryErrorCode(task.failure?.code, 'worker-task-failed') } : {}),
       })
       for (const callId of task.callIds) toolTelemetryStarts.delete(callId)
+      releaseTaskTelemetrySteps(task.taskId)
     }
     emit()
   }
@@ -1141,7 +1167,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       stepId,
       phase,
     })
-    if (phaseStartedAt !== undefined) telemetryStepPhases.set(stepId, phase)
+    if (phaseStartedAt !== undefined) retainTelemetryStep(task, stepId)
     const modelRequestStartedAt = emitTelemetry(task, {
       eventType: 'model-request.started',
       status: 'started',
@@ -1191,6 +1217,8 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       )
       emitTelemetry(task, { eventType: 'phase.failed', status: 'failed', errorCode, stepId, phase }, phaseStartedAt)
       throw error
+    } finally {
+      releaseTelemetryStep(stepId)
     }
   }
 
@@ -1362,7 +1390,10 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task.pendingInvocation = undefined
     task.pendingInvocationDurable = false
     const persisted = await persistTask(task, phase)
-    if (persisted) return true
+    if (persisted) {
+      if (pending) releaseTelemetryStep(pending.call.stepId)
+      return true
+    }
     task.pendingInvocation = pending
     task.pendingInvocationDurable = pendingWasDurable
     setPhase(task, 'PAUSED')
@@ -1379,6 +1410,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     setPhase(task, 'CHECKPOINT')
     const persisted = await persistTask(task, 'COMPLETED')
     if (persisted) {
+      if (pending) releaseTelemetryStep(pending.call.stepId)
       setPhase(task, 'COMPLETED')
       return 'completed'
     }
@@ -1514,6 +1546,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
     task.pendingInvocationDurable = false
     task.callIds.push(call.callId)
     task.callIndex.push({ callId: call.callId, capability: call.capability })
+    if (options.telemetrySink) retainTelemetryStep(task, call.stepId)
     ensureToolTelemetryStart(task, call)
     if (task.callIndexComplete) {
       task.callIndexComplete =
@@ -1563,7 +1596,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
           stepId: call.stepId,
           phase: 'RECOVERY',
         })
-    if (recoveryPhaseStartedAt !== undefined) telemetryStepPhases.set(call.stepId, 'RECOVERY')
+    if (recoveryPhaseStartedAt !== undefined) retainTelemetryStep(task, call.stepId)
     ensureToolTelemetryStart(task, call)
     try {
       const disposition = await withCommitLock(task, async () => {
@@ -1608,6 +1641,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
           recoveryPhaseStartedAt,
         )
       }
+      releaseTelemetryStepUnlessPending(task, call.stepId)
       return disposition
     } catch (error) {
       if (recoveryPhaseStartedAt !== undefined) {
@@ -1626,6 +1660,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
           recoveryPhaseStartedAt,
         )
       }
+      releaseTelemetryStepUnlessPending(task, call.stepId)
       throw error
     }
   }
@@ -1813,7 +1848,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       stepId,
       phase: 'COMPENSATION',
     })
-    if (phaseStartedAt !== undefined) telemetryStepPhases.set(stepId, 'COMPENSATION')
+    if (phaseStartedAt !== undefined) retainTelemetryStep(task, stepId)
     const call = createRuntimeOwnedCall(
       task,
       {
@@ -1849,6 +1884,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         { eventType: 'phase.failed', status: 'failed', errorCode, stepId, phase: 'COMPENSATION' },
         phaseStartedAt,
       )
+      releaseTelemetryStepUnlessPending(task, stepId)
       throw error
     }
     if (disposition === 'completed') {
@@ -1862,6 +1898,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
         { eventType: 'phase.completed', status: 'completed', stepId, phase: 'COMPENSATION' },
         phaseStartedAt,
       )
+      releaseTelemetryStepUnlessPending(task, stepId)
       return
     }
     emitTelemetry(
@@ -1886,6 +1923,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
       },
       phaseStartedAt,
     )
+    releaseTelemetryStepUnlessPending(task, stepId)
     if (task.controller?.signal.aborted || task.phase === 'CANCELLED' || activeTask !== task) {
       throw task.controller?.signal.reason ?? new DOMException('Compensation task is no longer active', 'AbortError')
     }

@@ -237,6 +237,7 @@ const createMachine = (steps, overrides = {}) => {
     repairBudget: overrides.repairBudget,
     sessionContextBudget: overrides.sessionContextBudget,
     telemetrySink: overrides.telemetrySink,
+    onTelemetryStepRetentionChange: overrides.onTelemetryStepRetentionChange,
     onSnapshot: snapshot => phases.push(snapshot.phase),
   })
   return { machine, model, host, persistence, phases }
@@ -458,6 +459,27 @@ test('emits bounded Worker-only telemetry with queryable task, step, model reque
       assert.equal(Object.hasOwn(event, forbidden), false)
     }
   }
+})
+
+test('releases completed and terminal telemetry steps from internal retention', async () => {
+  const retainedCounts = []
+  const fixture = createMachine(
+    [
+      { expectedPhase: 'BLUEPRINT', events: [blueprint] },
+      { expectedPhase: 'PLAN_STEP', events: [toolCall(call()), complete] },
+    ],
+    {
+      telemetrySink: { emit() {} },
+      onTelemetryStepRetentionChange: count => retainedCounts.push(count),
+    },
+  )
+
+  await fixture.machine.submit({ text: 'Retain only active telemetry steps' })
+  await fixture.machine.waitForIdle()
+
+  assert.equal(fixture.machine.getSnapshot().phase, 'COMPLETED')
+  assert.deepEqual(retainedCounts, [1, 0, 1, 0, 1, 0])
+  fixture.model.assertFullyConsumed()
 })
 
 test('canonical telemetry changeSet IDs are stable, collision-free for bounded call IDs, and byte-bijective', () => {
