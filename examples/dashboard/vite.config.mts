@@ -9,11 +9,16 @@ import {
   type OnlineComponentDependencyMiddlewareOptions,
   createEnvironmentOnlineComponentDependencyMiddleware,
 } from './server/online-components/index.mjs'
+import {
+  type MaterialPromotionMiddlewareOptions,
+  createEnvironmentMaterialPromotionMiddleware,
+} from './server/promotion/index.mjs'
 
 export interface DashboardViteConfigOptions {
   env?: NodeJS.ProcessEnv
   dataProxyOptions?: Pick<DataProxyMiddlewareOptions, 'lookup' | 'transport'>
   onlineComponentDependencyOptions?: Pick<OnlineComponentDependencyMiddlewareOptions, 'lookup' | 'transport'>
+  materialPromotionOptions?: MaterialPromotionMiddlewareOptions
 }
 
 const dashboardDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -23,6 +28,7 @@ export const createDashboardViteConfig = ({
   env = process.env,
   dataProxyOptions = {},
   onlineComponentDependencyOptions = {},
+  materialPromotionOptions = {},
 }: DashboardViteConfigOptions = {}): UserConfig => {
   const agentRuntimeE2EEnabled = env.VITE_E2E === '1'
   const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
@@ -35,11 +41,23 @@ export const createDashboardViteConfig = ({
     lookup: onlineComponentDependencyOptions.lookup,
     transport: onlineComponentDependencyOptions.transport,
   })
+  const materialPromotionMiddleware = createEnvironmentMaterialPromotionMiddleware({
+    ...materialPromotionOptions,
+    env,
+  })
   return {
     define: {
       __EASY_EDITOR_AGENT_RUNTIME_E2E__: JSON.stringify(agentRuntimeE2EEnabled),
     },
     plugins: [
+      {
+        name: 'easy-editor-material-promotion',
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            void materialPromotionMiddleware(request, response, next)
+          })
+        },
+      },
       {
         name: 'easy-editor-online-component-dependency',
         configureServer(server) {

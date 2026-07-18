@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { createEnvironmentDataProxyMiddleware } from './data/index.mjs'
 import { createEnvironmentOnlineComponentDependencyMiddleware } from './online-components/index.mjs'
+import { createEnvironmentMaterialPromotionMiddleware } from './promotion/index.mjs'
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultDistDirectory = resolve(moduleDirectory, '..', 'dist')
@@ -99,6 +100,11 @@ export const createDashboardServer = ({
   onlineComponentDependencyHandler,
   onlineComponentDependencyInboundTimeoutMs,
   onlineComponentDependencyPublicOrigins,
+  materialPromotionOptions = {},
+  materialPromotionHandler,
+  materialPromotionInboundTimeoutMs,
+  materialPromotionOperationTimeoutMs,
+  materialPromotionPublicOrigins,
 } = {}) => {
   const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
     env,
@@ -116,8 +122,17 @@ export const createDashboardServer = ({
     publicOrigins: onlineComponentDependencyPublicOrigins,
     transport: onlineComponentDependencyOptions.transport,
   })
+  const materialPromotionMiddleware = createEnvironmentMaterialPromotionMiddleware({
+    ...materialPromotionOptions,
+    env,
+    handler: materialPromotionHandler ?? materialPromotionOptions.handler,
+    inboundTimeoutMs: materialPromotionInboundTimeoutMs ?? materialPromotionOptions.inboundTimeoutMs,
+    operationTimeoutMs: materialPromotionOperationTimeoutMs ?? materialPromotionOptions.operationTimeoutMs,
+    publicOrigins: materialPromotionPublicOrigins ?? materialPromotionOptions.publicOrigins,
+  })
   return createServer((request, response) => {
     void (async () => {
+      if (await materialPromotionMiddleware(request, response)) return
       if (await onlineComponentDependencyMiddleware(request, response)) return
       if (await dataProxyMiddleware(request, response)) return
       await serveDashboard(request, response, distDir)
