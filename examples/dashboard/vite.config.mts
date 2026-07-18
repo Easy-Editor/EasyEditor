@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { type UserConfig, defineConfig } from 'vite'
 import { type DataProxyMiddlewareOptions, createEnvironmentDataProxyMiddleware } from './server/data/index.mjs'
+import { type ModelGatewayMiddlewareOptions, createEnvironmentModelGatewayMiddleware } from './server/gateway/index.mjs'
 import {
   type OnlineComponentDependencyMiddlewareOptions,
   createEnvironmentOnlineComponentDependencyMiddleware,
@@ -16,6 +17,7 @@ import {
 
 export interface DashboardViteConfigOptions {
   env?: NodeJS.ProcessEnv
+  agentModelGatewayOptions?: ModelGatewayMiddlewareOptions
   dataProxyOptions?: Pick<DataProxyMiddlewareOptions, 'lookup' | 'transport'>
   onlineComponentDependencyOptions?: Pick<OnlineComponentDependencyMiddlewareOptions, 'lookup' | 'transport'>
   materialPromotionOptions?: MaterialPromotionMiddlewareOptions
@@ -26,11 +28,16 @@ const dashboardDirectory = path.dirname(fileURLToPath(import.meta.url))
 // https://vite.dev/config/
 export const createDashboardViteConfig = ({
   env = process.env,
+  agentModelGatewayOptions = {},
   dataProxyOptions = {},
   onlineComponentDependencyOptions = {},
   materialPromotionOptions = {},
 }: DashboardViteConfigOptions = {}): UserConfig => {
   const agentRuntimeE2EEnabled = env.VITE_E2E === '1'
+  const agentModelGatewayMiddleware = createEnvironmentModelGatewayMiddleware({
+    ...agentModelGatewayOptions,
+    env,
+  })
   const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
     env,
     lookup: dataProxyOptions.lookup,
@@ -50,6 +57,14 @@ export const createDashboardViteConfig = ({
       __EASY_EDITOR_AGENT_RUNTIME_E2E__: JSON.stringify(agentRuntimeE2EEnabled),
     },
     plugins: [
+      {
+        name: 'easy-editor-agent-model-gateway',
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            void agentModelGatewayMiddleware(request, response, next)
+          })
+        },
+      },
       {
         name: 'easy-editor-material-promotion',
         configureServer(server) {

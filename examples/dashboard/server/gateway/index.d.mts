@@ -1,0 +1,127 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+
+export const MODEL_GATEWAY_PATH: '/api/agent/model/stream'
+export const MODEL_GATEWAY_SCHEMA_VERSION: 1
+export const MODEL_GATEWAY_MAX_BODY_BYTES: number
+export const AGENT_MODEL_GATEWAY_ENABLED_ENV: 'EASY_EDITOR_AGENT_GATEWAY_ENABLED'
+export const AGENT_MODEL_GATEWAY_CONFIG_ENV: 'EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON'
+
+export interface ModelGatewayPrincipal {
+  readonly tenantId: string
+  readonly userId: string
+}
+
+export interface ModelGatewayRequestV1 {
+  readonly schemaVersion: 1
+  readonly projectId: string
+  readonly branchId: string
+  readonly sessionId: string
+  readonly taskId: string
+  readonly stepId: string
+  readonly modelRequestId: string
+  readonly providerId: string
+  readonly model: string
+  readonly phase: 'BLUEPRINT' | 'PLAN_STEP' | 'REPAIR'
+  readonly messages: readonly Readonly<{
+    role: 'system' | 'user' | 'assistant'
+    content: string
+  }>[]
+  readonly maxOutputTokens?: number
+}
+
+export interface ModelGatewayTransportRequest {
+  readonly method: string
+  readonly path: string
+  readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>
+  readonly body: Uint8Array
+  readonly signal: AbortSignal
+}
+
+export interface ModelGatewayTransportResult {
+  readonly status: number
+  readonly headers: Readonly<Record<string, string>>
+  readonly body: AsyncIterable<Uint8Array>
+}
+
+export interface ModelGatewayHandler {
+  readonly path: typeof MODEL_GATEWAY_PATH
+  handle(request: ModelGatewayTransportRequest): Promise<ModelGatewayTransportResult>
+}
+
+export interface ModelGatewayProviderTransport {
+  stream(
+    input: Readonly<{
+      principal: ModelGatewayPrincipal
+      request: ModelGatewayRequestV1
+      signal: AbortSignal
+    }>,
+  ): Promise<AsyncIterable<unknown>> | AsyncIterable<unknown>
+}
+
+export type ModelGatewayPrincipalAuthorizer = (
+  input: Readonly<{
+    headers: Readonly<Record<string, string>>
+    projectId: string
+    signal: AbortSignal
+  }>,
+) => Promise<ModelGatewayPrincipal> | ModelGatewayPrincipal
+
+export interface ModelGatewayHandlerOptions {
+  authorizePrincipal: ModelGatewayPrincipalAuthorizer
+  providerTransport: ModelGatewayProviderTransport
+  maxConcurrent?: number
+  timeoutMs?: number
+  logger?: { warn(value: unknown): void }
+}
+
+export interface EnvironmentModelGatewayHandlerOptions
+  extends Partial<
+    Pick<
+      ModelGatewayHandlerOptions,
+      'authorizePrincipal' | 'providerTransport' | 'maxConcurrent' | 'timeoutMs' | 'logger'
+    >
+  > {
+  env?: NodeJS.ProcessEnv
+  handler?: ModelGatewayHandler
+  fetchImpl?: typeof globalThis.fetch
+  resolveSessionPrincipal?: (
+    input: Readonly<{
+      sessionId: string
+      projectId: string
+    }>,
+  ) =>
+    | Promise<Readonly<ModelGatewayPrincipal & { projectIds: readonly string[] }> | null>
+    | Readonly<ModelGatewayPrincipal & { projectIds: readonly string[] }>
+    | null
+}
+
+export interface ModelGatewayMiddlewareOptions extends EnvironmentModelGatewayHandlerOptions {
+  inboundTimeoutMs?: number
+  publicOrigins?: readonly string[]
+}
+
+export type ModelGatewayMiddleware = (
+  request: IncomingMessage,
+  response: ServerResponse,
+  next?: () => void,
+) => Promise<boolean>
+
+export function createModelGatewayHandler(options: ModelGatewayHandlerOptions): ModelGatewayHandler
+export function createEnvironmentModelGatewayHandler(
+  options?: EnvironmentModelGatewayHandlerOptions,
+): ModelGatewayHandler
+export function isEnvironmentModelGatewayEnabled(env?: NodeJS.ProcessEnv): boolean
+export function createNodeModelGatewayMiddleware(
+  options: ModelGatewayMiddlewareOptions & { handler: ModelGatewayHandler },
+): ModelGatewayMiddleware
+export function createEnvironmentModelGatewayMiddleware(options?: ModelGatewayMiddlewareOptions): ModelGatewayMiddleware
+
+export function createOpenAICompatibleProviderTransport(
+  options: Readonly<{
+    fetchImpl?: typeof globalThis.fetch
+    baseUrl: string
+    apiKey: string
+    defaultModel?: string
+    timeoutMs?: number
+  }>,
+): ModelGatewayProviderTransport

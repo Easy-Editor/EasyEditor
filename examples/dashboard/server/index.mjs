@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { createEnvironmentDataProxyMiddleware } from './data/index.mjs'
+import { createEnvironmentModelGatewayMiddleware } from './gateway/index.mjs'
 import { createEnvironmentOnlineComponentDependencyMiddleware } from './online-components/index.mjs'
 import { createEnvironmentMaterialPromotionMiddleware } from './promotion/index.mjs'
 
@@ -92,6 +93,10 @@ const serveDashboard = async (request, response, distDirectory) => {
 export const createDashboardServer = ({
   distDir = defaultDistDirectory,
   env = process.env,
+  agentModelGatewayOptions = {},
+  agentModelGatewayHandler,
+  agentModelGatewayInboundTimeoutMs,
+  agentModelGatewayPublicOrigins,
   dataProxyOptions = {},
   dataProxyHandler,
   dataProxyInboundTimeoutMs,
@@ -106,6 +111,13 @@ export const createDashboardServer = ({
   materialPromotionOperationTimeoutMs,
   materialPromotionPublicOrigins,
 } = {}) => {
+  const agentModelGatewayMiddleware = createEnvironmentModelGatewayMiddleware({
+    ...agentModelGatewayOptions,
+    env,
+    handler: agentModelGatewayHandler ?? agentModelGatewayOptions.handler,
+    inboundTimeoutMs: agentModelGatewayInboundTimeoutMs ?? agentModelGatewayOptions.inboundTimeoutMs,
+    publicOrigins: agentModelGatewayPublicOrigins ?? agentModelGatewayOptions.publicOrigins,
+  })
   const dataProxyMiddleware = createEnvironmentDataProxyMiddleware({
     env,
     handler: dataProxyHandler,
@@ -132,6 +144,7 @@ export const createDashboardServer = ({
   })
   return createServer((request, response) => {
     void (async () => {
+      if (await agentModelGatewayMiddleware(request, response)) return
       if (await materialPromotionMiddleware(request, response)) return
       if (await onlineComponentDependencyMiddleware(request, response)) return
       if (await dataProxyMiddleware(request, response)) return
