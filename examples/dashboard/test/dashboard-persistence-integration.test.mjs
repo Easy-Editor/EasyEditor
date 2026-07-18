@@ -1728,14 +1728,24 @@ test('Dashboard wiring keeps canonical writes and IndexedDB transactions behind 
   assert.deepEqual(indexedDbApiUsers, ['src/lib/storage/indexeddb-backend.mjs'])
 
   const runtimeSource = readFileSync(resolve(dashboardRoot, 'src/editor/runtime.ts'), 'utf8')
-  const probe = runtimeSource.match(
-    /Object\.defineProperty\(window, '__EASY_EDITOR_E2E__',[\s\S]+?flushPersistence:[\s\S]+?\n\s*\}\)/u,
-  )?.[0]
-  assert.ok(probe)
-  assert.match(probe, /getEngineState:/u)
-  assert.match(probe, /getPersistenceState:/u)
-  assert.match(probe, /flushPersistence:/u)
-  assert.doesNotMatch(probe, /\b(?:save|write|commit|loadProject|destroy)\w*:/iu)
+  const e2eOnlyBlockMatch = runtimeSource.match(/(?:^|\n)(if \(import\.meta\.env\.VITE_E2E === '1'\) \{[\s\S]*\})\s*$/u)
+  assert.ok(e2eOnlyBlockMatch)
+  const e2eOnlyBlock = e2eOnlyBlockMatch[1]
+  assert.match(e2eOnlyBlock, /^if \(import\.meta\.env\.VITE_E2E === '1'\) \{\s+const e2eProbe = \{/u)
+  assert.match(e2eOnlyBlock, /\n\s+getEngineState:/u)
+  assert.match(e2eOnlyBlock, /\n\s+getPersistenceState:/u)
+  assert.match(e2eOnlyBlock, /\n\s+flushPersistence:/u)
+  assert.match(
+    e2eOnlyBlock,
+    /Object\.defineProperty\(window, '__EASY_EDITOR_E2E__', \{\s+configurable: true,\s+value: Object\.freeze\(e2eProbe\),\s+\}\)/u,
+  )
+  assert.doesNotMatch(e2eOnlyBlock, /\b(?:save|write|commit|loadProject|destroy)\w*:/iu)
+
+  const productionRuntimeSource = runtimeSource.slice(0, e2eOnlyBlockMatch.index)
+  assert.doesNotMatch(
+    productionRuntimeSource,
+    /__EASY_EDITOR_E2E__|\be2eProbe\b|\bgetEngineState\b|\bflushPersistence\b/u,
+  )
 
   const persistenceSource = readFileSync(persistenceRuntimePath, 'utf8')
   assert.match(persistenceSource, /this\.#coordinator\.commit\(/u)
