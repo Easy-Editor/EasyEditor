@@ -1,3 +1,5 @@
+import { parseWorkerTelemetryControlEvent } from '../../../agent-runtime/worker-telemetry-control.mjs'
+
 const MODEL_PHASES = new Set(['BLUEPRINT', 'PLAN_STEP', 'REPAIR'])
 const SCRIPT_FAULTS = new Set(['disconnect', 'malformed', 'timeout'])
 const STEP_FIELDS = new Set(['delayMs', 'events', 'expectedPhase', 'fault'])
@@ -95,30 +97,65 @@ export const cloneAgentRuntimeE2ESteps = steps => {
   }
 }
 
-const assertControlRecord = value => {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+const exactControlRecord = (value, fields) => {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
     fail('invalid-handshake', 'Worker control message must be an object')
   }
-  if (value.schemaVersion !== AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION) {
+  const keys = Reflect.ownKeys(value)
+  if (
+    keys.length !== fields.length ||
+    keys.some(key => {
+      if (typeof key !== 'string' || !fields.includes(key)) return true
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return descriptor?.enumerable !== true || !Object.hasOwn(descriptor, 'value')
+    })
+  ) {
+    fail('invalid-handshake', 'Worker control message fields are invalid')
+  }
+}
+
+const assertControlRecord = value => {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Reflect.ownKeys(value).some(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return typeof key !== 'string' || descriptor?.enumerable !== true || !Object.hasOwn(descriptor, 'value')
+    })
+  ) {
+    fail('invalid-handshake', 'Worker control message must be an object')
+  }
+  const schemaVersion = Object.getOwnPropertyDescriptor(value, 'schemaVersion')?.value
+  const generation = Object.getOwnPropertyDescriptor(value, 'generation')?.value
+  if (schemaVersion !== AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION) {
     fail('invalid-handshake', 'Worker control message schemaVersion is invalid')
   }
-  if (!Number.isSafeInteger(value.generation) || value.generation < 1) {
+  if (!Number.isSafeInteger(generation) || generation < 1) {
     fail('invalid-handshake', 'Worker control message generation is invalid')
   }
 }
 
 export const parseAgentRuntimeE2EWorkerControlMessage = value => {
   assertControlRecord(value)
-  if (value.kind === 'ready') {
-    if (Object.keys(value).length !== 3) fail('invalid-handshake', 'Worker ready message has unexpected fields')
+  const kind = Object.getOwnPropertyDescriptor(value, 'kind')?.value
+  if (kind === 'ready') {
+    exactControlRecord(value, ['schemaVersion', 'kind', 'generation'])
     return Object.freeze({
       schemaVersion: AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION,
       kind: 'ready',
       generation: value.generation,
     })
   }
-  if (value.kind === 'fault') {
-    if (Object.keys(value).length !== 4 || typeof value.message !== 'string' || value.message.length === 0) {
+  if (kind === 'fault') {
+    exactControlRecord(value, ['schemaVersion', 'kind', 'generation', 'message'])
+    if (typeof value.message !== 'string' || value.message.length === 0 || value.message.length > 512) {
       fail('invalid-handshake', 'Worker fault message is invalid')
     }
     return Object.freeze({
@@ -128,5 +165,14 @@ export const parseAgentRuntimeE2EWorkerControlMessage = value => {
       message: value.message,
     })
   }
-  fail('invalid-handshake', `Unsupported Worker control message kind ${String(value.kind)}`)
+  if (kind === 'telemetry') {
+    exactControlRecord(value, ['schemaVersion', 'kind', 'generation', 'event'])
+    return Object.freeze({
+      schemaVersion: AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION,
+      kind: 'telemetry',
+      generation: value.generation,
+      event: parseWorkerTelemetryControlEvent(value.event),
+    })
+  }
+  fail('invalid-handshake', 'Worker control message kind is invalid')
 }

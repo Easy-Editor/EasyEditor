@@ -710,6 +710,12 @@ test('telemetry event validation rejects raw payload fields, invalid enums, iden
     { ...base, eventType: 'custom.event' },
     { ...base, timestampMs: -1 },
     { ...base, taskId: 'contains whitespace' },
+    {
+      ...base,
+      eventType: 'task.failed',
+      status: 'failed',
+      errorCode: 'sk-live-secret',
+    },
     Object.defineProperty({ ...base }, 'taskId', { get: () => 'task-1', enumerable: true }),
   ]) {
     assert.throws(() => createWorkerTelemetryEvent(invalid), /telemetry event is invalid/i)

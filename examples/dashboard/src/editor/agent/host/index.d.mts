@@ -24,6 +24,7 @@ import type {
 import type { ScreenApplyPersistencePort } from '../capabilities/screen/index.mjs'
 import type { TaskCompensationPersistence, TaskCompensationService } from '../compensation/index.mjs'
 import type { ReceiptRecoveryResult } from '../persistence/receipt-ledger.mjs'
+import type { DashboardAgentTelemetryLedger } from '../telemetry/index.mjs'
 
 export type DashboardAgentHostErrorCode =
   | 'AUTHORITY_MISMATCH'
@@ -52,6 +53,7 @@ export interface DashboardAgentHostOptions {
   readonly adapterGeneration?: number
   readonly artifactService?: DashboardOnlineArtifactCapabilityService
   readonly compensationService?: DashboardTaskCompensationService
+  readonly createTelemetryChangeSetId?: (callId: string) => string
   readonly dataResolver?: DashboardDataResolver
   readonly dataService?: DashboardDataCapabilityService
   readonly isTransactionCommittedError?: (error: unknown) => boolean
@@ -60,6 +62,8 @@ export interface DashboardAgentHostOptions {
   readonly persistence?: DashboardAgentHostPersistence
   readonly promotionAvailability?: DashboardLocalMaterialPromotionAvailability
   readonly promotionService?: DashboardLocalMaterialPromotionCapabilityService
+  readonly telemetry?: Pick<DashboardAgentTelemetryLedger, 'record'>
+  readonly telemetryNow?: () => number
 }
 
 export type DashboardLocalMaterialPromotionAvailability = () => Promise<
@@ -116,6 +120,7 @@ export declare class DashboardAgentHost implements AgentHost {
     readonly persistence: DashboardAgentHostPersistence
     readonly promotionAvailability?: DashboardLocalMaterialPromotionAvailability
     readonly promotionService?: DashboardLocalMaterialPromotionCapabilityService
+    readonly telemetry?: Pick<DashboardAgentTelemetryLedger, 'record'>
   })
   readonly disposed: boolean
   observe(request: ObserveRequest): Promise<HostSnapshot | HostSnapshotDelta>

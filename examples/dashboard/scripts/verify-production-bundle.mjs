@@ -14,6 +14,10 @@ const forbiddenMarkers = Object.freeze([
   'e2e-steps',
   'loadAgentRuntimeE2E',
   'runtime-e2e',
+  'createDashboardE2EPostIntentGate',
+  'armDashboardAgentPostIntentGate',
+  'waitForDashboardAgentPostIntent',
+  'releaseDashboardAgentPostIntentGate',
 ])
 
 const listFiles = async directory => {

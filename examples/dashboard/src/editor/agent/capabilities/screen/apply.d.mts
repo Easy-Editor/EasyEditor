@@ -3,6 +3,7 @@ import type { ArtifactMaterialIdentityV1 } from '../../../../lib/storage/artifac
 import type { CanonicalActiveDocumentV1, CanonicalWorkingDraftV1 } from '../../../../lib/storage/contracts.mjs'
 import type { DurableAgentBatchV1 } from '../../persistence/durable-agent-commit.mjs'
 import type { ReceiptIntentV1, ReceiptRecoveryResult, ToolReceiptV1 } from '../../persistence/receipt-ledger.mjs'
+import type { DashboardAgentTelemetryLedger } from '../../telemetry/index.mjs'
 import type {
   DashboardMaterialGcAdmissionInput,
   DashboardMaterialGcRuntime,
@@ -126,6 +127,7 @@ export interface ScreenApplyChangeSetDependencies<DocumentHandle = unknown> {
   captureDocumentState(handle: DocumentHandle): ScreenCompileDocument | Promise<ScreenCompileDocument>
   captureProject(): ScreenApplyProjectCapture | Promise<ScreenApplyProjectCapture>
   compileChangeSet(input: CompileScreenChangeSetInput): Readonly<CompiledScreenChangeSet>
+  createTelemetryChangeSetId?(callId: string): string
   hashCanonicalJson(value: ScreenJsonValue): Promise<`sha256:${string}`>
   runOnDocument(
     handle: DocumentHandle,
@@ -135,6 +137,8 @@ export interface ScreenApplyChangeSetDependencies<DocumentHandle = unknown> {
   isTransactionCommittedError(error: unknown): boolean
   isTransactionRollbackIncompleteError(error: unknown): boolean
   now(): number
+  readonly telemetry?: Pick<DashboardAgentTelemetryLedger, 'record'>
+  readonly telemetryNow?: () => number
 }
 
 type AssertTrue<Value extends true> = Value

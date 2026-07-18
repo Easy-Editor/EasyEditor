@@ -1,3 +1,4 @@
+import { createDashboardTelemetryChannel } from '../../../../runtime/telemetry-channel.mjs'
 import { validateArtifactRef } from '../../online-components/artifact-contracts.mjs'
 import { createMutationProvenanceBatch } from '../../persistence/provenance.mjs'
 import {
@@ -521,9 +522,27 @@ export const createScreenApplyChangeSetHandler = dependencies => {
     'dependencies',
   )
   const now = requireMethod(dependencies, 'now', 'dependencies')
+  const telemetryNow = typeof dependencies.telemetryNow === 'function' ? dependencies.telemetryNow : Date.now
+  const telemetry = createDashboardTelemetryChannel(dependencies.telemetry, telemetryNow)
+  const createTelemetryChangeSetId = telemetry.enabled
+    ? requireMethod(dependencies, 'createTelemetryChangeSetId', 'dependencies')
+    : null
+  const emitTelemetry = (event, startedAt) => {
+    if (event.changeSetId === null) return
+    telemetry.emit(event, startedAt)
+  }
 
   return async value => {
     const call = normalizeCall(value, authority)
+    let changeSetId = null
+    if (createTelemetryChangeSetId) {
+      try {
+        changeSetId = createTelemetryChangeSetId(call.callId)
+      } catch {
+        // A telemetry correlation helper cannot gate the Screen capability.
+      }
+    }
+    const prepareStartedAt = telemetry.start()
     const recoveryAuthority = { projectId: call.projectId, branchId: call.branchId, callId: call.callId }
     const recovered = await recoverInvocation(
       await recoverDurableAgentReceipt(recoveryAuthority),
@@ -536,6 +555,17 @@ export const createScreenApplyChangeSetHandler = dependencies => {
     const idleGeneration = requireNonNegativeInteger(idle?.generation, 'screenApply.idle.generation')
     const initialSnapshot = normalizeSnapshot(await captureFullSnapshot())
     if (initialSnapshot.revision !== call.expectedRevision) {
+      emitTelemetry({
+        eventType: 'dashboard.screen.stale',
+        sessionId: call.sessionId,
+        taskId: call.taskId,
+        stepId: call.stepId,
+        callId: call.callId,
+        changeSetId,
+        expectedProjectRevision: call.expectedRevision,
+        currentProjectRevision: initialSnapshot.revision,
+        diagnosticCode: 'initial-revision-mismatch',
+      })
       return invocationFailure(
         call.callId,
         'not-applied',
@@ -644,6 +674,19 @@ export const createScreenApplyChangeSetHandler = dependencies => {
       expectedPostImages: payloads.expectedPostImages,
       status: 'pending',
     })
+    emitTelemetry(
+      {
+        eventType: 'dashboard.screen.prepare',
+        sessionId: call.sessionId,
+        taskId: call.taskId,
+        stepId: call.stepId,
+        callId: call.callId,
+        changeSetId,
+        projectRevision: initialSnapshot.revision,
+        status: 'completed',
+      },
+      prepareStartedAt,
+    )
 
     if (activityLease.generation !== idleGeneration || isActive()) {
       return invocationFailure(
@@ -667,6 +710,19 @@ export const createScreenApplyChangeSetHandler = dependencies => {
 
         const commitTerminalFailure = async (failureCode, message, details) => {
           const postSnapshot = normalizeSnapshot(await captureFullSnapshot())
+          if (failureCode === SCREEN_APPLY_CHANGESET_FAILURE_CODE.staleRevision) {
+            emitTelemetry({
+              eventType: 'dashboard.screen.stale',
+              sessionId: call.sessionId,
+              taskId: call.taskId,
+              stepId: call.stepId,
+              callId: call.callId,
+              changeSetId,
+              expectedProjectRevision: call.expectedRevision,
+              currentProjectRevision: postSnapshot.revision,
+              diagnosticCode: 'prepared-fence-mismatch',
+            })
+          }
           const project = normalizeProject(await captureProject())
           const draftGeneration = expectedDraftGeneration + 1
           const witness = createFailureWitness({
@@ -738,6 +794,7 @@ export const createScreenApplyChangeSetHandler = dependencies => {
 
         let transactionError = null
         let transactionReturned = false
+        const commitStartedAt = telemetry.start()
         try {
           await runOnDocument(prepared.documentHandle, compiled.commands, {
             agentCallId: call.callId,
@@ -751,6 +808,20 @@ export const createScreenApplyChangeSetHandler = dependencies => {
         const committedError = transactionError !== null && isTransactionCommittedError(transactionError)
         const rollbackIncomplete = transactionError !== null && isTransactionRollbackIncompleteError(transactionError)
         if (transactionReturned || committedError) coreOutcome = 'applied'
+        emitTelemetry(
+          {
+            eventType: 'dashboard.screen.commit',
+            sessionId: call.sessionId,
+            taskId: call.taskId,
+            stepId: call.stepId,
+            callId: call.callId,
+            changeSetId,
+            projectRevision: initialSnapshot.revision,
+            status: transactionReturned || committedError ? 'completed' : 'failed',
+            ...(transactionReturned || committedError ? {} : { errorCode: 'core-transaction-failed' }),
+          },
+          commitStartedAt,
+        )
 
         if (rollbackIncomplete) {
           try {
@@ -766,6 +837,7 @@ export const createScreenApplyChangeSetHandler = dependencies => {
         }
 
         let postDocument
+        const verifyStartedAt = telemetry.start()
         try {
           postDocument = normalizeDocumentState(
             await captureDocumentState(prepared.documentHandle),
@@ -819,6 +891,20 @@ export const createScreenApplyChangeSetHandler = dependencies => {
             { stage: 'core' },
           )
         }
+
+        emitTelemetry(
+          {
+            eventType: 'dashboard.screen.verify',
+            sessionId: call.sessionId,
+            taskId: call.taskId,
+            stepId: call.stepId,
+            callId: call.callId,
+            changeSetId,
+            projectRevision: initialSnapshot.revision,
+            status: 'completed',
+          },
+          verifyStartedAt,
+        )
 
         coreOutcome = 'applied'
         const postSnapshot = normalizeSnapshot(await captureFullSnapshot())

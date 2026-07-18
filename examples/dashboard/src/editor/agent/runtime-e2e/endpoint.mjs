@@ -1,3 +1,4 @@
+import { createMainThreadWorkerTelemetryDelivery } from '../../../agent-runtime/worker-telemetry-control.mjs'
 import {
   AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION,
   AgentRuntimeE2EWorkerError,
@@ -26,7 +27,25 @@ const eventError = event =>
   event.error instanceof Error ? event.error : workerFault(event.message || 'Agent Runtime E2E module Worker failed')
 
 const createEndpoint = (options, platform) => {
-  const steps = cloneAgentRuntimeE2ESteps(options.steps)
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    Array.isArray(options) ||
+    Object.getPrototypeOf(options) !== Object.prototype ||
+    Reflect.ownKeys(options).some(key => key !== 'steps' && key !== 'telemetry') ||
+    !Object.hasOwn(options, 'steps') ||
+    Reflect.ownKeys(options).some(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(options, key)
+      return typeof key !== 'string' || descriptor?.enumerable !== true || !Object.hasOwn(descriptor, 'value')
+    })
+  ) {
+    throw new AgentRuntimeE2EWorkerError('invalid-steps', 'Worker endpoint options are invalid')
+  }
+  const values = Object.fromEntries(
+    Reflect.ownKeys(options).map(key => [key, Object.getOwnPropertyDescriptor(options, key).value]),
+  )
+  const steps = cloneAgentRuntimeE2ESteps(values.steps)
+  const telemetry = createMainThreadWorkerTelemetryDelivery(values.telemetry)
   const generation = (nextWorkerGeneration += 1)
   const channel = platform.createMessageChannel()
   let worker
@@ -77,6 +96,10 @@ const createEndpoint = (options, platform) => {
     }
     if (control.generation !== generation) {
       publishFault(workerFault('Agent Runtime E2E module Worker generation does not match its endpoint'))
+      return
+    }
+    if (control.kind === 'telemetry') {
+      telemetry.emit(control.event)
       return
     }
     if (control.kind === 'fault') {

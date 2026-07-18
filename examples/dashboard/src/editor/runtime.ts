@@ -1,3 +1,4 @@
+import { createAgentTelemetryChangeSetId } from '@easy-editor/agent-runtime'
 import {
   type EngineInstance,
   type RemoteAccessRequest,
@@ -39,6 +40,7 @@ import {
   type DashboardAgentHostAuthority,
   createDashboardAgentHost,
 } from './agent/host/index.mjs'
+import { createDashboardHostPersistenceFacade } from './agent/host/persistence-facade.mjs'
 import {
   type DashboardAgentSessionHost,
   type DashboardAgentSessionHostAuthority,
@@ -46,6 +48,7 @@ import {
 } from './agent/host/session-host.mjs'
 import { createDashboardOnlineComponentDependencyResolver } from './agent/online-components/dependency-resolver.mjs'
 import { createDashboardAgentPersistencePort } from './agent/persistence/agent-persistence-port.mjs'
+import { type DashboardAgentTelemetryQuery, createDashboardAgentTelemetryLedger } from './agent/telemetry/index.mjs'
 import { createDashboardSameOriginDataResolver } from './data/contract.mjs'
 import {
   type DashboardPersistenceInput,
@@ -81,6 +84,17 @@ engineReference.current = engine
 remoteResources.bindEngine(engine)
 
 export const dashboardAgentRuntimeFeatureFlags = resolveAgentRuntimeFeatureFlags(import.meta.env)
+const dashboardAgentTelemetryLedger = dashboardAgentRuntimeFeatureFlags.runtime
+  ? createDashboardAgentTelemetryLedger({ capacity: 4096 })
+  : null
+export const dashboardAgentTelemetry = dashboardAgentTelemetryLedger
+  ? Object.freeze({ record: (event: unknown) => dashboardAgentTelemetryLedger.record(event) })
+  : null
+export const dashboardAgentWorkerTelemetry = dashboardAgentTelemetryLedger
+  ? Object.freeze({
+      sink: Object.freeze({ emit: dashboardAgentTelemetryLedger.sink.emit }),
+    })
+  : null
 export const dashboardMaterialGcEnabled = resolveDashboardMaterialGcEnabled(import.meta.env)
 export const dashboardMutationQuiescenceGate = dashboardMaterialGcEnabled
   ? createDashboardMutationQuiescenceGate({ inputTarget: window })
@@ -115,6 +129,10 @@ export const registerDashboardAgentWorkspaceE2EProbe = (
 }
 
 const dashboardHumanActivityLease = createHumanActivityLease()
+export const getDashboardHumanActivityGeneration = (): number => {
+  if (import.meta.env.VITE_E2E !== '1') throw new Error('Dashboard human activity generation is E2E-only')
+  return dashboardHumanActivityLease.generation
+}
 export const dashboardInvocationActivity = createDashboardInvocationActivity()
 let releaseDashboardHumanActivityTracking: (() => void) | null =
   dashboardAgentRuntimeFeatureFlags.runtime === true || dashboardMaterialGcEnabled
@@ -140,7 +158,75 @@ export const dashboardPersistence = createDashboardPersistenceRuntime({
   },
 })
 
-export const dashboardAgentPersistence = createDashboardAgentPersistencePort(dashboardPersistence)
+const createDashboardE2EPostIntentGate = () => {
+  let gate:
+    | {
+        readonly reached: Promise<string>
+        readonly release: Promise<void>
+        markReached(callId: string): void
+        releaseGate(): void
+      }
+    | undefined
+  return Object.freeze({
+    arm() {
+      if (gate) throw new Error('Dashboard Agent post-intent gate is already armed')
+      let markReached: (callId: string) => void = () => {}
+      let releaseGate: () => void = () => {}
+      const reached = new Promise<string>(resolve => {
+        markReached = resolve
+      })
+      const release = new Promise<void>(resolve => {
+        releaseGate = resolve
+      })
+      gate = { reached, release, markReached, releaseGate }
+    },
+    waitUntilReached() {
+      if (!gate) throw new Error('Dashboard Agent post-intent gate is not armed')
+      return gate.reached
+    },
+    release() {
+      if (!gate) throw new Error('Dashboard Agent post-intent gate is not armed')
+      gate.releaseGate()
+    },
+    async holdAfterIntent(callId: string) {
+      const active = gate
+      if (!active) return
+      active.markReached(callId)
+      await active.release
+      if (gate === active) gate = undefined
+    },
+  })
+}
+
+const dashboardE2EPostIntentGate =
+  import.meta.env.VITE_E2E === '1' && dashboardAgentRuntimeFeatureFlags.runtime
+    ? createDashboardE2EPostIntentGate()
+    : null
+
+export const armDashboardAgentPostIntentGate = (): void => {
+  if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
+  dashboardE2EPostIntentGate.arm()
+}
+
+export const waitForDashboardAgentPostIntent = (): Promise<string> => {
+  if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
+  return dashboardE2EPostIntentGate.waitUntilReached()
+}
+
+export const releaseDashboardAgentPostIntentGate = (): void => {
+  if (!dashboardE2EPostIntentGate) throw new Error('Dashboard Agent post-intent gate is E2E-only')
+  dashboardE2EPostIntentGate.release()
+}
+
+const dashboardHostPersistence = createDashboardHostPersistenceFacade(dashboardPersistence, {
+  ...(dashboardE2EPostIntentGate
+    ? { afterRecordIntent: intent => dashboardE2EPostIntentGate.holdAfterIntent(intent.callId) }
+    : {}),
+})
+
+export const dashboardAgentPersistence = createDashboardAgentPersistencePort(dashboardPersistence, {
+  ...(dashboardAgentTelemetry ? { telemetry: dashboardAgentTelemetry } : {}),
+})
 
 export const dashboardMaterialGcClient = dashboardMaterialGcEnabled
   ? createDashboardSameOriginMaterialGcClient({ fetchImpl: window.fetch.bind(window) })
@@ -245,6 +331,7 @@ const createBoundDashboardAgentHost = (
           persistence: createDashboardOnlineArtifactPersistenceAdapter(dashboardPersistence),
           resolver: createDashboardOnlineComponentDependencyResolver({ fetchImpl: window.fetch.bind(window) }),
           crypto: window.crypto,
+          ...(dashboardAgentTelemetry ? { telemetry: dashboardAgentTelemetry } : {}),
           isTransactionCommittedError: error => error instanceof TransactionCommittedError,
           isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
         })
@@ -275,6 +362,7 @@ const createBoundDashboardAgentHost = (
             persistence: dashboardPersistence,
           }),
           crypto: window.crypto,
+          ...(dashboardAgentTelemetry ? { telemetry: dashboardAgentTelemetry } : {}),
           admitMaterialRefsUnderSharedMutation: dashboardMaterialGcAdmissionPort.admitMaterialRefsUnderSharedMutation,
           ...(grantIdentity ? { grantIdentity } : {}),
           onPromotionApplied: async () => {
@@ -288,6 +376,7 @@ const createBoundDashboardAgentHost = (
   const host = createDashboardAgentHost({
     activityLease: dashboardHumanActivityLease,
     authority,
+    createTelemetryChangeSetId: createAgentTelemetryChangeSetId,
     enabled: true,
     engine,
     invocationActivity: dashboardInvocationActivity,
@@ -299,7 +388,8 @@ const createBoundDashboardAgentHost = (
       : {}),
     isTransactionCommittedError: error => error instanceof TransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
-    persistence: dashboardPersistence,
+    persistence: dashboardHostPersistence,
+    ...(dashboardAgentTelemetry ? { telemetry: dashboardAgentTelemetry } : {}),
     ...(artifactService ? { artifactService } : {}),
     ...(dataResolver ? { dataResolver } : {}),
     ...(promotionRuntime
@@ -336,6 +426,13 @@ if (import.meta.env.VITE_E2E === '1') {
       getEngineState: () => engine.lifecycleState,
       getPersistenceState: () => dashboardPersistence.getSnapshot(),
       getAgentWorkspaceState: () => dashboardAgentWorkspaceE2EProbe?.() ?? null,
+      getAgentTelemetryState: (query: DashboardAgentTelemetryQuery) =>
+        dashboardAgentTelemetryLedger
+          ? {
+              events: structuredClone(dashboardAgentTelemetryLedger.query(query)),
+              stats: structuredClone(dashboardAgentTelemetryLedger.stats()),
+            }
+          : null,
       flushPersistence: () => dashboardPersistence.flush(),
       ...(dashboardMaterialGcEnabled
         ? {

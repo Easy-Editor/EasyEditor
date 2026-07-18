@@ -5,8 +5,33 @@ import {
 } from '@easy-editor/agent-runtime/testing'
 import { startAgentWorker } from '@easy-editor/agent-runtime/worker'
 import { AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION, cloneAgentRuntimeE2ESteps } from './protocol.mjs'
+import { startAgentRuntimeE2EWorkerRuntime } from './worker-runtime.mjs'
 
 let started = false
+const CURRENT_SNAPSHOT_REVISION_DIRECTIVE = '$e2e:current-snapshot-revision'
+
+class DashboardE2EScriptedModelAdapter {
+  #consumed = 0
+  #steps
+
+  constructor(steps) {
+    this.#steps = steps
+  }
+
+  async *run(request, signal) {
+    const step = this.#steps[this.#consumed]
+    if (!step) throw new Error('Agent Runtime E2E scripted model has no remaining step')
+    this.#consumed += 1
+    const resolved = structuredClone(step)
+    for (const event of resolved.events) {
+      if (event?.kind === 'tool-call' && event.call?.expectedRevision === CURRENT_SNAPSHOT_REVISION_DIRECTIVE) {
+        event.call.expectedRevision = request.snapshot.revision
+      }
+    }
+    const delegate = new ScriptedModelAdapter([resolved])
+    yield* delegate.run(request, signal)
+  }
+}
 
 const postControl = message => self.postMessage(Object.freeze(message))
 
@@ -44,11 +69,14 @@ self.addEventListener('message', event => {
   const start = assertStartMessage(event.data)
   started = true
 
-  void startAgentWorker({
+  void startAgentRuntimeE2EWorkerRuntime({
+    start: startAgentWorker,
     port: start.port,
-    model: new ScriptedModelAdapter(start.steps),
+    model: new DashboardE2EScriptedModelAdapter(start.steps),
     clock: createDeterministicClock(start.generation * 1_000_000),
     idFactory: createDeterministicIdFactory(`dashboard-e2e-worker-${start.generation}-`),
+    generation: start.generation,
+    postControl,
   }).then(
     () => {
       postControl({

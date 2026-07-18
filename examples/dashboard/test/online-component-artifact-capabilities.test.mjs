@@ -141,6 +141,8 @@ const createHarness = async ({
   coreResultMutator = null,
   durableFailure = null,
   resolverResult,
+  telemetry,
+  telemetryNow,
 } = {}) => {
   const artifacts = new Map()
   const batches = []
@@ -333,6 +335,7 @@ const createHarness = async ({
     persistence,
     resolver,
     now: () => 123,
+    ...(telemetry === undefined ? {} : { telemetry, telemetryNow: telemetryNow ?? (() => 500) }),
   })
   return { artifacts, batches, coreCalls, lineage, persistence, resolverCalls, service }
 }
@@ -389,6 +392,47 @@ test('createOnline locks dependencies, persists the immutable artifact first, an
     },
   ])
   assert.deepEqual(batch.artifactRefDeletes, [])
+})
+
+test('online artifact capability records safe dependency resolution and distinct source/artifact/project revisions', async () => {
+  const telemetry = []
+  const harness = await createHarness({ telemetry: { record: event => telemetry.push(structuredClone(event)) } })
+  const result = await harness.service.createOnline(createCall())
+  const artifact = [...harness.artifacts.values()][0]
+
+  assert.equal(result.status, 'applied')
+  assert.deepEqual(
+    telemetry.map(event => event.eventType),
+    ['dashboard.artifact.resolution', 'dashboard.artifact.revision'],
+  )
+  assert.equal(telemetry[0].sourceRevision, artifact.sourceRevision)
+  assert.equal(telemetry[0].dependencyLockDigest, artifact.dependencyLockDigest)
+  assert.equal(telemetry[1].artifactRevision, artifact.sourceIntegrity)
+  assert.equal(telemetry[1].projectRevision, result.revision)
+  assert.equal(Object.hasOwn(telemetry[1], 'source'), false)
+  assert.equal(Object.hasOwn(telemetry[1], 'css'), false)
+  assert.equal(Object.hasOwn(telemetry[1], 'lockedDependencies'), false)
+})
+
+test('online artifact capability ignores telemetry clock failures', async () => {
+  let sinkCalls = 0
+  const harness = await createHarness({
+    telemetry: {
+      record: () => {
+        sinkCalls += 1
+        return Promise.reject(new Error('private artifact telemetry failure'))
+      },
+    },
+    telemetryNow: () => {
+      throw new Error('private artifact telemetry clock failure')
+    },
+  })
+
+  const result = await harness.service.createOnline(createCall())
+  assert.equal(result.status, 'applied')
+  assert.equal(harness.artifacts.size, 1)
+  assert.equal(harness.coreCalls.filter(call => call.method === 'createOnline').length, 1)
+  assert.equal(sinkCalls, 0)
 })
 
 test('idempotent existing artifact recovery delegates full ArtifactRecord integrity verification', async () => {

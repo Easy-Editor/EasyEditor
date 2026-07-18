@@ -234,6 +234,11 @@ export const createDashboardScreenApplyChangeSetHandler = options => {
   const manifestCache = requireObject(input.manifestCache, 'options.manifestCache')
   requireMethod(manifestCache, 'get', 'options.manifestCache')
   const captureFullSnapshot = requireMethod(input, 'captureFullSnapshot', 'options')
+  const telemetry = optionalOwnDataValue(input, 'telemetry', 'options')
+  const createTelemetryChangeSetId =
+    telemetry === undefined || telemetry === null
+      ? undefined
+      : requireMethod(input, 'createTelemetryChangeSetId', 'options')
   const isTransactionCommittedError = requireMethod(input, 'isTransactionCommittedError', 'options')
   const isTransactionRollbackIncompleteError = requireMethod(input, 'isTransactionRollbackIncompleteError', 'options')
   const admitMaterialRefsUnderSharedMutation = optionalOwnDataValue(
@@ -254,6 +259,7 @@ export const createDashboardScreenApplyChangeSetHandler = options => {
     persistence: input.persistence,
     ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
     captureFullSnapshot: captureSnapshot,
+    ...(createTelemetryChangeSetId === undefined ? {} : { createTelemetryChangeSetId }),
     capturePrepareContext: async ({ snapshot }) => {
       const normalizedSnapshot = freezeDto({
         revision: requireNonEmptyString(snapshot.revision, 'snapshot.revision'),
@@ -292,5 +298,7 @@ export const createDashboardScreenApplyChangeSetHandler = options => {
     isTransactionCommittedError,
     isTransactionRollbackIncompleteError,
     now: input.now,
+    ...(telemetry === undefined ? {} : { telemetry }),
+    ...(input.telemetryNow === undefined ? {} : { telemetryNow: input.telemetryNow }),
   })
 }

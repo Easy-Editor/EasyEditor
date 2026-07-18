@@ -1,4 +1,5 @@
 import type { AgentWorkerEndpoint } from '@easy-editor/agent-runtime'
+import type { WorkerTelemetrySink } from '@easy-editor/agent-runtime/worker'
 import type { AgentRuntimeE2EScriptedModelStep } from './protocol.mjs'
 
 export interface AgentRuntimeE2EWorkerEndpoint extends AgentWorkerEndpoint {
@@ -8,6 +9,7 @@ export interface AgentRuntimeE2EWorkerEndpoint extends AgentWorkerEndpoint {
 
 export interface AgentRuntimeE2EWorkerEndpointOptions {
   readonly steps: readonly AgentRuntimeE2EScriptedModelStep[]
+  readonly telemetry?: WorkerTelemetrySink
 }
 
 export interface AgentRuntimeE2EWorkerLike {

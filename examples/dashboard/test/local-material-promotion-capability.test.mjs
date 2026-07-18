@@ -300,6 +300,8 @@ const createServiceHarness = async ({
   promoteAckLoss = false,
   queryPromotionFailure = null,
   queryPromotionResult = undefined,
+  telemetry = undefined,
+  telemetryNow = () => 456,
 } = {}) => {
   const artifact = artifactOverride ?? (await createArtifact())
   const batches = []
@@ -518,6 +520,8 @@ const createServiceHarness = async ({
     client,
     ...(omitMaterialAdmission ? {} : { admitMaterialRefsUnderSharedMutation }),
     now: () => 123,
+    telemetry,
+    telemetryNow,
   })
 
   return {
@@ -602,6 +606,73 @@ test('promoteLocal binds the server identity to the canonical call digest and co
     ),
   )
   assert.equal(DASHBOARD_STORAGE_STORE_NAMES.includes('promotionSagas'), false)
+})
+
+test('promotion telemetry observes prepared, registry activation, and durable commit without source payloads', async () => {
+  const events = []
+  const harness = await createServiceHarness({ telemetry: { record: event => events.push(structuredClone(event)) } })
+
+  assert.equal((await harness.service.promoteLocal(createPromotionCall())).status, 'applied')
+  assert.deepEqual(
+    events.map(event => [event.promotionStatus, event.status]),
+    [
+      ['prepared', 'completed'],
+      ['registry-active', 'completed'],
+      ['committed', 'applied'],
+    ],
+  )
+  assert.deepEqual(
+    events.map(({ artifactId, sourceRevision, artifactRevision, dependencyLockDigest, projectRevision }) => ({
+      artifactId,
+      sourceRevision,
+      artifactRevision,
+      dependencyLockDigest,
+      ...(projectRevision === undefined ? {} : { projectRevision }),
+    })),
+    [
+      {
+        artifactId: harness.artifact.artifactId,
+        sourceRevision: harness.artifact.sourceRevision,
+        artifactRevision: harness.artifact.sourceIntegrity,
+        dependencyLockDigest: harness.artifact.dependencyLockDigest,
+      },
+      {
+        artifactId: harness.artifact.artifactId,
+        sourceRevision: harness.artifact.sourceRevision,
+        artifactRevision: harness.artifact.sourceIntegrity,
+        dependencyLockDigest: harness.artifact.dependencyLockDigest,
+      },
+      {
+        artifactId: harness.artifact.artifactId,
+        sourceRevision: harness.artifact.sourceRevision,
+        artifactRevision: harness.artifact.sourceIntegrity,
+        dependencyLockDigest: harness.artifact.dependencyLockDigest,
+        projectRevision: 'host-revision-1',
+      },
+    ],
+  )
+  assert.doesNotMatch(JSON.stringify(events), /sourceText|cssText|dependencies/u)
+})
+
+test('promotion business outcome ignores telemetry clock failures', async () => {
+  let sinkCalls = 0
+  const harness = await createServiceHarness({
+    telemetry: {
+      record: () => {
+        sinkCalls += 1
+        return Promise.reject(new Error('private promotion telemetry failure'))
+      },
+    },
+    telemetryNow: () => {
+      throw new Error('private promotion telemetry clock failure')
+    },
+  })
+
+  const result = await harness.service.promoteLocal(createPromotionCall())
+  assert.equal(result.status, 'applied')
+  assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 1)
+  assert.equal(harness.batches.length, 1)
+  assert.equal(sinkCalls, 0)
 })
 
 test('promotion retains its staged identity before server activation and admits the active material before Core switch', async () => {

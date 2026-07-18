@@ -47,6 +47,85 @@ export const workerTelemetryReceiptDispositions = [
   'resume-safe-retry',
 ] as const
 
+export const workerTelemetryErrorCodes = [
+  'AMBIGUOUS_RECEIPT',
+  'APPLIED_UNDURABLE',
+  'AUTHORITY_MISMATCH',
+  'BUDGET_EXCEEDED',
+  'CAPABILITY_UNAVAILABLE',
+  'COMPENSATION_CONFLICT',
+  'COMPENSATION_IN_PROGRESS',
+  'CORE_TRANSACTION_FAILED',
+  'DATA_BINDING_UNSUPPORTED',
+  'DATA_BUDGET_EXCEEDED',
+  'DATA_NODE_NOT_FOUND',
+  'DATA_SOURCE_CONFLICT',
+  'DATA_SOURCE_NOT_FOUND',
+  'DATA_UNAVAILABLE',
+  'HOST_DISPOSED',
+  'HUMAN_ACTIVITY',
+  'IDEMPOTENCY_CONFLICT',
+  'INDETERMINATE_CORE_OUTCOME',
+  'INDETERMINATE_RECEIPT',
+  'INDETERMINATE_SERVER_OUTCOME',
+  'INVALID_CALL',
+  'INVALID_CAPABILITY_REQUEST',
+  'INVALID_CHANGESET',
+  'INVALID_DATA_REQUEST',
+  'INVALID_DOCUMENT_STATE',
+  'INVALID_JSON',
+  'INVALID_LINEAGE_DTO',
+  'INVALID_MANIFEST',
+  'INVALID_MATERIAL_REF',
+  'INVALID_PREPARE_CONTEXT',
+  'INVALID_PROJECT_STATE',
+  'INVALID_RECOVERY',
+  'INVALID_REQUEST',
+  'INVALID_SNAPSHOT',
+  'MATERIAL_ADMISSION_FAILED',
+  'MATERIAL_NOT_FOUND',
+  'NO_CHANGE',
+  'PERSISTENCE_FAILURE',
+  'REPAIR_BUDGET_EXHAUSTED',
+  'RESULT_REVISION_MISMATCH',
+  'SERVER_PROMOTION_FAILED',
+  'SNAPSHOT_REVISION_MISMATCH',
+  'STALE_MUTATION_VERSION',
+  'STALE_REVISION',
+  'TOOL_FAILURE',
+  'TRANSACTION_ROLLBACK_INCOMPLETE',
+  'UNKNOWN_CAPABILITY',
+  'UNKNOWN_FIELD',
+  'UNKNOWN_MATERIAL',
+  'UNKNOWN_NODE',
+  'UNSUPPORTED_FIELD',
+  'UNSUPPORTED_VALUE_SCHEMA',
+  'VALUE_CONSTRAINT',
+  'WRITE_CONFLICT',
+  'YIELD_LIMIT',
+  'applied-undurable-recovery-locked',
+  'compensation-command-incomplete',
+  'compensation-failed',
+  'compensation-incomplete',
+  'disposed',
+  'human-priority-yield-limit',
+  'indeterminate-tool-result',
+  'invalid-model-turn',
+  'invalid-task-phase',
+  'invalid-tool-call-context',
+  'missing-task',
+  'model-paused',
+  'model-request-failed',
+  'persistence-failed',
+  'receipt-recovery-failed',
+  'repair-budget-exhausted',
+  'request-aborted',
+  'snapshot-revision-mismatch',
+  'tool-call-failed',
+  'tool-call-indeterminate',
+  'worker-task-failed',
+] as const
+
 export type WorkerTelemetryEventType = (typeof workerTelemetryEventTypes)[number]
 export type WorkerTelemetryPhase = (typeof workerTelemetryPhases)[number]
 export type WorkerTelemetryExecutionDisposition = (typeof workerTelemetryExecutionDispositions)[number]
@@ -169,6 +248,7 @@ const modelPhases = new Set<string>(['BLUEPRINT', 'PLAN_STEP', 'REPAIR'])
 const executionDispositions = new Set<string>(workerTelemetryExecutionDispositions)
 const dispositionReasons = new Set<string>(workerTelemetryDispositionReasons)
 const receiptDispositions = new Set<string>(workerTelemetryReceiptDispositions)
+const errorCodes = new Set<string>(workerTelemetryErrorCodes)
 const statuses = new Set<string>(['started', 'recovered', 'completed', 'failed', 'cancelled', 'compensated'])
 const baseKeys = ['schemaVersion', 'eventType', 'timestampMs', 'byteCount', 'status', 'sessionId', 'taskId'] as const
 const timedKeys = ['durationMs'] as const
@@ -225,6 +305,12 @@ const requireIdentifier = (value: unknown, maximumLength = 256): string => {
     fail()
   }
   return value as string
+}
+
+const requireErrorCode = (value: unknown): string => {
+  const errorCode = requireIdentifier(value)
+  if (!errorCodes.has(errorCode)) fail()
+  return errorCode
 }
 
 const optionalIdentifier = (
@@ -352,7 +438,7 @@ export const createWorkerTelemetryEvent = (input: unknown): WorkerTelemetryEvent
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(byteCount === undefined ? {} : { byteCount }),
     status: candidate.status as WorkerTelemetryStatus,
-    ...(failed ? { errorCode: requireIdentifier(candidate.errorCode) } : {}),
+    ...(failed ? { errorCode: requireErrorCode(candidate.errorCode) } : {}),
     sessionId: requireIdentifier(candidate.sessionId),
     taskId: requireIdentifier(candidate.taskId),
     ...(stepId === undefined ? {} : { stepId }),

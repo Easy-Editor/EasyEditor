@@ -1,4 +1,5 @@
 import type { AgentWorkerEndpoint } from '@easy-editor/agent-runtime'
+import type { WorkerTelemetrySink } from '@easy-editor/agent-runtime/worker'
 import type {
   ProductionAgentGrantAuthority,
   ProductionAgentModelConfig,
@@ -7,6 +8,7 @@ import type {
   AgentRuntimeE2ERecovery,
   AgentRuntimeE2EScriptedModelStep,
 } from '../../../editor/agent/runtime-e2e/index.mjs'
+import type { DashboardAgentTelemetryLedger } from '../../../editor/agent/telemetry/index.mjs'
 import {
   type DashboardAgentWorkspaceComposition,
   type DashboardAgentWorkspaceCompositionOptions,
@@ -28,7 +30,9 @@ type AgentRuntimeE2ESurface = Readonly<{
     }>
   >
   loadAgentRuntimeE2EWorkerEndpointFactory(): Promise<
-    (options: Readonly<{ steps: readonly AgentRuntimeE2EScriptedModelStep[] }>) => AgentWorkerEndpoint
+    (
+      options: Readonly<{ steps: readonly AgentRuntimeE2EScriptedModelStep[]; telemetry?: WorkerTelemetrySink }>,
+    ) => AgentWorkerEndpoint
   >
   loadAgentRuntimeE2ERecoveryConfig(): Promise<
     Readonly<{
@@ -44,7 +48,7 @@ type AgentRuntimeProductionSurface = Readonly<{
   readProductionAgentModelConfig(source?: Readonly<Record<string, unknown>>): Readonly<ProductionAgentModelConfig>
   createProductionAgentGrantAuthority(config: ProductionAgentModelConfig): Readonly<ProductionAgentGrantAuthority>
   loadProductionAgentWorkerEndpointFactory(): Promise<
-    (options: Readonly<{ config: ProductionAgentModelConfig }>) => AgentWorkerEndpoint
+    (options: Readonly<{ config: ProductionAgentModelConfig; telemetry?: WorkerTelemetrySink }>) => AgentWorkerEndpoint
   >
 }>
 
@@ -65,6 +69,7 @@ export interface DashboardAgentWorkspacePageIntegrationOptions {
   readonly enabled: boolean
   readonly e2eEnabled: boolean
   readonly storage: StorageReader
+  readonly telemetry?: Pick<DashboardAgentTelemetryLedger, 'sink'>
   readonly environment?: Readonly<Record<string, unknown>>
   readonly createComposition?: (
     options: DashboardAgentWorkspaceCompositionOptions,
@@ -114,7 +119,8 @@ const loadE2ECompositionOptions: (
       const steps = scriptConfig.readAgentRuntimeE2EScript(options.storage)
       const recoveries = recoveryConfig.readAgentRuntimeE2ERecoveries(options.storage)
       return Object.freeze({
-        workerFactory: () => createEndpoint({ steps }),
+        workerFactory: () =>
+          createEndpoint({ steps, ...(options.telemetry ? { telemetry: options.telemetry.sink } : {}) }),
         grantAuthority: E2E_GRANT_AUTHORITY,
         ...(recoveries.length > 0
           ? { recoveryBridge: recoveryConfig.createAgentRuntimeE2ERecoveryBridge(recoveries) }
@@ -131,7 +137,8 @@ const loadProductionCompositionOptions = async (
   const config = surface.readProductionAgentModelConfig(options.environment ?? productionModelEnvironment())
   const createEndpoint = await surface.loadProductionAgentWorkerEndpointFactory()
   return Object.freeze({
-    workerFactory: () => createEndpoint({ config }),
+    workerFactory: () =>
+      createEndpoint({ config, ...(options.telemetry ? { telemetry: options.telemetry.sink } : {}) }),
     grantAuthority: surface.createProductionAgentGrantAuthority(config),
   })
 }

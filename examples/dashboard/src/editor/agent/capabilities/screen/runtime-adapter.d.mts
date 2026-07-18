@@ -25,9 +25,12 @@ export interface DashboardScreenApplyRuntimeAdapterOptions {
       readonly [key: string]: ScreenJsonValue
     }>
   >
+  readonly createTelemetryChangeSetId?: ScreenApplyChangeSetDependencies['createTelemetryChangeSetId']
   readonly manifestCache: SafeMaterialManifestCache
   readonly hashCanonicalJson: (value: ScreenJsonValue) => Promise<`sha256:${string}`>
   readonly now: () => number
+  readonly telemetry?: ScreenApplyChangeSetDependencies['telemetry']
+  readonly telemetryNow?: ScreenApplyChangeSetDependencies['telemetryNow']
   readonly isTransactionCommittedError: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError: (error: unknown) => boolean
   readonly admitMaterialRefsUnderSharedMutation?: ScreenApplyChangeSetDependencies['admitMaterialRefsUnderSharedMutation']

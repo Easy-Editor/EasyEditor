@@ -43,6 +43,84 @@ const RECEIPT_DISPOSITIONS = new Set([
   'indeterminate',
   'resume-safe-retry',
 ])
+const ERROR_CODES = new Set([
+  'AMBIGUOUS_RECEIPT',
+  'APPLIED_UNDURABLE',
+  'AUTHORITY_MISMATCH',
+  'BUDGET_EXCEEDED',
+  'CAPABILITY_UNAVAILABLE',
+  'COMPENSATION_CONFLICT',
+  'COMPENSATION_IN_PROGRESS',
+  'CORE_TRANSACTION_FAILED',
+  'DATA_BINDING_UNSUPPORTED',
+  'DATA_BUDGET_EXCEEDED',
+  'DATA_NODE_NOT_FOUND',
+  'DATA_SOURCE_CONFLICT',
+  'DATA_SOURCE_NOT_FOUND',
+  'DATA_UNAVAILABLE',
+  'HOST_DISPOSED',
+  'HUMAN_ACTIVITY',
+  'IDEMPOTENCY_CONFLICT',
+  'INDETERMINATE_CORE_OUTCOME',
+  'INDETERMINATE_RECEIPT',
+  'INDETERMINATE_SERVER_OUTCOME',
+  'INVALID_CALL',
+  'INVALID_CAPABILITY_REQUEST',
+  'INVALID_CHANGESET',
+  'INVALID_DATA_REQUEST',
+  'INVALID_DOCUMENT_STATE',
+  'INVALID_JSON',
+  'INVALID_LINEAGE_DTO',
+  'INVALID_MANIFEST',
+  'INVALID_MATERIAL_REF',
+  'INVALID_PREPARE_CONTEXT',
+  'INVALID_PROJECT_STATE',
+  'INVALID_RECOVERY',
+  'INVALID_REQUEST',
+  'INVALID_SNAPSHOT',
+  'MATERIAL_ADMISSION_FAILED',
+  'MATERIAL_NOT_FOUND',
+  'NO_CHANGE',
+  'PERSISTENCE_FAILURE',
+  'REPAIR_BUDGET_EXHAUSTED',
+  'RESULT_REVISION_MISMATCH',
+  'SERVER_PROMOTION_FAILED',
+  'SNAPSHOT_REVISION_MISMATCH',
+  'STALE_MUTATION_VERSION',
+  'STALE_REVISION',
+  'TOOL_FAILURE',
+  'TRANSACTION_ROLLBACK_INCOMPLETE',
+  'UNKNOWN_CAPABILITY',
+  'UNKNOWN_FIELD',
+  'UNKNOWN_MATERIAL',
+  'UNKNOWN_NODE',
+  'UNSUPPORTED_FIELD',
+  'UNSUPPORTED_VALUE_SCHEMA',
+  'VALUE_CONSTRAINT',
+  'WRITE_CONFLICT',
+  'YIELD_LIMIT',
+  'applied-undurable-recovery-locked',
+  'compensation-command-incomplete',
+  'compensation-failed',
+  'compensation-incomplete',
+  'disposed',
+  'human-priority-yield-limit',
+  'indeterminate-tool-result',
+  'invalid-model-turn',
+  'invalid-task-phase',
+  'invalid-tool-call-context',
+  'missing-task',
+  'model-paused',
+  'model-request-failed',
+  'persistence-failed',
+  'receipt-recovery-failed',
+  'repair-budget-exhausted',
+  'request-aborted',
+  'snapshot-revision-mismatch',
+  'tool-call-failed',
+  'tool-call-indeterminate',
+  'worker-task-failed',
+])
 const BASE_FIELDS = ['schemaVersion', 'eventType', 'timestampMs', 'byteCount', 'status', 'sessionId', 'taskId']
 const PHASE_FIELDS = ['stepId', 'phase']
 const MODEL_FIELDS = ['stepId', 'modelRequestId', 'phase', 'tokenBudget']
@@ -85,6 +163,12 @@ const identifier = (value, maximumLength = 256) => {
     fail()
   }
   return value
+}
+
+const errorCode = value => {
+  const code = identifier(value)
+  if (!ERROR_CODES.has(code)) fail()
+  return code
 }
 
 const optionalIdentifier = (value, key, maximumLength) =>
@@ -188,7 +272,7 @@ export const parseWorkerTelemetryControlEvent = value => {
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(byteCount === undefined ? {} : { byteCount }),
     status: value.status,
-    ...(failed ? { errorCode: identifier(value.errorCode) } : {}),
+    ...(failed ? { errorCode: errorCode(value.errorCode) } : {}),
     sessionId: identifier(value.sessionId),
     taskId: identifier(value.taskId),
     ...(Object.hasOwn(value, 'stepId') ? { stepId: identifier(value.stepId) } : {}),

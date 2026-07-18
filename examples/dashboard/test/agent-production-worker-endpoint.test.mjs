@@ -387,5 +387,13 @@ test('production Worker modules are isolated from testing/E2E imports and the bu
   )
   assert.match(verifierSource, /@easy-editor\/agent-runtime\/testing/u)
   assert.match(verifierSource, /ScriptedModelAdapter/u)
+  for (const marker of [
+    'createDashboardE2EPostIntentGate',
+    'armDashboardAgentPostIntentGate',
+    'waitForDashboardAgentPostIntent',
+    'releaseDashboardAgentPostIntentGate',
+  ]) {
+    assert.match(verifierSource, new RegExp(marker, 'u'))
+  }
   assert.match(verifierSource, /allowing the production Gateway Worker/u)
 })

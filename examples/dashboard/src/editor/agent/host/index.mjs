@@ -1,4 +1,5 @@
 import { hashCanonicalJson } from '../../../lib/storage/index.mjs'
+import { createDashboardTelemetryChannel } from '../../../runtime/telemetry-channel.mjs'
 import { isDashboardOnlineArtifactCapability } from '../capabilities/artifact/index.mjs'
 import {
   DashboardDataCapabilityError,
@@ -747,6 +748,8 @@ export class DashboardAgentHost {
   #promotionService
   #screenApplyChangeSet
   #snapshotService
+  #telemetry
+  #telemetryChannel
   #unregisterCoreProvider
 
   constructor({
@@ -756,6 +759,7 @@ export class DashboardAgentHost {
     authority,
     artifactService,
     compensationService,
+    createTelemetryChangeSetId,
     dataResolver,
     dataService,
     engine,
@@ -767,6 +771,8 @@ export class DashboardAgentHost {
     persistence,
     promotionAvailability,
     promotionService,
+    telemetry,
+    telemetryNow = now,
   }) {
     if (!Number.isSafeInteger(adapterGeneration) || adapterGeneration < 1) {
       throw new TypeError('adapterGeneration must be a positive safe integer')
@@ -786,6 +792,17 @@ export class DashboardAgentHost {
       throw new TypeError('activityLease must expose waitUntilIdle, isActive, and a generation')
     }
     if (typeof now !== 'function') throw new TypeError('now must be a function')
+    if (telemetry !== undefined && telemetry !== null && typeof createTelemetryChangeSetId !== 'function') {
+      throw new TypeError('createTelemetryChangeSetId must be a function')
+    }
+    if (telemetry !== undefined && telemetry !== null && typeof telemetry?.record !== 'function') {
+      throw new TypeError('telemetry must expose record')
+    }
+    if (telemetry !== undefined && telemetry !== null && typeof telemetryNow !== 'function') {
+      throw new TypeError('telemetryNow must be a function')
+    }
+    this.#telemetry = telemetry ?? null
+    this.#telemetryChannel = createDashboardTelemetryChannel(telemetry, telemetryNow)
     if (
       typeof isTransactionCommittedError !== 'function' ||
       typeof isTransactionRollbackIncompleteError !== 'function'
@@ -878,9 +895,11 @@ export class DashboardAgentHost {
       persistence: this.#persistence,
       ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
       captureFullSnapshot: () => this.#captureFull(),
+      ...(this.#telemetry ? { createTelemetryChangeSetId } : {}),
       manifestCache: this.#manifestCache,
       hashCanonicalJson,
       now,
+      ...(this.#telemetry ? { telemetry: this.#telemetry, telemetryNow } : {}),
       isTransactionCommittedError,
       isTransactionRollbackIncompleteError,
     })
@@ -899,9 +918,11 @@ export class DashboardAgentHost {
         persistence: this.#persistence,
         ...(admitMaterialRefsUnderSharedMutation === undefined ? {} : { admitMaterialRefsUnderSharedMutation }),
         captureFullSnapshot: () => this.#captureFull(),
+        ...(this.#telemetry ? { createTelemetryChangeSetId } : {}),
         manifestCache: createDashboardDataManifestCache(this.#manifestCache),
         hashCanonicalJson,
         now,
+        ...(this.#telemetry ? { telemetry: this.#telemetry, telemetryNow } : {}),
         isTransactionCommittedError,
         isTransactionRollbackIncompleteError,
       })
@@ -948,6 +969,10 @@ export class DashboardAgentHost {
     }
   }
 
+  #recordTelemetry(event, startedAt) {
+    this.#telemetryChannel.emit(event, startedAt)
+  }
+
   #validateObserveRequest(request) {
     assertExactKeys(
       request,
@@ -984,12 +1009,30 @@ export class DashboardAgentHost {
   async observe(request) {
     this.#assertActive()
     this.#validateObserveRequest(request)
-    return boundaryClone(
-      await this.#snapshotService.observe({
-        mode: readOwnDataValue(request, 'mode'),
-        ...(readOwnDataValue(request, 'cursor', undefined) ? { cursor: readOwnDataValue(request, 'cursor') } : {}),
-      }),
+    const startedAt = this.#telemetryChannel.start()
+    const observed = await this.#snapshotService.observe({
+      mode: readOwnDataValue(request, 'mode'),
+      ...(readOwnDataValue(request, 'cursor', undefined) ? { cursor: readOwnDataValue(request, 'cursor') } : {}),
+    })
+    const cloned = boundaryClone(observed)
+    let byteCount
+    try {
+      byteCount = new TextEncoder().encode(JSON.stringify(observed)).byteLength
+    } catch {
+      // Snapshot serialization is not part of Host authority; omit optional size metadata if it cannot be measured.
+    }
+    this.#recordTelemetry(
+      {
+        eventType: 'dashboard.snapshot.captured',
+        sessionId: readOwnDataValue(request, 'sessionId'),
+        taskId: readOwnDataValue(request, 'taskId'),
+        snapshotMode: readOwnDataValue(request, 'mode'),
+        projectRevision: Object.hasOwn(observed, 'projection') ? observed.revision : observed.newRevision,
+        ...(byteCount === undefined ? {} : { byteCount }),
+      },
+      startedAt,
     )
+    return cloned
   }
 
   async describeCapability(request) {
@@ -1116,6 +1159,14 @@ export class DashboardAgentHost {
         )
       }
       assertAuthority(this.#authority, call, AUTHORITY_FIELDS)
+      this.#recordTelemetry({
+        eventType: 'dashboard.call.observed',
+        sessionId: readOwnDataValue(call, 'sessionId'),
+        taskId: readOwnDataValue(call, 'taskId'),
+        stepId: readOwnDataValue(call, 'stepId'),
+        callId: readOwnDataValue(call, 'callId'),
+        projectRevision: readOwnDataValue(call, 'expectedRevision'),
+      })
       const invocationContext = normalizeInvokeContext(context, call)
       const capability = readOwnDataValue(call, 'capability')
       dashboardCapabilityRegistry.assertAvailable(capability)
@@ -1152,20 +1203,37 @@ export class DashboardAgentHost {
       if (capability === 'data.upsert') return boundaryClone(await this.#dataService.upsert(call))
       if (capability === 'data.bind') return boundaryClone(await this.#dataService.bind(call))
       if (capability === 'task.compensate') {
-        const receipt = await this.#compensationService.compensate({
-          schemaVersion: 1,
-          outerCallId: readOwnDataValue(call, 'callId'),
-          target: invocationContext.compensationTarget,
-        })
-        return boundaryClone(
-          invocationFromReceipt(
-            normalizeToolReceipt(
-              receipt,
-              { projectId: this.#authority.projectId, branchId: this.#authority.branchId, callId: call.callId },
-              'task-compensation-receipt',
-            ),
-          ),
+        const compensationStartedAt = this.#telemetryChannel.start()
+        const receipt = normalizeToolReceipt(
+          await this.#compensationService.compensate({
+            schemaVersion: 1,
+            outerCallId: readOwnDataValue(call, 'callId'),
+            target: invocationContext.compensationTarget,
+          }),
+          { projectId: this.#authority.projectId, branchId: this.#authority.branchId, callId: call.callId },
+          'task-compensation-receipt',
         )
+        const witness = readOwnDataValue(receipt, 'witness', undefined)
+        if (readOwnDataValue(witness, 'kind', undefined) === 'compensation-run') {
+          const total = readOwnDataValue(witness, 'total', undefined)
+          const conflictCount = readOwnDataValue(witness, 'conflictCount', undefined)
+          if (Number.isSafeInteger(total) && total >= 0 && Number.isSafeInteger(conflictCount) && conflictCount >= 0) {
+            this.#recordTelemetry(
+              {
+                eventType: 'dashboard.compensation.result',
+                sessionId: readOwnDataValue(call, 'sessionId'),
+                taskId: readOwnDataValue(call, 'taskId'),
+                stepId: readOwnDataValue(call, 'stepId'),
+                callId: readOwnDataValue(call, 'callId'),
+                status: readOwnDataValue(receipt, 'status'),
+                appliedCount: Math.max(0, total - conflictCount),
+                conflictCount,
+              },
+              compensationStartedAt,
+            )
+          }
+        }
+        return boundaryClone(invocationFromReceipt(receipt))
       }
       const snapshot = await this.#captureFull()
       if (readOwnDataValue(call, 'expectedRevision') !== snapshot.revision) {
@@ -1204,6 +1272,7 @@ export class DashboardAgentHost {
   }
 
   async queryReceipt(request) {
+    const startedAt = this.#telemetryChannel.start()
     this.#assertActive()
     assertExactKeys(
       request,
@@ -1224,27 +1293,61 @@ export class DashboardAgentHost {
       branchId: readOwnDataValue(request, 'branchId'),
       callId: readOwnDataValue(request, 'callId'),
     }
+    const recordRecovery = receipt => {
+      const status = readOwnDataValue(receipt, 'status', undefined)
+      const receiptClassification =
+        receipt === null
+          ? 'missing'
+          : status === 'applied'
+            ? 'committed'
+            : status === 'indeterminate'
+              ? 'indeterminate'
+              : 'failed'
+      this.#recordTelemetry(
+        {
+          eventType: 'dashboard.receipt.recovery',
+          sessionId: readOwnDataValue(request, 'sessionId'),
+          taskId: readOwnDataValue(request, 'taskId'),
+          callId: authority.callId,
+          receiptClassification,
+          status:
+            receiptClassification === 'committed'
+              ? 'committed'
+              : receiptClassification === 'failed'
+                ? 'rejected'
+                : receiptClassification,
+        },
+        startedAt,
+      )
+      return receipt
+    }
     const compensationReceipt = await this.#compensationService.query({
       schemaVersion: 1,
       outerCallId: authority.callId,
     })
     if (compensationReceipt !== null) {
-      return boundaryClone(normalizeToolReceipt(compensationReceipt, authority, 'task-compensation-recovery'))
+      return boundaryClone(
+        recordRecovery(normalizeToolReceipt(compensationReceipt, authority, 'task-compensation-recovery')),
+      )
     }
     if (this.#promotionService) {
       await this.#awaitPromotionRecovery()
       const promotionReceipt = await this.#promotionService.queryReceipt(authority)
       if (promotionReceipt !== null) {
-        return boundaryClone(normalizeToolReceipt(promotionReceipt, authority, 'local-material-promotion-recovery'))
+        return boundaryClone(
+          recordRecovery(normalizeToolReceipt(promotionReceipt, authority, 'local-material-promotion-recovery')),
+        )
       }
     }
     if (this.#artifactService) {
       const artifactReceipt = await this.#artifactService.queryReceipt(authority)
       if (artifactReceipt !== null) {
-        return boundaryClone(normalizeToolReceipt(artifactReceipt, authority, 'online-artifact-recovery'))
+        return boundaryClone(
+          recordRecovery(normalizeToolReceipt(artifactReceipt, authority, 'online-artifact-recovery')),
+        )
       }
     }
-    return boundaryClone(await recoverDurableScreenReceipt(this.#persistence, authority))
+    return boundaryClone(recordRecovery(await recoverDurableScreenReceipt(this.#persistence, authority)))
   }
 
   dispose() {
@@ -1269,6 +1372,7 @@ export const createDashboardAgentHost = (options = {}) => {
     artifactService: readOwnDataValue(options, 'artifactService', undefined),
     authority: readOwnDataValue(options, 'authority'),
     compensationService: readOwnDataValue(options, 'compensationService', undefined),
+    createTelemetryChangeSetId: readOwnDataValue(options, 'createTelemetryChangeSetId', undefined),
     dataResolver: readOwnDataValue(options, 'dataResolver', undefined),
     dataService: readOwnDataValue(options, 'dataService', undefined),
     engine: readOwnDataValue(options, 'engine'),
@@ -1280,5 +1384,7 @@ export const createDashboardAgentHost = (options = {}) => {
     persistence: readOwnDataValue(options, 'persistence', undefined),
     promotionAvailability: readOwnDataValue(options, 'promotionAvailability', undefined),
     promotionService: readOwnDataValue(options, 'promotionService', undefined),
+    telemetry: readOwnDataValue(options, 'telemetry', undefined),
+    telemetryNow: readOwnDataValue(options, 'telemetryNow', undefined),
   })
 }

@@ -1,5 +1,5 @@
 import type { ScriptedModelFault } from '@easy-editor/agent-runtime/testing'
-import type { ModelEvent, ModelTurnPhase } from '@easy-editor/agent-runtime/worker'
+import type { ModelEvent, ModelTurnPhase, WorkerTelemetryEvent } from '@easy-editor/agent-runtime/worker'
 
 export declare const AGENT_RUNTIME_E2E_WORKER_PROTOCOL_VERSION: 1
 
@@ -34,6 +34,12 @@ export type AgentRuntimeE2EWorkerControlMessage =
       kind: 'fault'
       generation: number
       message: string
+    }>
+  | Readonly<{
+      schemaVersion: 1
+      kind: 'telemetry'
+      generation: number
+      event: WorkerTelemetryEvent
     }>
 
 export declare const cloneAgentRuntimeE2ESteps: (

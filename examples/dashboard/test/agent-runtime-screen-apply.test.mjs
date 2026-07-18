@@ -9,6 +9,7 @@ import {
 
 const SHA_PREPARED = `sha256:${'a'.repeat(64)}`
 const SHA_TRANSACTION = `sha256:${'b'.repeat(64)}`
+const createTelemetryChangeSetId = callId => `change-set-v1-${Buffer.from(callId, 'utf8').toString('hex')}`
 const authority = Object.freeze({
   projectId: 'project-a',
   branchId: 'main',
@@ -301,6 +302,7 @@ const createHarness = (overrides = {}) => {
       assert.equal(input.expectedMutationVersion, 4)
       return structuredClone(overrides.compiled ?? compiled)
     },
+    createTelemetryChangeSetId: overrides.createTelemetryChangeSetId ?? createTelemetryChangeSetId,
     ...(overrides.admitMaterialRefsUnderSharedMutation === undefined
       ? {}
       : {
@@ -349,6 +351,9 @@ const createHarness = (overrides = {}) => {
     isTransactionCommittedError: error => error instanceof FakeTransactionCommittedError,
     isTransactionRollbackIncompleteError: error => error instanceof FakeTransactionRollbackIncompleteError,
     now: () => 100,
+    ...(overrides.telemetry === undefined
+      ? {}
+      : { telemetry: overrides.telemetry, telemetryNow: overrides.telemetryNow ?? (() => 200) }),
   }
 
   return {
@@ -448,6 +453,49 @@ test('normal apply is recovery-first, persists the frozen prepared intent, and A
   )
   assert.equal(harness.committedBatch.journal.recordId, 'call:call-a')
   assert.equal(harness.committedBatch.checkpoint.checkpointId, 'call:call-a')
+})
+
+test('Screen apply records prepare, Core commit, and post-state verification using opaque correlations only', async () => {
+  const telemetry = []
+  const harness = createHarness({ telemetry: { record: event => telemetry.push(structuredClone(event)) } })
+  assert.equal((await harness.handler(call)).status, 'applied')
+  assert.deepEqual(
+    telemetry.map(event => event.eventType),
+    ['dashboard.screen.prepare', 'dashboard.screen.commit', 'dashboard.screen.verify'],
+  )
+  assert.ok(telemetry.every(event => event.changeSetId === createTelemetryChangeSetId(call.callId)))
+  assert.ok(telemetry.every(event => event.projectRevision === 'revision-1'))
+  assert.ok(telemetry.every(event => event.durationMs === 0 && event.status === 'completed'))
+  assert.doesNotMatch(JSON.stringify(telemetry), /before|after|props\.text|screen-change-set-pre-images/u)
+})
+
+test('Screen telemetry correlation is entirely dormant when telemetry is disabled', async () => {
+  let calls = 0
+  const harness = createHarness({
+    createTelemetryChangeSetId: () => {
+      calls += 1
+      return 'must-not-be-created'
+    },
+  })
+
+  assert.equal((await harness.handler(call)).status, 'applied')
+  assert.equal(calls, 0)
+})
+
+test('Screen telemetry helper and clock failures cannot gate an otherwise valid apply', async () => {
+  const telemetry = []
+  const harness = createHarness({
+    createTelemetryChangeSetId: () => {
+      throw new Error('telemetry correlation failed')
+    },
+    telemetry: { record: event => telemetry.push(structuredClone(event)) },
+    telemetryNow: () => {
+      throw new Error('telemetry clock failed')
+    },
+  })
+
+  assert.equal((await harness.handler(call)).status, 'applied')
+  assert.deepEqual(telemetry, [])
 })
 
 test('Screen admission deduplicates canonical local refs and resolves before intent or Core mutation', async () => {

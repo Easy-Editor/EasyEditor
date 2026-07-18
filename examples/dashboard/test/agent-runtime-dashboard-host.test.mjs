@@ -12,6 +12,7 @@ import {
   DashboardAgentHostError,
   createDashboardAgentHost,
 } from '../src/editor/agent/host/index.mjs'
+import { createDashboardHostPersistenceFacade } from '../src/editor/agent/host/persistence-facade.mjs'
 
 const dashboardRoot = fileURLToPath(new URL('..', import.meta.url))
 const coreInstanceUrl = new URL('../../../packages/core/dist/instance.js', import.meta.url)
@@ -310,6 +311,11 @@ const createHarness = async (t, options = {}) => {
         compensate: async () => assert.fail('unexpected compensation invocation'),
         query: async () => null,
       }),
+    ...(options.omitTelemetryChangeSetId
+      ? {}
+      : {
+          createTelemetryChangeSetId: callId => `change-set-v1-${Buffer.from(callId, 'utf8').toString('hex')}`,
+        }),
     dataResolver: options.dataResolver,
     dataService: options.dataService,
     enabled: true,
@@ -322,6 +328,8 @@ const createHarness = async (t, options = {}) => {
     persistence,
     promotionAvailability: options.promotionAvailability,
     promotionService: options.promotionService,
+    telemetry: options.telemetry,
+    telemetryNow: options.telemetryNow,
   })
   assert.ok(host)
   const rpc = createRpc(host)
@@ -356,6 +364,118 @@ test('default-off Host composition is inert and production never boots an Agent 
   const productionSource = sources.join('\n')
   assert.doesNotMatch(productionSource, /\bcreateAgentRuntime\b|\bnew\s+Worker\b|\bAgentPersistence\b/)
   assert.doesNotMatch(productionSource, /\bMessageChannel\b|\bMessagePort\b/)
+  assert.match(
+    sources[1],
+    /dashboardAgentTelemetryLedger\s*=\s*dashboardAgentRuntimeFeatureFlags\.runtime\s*\?\s*createDashboardAgentTelemetryLedger/u,
+  )
+  assert.match(sources[1], /dashboardAgentTelemetry\s*=\s*dashboardAgentTelemetryLedger\s*\?/u)
+  assert.match(sources[1], /dashboardAgentWorkerTelemetry\s*=\s*dashboardAgentTelemetryLedger\s*\?/u)
+})
+
+test('Host persistence facade exposes only frozen required methods and gates the recorded call identity', async () => {
+  const calls = []
+  let releaseGate
+  let markReached
+  const reached = new Promise(resolvePromise => {
+    markReached = resolvePromise
+  })
+  const release = new Promise(resolvePromise => {
+    releaseGate = resolvePromise
+  })
+  const persistence = {
+    runAgentMutation(callId, operation) {
+      calls.push(['mutation', callId])
+      return operation()
+    },
+    async readCompensationRun(request) {
+      calls.push(['run-read', request])
+      return null
+    },
+    async readCompensationTargetClaim(request) {
+      calls.push(['claim-read', request])
+      return null
+    },
+    async commitCompensationRunState(input) {
+      calls.push(['run-commit', input])
+      return { committed: true }
+    },
+    async recoverDurableAgentReceipt(request) {
+      calls.push(['receipt-read', request])
+      return { classification: 'missing' }
+    },
+    async runDurableAgentWrite(operation) {
+      return operation({
+        draft: { draftGeneration: 3 },
+        async recordIntent(intent) {
+          calls.push(['intent', intent.callId])
+          return structuredClone(intent)
+        },
+        async readReceiptLineage(request) {
+          calls.push(['lineage', request])
+          return { records: [] }
+        },
+        async readMutationProvenance(request) {
+          calls.push(['provenance', request])
+          return { records: [] }
+        },
+        async commitBatch(batch) {
+          calls.push(['batch', batch.callId])
+          return { receipt: batch.receipt }
+        },
+      })
+    },
+  }
+  Object.defineProperty(persistence, 'unknownRuntimePower', {
+    get() {
+      assert.fail('Host facade must not inspect unknown persistence properties')
+    },
+  })
+  const facade = createDashboardHostPersistenceFacade(persistence, {
+    afterRecordIntent: async intent => {
+      markReached(intent.callId)
+      await release
+    },
+  })
+
+  assert.equal(Object.isFrozen(facade), true)
+  assert.deepEqual(Object.keys(facade).sort(), [
+    'commitCompensationRunState',
+    'readCompensationRun',
+    'readCompensationTargetClaim',
+    'recoverDurableAgentReceipt',
+    'runAgentMutation',
+    'runDurableAgentWrite',
+  ])
+  assert.equal(
+    facade.runAgentMutation('call-mutation', () => 'mutated'),
+    'mutated',
+  )
+
+  let settled = false
+  const write = facade
+    .runDurableAgentWrite(async session => {
+      assert.equal(Object.isFrozen(session), true)
+      assert.deepEqual(Object.keys(session).sort(), [
+        'commitBatch',
+        'draft',
+        'readMutationProvenance',
+        'readReceiptLineage',
+        'recordIntent',
+      ])
+      return session.recordIntent({ callId: 'gated-call' })
+    })
+    .finally(() => {
+      settled = true
+    })
+  assert.equal(await reached, 'gated-call')
+  assert.equal(settled, false)
+  releaseGate()
+  assert.equal((await write).callId, 'gated-call')
+
+  const facadeSource = readFileSync(resolve(dashboardRoot, 'src/editor/agent/host/persistence-facade.mjs'), 'utf8')
+  const runtimeSource = readFileSync(resolve(dashboardRoot, 'src/editor/runtime.ts'), 'utf8')
+  assert.doesNotMatch(facadeSource, /\bProxy\b|\bReflect\b|\.bind\(/u)
+  assert.doesNotMatch(runtimeSource, /new\s+Proxy\s*\(\s*dashboardPersistence/u)
 })
 
 test('Host gates and routes online artifact create/revise plus receipt recovery through the injected service', async t => {
@@ -860,6 +980,107 @@ test('actual MessageChannel observation owns full and delta DTOs without host le
   assert.deepEqual(resync.providerGenerations, ownedProviderGenerations)
   assert.notStrictEqual(resync.providerGenerations, ownedProviderGenerations)
   assert.equal(resync.projection['dashboard.core'].nodes['image-1'].extra.$dashboard.rect.x, 88)
+})
+
+test('Host records safe snapshot, call-boundary, and receipt recovery telemetry from real seams', async t => {
+  const telemetry = []
+  const { host } = await createHarness(t, { telemetry: { record: event => telemetry.push(structuredClone(event)) } })
+  const full = await host.observe(observeRequest())
+  const result = await host.invoke(
+    semanticCall({
+      arguments: { nodeIds: ['image-1'] },
+      callId: 'telemetry-inspect-1',
+      capability: 'screen.inspect',
+      expectedRevision: full.revision,
+    }),
+    invocationContext(),
+  )
+  assert.equal(result.status, 'applied')
+  assert.equal(await host.queryReceipt(receiptQuery('telemetry-missing-1')), null)
+
+  assert.deepEqual(
+    telemetry.map(event => event.eventType),
+    ['dashboard.snapshot.captured', 'dashboard.call.observed', 'dashboard.receipt.recovery'],
+  )
+  assert.deepEqual(telemetry[0], {
+    schemaVersion: 1,
+    eventType: 'dashboard.snapshot.captured',
+    timestampMs: 1_700_000_000_000,
+    durationMs: 0,
+    sessionId: authority.sessionId,
+    taskId: authority.taskId,
+    snapshotMode: 'full',
+    projectRevision: full.revision,
+    byteCount: telemetry[0].byteCount,
+  })
+  assert.ok(telemetry[0].byteCount > 0)
+  assert.deepEqual(telemetry[1], {
+    schemaVersion: 1,
+    eventType: 'dashboard.call.observed',
+    timestampMs: 1_700_000_000_000,
+    sessionId: authority.sessionId,
+    taskId: authority.taskId,
+    stepId: 'step-1',
+    callId: 'telemetry-inspect-1',
+    projectRevision: full.revision,
+  })
+  assert.deepEqual(telemetry[2], {
+    schemaVersion: 1,
+    eventType: 'dashboard.receipt.recovery',
+    timestampMs: 1_700_000_000_000,
+    durationMs: 0,
+    sessionId: authority.sessionId,
+    taskId: authority.taskId,
+    callId: 'telemetry-missing-1',
+    receiptClassification: 'missing',
+    status: 'missing',
+  })
+  assert.doesNotMatch(
+    JSON.stringify(telemetry),
+    /credential-must-not-cross|api-key-must-not-cross|source-must-not-cross/u,
+  )
+})
+
+test('Host without telemetry has no telemetry-correlation dependency', async t => {
+  const { host } = await createHarness(t, { omitTelemetryChangeSetId: true })
+  const full = await host.observe(observeRequest())
+  const result = await host.invoke(
+    semanticCall({
+      arguments: { nodeIds: ['image-1'] },
+      callId: 'no-telemetry-inspect-1',
+      capability: 'screen.inspect',
+      expectedRevision: full.revision,
+    }),
+    invocationContext(),
+  )
+  assert.equal(result.status, 'applied')
+})
+
+test('Host telemetry clock and rejected sink failures remain passive', async t => {
+  let sinkCalls = 0
+  const { host } = await createHarness(t, {
+    telemetry: {
+      record: () => {
+        sinkCalls += 1
+        return Promise.reject(new Error('private Host telemetry failure'))
+      },
+    },
+    telemetryNow: () => {
+      throw new Error('private Host telemetry clock failure')
+    },
+  })
+  const full = await host.observe(observeRequest())
+  const result = await host.invoke(
+    semanticCall({
+      arguments: { nodeIds: ['image-1'] },
+      callId: 'passive-telemetry-inspect-1',
+      capability: 'screen.inspect',
+      expectedRevision: full.revision,
+    }),
+    invocationContext(),
+  )
+  assert.equal(result.status, 'applied')
+  assert.equal(sinkCalls, 0)
 })
 
 test('Host.observe normalizes hostile runtime ComponentMeta metadata without leaking secrets', async t => {

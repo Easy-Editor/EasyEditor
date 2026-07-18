@@ -57,6 +57,8 @@ export declare const createDashboardLocalMaterialPromotionRuntime: (options: {
     checkLocalGrant(request: DashboardLocalGrantCheckV1): Promise<DashboardLocalGrantDecisionV1>
   }
   readonly now?: () => number
+  readonly telemetry?: DashboardLocalMaterialPromotionCapabilityServiceOptions['telemetry']
+  readonly telemetryNow?: () => number
   readonly onPromotionApplied?: () => void | Promise<void>
   readonly admitMaterialRefsUnderSharedMutation: DashboardLocalMaterialPromotionCapabilityServiceOptions['admitMaterialRefsUnderSharedMutation']
   readonly isTransactionCommittedError?: (error: unknown) => boolean

@@ -1,6 +1,11 @@
 /// <reference types="vite/client" />
 
 import type { DashboardMaterialGcRuntimeSnapshotV1 } from './editor/agent/capabilities/promotion/material-gc-runtime.mjs'
+import type {
+  DashboardAgentTelemetryEvent,
+  DashboardAgentTelemetryQuery,
+  DashboardAgentTelemetryStats,
+} from './editor/agent/telemetry/index.mjs'
 import type { DashboardPersistenceSnapshot } from './editor/persistence-runtime'
 import type { DashboardAgentWorkspaceE2EProbeState } from './pages/editor/AgentWorkspace/page-integration'
 
@@ -16,6 +21,10 @@ declare global {
   interface Window {
     readonly __EASY_EDITOR_E2E__?: Readonly<{
       getAgentWorkspaceState: () => DashboardAgentWorkspaceE2EProbeState | null
+      getAgentTelemetryState: (query: DashboardAgentTelemetryQuery) => Readonly<{
+        events: readonly DashboardAgentTelemetryEvent[]
+        stats: DashboardAgentTelemetryStats
+      }> | null
       getEngineState: () => 'created' | 'initializing' | 'ready' | 'disposing' | 'disposed' | 'failed'
       getPersistenceState: () => DashboardPersistenceSnapshot
       getMaterialGcState?: () => DashboardMaterialGcRuntimeSnapshotV1

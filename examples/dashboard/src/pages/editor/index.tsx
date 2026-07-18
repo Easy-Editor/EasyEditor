@@ -1,7 +1,11 @@
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { dashboardEditorSurfaceLifecycle, registerDashboardEditorDisposer } from '@/editor'
-import { dashboardAgentRuntimeFeatureFlags, registerDashboardAgentWorkspaceE2EProbe } from '@/editor/runtime'
+import {
+  dashboardAgentRuntimeFeatureFlags,
+  dashboardAgentWorkerTelemetry,
+  registerDashboardAgentWorkspaceE2EProbe,
+} from '@/editor/runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { AgentWorkspace, type DashboardAgentWorkspaceComposition } from './AgentWorkspace'
 import { startDashboardAgentWorkspacePageIntegration } from './AgentWorkspace/page-integration'
@@ -49,6 +53,7 @@ const AppLayout = () => {
       enabled: agentEnabled,
       e2eEnabled: import.meta.env.VITE_E2E === '1',
       storage: window.sessionStorage,
+      ...(dashboardAgentWorkerTelemetry ? { telemetry: dashboardAgentWorkerTelemetry } : {}),
       registerEditorDisposer: registerDashboardEditorDisposer,
       registerE2EProbe: registerDashboardAgentWorkspaceE2EProbe,
       onReady: composition => {

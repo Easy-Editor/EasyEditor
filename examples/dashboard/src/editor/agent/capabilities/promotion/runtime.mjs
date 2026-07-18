@@ -116,6 +116,8 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
     core: options.core,
     persistence,
     crypto: options.crypto,
+    ...(options.telemetry ? { telemetry: options.telemetry } : {}),
+    ...(typeof options.telemetryNow === 'function' ? { telemetryNow: options.telemetryNow } : {}),
     admitMaterialRefsUnderSharedMutation,
     ...(typeof options.now === 'function' ? { now: options.now } : {}),
     ...(typeof options.isTransactionCommittedError === 'function'

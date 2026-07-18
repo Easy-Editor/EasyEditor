@@ -89,7 +89,13 @@ test('dashboard lifecycle, reload, persistence, and preview remain coherent', as
   expect(initialPersistence.projectId).toBeTruthy()
 
   const probeKeys = await page.evaluate(() => Object.keys(window.__EASY_EDITOR_E2E__ ?? {}).sort())
-  expect(probeKeys).toEqual(['flushPersistence', 'getAgentWorkspaceState', 'getEngineState', 'getPersistenceState'])
+  expect(probeKeys).toEqual([
+    'flushPersistence',
+    'getAgentTelemetryState',
+    'getAgentWorkspaceState',
+    'getEngineState',
+    'getPersistenceState',
+  ])
 
   await dispatchPageHide(page, true)
   await expectEngineState(page, 'ready')

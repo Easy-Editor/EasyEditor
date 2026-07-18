@@ -38,10 +38,12 @@ import {
 import { applyHostSnapshotDelta, cloneFrozenHostSnapshot } from '../snapshot/index.js'
 import { createAgentTelemetryChangeSetId } from '../telemetry-change-set-id.js'
 import type { WorkerTelemetryPhase, WorkerTelemetrySink } from '../telemetry.js'
-import { createSafeWorkerTelemetryEmitter } from '../telemetry.js'
+import { createSafeWorkerTelemetryEmitter, workerTelemetryErrorCodes } from '../telemetry.js'
 
 type RuntimeTaskCallIndexEntryV1 = RuntimeTaskCompensationTargetV1['callIndex'][number]
 type ModelToolCallProposal = Extract<ModelEvent, { readonly kind: 'tool-call' }>['call']
+
+const SAFE_TELEMETRY_ERROR_CODES = new Set<string>(workerTelemetryErrorCodes)
 
 export type WorkerStateMachineErrorCode =
   | 'disposed'
@@ -693,7 +695,7 @@ export const createWorkerStateMachine = (options: WorkerStateMachineOptions): Wo
   }
 
   const safeTelemetryErrorCode = (value: unknown, fallback: string) =>
-    typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value) ? value : fallback
+    typeof value === 'string' && SAFE_TELEMETRY_ERROR_CODES.has(value) ? value : fallback
 
   const emitTelemetry = (task: MutableTask, event: Record<string, unknown>, startedAt?: number): number | undefined => {
     if (!options.telemetrySink) return undefined

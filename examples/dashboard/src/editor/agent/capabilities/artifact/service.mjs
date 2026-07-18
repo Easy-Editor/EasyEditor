@@ -1,4 +1,5 @@
 import { canonicalJsonStringify, hashCanonicalJson } from '../../../../lib/storage/index.mjs'
+import { createDashboardTelemetryChannel } from '../../../../runtime/telemetry-channel.mjs'
 import {
   validateArtifactRecord,
   validateArtifactRef,
@@ -570,6 +571,9 @@ const createService = options => {
   })
   const resolveDependency = requireMethod(options.resolver, 'resolve', 'resolver')
   const now = typeof options.now === 'function' ? options.now : Date.now
+  const telemetryNow = typeof options.telemetryNow === 'function' ? options.telemetryNow : Date.now
+  const telemetry = createDashboardTelemetryChannel(options.telemetry, telemetryNow)
+  const emitTelemetry = (event, startedAt) => telemetry.emit(event, startedAt)
   const crypto = options.crypto ?? globalThis.crypto
   const hasher = createHasher(crypto)
   const hashJson = value => hashCanonicalJson(value, { crypto })
@@ -584,6 +588,7 @@ const createService = options => {
 
   const invoke = async (value, capability) => {
     const call = normalizeOnlineArtifactCall(value, authority, capability)
+    const invokeStartedAt = telemetry.start()
     const recoveryAuthority = { projectId: call.projectId, branchId: call.branchId, callId: call.callId }
     const recovered = await recoverInvocation({
       recovery: await persistence.recoverDurableAgentReceipt(recoveryAuthority),
@@ -625,6 +630,7 @@ const createService = options => {
       ...(call.capability === 'artifact.createOnline' ? { documentId: call.arguments.documentId } : {}),
     })
     const identity = await createArtifactIdentity({ call, prepare, hashJson })
+    const resolutionStartedAt = telemetry.start()
     const artifact = await createOrRecoverArtifact({
       call,
       prepare,
@@ -635,6 +641,21 @@ const createService = options => {
       hashJson,
       now,
     })
+    emitTelemetry(
+      {
+        eventType: 'dashboard.artifact.resolution',
+        sessionId: call.sessionId,
+        taskId: call.taskId,
+        stepId: call.stepId,
+        callId: call.callId,
+        artifactId: artifact.artifactId,
+        sourceRevision: artifact.sourceRevision,
+        dependencyLockDigest: artifact.dependencyLockDigest,
+        resolutionStatus: 'resolved',
+        status: 'completed',
+      },
+      resolutionStartedAt,
+    )
     const artifactRef = validateArtifactRef({
       ...artifactSourceRevision(artifact),
       target: { kind: 'online' },
@@ -820,7 +841,24 @@ const createService = options => {
               ? []
               : [artifactRoot('working-draft', call.branchId, prepare.previousArtifactRef)],
         })
-        return invocationFromReceipt(createToolReceipt(committed.receipt), payloads.expectedPostImages)
+        const committedReceipt = createToolReceipt(committed.receipt)
+        emitTelemetry(
+          {
+            eventType: 'dashboard.artifact.revision',
+            sessionId: call.sessionId,
+            taskId: call.taskId,
+            stepId: call.stepId,
+            callId: call.callId,
+            artifactId: artifact.artifactId,
+            sourceRevision: artifact.sourceRevision,
+            artifactRevision: artifact.sourceIntegrity,
+            dependencyLockDigest: artifact.dependencyLockDigest,
+            projectRevision: post.revision,
+            status: 'applied',
+          },
+          invokeStartedAt,
+        )
+        return invocationFromReceipt(committedReceipt, payloads.expectedPostImages)
       })
     } catch {
       return invocationFailure(

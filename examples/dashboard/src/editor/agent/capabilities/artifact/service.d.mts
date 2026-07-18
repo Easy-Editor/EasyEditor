@@ -10,6 +10,7 @@ import type { CanonicalWorkingDraftV1 } from '../../../../lib/storage/contracts.
 import type { JsonObject } from '../../persistence/contract.mjs'
 import type { DurableAgentBatchV1, DurableAgentCommitResultV1 } from '../../persistence/durable-agent-commit.mjs'
 import type { ReceiptIntentV1, ReceiptRecoveryResult } from '../../persistence/receipt-ledger.mjs'
+import type { DashboardAgentTelemetryLedger } from '../../telemetry/index.mjs'
 import type {
   OnlineArtifactAuthority,
   OnlineArtifactCoreResult,
@@ -158,6 +159,8 @@ export interface DashboardOnlineArtifactCapabilityServiceOptions extends OnlineA
   readonly resolver: OnlineArtifactDependencyResolver
   readonly now?: () => number
   readonly crypto?: Crypto
+  readonly telemetry?: Pick<DashboardAgentTelemetryLedger, 'record'>
+  readonly telemetryNow?: () => number
 }
 
 export declare const createDashboardOnlineArtifactCapabilityService: (

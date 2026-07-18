@@ -10,6 +10,7 @@ import type {
 import type { CanonicalWorkingDraftV1 } from '../../../../lib/storage/contracts.mjs'
 import type { DurableAgentBatchV1, DurableAgentCommitResultV1 } from '../../persistence/durable-agent-commit.mjs'
 import type { ReceiptIntentV1, ReceiptRecoveryResult, ToolReceiptV1 } from '../../persistence/receipt-ledger.mjs'
+import type { DashboardAgentTelemetryLedger } from '../../telemetry/index.mjs'
 import type {
   OnlineArtifactCoreResult,
   OnlineArtifactPrepareResult,
@@ -168,6 +169,8 @@ export interface DashboardLocalMaterialPromotionCapabilityServiceOptions {
     input: Readonly<LocalMaterialPromotionAdmissionInputV1>,
   ) => unknown | PromiseLike<unknown>
   readonly now?: () => number
+  readonly telemetry?: Pick<DashboardAgentTelemetryLedger, 'record'>
+  readonly telemetryNow?: () => number
   readonly crypto?: Crypto
   readonly isTransactionCommittedError?: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean

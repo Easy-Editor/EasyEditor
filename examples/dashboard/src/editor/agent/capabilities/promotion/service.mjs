@@ -1,4 +1,5 @@
 import { hashCanonicalJson } from '../../../../lib/storage/canonical-json.mjs'
+import { createDashboardTelemetryChannel } from '../../../../runtime/telemetry-channel.mjs'
 import {
   validateArtifactRecord,
   validateArtifactRef,
@@ -285,6 +286,8 @@ const createService = options => {
   })
   const admitMaterialRefsUnderSharedMutation = requireMethod(options, 'admitMaterialRefsUnderSharedMutation', 'options')
   const now = typeof options.now === 'function' ? options.now : Date.now
+  const telemetryNow = typeof options.telemetryNow === 'function' ? options.telemetryNow : Date.now
+  const telemetry = createDashboardTelemetryChannel(options.telemetry, telemetryNow)
   const crypto = options.crypto ?? globalThis.crypto
   if (!crypto?.subtle || typeof crypto.subtle.digest !== 'function') {
     throw new TypeError('local material promotion requires WebCrypto SHA-256')
@@ -299,6 +302,23 @@ const createService = options => {
       ? { isTransactionRollbackIncompleteError: options.isTransactionRollbackIncompleteError }
       : {}),
   })
+
+  const emitPromotionStatus = (state, promotionStatus, status, projectRevision) => {
+    telemetry.emit({
+      eventType: 'dashboard.promotion.status',
+      sessionId: state.call.sessionId,
+      taskId: state.call.taskId,
+      stepId: state.call.stepId,
+      callId: state.call.callId,
+      artifactId: state.artifactIdentity.artifactId,
+      sourceRevision: state.artifactIdentity.sourceRevision,
+      artifactRevision: state.artifactIdentity.sourceIntegrity,
+      dependencyLockDigest: state.artifactIdentity.dependencyLockDigest,
+      promotionStatus,
+      status,
+      ...(projectRevision === undefined ? {} : { projectRevision }),
+    })
+  }
 
   const readRawJournal = call =>
     persistence.readPromotionJournal({
@@ -476,6 +496,7 @@ const createService = options => {
     )
     const journal = await writeJournal(call, value)
     const state = journal.value
+    emitPromotionStatus(state, 'prepared', 'completed')
     return Object.freeze({
       journal,
       state,
@@ -543,6 +564,7 @@ const createService = options => {
       }),
       artifactRefDeletes: [],
     })
+    emitPromotionStatus(state, 'failed', 'rejected', project.revision)
     return invocationFromReceipt(createToolReceipt(committed.receipt), null)
   }
 
@@ -584,7 +606,9 @@ const createService = options => {
       authority,
     )
     const journal = await writeJournal(state.call, value)
-    return hydrateJournal(journal)
+    const activated = await hydrateJournal(journal)
+    emitPromotionStatus(activated.state, 'registry-active', 'completed')
+    return activated
   }
 
   const applyState = async initial => {
@@ -750,6 +774,7 @@ const createService = options => {
           }),
           artifactRefDeletes: [],
         })
+        emitPromotionStatus(state, 'committed', 'applied', post.revision)
         return invocationFromReceipt(createToolReceipt(committed.receipt), output)
       })
     } catch {
