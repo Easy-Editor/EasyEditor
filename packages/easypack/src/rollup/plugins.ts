@@ -27,13 +27,15 @@ export interface CreatePluginsOptions {
   minify?: boolean
   /** 当前工作目录 */
   cwd?: string
+  /** 将 Node 包解析限制在 cwd；程序化工作区构建启用。 */
+  workspaceConfinement?: boolean
 }
 
 /**
  * 创建 Rollup 插件配置
  */
 export function createPlugins(options: CreatePluginsOptions): RollupPlugin[] {
-  const { config, minify = false, cwd = process.cwd() } = options
+  const { config, minify = false, cwd = process.cwd(), workspaceConfinement = false } = options
   // 使用 unknown[] 避免第三方插件之间的 Rollup 版本类型冲突
   const plugins: unknown[] = []
 
@@ -50,6 +52,8 @@ export function createPlugins(options: CreatePluginsOptions): RollupPlugin[] {
   plugins.push(
     nodeResolve({
       extensions: DEFAULT_EXTENSIONS,
+      rootDir: cwd,
+      ...(workspaceConfinement ? { jail: cwd } : {}),
     }),
   )
 

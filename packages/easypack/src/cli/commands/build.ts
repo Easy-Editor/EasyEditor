@@ -5,10 +5,8 @@
 
 import { spawn } from 'node:child_process'
 import pc from 'picocolors'
-import { rollup } from 'rollup'
-import { loadConfig } from '../../config'
+import { buildEasypack, loadEasypackWorkspaceConfig } from '../../build'
 import type { ResolvedConfig } from '../../config/types'
-import { createRollupConfig } from '../../rollup'
 import type { CliArgs } from '../index'
 
 /**
@@ -44,32 +42,17 @@ export async function buildCommand(argv: CliArgs): Promise<void> {
   console.log(pc.cyan('Building for production...\n'))
 
   // 加载配置
-  const config = await loadConfig(argv.config)
+  const rootDir = process.cwd()
+  const config = await loadEasypackWorkspaceConfig({ rootDir, configFile: argv.config })
 
   console.log(pc.gray(`  Package: ${config.pkg.name}@${config.pkg.version}`))
   console.log(pc.gray(`  Preset:  ${config.preset}`))
   console.log(pc.gray(`  Output:  ${config.output.dir}/\n`))
 
-  // 生成 Rollup 配置
-  const rollupConfigs = createRollupConfig({ config })
-
-  let fileCount = 0
-
-  // 执行构建
-  for (const rollupConfig of rollupConfigs) {
-    const bundle = await rollup(rollupConfig)
-
-    const outputs = Array.isArray(rollupConfig.output) ? rollupConfig.output : [rollupConfig.output]
-
-    for (const output of outputs) {
-      if (output && output.file) {
-        await bundle.write(output)
-        console.log(pc.green(`  ✓ ${output.file}`))
-        fileCount++
-      }
-    }
-
-    await bundle.close()
+  const result = await buildEasypack({ rootDir, config })
+  let fileCount = result.artifacts.length
+  for (const artifact of result.artifacts) {
+    console.log(pc.green(`  ✓ ${artifact.path}`))
   }
 
   // 生成类型声明

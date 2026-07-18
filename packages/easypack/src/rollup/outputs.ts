@@ -15,6 +15,7 @@ export interface CreateOutputConfigOptions {
   input: string
   type: BuildType
   cwd?: string
+  workspaceConfinement?: boolean
 }
 
 /**
@@ -72,7 +73,7 @@ function getFilePrefix(type: BuildType): string {
  * minify 决定是否生成压缩版本（true: 只生成压缩版本，false: 只生成非压缩版本）
  */
 export function createOutputConfigs(options: CreateOutputConfigOptions): RollupOptions[] {
-  const { config, input, type, cwd = process.cwd() } = options
+  const { config, input, type, cwd = process.cwd(), workspaceConfinement = false } = options
   const configs: RollupOptions[] = []
 
   const external = getExternals(config)
@@ -82,7 +83,7 @@ export function createOutputConfigs(options: CreateOutputConfigOptions): RollupO
   const { pkg, output: outputConfig } = config
   const { minify } = outputConfig
 
-  const plugins = createPlugins({ config, minify, cwd })
+  const plugins = createPlugins({ config, minify, cwd, workspaceConfinement })
 
   // ESM 构建
   if (outputConfig.esm) {

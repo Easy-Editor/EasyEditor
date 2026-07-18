@@ -12,6 +12,7 @@ import { createOutputConfigs } from './outputs'
 export interface CreateRollupConfigOptions {
   config: ResolvedConfig
   cwd?: string
+  workspaceConfinement?: boolean
 }
 
 /**
@@ -26,7 +27,7 @@ function entryExists(entry: string, cwd: string): boolean {
  * 创建 Rollup 配置
  */
 export function createRollupConfig(options: CreateRollupConfigOptions): RollupOptions[] {
-  const { config, cwd = process.cwd() } = options
+  const { config, cwd = process.cwd(), workspaceConfinement = false } = options
   const configs: RollupOptions[] = []
 
   // 对于 material 预设，生成分离构建（meta + component）
@@ -39,6 +40,7 @@ export function createRollupConfig(options: CreateRollupConfigOptions): RollupOp
           input: config.entry.meta,
           type: 'meta',
           cwd,
+          workspaceConfinement,
         }),
       )
     }
@@ -51,6 +53,7 @@ export function createRollupConfig(options: CreateRollupConfigOptions): RollupOp
           input: config.entry.component,
           type: 'component',
           cwd,
+          workspaceConfinement,
         }),
       )
     }
@@ -64,6 +67,7 @@ export function createRollupConfig(options: CreateRollupConfigOptions): RollupOp
         input: config.entry.main,
         type: 'full',
         cwd,
+        workspaceConfinement,
       }),
     )
   } else {

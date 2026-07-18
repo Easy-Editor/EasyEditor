@@ -6,6 +6,14 @@
 // CLI 入口
 export { cli } from './cli'
 
+// 程序化构建
+export { buildEasypack } from './build'
+export type {
+  BuildEasypackOptions,
+  EasypackBuildArtifact,
+  EasypackBuildResult,
+} from './build'
+
 // 配置相关
 export { defineConfig, loadConfig } from './config'
 export type {

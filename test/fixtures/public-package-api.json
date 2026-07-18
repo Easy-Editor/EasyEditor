@@ -104,6 +104,7 @@
   },
   "@easy-editor/easypack": {
     "all": [
+      "BuildEasypackOptions",
       "BuildToolsConfig",
       "CssConfig",
       "CssMode",
@@ -115,6 +116,8 @@
       "DEFAULT_GLOBALS",
       "DEFAULT_OUTPUT",
       "DevConfig",
+      "EasypackBuildArtifact",
+      "EasypackBuildResult",
       "EasypackConfig",
       "EntryConfig",
       "ExternalConfig",
@@ -124,6 +127,7 @@
       "OutputConfig",
       "Preset",
       "ResolvedConfig",
+      "buildEasypack",
       "cli",
       "createOutputConfigs",
       "createPlugins",
@@ -146,6 +150,7 @@
       "DEFAULT_EXTERNALS",
       "DEFAULT_GLOBALS",
       "DEFAULT_OUTPUT",
+      "buildEasypack",
       "cli",
       "createOutputConfigs",
       "createPlugins",

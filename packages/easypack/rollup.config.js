@@ -6,6 +6,7 @@ import cleanup from 'rollup-plugin-cleanup'
 
 const external = [
   // Node built-ins
+  'node:crypto',
   'node:fs',
   'node:path',
   'node:url',

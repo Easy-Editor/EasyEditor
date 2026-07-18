@@ -3,6 +3,7 @@
  * 配置加载器 - 加载和解析 easypack.config.ts
  */
 
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -54,7 +55,7 @@ async function loadConfigFile(configPath: string): Promise<EasypackConfig> {
   })
 
   const code = result.outputFiles[0].text
-  const tempFile = path.join(path.dirname(configPath), '.easypack.config.tmp.mjs')
+  const tempFile = path.join(path.dirname(configPath), `.easypack.config.${process.pid}.${randomUUID()}.tmp.mjs`)
 
   fs.writeFileSync(tempFile, code)
   try {
@@ -73,7 +74,7 @@ async function loadConfigFile(configPath: string): Promise<EasypackConfig> {
 /**
  * 查找配置文件
  */
-function findConfigFile(cwd: string, customPath?: string): string | null {
+export function findConfigFile(cwd: string, customPath?: string): string | null {
   if (customPath) {
     const fullPath = path.isAbsolute(customPath) ? customPath : path.join(cwd, customPath)
     if (fs.existsSync(fullPath)) {

@@ -53,6 +53,7 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "build:types": "pnpm types",
+    "test": "pnpm build:js && node --test test/*.test.mjs",
     "types": "npm-run-all -nl types:*",
     "types:src": "tsc --project tsconfig.build.json"
   },
