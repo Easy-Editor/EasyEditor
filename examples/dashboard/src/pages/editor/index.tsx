@@ -1,8 +1,8 @@
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
-import { registerDashboardEditorDisposer } from '@/editor'
+import { dashboardEditorSurfaceLifecycle, registerDashboardEditorDisposer } from '@/editor'
 import { dashboardAgentRuntimeFeatureFlags, registerDashboardAgentWorkspaceE2EProbe } from '@/editor/runtime'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { AgentWorkspace, type DashboardAgentWorkspaceComposition } from './AgentWorkspace'
 import { startDashboardAgentWorkspacePageIntegration } from './AgentWorkspace/page-integration'
 import { AppHeader } from './Header'
@@ -14,6 +14,28 @@ const AppLayout = () => {
   const agentEnabled = dashboardAgentRuntimeFeatureFlags.runtime
   const [agentOpen, setAgentOpen] = useState(false)
   const [agentComposition, setAgentComposition] = useState<DashboardAgentWorkspaceComposition | null>(null)
+  const editorSurfacePhase = useSyncExternalStore(
+    dashboardEditorSurfaceLifecycle.subscribe,
+    dashboardEditorSurfaceLifecycle.getSnapshot,
+    dashboardEditorSurfaceLifecycle.getSnapshot,
+  )
+  const editorSurfaceParticipant = useRef<
+    ReturnType<typeof dashboardEditorSurfaceLifecycle.registerParticipant> | undefined
+  >(undefined)
+  const editorSurfaceMounted = editorSurfacePhase === 'mounted' || editorSurfacePhase === 'resuming'
+
+  useEffect(() => {
+    const participant = dashboardEditorSurfaceLifecycle.registerParticipant()
+    editorSurfaceParticipant.current = participant
+    return () => {
+      editorSurfaceParticipant.current = undefined
+      participant.dispose()
+    }
+  }, [])
+
+  useEffect(() => {
+    editorSurfaceParticipant.current?.acknowledge(editorSurfacePhase)
+  }, [editorSurfacePhase])
 
   useEffect(() => {
     setAgentComposition(null)
@@ -65,30 +87,43 @@ const AppLayout = () => {
               } as React.CSSProperties
             }
           >
-            <AppSidebar
-              style={
-                {
-                  height: 'calc(100vh - 57px)',
-                  top: '57px',
-                } as React.CSSProperties
-              }
-            />
+            {editorSurfaceMounted ? (
+              <AppSidebar
+                style={
+                  {
+                    height: 'calc(100vh - 57px)',
+                    top: '57px',
+                  } as React.CSSProperties
+                }
+              />
+            ) : null}
             <SidebarInset>
               <div className='flex flex-1 flex-col gap-4'>
-                <Renderer />
+                {editorSurfaceMounted ? (
+                  <Renderer />
+                ) : (
+                  <div
+                    className='flex flex-1 items-center justify-center text-sm text-muted-foreground'
+                    data-dashboard-editor-surface-state={editorSurfacePhase}
+                  >
+                    正在切换编辑分支…
+                  </div>
+                )}
               </div>
             </SidebarInset>
             {agentOpen && agentComposition ? (
               <AgentWorkspace controller={agentComposition.controller} onClose={() => setAgentOpen(false)} />
             ) : null}
-            <SettingSidebar
-              style={
-                {
-                  height: 'calc(100vh - 57px)',
-                  top: '57px',
-                } as React.CSSProperties
-              }
-            />
+            {editorSurfaceMounted ? (
+              <SettingSidebar
+                style={
+                  {
+                    height: 'calc(100vh - 57px)',
+                    top: '57px',
+                  } as React.CSSProperties
+                }
+              />
+            ) : null}
           </SidebarProvider>
         </main>
         <Toaster />

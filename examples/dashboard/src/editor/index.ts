@@ -43,10 +43,13 @@ import {
   remoteResources,
 } from './runtime'
 import { setterMap } from './setters'
+import { dashboardEditorSurfaceLifecycle } from './surface-lifecycle.mjs'
 
 import './overrides.css'
 
 export { composeDashboardAgentHost, dashboardAgentRuntimeFeatureFlags }
+export { dashboardEditorSurfaceLifecycle }
+export type { DashboardEditorSurfacePhase } from './surface-lifecycle.mjs'
 export type { DashboardAgentHostAuthority } from './agent/host/index.mjs'
 
 const dashboardDataRuntime = createDashboardDataRuntime({
@@ -279,11 +282,18 @@ const installPersistenceListeners = () => {
  * canonical project binding. The caller must always either reattach the
  * listeners to the old binding or finish loading the restored binding.
  */
-export const detachDashboardPersistenceListeners = (): void => {
+export const detachDashboardPersistenceListeners = async (): Promise<void> => {
   for (const release of releasePersistenceListeners.splice(0)) release()
+  try {
+    await dashboardEditorSurfaceLifecycle.suspend()
+  } catch (error) {
+    installPersistenceListeners()
+    throw error
+  }
 }
 
-export const reattachDashboardPersistenceListeners = (): void => {
+export const reattachDashboardPersistenceListeners = async (): Promise<void> => {
+  await dashboardEditorSurfaceLifecycle.resume()
   installPersistenceListeners()
 }
 
