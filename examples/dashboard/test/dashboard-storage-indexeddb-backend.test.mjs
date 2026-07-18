@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { IndexedDbDashboardStorageBackend } from '../src/lib/storage/indexeddb-backend.mjs'
+import { DASHBOARD_MATERIAL_GC_STORE_NAMES } from '../src/lib/storage/material-gc.mjs'
 import { ProjectPersistenceCoordinator } from '../src/lib/storage/project-persistence-coordinator.mjs'
 import { DASHBOARD_STORAGE_STORES, DASHBOARD_STORAGE_STORE_NAMES } from '../src/lib/storage/schema.mjs'
 
@@ -237,6 +238,25 @@ test('IndexedDB backend opens the frozen database version and installs the compl
   assert.deepEqual(
     [...indexedDB.database.records],
     DASHBOARD_STORAGE_STORE_NAMES.map(name => [name, new Map()]),
+  )
+})
+
+test('IndexedDB material GC snapshot reads every relevant store in one readonly transaction', async () => {
+  const indexedDB = createFactory()
+  const transactions = []
+  const transaction = indexedDB.database.transaction.bind(indexedDB.database)
+  indexedDB.database.transaction = (names, mode) => {
+    transactions.push({ names: [...names], mode })
+    return transaction(names, mode)
+  }
+  const backend = new IndexedDbDashboardStorageBackend({ indexedDB })
+
+  const snapshot = await backend.readMaterialGcStoreSnapshot('project-1')
+  assert.deepEqual(transactions, [{ names: [...DASHBOARD_MATERIAL_GC_STORE_NAMES], mode: 'readonly' }])
+  assert.deepEqual(Object.keys(snapshot.stores), [...DASHBOARD_MATERIAL_GC_STORE_NAMES])
+  assert.equal(
+    Object.values(snapshot.stores).every(records => records.length === 0),
+    true,
   )
 })
 

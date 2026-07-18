@@ -20,6 +20,7 @@ export declare class MemoryDashboardStorageBackend implements DashboardStorageBa
   )
   get: DashboardStorageBackend['get']
   getAll: DashboardStorageBackend['getAll']
+  readMaterialGcStoreSnapshot: DashboardStorageBackend['readMaterialGcStoreSnapshot']
   commit: DashboardStorageBackend['commit']
   putMigrationState: DashboardStorageBackend['putMigrationState']
   readAgentPersistence: DashboardStorageBackend['readAgentPersistence']

@@ -1,5 +1,18 @@
 import {
+  normalizeLocalMaterialPromotionJournalRecord,
+  normalizeLocalMaterialPromotionPlannedPostImages,
+  normalizeLocalMaterialPromotionPreImages,
+} from '../../editor/agent/capabilities/promotion/contract.mjs'
+import { createFieldSlotAliases } from '../../editor/agent/persistence/provenance.mjs'
+import {
+  createToolReceiptWitness,
+  parseApplyWitness,
+  parseFailureWitness,
+  parseToolReceipt,
+} from '../../editor/agent/persistence/receipt-ledger.mjs'
+import {
   cloneFrozenJson,
+  normalizeArtifactMaterialRefs,
   readCanonicalNodeArtifactRef,
   validateArtifactReadRequest,
   validateArtifactRecord,
@@ -14,6 +27,7 @@ import {
   readStorageCompatibilityMarker,
 } from './compatibility-marker.mjs'
 import {
+  createAgentPersistenceCheckpointId,
   validateAgentPersistenceBatch,
   validateAgentPersistenceReadRequest,
   validateCompensationRunListRequest,
@@ -28,7 +42,11 @@ import {
 } from './contracts.mjs'
 import { materializeLegacyFromCanonical, selectForwardReentryDraft } from './downgrade.mjs'
 import { DASHBOARD_STORAGE_ERROR_CODE, DashboardStorageError } from './errors.mjs'
-import { requestLegacyIdentityLock, requestLegacySnapshotLock } from './legacy-snapshot-lock.mjs'
+import {
+  requestLegacyIdentityLock,
+  requestLegacySnapshotLock,
+  requestProjectMaterialLock,
+} from './legacy-snapshot-lock.mjs'
 import {
   DASHBOARD_LOCAL_GRANT_SCOPES,
   normalizeArtifactIdentities,
@@ -39,6 +57,7 @@ import {
   validateLocalGrantRecord,
   validateProjectVersionRecord,
 } from './lifecycle.mjs'
+import { DASHBOARD_MATERIAL_GC_STORE_NAMES, validateMaterialGcStoreSnapshot } from './material-gc.mjs'
 
 const commitRequestFields = Object.freeze([
   'activeDocument',
@@ -262,6 +281,13 @@ const requireAuthority = (value, label) => {
 const requireGeneration = (value, label) => {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw validationFailure(`${label}-must-be-a-non-negative-safe-integer`)
+  }
+  return value
+}
+
+const requireSha256 = (value, label) => {
+  if (typeof value !== 'string' || !/^sha256:[\da-f]{64}$/u.test(value)) {
+    throw validationFailure(`${label}-must-be-a-sha256-digest`)
   }
   return value
 }
@@ -755,6 +781,387 @@ const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 const compareArtifactIdentity = (left, right) =>
   compareText(`${left.artifactId}\u0000${left.sourceRevision}`, `${right.artifactId}\u0000${right.sourceRevision}`)
 
+const compareCanonical = (left, right) => compareText(canonicalJsonStringify(left), canonicalJsonStringify(right))
+
+const promotionAffectedSlotKeys = ({ projectId, branchId, nodeId }) =>
+  [
+    ...new Set([
+      ...createFieldSlotAliases({ projectId, branchId, nodeId, root: 'extras', path: ['$agent'] }),
+      ...createFieldSlotAliases({ projectId, branchId, nodeId, root: 'extras', path: ['artifactRef'] }),
+      ...createFieldSlotAliases({ projectId, branchId, nodeId, root: 'extras', path: ['extra', 'artifactRef'] }),
+    ]),
+  ].sort(compareText)
+
+const addMaterialRef = (refs, value, label) => {
+  const materialRef = normalizeArtifactMaterialRefs([value], label)[0]
+  refs.set(canonicalJsonStringify(materialRef), materialRef)
+  return materialRef
+}
+
+const promotionLineageKey = value => `${value.branchId}\u0000${value.callId}`
+
+const promotionCheckpointKey = value => `${value.branchId}\u0000${value.sessionId}\u0000${value.callId}`
+
+const sourceRevisionOf = value => ({
+  artifactId: value.artifactId,
+  sourceRevision: value.sourceRevision,
+  logicalComponentId: value.logicalComponentId,
+  sourceIntegrity: value.sourceIntegrity,
+})
+
+const promotionIdentityHashInput = journal => ({
+  schemaVersion: 1,
+  kind: 'local-material-promotion-identity',
+  authority: {
+    projectId: journal.projectId,
+    branchId: journal.branchId,
+    sessionId: journal.sessionId,
+    taskId: journal.taskId,
+  },
+  callId: journal.callId,
+  callDigest: journal.value.callDigest,
+  artifact: journal.value.artifactIdentity,
+})
+
+const preparedHashInput = ({ journal, intent }) => ({
+  schemaVersion: 1,
+  kind: 'local-material-promotion-prepared-hash',
+  projectId: journal.projectId,
+  branchId: journal.branchId,
+  callId: journal.callId,
+  baseRevision: journal.value.prepare.baseRevision,
+  preImages: intent.preImages,
+  expectedPostImages: intent.expectedPostImages,
+})
+
+const promotionArtifactRef = journal => ({
+  ...sourceRevisionOf(journal.value.artifactIdentity),
+  target: {
+    kind: 'local-material',
+    materialId: journal.value.server.materialId,
+    materialVersion: journal.value.server.materialVersion,
+    buildIntegrity: journal.value.server.buildIntegrity,
+  },
+  rollbackTo: journal.value.server.rollbackTo,
+})
+
+const promotionTransactionFingerprintInput = journal => ({
+  schemaVersion: 1,
+  kind: 'local-material-promotion-transaction-fingerprint',
+  projectId: journal.projectId,
+  branchId: journal.branchId,
+  callId: journal.callId,
+  promotionId: journal.value.promotionId,
+  documentId: journal.value.prepare.documentId,
+  nodeId: journal.value.prepare.nodeId,
+  baseMutationVersion: journal.value.prepare.baseMutationVersion,
+  previousArtifactRef: journal.value.prepare.previousArtifactRef,
+  artifactRef: promotionArtifactRef(journal),
+})
+
+const validateMaterialGcPromotionJournal = async (record, projectId, crypto) => {
+  assertExactFieldsWithOptional(
+    record,
+    ['branchId', 'kind', 'projectId', 'recordId', 'schemaVersion', 'sessionId', 'value'],
+    ['callId', 'draftGeneration', 'taskId', 'updatedAt', 'writerCheckpointId'],
+    'material-gc-promotion-journal',
+  )
+  if (record.schemaVersion !== 1 || record.projectId !== projectId) {
+    throw validationFailure('material-gc-promotion-journal-authority-mismatch')
+  }
+  const branchId = requireAuthority(record.branchId, 'material-gc-promotion-journal.branchId')
+  const sessionId = requireAuthority(record.sessionId, 'material-gc-promotion-journal.sessionId')
+  assertRecord(record.value, 'material-gc-promotion-journal.value')
+  assertRecord(record.value.call, 'material-gc-promotion-journal.value.call')
+  const callId = requireAuthority(record.value.call.callId, 'material-gc-promotion-journal.value.call.callId')
+  const taskId = requireAuthority(record.value.call.taskId, 'material-gc-promotion-journal.value.call.taskId')
+  const journal = normalizeLocalMaterialPromotionJournalRecord(
+    Object.hasOwn(record, 'callId') ? record : { ...record, callId },
+    { projectId, branchId, sessionId, taskId },
+  )
+  if (
+    (journal.value.stage === 'committed' || journal.value.stage === 'failed') &&
+    (record.callId !== journal.callId ||
+      !Number.isSafeInteger(record.draftGeneration) ||
+      record.draftGeneration < 1 ||
+      !Number.isSafeInteger(record.updatedAt) ||
+      record.updatedAt < 0)
+  ) {
+    throw validationFailure('material-gc-terminal-promotion-storage-projection-is-incomplete')
+  }
+  const expectedCallDigest = await hashCanonicalJson(journal.value.call, { crypto })
+  if (journal.value.callDigest !== expectedCallDigest) {
+    throw validationFailure('material-gc-promotion-journal-call-digest-does-not-match')
+  }
+  const expectedPromotionId = await hashCanonicalJson(promotionIdentityHashInput(journal), { crypto })
+  if (journal.value.promotionId !== expectedPromotionId) {
+    throw validationFailure('material-gc-promotion-journal-promotion-id-does-not-match')
+  }
+  return journal
+}
+
+const validateMaterialGcReceiptIntent = (record, projectId) => {
+  const intent = validateReceiptIntentRecord(record)
+  if (intent.projectId !== projectId) throw validationFailure('material-gc-receipt-intent-project-authority-mismatch')
+  const promotionPre = intent.preImages?.kind === 'local-material-promotion-pre-images'
+  const promotionPost = intent.expectedPostImages?.kind === 'local-material-promotion-post-images'
+  if (!promotionPre && !promotionPost) return { intent, promotion: null }
+  if (!promotionPre || !promotionPost) {
+    throw validationFailure('material-gc-receipt-intent-promotion-authority-mismatch')
+  }
+  const preImages = normalizeLocalMaterialPromotionPreImages(intent.preImages)
+  const expectedPostImages = normalizeLocalMaterialPromotionPlannedPostImages(intent.expectedPostImages)
+  if (
+    intent.baseRevision !== preImages.expectedRevision ||
+    preImages.promotionId !== expectedPostImages.promotionId ||
+    preImages.nodeId !== expectedPostImages.nodeId ||
+    !jsonEqual(sourceRevisionOf(preImages.artifactIdentity), expectedPostImages.sourceRevision) ||
+    !jsonEqual(sourceRevisionOf(preImages.previousArtifactRef), expectedPostImages.sourceRevision)
+  ) {
+    throw validationFailure('material-gc-receipt-intent-promotion-authority-mismatch')
+  }
+  return {
+    intent: { ...intent, preImages, expectedPostImages },
+    promotion: { promotionId: preImages.promotionId },
+  }
+}
+
+const validateMaterialGcToolReceipt = (record, projectId) => {
+  const receipt = parseToolReceipt(record)
+  if (receipt.projectId !== projectId) {
+    throw validationFailure('material-gc-tool-receipt-authority-mismatch')
+  }
+  return receipt
+}
+
+const validateMaterialGcReceiptWitness = receipt => {
+  assertRecord(receipt.witness, 'material-gc-tool-receipt.witness')
+  const { kind, ...reference } = receipt.witness
+  let witness
+  if (kind === 'apply') {
+    witness = parseApplyWitness({
+      projectId: receipt.projectId,
+      branchId: receipt.branchId,
+      callId: receipt.callId,
+      ...reference,
+    })
+  } else if (kind === 'failure') {
+    witness = parseFailureWitness({
+      projectId: receipt.projectId,
+      branchId: receipt.branchId,
+      callId: receipt.callId,
+      ...reference,
+    })
+  } else {
+    throw validationFailure('material-gc-tool-receipt-witness-kind-is-invalid')
+  }
+  if (!jsonEqual(createToolReceiptWitness(witness), receipt.witness)) {
+    throw validationFailure('material-gc-tool-receipt-witness-is-not-canonical')
+  }
+  return { kind, witness }
+}
+
+const validateMaterialGcAgentPersistenceResult = (value, batchId) => {
+  assertRecord(value, 'material-gc-persistence-checkpoint.result')
+  const rejected = value.status === 'rejected'
+  assertExactFields(
+    value,
+    ['batchId', 'persistenceGeneration', 'schemaVersion', 'status', ...(rejected ? ['failure'] : [])],
+    'material-gc-persistence-checkpoint.result',
+  )
+  if (
+    value.schemaVersion !== 1 ||
+    value.batchId !== batchId ||
+    (value.status !== 'committed' && value.status !== 'generation-conflict' && value.status !== 'rejected')
+  ) {
+    throw validationFailure('material-gc-persistence-checkpoint-result-authority-is-invalid')
+  }
+  requireGeneration(value.persistenceGeneration, 'material-gc-persistence-checkpoint.result.persistenceGeneration')
+  if (rejected) {
+    assertExactFields(
+      value.failure,
+      ['code', 'details', 'message', 'retryable'],
+      'material-gc-persistence-checkpoint.result.failure',
+    )
+    requireAuthority(value.failure.code, 'material-gc-persistence-checkpoint.result.failure.code')
+    requireAuthority(value.failure.message, 'material-gc-persistence-checkpoint.result.failure.message')
+    if (value.failure.retryable !== true && value.failure.retryable !== false) {
+      throw validationFailure('material-gc-persistence-checkpoint.result.failure.retryable-must-be-a-boolean')
+    }
+    assertRecord(value.failure.details, 'material-gc-persistence-checkpoint.result.failure.details')
+    canonicalJsonStringify(value.failure.details)
+  }
+  return value
+}
+
+const validateMaterialGcCheckpoint = (record, projectId) => {
+  assertRecord(record, 'material-gc-checkpoint')
+  if (record.schemaVersion !== 1 || record.projectId !== projectId) {
+    throw validationFailure('material-gc-checkpoint-authority-mismatch')
+  }
+  requireAuthority(record.branchId, 'material-gc-checkpoint.branchId')
+  const sessionId = requireAuthority(record.sessionId, 'material-gc-checkpoint.sessionId')
+  const checkpointId = requireAuthority(record.checkpointId, 'material-gc-checkpoint.checkpointId')
+  if (Object.hasOwn(record, 'requestHash')) {
+    assertExactFields(
+      record,
+      ['batchId', 'branchId', 'checkpointId', 'projectId', 'requestHash', 'result', 'schemaVersion', 'sessionId'],
+      'material-gc-persistence-checkpoint',
+    )
+    const batchId = requireAuthority(record.batchId, 'material-gc-persistence-checkpoint.batchId')
+    if (checkpointId !== createAgentPersistenceCheckpointId({ sessionId, batchId })) {
+      throw validationFailure('material-gc-persistence-checkpoint-id-does-not-match')
+    }
+    requireSha256(record.requestHash, 'material-gc-persistence-checkpoint.requestHash')
+    const result = validateMaterialGcAgentPersistenceResult(record.result, batchId)
+    return {
+      checkpoint: { ...record, result },
+      promotion: null,
+      sessionRequired: result.status === 'committed' || result.persistenceGeneration > 0,
+    }
+  }
+  assertExactFields(record, durableAgentCheckpointFields, 'material-gc-durable-checkpoint')
+  requireAuthority(record.callId, 'material-gc-durable-checkpoint.callId')
+  requireGeneration(record.draftGeneration, 'material-gc-durable-checkpoint.draftGeneration')
+  assertRecord(record.value, 'material-gc-durable-checkpoint.value')
+  if (record.value.capability !== 'artifact.promoteLocal') {
+    return { checkpoint: record, promotion: null, sessionRequired: true }
+  }
+  const status = record.value.status
+  const failed = status === 'not-applied'
+  assertExactFields(
+    record.value,
+    ['capability', 'promotionId', 'schemaVersion', 'status', 'stepId', 'taskId', ...(failed ? ['failureCode'] : [])],
+    'material-gc-promotion-checkpoint.value',
+  )
+  if (
+    record.value.schemaVersion !== 1 ||
+    (status !== 'applied' && status !== 'not-applied') ||
+    record.outcome !== (failed ? 'failed' : 'committed') ||
+    record.checkpointId !== `promotion:${record.callId}` ||
+    record.journalRecordId !== `promotion:${record.callId}`
+  ) {
+    throw validationFailure('material-gc-promotion-checkpoint-outcome-is-invalid')
+  }
+  requireAuthority(record.value.taskId, 'material-gc-promotion-checkpoint.value.taskId')
+  requireAuthority(record.value.stepId, 'material-gc-promotion-checkpoint.value.stepId')
+  if (failed) requireAuthority(record.value.failureCode, 'material-gc-promotion-checkpoint.value.failureCode')
+  return {
+    checkpoint: record,
+    sessionRequired: true,
+    promotion: {
+      promotionId: requireSha256(record.value.promotionId, 'material-gc-promotion-checkpoint.value.promotionId'),
+    },
+  }
+}
+
+const validateMaterialGcTerminalPromotion = async ({ journal, intent, receipt, checkpoint, crypto }) => {
+  if (!intent || !receipt || !checkpoint) {
+    throw validationFailure('material-gc-terminal-promotion-lineage-is-incomplete')
+  }
+  const { call, prepare, artifactIdentity, promotionId, stage } = journal.value
+  const preImages = intent.preImages
+  const expectedPostImages = intent.expectedPostImages
+  if (
+    intent.projectId !== journal.projectId ||
+    intent.branchId !== journal.branchId ||
+    intent.callId !== journal.callId ||
+    intent.baseRevision !== prepare.baseRevision ||
+    preImages.capability !== call.capability ||
+    preImages.documentId !== prepare.documentId ||
+    preImages.nodeId !== prepare.nodeId ||
+    preImages.nodeId !== call.arguments.nodeId ||
+    preImages.promotionId !== promotionId ||
+    preImages.callDigest !== journal.value.callDigest ||
+    preImages.expectedRevision !== call.expectedRevision ||
+    !jsonEqual(preImages.previousArtifactRef, prepare.previousArtifactRef) ||
+    !jsonEqual(preImages.artifactIdentity, artifactIdentity) ||
+    expectedPostImages.nodeId !== call.arguments.nodeId ||
+    expectedPostImages.promotionId !== promotionId ||
+    !jsonEqual(expectedPostImages.sourceRevision, sourceRevisionOf(artifactIdentity))
+  ) {
+    throw validationFailure('material-gc-terminal-promotion-intent-does-not-match-journal')
+  }
+  const expectedPreparedHash = await hashCanonicalJson(preparedHashInput({ journal, intent }), { crypto })
+  if (intent.preparedHash !== expectedPreparedHash) {
+    throw validationFailure('material-gc-terminal-promotion-prepared-hash-does-not-match')
+  }
+  if (
+    receipt.projectId !== journal.projectId ||
+    receipt.branchId !== journal.branchId ||
+    receipt.callId !== journal.callId ||
+    receipt.revision === undefined ||
+    checkpoint.projectId !== journal.projectId ||
+    checkpoint.branchId !== journal.branchId ||
+    checkpoint.sessionId !== journal.sessionId ||
+    checkpoint.callId !== journal.callId ||
+    checkpoint.checkpointId !== `promotion:${journal.callId}` ||
+    checkpoint.journalRecordId !== journal.recordId ||
+    checkpoint.draftGeneration !== journal.draftGeneration ||
+    checkpoint.value.taskId !== call.taskId ||
+    checkpoint.value.stepId !== call.stepId ||
+    checkpoint.value.promotionId !== promotionId
+  ) {
+    throw validationFailure('material-gc-terminal-promotion-authority-does-not-match')
+  }
+  const { kind: witnessKind, witness } = validateMaterialGcReceiptWitness(receipt)
+  const expectedTransactionFingerprint = await hashCanonicalJson(promotionTransactionFingerprintInput(journal), {
+    crypto,
+  })
+  if (
+    witness.draftGeneration !== journal.draftGeneration ||
+    witness.draftGeneration !== checkpoint.draftGeneration ||
+    witness.transactionFingerprint !== expectedTransactionFingerprint
+  ) {
+    throw validationFailure('material-gc-terminal-promotion-witness-authority-does-not-match')
+  }
+  if (stage === 'committed') {
+    if (
+      receipt.status !== 'applied' ||
+      witnessKind !== 'apply' ||
+      checkpoint.outcome !== 'committed' ||
+      checkpoint.value.status !== 'applied'
+    ) {
+      throw validationFailure('material-gc-terminal-promotion-committed-outcome-does-not-match')
+    }
+    const expectedAffectedSlotKeys = promotionAffectedSlotKeys({
+      projectId: journal.projectId,
+      branchId: journal.branchId,
+      nodeId: prepare.nodeId,
+    })
+    if (
+      witness.coreMutationVersion <= prepare.baseMutationVersion ||
+      !jsonEqual(
+        witness.affectedSlotTokens.map(entry => entry.slotKey),
+        expectedAffectedSlotKeys,
+      )
+    ) {
+      throw validationFailure('material-gc-terminal-promotion-apply-witness-does-not-match-core-contract')
+    }
+  } else if (
+    stage !== 'failed' ||
+    (receipt.status !== 'not-applied' && receipt.status !== 'rejected') ||
+    witnessKind !== 'failure' ||
+    witness.receiptStatus !== receipt.status ||
+    witness.failureCode !== receipt.failure?.code ||
+    witness.failureCode !== journal.value.failureCode ||
+    receipt.failure?.code !== journal.value.failureCode ||
+    checkpoint.outcome !== 'failed' ||
+    checkpoint.value.status !== 'not-applied' ||
+    checkpoint.value.failureCode !== journal.value.failureCode
+  ) {
+    throw validationFailure('material-gc-terminal-promotion-failed-outcome-does-not-match')
+  }
+  return {
+    materialRef: {
+      materialId: journal.value.server.materialId,
+      materialVersion: journal.value.server.materialVersion,
+      buildIntegrity: journal.value.server.buildIntegrity,
+    },
+    promotionId,
+  }
+}
+
 const compareSession = (left, right) => left.createdAt - right.createdAt || compareText(left.sessionId, right.sessionId)
 
 const compareVersion = (left, right) =>
@@ -780,19 +1187,33 @@ const artifactRootFenceFromRecords = roots =>
     ownerId: root.ownerId,
     artifactId: root.artifactId,
     sourceRevision: root.sourceRevision,
+    materialRefs: root.materialRefs,
   }))
 
 const artifactIdentityKey = value => `${value.artifactId}\u0000${value.sourceRevision}`
 const workingDraftRootKey = value => `${value.ownerId}\u0000${artifactIdentityKey(value)}`
 
-const collectCanonicalProjectArtifactIdentities = projectSchema => {
-  const identities = new Map()
+const materialIdentityFromArtifactRef = artifactRef =>
+  artifactRef.target.kind === 'local-material'
+    ? {
+        materialId: artifactRef.target.materialId,
+        materialVersion: artifactRef.target.materialVersion,
+        buildIntegrity: artifactRef.target.buildIntegrity,
+      }
+    : null
+
+const collectCanonicalProjectArtifactClaims = projectSchema => {
+  const claims = new Map()
   const visitNode = node => {
     if (typeof node !== 'object' || node === null || Array.isArray(node)) return
     const artifactRef = readCanonicalNodeArtifactRef(node)
     if (artifactRef) {
       const identity = { artifactId: artifactRef.artifactId, sourceRevision: artifactRef.sourceRevision }
-      identities.set(artifactIdentityKey(identity), identity)
+      const key = artifactIdentityKey(identity)
+      const claim = claims.get(key) ?? { ...identity, materialRefs: new Map() }
+      const materialRef = materialIdentityFromArtifactRef(artifactRef)
+      if (materialRef) claim.materialRefs.set(canonicalJsonStringify(materialRef), materialRef)
+      claims.set(key, claim)
     }
     if (Array.isArray(node.children)) {
       for (const child of node.children) visitNode(child)
@@ -801,8 +1222,22 @@ const collectCanonicalProjectArtifactIdentities = projectSchema => {
   if (Array.isArray(projectSchema.componentsTree)) {
     for (const node of projectSchema.componentsTree) visitNode(node)
   }
-  return [...identities.values()].sort(compareArtifactIdentity)
+  return [...claims.values()]
+    .map(claim => ({
+      artifactId: claim.artifactId,
+      sourceRevision: claim.sourceRevision,
+      materialRefs: [...claim.materialRefs.values()].sort((left, right) =>
+        compareText(canonicalJsonStringify(left), canonicalJsonStringify(right)),
+      ),
+    }))
+    .sort(compareArtifactIdentity)
 }
+
+const collectCanonicalProjectArtifactIdentities = projectSchema =>
+  collectCanonicalProjectArtifactClaims(projectSchema).map(({ artifactId, sourceRevision }) => ({
+    artifactId,
+    sourceRevision,
+  }))
 
 const isCallerSuppliedWorkingDraftRootOperation = operation => {
   if (operation?.store !== 'artifactRefs') return false
@@ -879,6 +1314,19 @@ const markerFromDraft = (draft, updatedAt) =>
     updatedAt,
   })
 
+const createTrackedMaterialGcSnapshotPromise = (task, markObserved) =>
+  new Proxy(task, {
+    get(target, property) {
+      if (property === 'then' || property === 'catch' || property === 'finally') {
+        return (...args) => {
+          markObserved()
+          return Reflect.apply(Promise.prototype[property], target, args)
+        }
+      }
+      return Reflect.get(target, property, target)
+    },
+  })
+
 export class ProjectPersistenceCoordinator {
   #backend
   #compatibilityStorage
@@ -946,6 +1394,10 @@ export class ProjectPersistenceCoordinator {
 
   #withSnapshotLock(scope, operation) {
     return requestLegacySnapshotLock({ scope, lockManager: this.#lockManager }, operation)
+  }
+
+  #withProjectMaterialLock(projectId, mode, operation) {
+    return requestProjectMaterialLock({ projectId, lockManager: this.#lockManager, mode }, operation)
   }
 
   #assertLegacyMigrationAuthority(request) {
@@ -1016,6 +1468,12 @@ export class ProjectPersistenceCoordinator {
   }
 
   async #commitNow(request, expectedProjectHash, nextDraftGeneration = request.expectedDraftGeneration + 1) {
+    return this.#withProjectMaterialLock(request.projectId, 'shared', () =>
+      this.#commitWithMaterialLock(request, expectedProjectHash, nextDraftGeneration),
+    )
+  }
+
+  async #commitWithMaterialLock(request, expectedProjectHash, nextDraftGeneration) {
     const projectHash = await hashCanonicalJson(request.projectSchema, { crypto: this.#crypto })
     if (expectedProjectHash !== undefined && projectHash !== expectedProjectHash) {
       throw new DashboardStorageError(
@@ -1049,7 +1507,7 @@ export class ProjectPersistenceCoordinator {
       )
       .map(normalizeArtifactRootRecord)
       .sort(compareRoot)
-    const desiredWorkingDraftRoots = collectCanonicalProjectArtifactIdentities(request.projectSchema).map(identity => ({
+    const desiredWorkingDraftRoots = collectCanonicalProjectArtifactClaims(request.projectSchema).map(identity => ({
       schemaVersion: 1,
       projectId: request.projectId,
       branchId: request.branchId,
@@ -1058,7 +1516,7 @@ export class ProjectPersistenceCoordinator {
       ...identity,
     }))
     const desiredKeys = new Set(desiredWorkingDraftRoots.map(workingDraftRootKey))
-    const currentKeys = new Set(storedWorkingDraftRoots.map(workingDraftRootKey))
+    const currentByKey = new Map(storedWorkingDraftRoots.map(root => [workingDraftRootKey(root), root]))
     const workingDraftRootOperations = [
       ...storedWorkingDraftRoots
         .filter(root => !desiredKeys.has(workingDraftRootKey(root)))
@@ -1075,7 +1533,10 @@ export class ProjectPersistenceCoordinator {
           ],
         })),
       ...desiredWorkingDraftRoots
-        .filter(root => !currentKeys.has(workingDraftRootKey(root)))
+        .filter(root => {
+          const current = currentByKey.get(workingDraftRootKey(root))
+          return !current || !jsonEqual(current.materialRefs, root.materialRefs)
+        })
         .map(value => ({ type: 'put', store: 'artifactRefs', value })),
     ]
     const requestedOperations = request.operations.filter(
@@ -1413,7 +1874,9 @@ export class ProjectPersistenceCoordinator {
     if (typeof this.#backend.commitAgentPersistence !== 'function') {
       throw validationFailure('storage-backend-agent-persistence-commit-seam-is-required')
     }
-    return this.#enqueue(agentPersistenceScopeKey(batch), () => this.#backend.commitAgentPersistence(batch))
+    return this.#enqueue(agentPersistenceScopeKey(batch), () =>
+      this.#withProjectMaterialLock(batch.projectId, 'shared', () => this.#backend.commitAgentPersistence(batch)),
+    )
   }
 
   async #commitLifecycleNow({
@@ -1552,7 +2015,7 @@ export class ProjectPersistenceCoordinator {
           commitKind: 'named-version',
           operations: [
             { type: 'put', store: 'projectVersions', mode: 'add', value: version },
-            ...version.artifactRefs.map(ref => ({
+            ...collectCanonicalProjectArtifactClaims(version.projectSchema).map(ref => ({
               type: 'put',
               store: 'artifactRefs',
               mode: 'add',
@@ -2065,12 +2528,14 @@ export class ProjectPersistenceCoordinator {
     if (typeof this.#backend.createArtifactRoot !== 'function') {
       throw validationFailure('storage-backend-artifact-root-create-seam-is-required')
     }
-    return this.#enqueue(scopeKey(root), async () =>
-      validateArtifactRootMutationResult(
-        await this.#backend.createArtifactRoot(root),
-        root,
-        ['created', 'reconciled'],
-        'storage-backend-artifact-root-create-result-is-invalid',
+    return this.#enqueue(scopeKey(root), () =>
+      this.#withProjectMaterialLock(root.projectId, 'shared', async () =>
+        validateArtifactRootMutationResult(
+          await this.#backend.createArtifactRoot(root),
+          root,
+          ['created', 'reconciled'],
+          'storage-backend-artifact-root-create-result-is-invalid',
+        ),
       ),
     )
   }
@@ -2108,12 +2573,14 @@ export class ProjectPersistenceCoordinator {
     if (typeof this.#backend.deleteArtifactRoot !== 'function') {
       throw validationFailure('storage-backend-artifact-root-delete-seam-is-required')
     }
-    return this.#enqueue(scopeKey(root), async () =>
-      validateArtifactRootMutationResult(
-        await this.#backend.deleteArtifactRoot(root),
-        root,
-        ['deleted', 'absent'],
-        'storage-backend-artifact-root-delete-result-is-invalid',
+    return this.#enqueue(scopeKey(root), () =>
+      this.#withProjectMaterialLock(root.projectId, 'shared', async () =>
+        validateArtifactRootMutationResult(
+          await this.#backend.deleteArtifactRoot(root),
+          root,
+          ['deleted', 'absent'],
+          'storage-backend-artifact-root-delete-result-is-invalid',
+        ),
       ),
     )
   }
@@ -2157,6 +2624,269 @@ export class ProjectPersistenceCoordinator {
       )
     }
     return { generationFence, roots, artifacts }
+  }
+
+  async #readMaterialGcSnapshotNow(projectId) {
+    if (typeof this.#backend.readMaterialGcStoreSnapshot !== 'function') {
+      throw validationFailure('storage-backend-material-gc-snapshot-seam-is-required')
+    }
+    let rawSnapshot
+    try {
+      rawSnapshot = validateMaterialGcStoreSnapshot(
+        await this.#backend.readMaterialGcStoreSnapshot(projectId),
+        projectId,
+      )
+    } catch (error) {
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'stored-material-gc-snapshot-contract-is-invalid',
+        { projectId },
+        { cause: error },
+      )
+    }
+
+    try {
+      const drafts = await Promise.all(
+        rawSnapshot.stores.workingDrafts.map(record =>
+          this.#normalizeStoredWorkingDraft(record, {
+            projectId,
+            branchId: requireAuthority(record.branchId, 'material-gc-working-draft.branchId'),
+          }),
+        ),
+      )
+      const versions = await Promise.all(
+        rawSnapshot.stores.projectVersions.map(record => this.#normalizeStoredProjectVersion(record, { projectId })),
+      )
+      const sessions = rawSnapshot.stores.agentSessions.map(record =>
+        normalizeStoredAgentSessionRecord(record, { projectId }),
+      )
+      const sessionsByKey = new Map(sessions.map(session => [`${session.branchId}\u0000${session.sessionId}`, session]))
+      const sessionKeys = new Set(sessionsByKey.keys())
+      const materialRefs = new Map()
+      for (const projectSchema of [
+        ...drafts.map(draft => draft.projectSchema),
+        ...versions.map(version => version.projectSchema),
+      ]) {
+        for (const claim of collectCanonicalProjectArtifactClaims(projectSchema)) {
+          for (const materialRef of claim.materialRefs) {
+            addMaterialRef(materialRefs, materialRef, 'material-gc-project-schema.materialRefs')
+          }
+        }
+      }
+
+      const unresolvedPromotionIds = new Set()
+      const resolvedPromotionIds = new Set()
+      const promotionJournals = []
+      const promotionIntents = new Map()
+      const toolReceipts = new Map()
+      const promotionCheckpoints = new Map()
+      for (const record of rawSnapshot.stores.taskJournals) {
+        assertExactFieldsWithOptional(
+          record,
+          ['branchId', 'kind', 'projectId', 'recordId', 'schemaVersion', 'sessionId', 'value'],
+          ['callId', 'draftGeneration', 'taskId', 'updatedAt', 'writerCheckpointId'],
+          'material-gc-task-journal',
+        )
+        if (record.schemaVersion !== 1 || record.projectId !== projectId) {
+          throw validationFailure('material-gc-task-journal-authority-mismatch')
+        }
+        const branchId = requireAuthority(record.branchId, 'material-gc-task-journal.branchId')
+        const sessionId = requireAuthority(record.sessionId, 'material-gc-task-journal.sessionId')
+        requireAuthority(record.recordId, 'material-gc-task-journal.recordId')
+        requireAuthority(record.kind, 'material-gc-task-journal.kind')
+        if (!sessionKeys.has(`${branchId}\u0000${sessionId}`)) {
+          throw validationFailure('material-gc-task-journal-session-authority-is-missing')
+        }
+        if (record.kind === 'local-material-promotion') {
+          const journal = await validateMaterialGcPromotionJournal(record, projectId, this.#crypto)
+          promotionJournals.push(journal)
+          unresolvedPromotionIds.add(journal.value.promotionId)
+        }
+      }
+      for (const record of rawSnapshot.stores.receiptIntents) {
+        const { intent, promotion } = validateMaterialGcReceiptIntent(record, projectId)
+        if (!promotion) continue
+        const key = promotionLineageKey(intent)
+        if (promotionIntents.has(key)) throw validationFailure('material-gc-promotion-intent-authority-is-duplicated')
+        promotionIntents.set(key, intent)
+        unresolvedPromotionIds.add(promotion.promotionId)
+      }
+      for (const record of rawSnapshot.stores.toolReceipts) {
+        const receipt = validateMaterialGcToolReceipt(record, projectId)
+        const key = promotionLineageKey(receipt)
+        if (toolReceipts.has(key)) throw validationFailure('material-gc-tool-receipt-authority-is-duplicated')
+        toolReceipts.set(key, receipt)
+      }
+      for (const record of rawSnapshot.stores.agentCheckpoints) {
+        const { checkpoint, promotion, sessionRequired } = validateMaterialGcCheckpoint(record, projectId)
+        const session = sessionsByKey.get(`${record.branchId}\u0000${record.sessionId}`)
+        if (sessionRequired && !session) {
+          throw validationFailure('material-gc-checkpoint-session-authority-is-missing')
+        }
+        if (
+          Object.hasOwn(checkpoint, 'requestHash') &&
+          session &&
+          checkpoint.result.persistenceGeneration > session.persistenceGeneration
+        ) {
+          throw validationFailure('material-gc-persistence-checkpoint-generation-is-ahead-of-session')
+        }
+        if (!promotion) continue
+        const key = promotionCheckpointKey(checkpoint)
+        if (promotionCheckpoints.has(key)) {
+          throw validationFailure('material-gc-promotion-checkpoint-authority-is-duplicated')
+        }
+        promotionCheckpoints.set(key, checkpoint)
+        unresolvedPromotionIds.add(promotion.promotionId)
+      }
+      for (const journal of promotionJournals) {
+        if (journal.value.stage !== 'committed' && journal.value.stage !== 'failed') continue
+        const terminal = await validateMaterialGcTerminalPromotion({
+          journal,
+          intent: promotionIntents.get(promotionLineageKey(journal)),
+          receipt: toolReceipts.get(promotionLineageKey(journal)),
+          checkpoint: promotionCheckpoints.get(promotionCheckpointKey(journal)),
+          crypto: this.#crypto,
+        })
+        addMaterialRef(materialRefs, terminal.materialRef, 'material-gc-promotion-journal.materialRefs')
+        resolvedPromotionIds.add(terminal.promotionId)
+      }
+
+      const roots = rawSnapshot.stores.artifactRefs
+        .map(record => {
+          const stored = validateArtifactRootRecord(record)
+          if (stored.projectId !== projectId) throw validationFailure('material-gc-artifact-root-authority-mismatch')
+          const root = normalizeArtifactRootRecord(stored)
+          for (const materialRef of root.materialRefs) {
+            addMaterialRef(materialRefs, materialRef, 'material-gc-artifact-root.materialRefs')
+          }
+          return root
+        })
+        .sort(compareRoot)
+
+      for (const promotionId of resolvedPromotionIds) unresolvedPromotionIds.delete(promotionId)
+      const generationFence = drafts
+        .map(draft => ({ branchId: draft.branchId, draftGeneration: draft.draftGeneration }))
+        .sort((left, right) => compareText(left.branchId, right.branchId))
+      const sessionGenerationFence = sessions
+        .map(session => ({
+          branchId: session.branchId,
+          sessionId: session.sessionId,
+          persistenceGeneration: session.persistenceGeneration,
+        }))
+        .sort((left, right) =>
+          compareText(`${left.branchId}\u0000${left.sessionId}`, `${right.branchId}\u0000${right.sessionId}`),
+        )
+      const rootFence = artifactRootFenceFromRecords(roots)
+      const storeFence = await Promise.all(
+        DASHBOARD_MATERIAL_GC_STORE_NAMES.map(async store => {
+          const records = [...rawSnapshot.stores[store]].sort(compareCanonical)
+          return {
+            store,
+            recordCount: records.length,
+            digest: await hashCanonicalJson(records, { crypto: this.#crypto }),
+          }
+        }),
+      )
+      const snapshot = {
+        schemaVersion: 1,
+        projectId,
+        generationFence,
+        sessionGenerationFence,
+        rootFence,
+        storeFence,
+        materialRefs: [...materialRefs.values()].sort(compareCanonical),
+        unresolvedPromotionIds: [...unresolvedPromotionIds].sort(compareText),
+      }
+      return cloneFrozenJson({
+        ...snapshot,
+        snapshotDigest: await hashCanonicalJson(snapshot, { crypto: this.#crypto }),
+      })
+    } catch (error) {
+      if (error instanceof DashboardStorageError && error.code === DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch) {
+        throw error
+      }
+      throw new DashboardStorageError(
+        DASHBOARD_STORAGE_ERROR_CODE.integrityMismatch,
+        'stored-material-gc-authority-is-invalid',
+        { projectId },
+        { cause: error },
+      )
+    }
+  }
+
+  async readMaterialGcSnapshot(value) {
+    this.#assertAccepting()
+    const request = normalizeProjectList(value, 'material-gc-snapshot')
+    await this.flush()
+    return this.#enqueue(artifactProjectScopeKey(request.projectId), () =>
+      this.#withProjectMaterialLock(request.projectId, 'shared', () =>
+        this.#readMaterialGcSnapshotNow(request.projectId),
+      ),
+    )
+  }
+
+  async withMaterialGcFence(value, operation) {
+    this.#assertAccepting()
+    const request = normalizeProjectList(value, 'material-gc-fence')
+    if (typeof operation !== 'function') {
+      throw validationFailure('material-gc-fence-operation-must-be-a-function')
+    }
+    await this.flush()
+    return this.#enqueue(artifactProjectScopeKey(request.projectId), () =>
+      this.#withProjectMaterialLock(request.projectId, 'exclusive', async () => {
+        let active = true
+        const startedSnapshots = []
+        const context = Object.freeze({
+          projectId: request.projectId,
+          readSnapshot: () => {
+            if (!active) return Promise.reject(validationFailure('material-gc-fence-context-is-no-longer-active'))
+            const task = Promise.resolve().then(() => this.#readMaterialGcSnapshotNow(request.projectId))
+            const tracked = { task, observed: false }
+            startedSnapshots.push(tracked)
+            const exposed = createTrackedMaterialGcSnapshotPromise(task, () => {
+              tracked.observed = true
+            })
+            // The fence owns every started read even when the callback drops the returned Promise.
+            task.catch(() => undefined)
+            return exposed
+          },
+        })
+        let result
+        let operationError
+        let operationFailed = false
+        try {
+          result = await operation(context)
+        } catch (error) {
+          operationFailed = true
+          operationError = error
+        } finally {
+          active = false
+        }
+        const snapshotResults = await Promise.allSettled(startedSnapshots.map(entry => entry.task))
+        const snapshotFailures = snapshotResults.flatMap((entry, index) =>
+          entry.status === 'rejected' ? [{ error: entry.reason, observed: startedSnapshots[index].observed }] : [],
+        )
+        const observedOperationFailureIndex = operationFailed
+          ? snapshotFailures.findIndex(entry => entry.observed && entry.error === operationError)
+          : -1
+        const independentSnapshotErrors = snapshotFailures
+          .filter((_entry, index) => index !== observedOperationFailureIndex)
+          .map(entry => entry.error)
+        if (operationFailed && independentSnapshotErrors.length > 0) {
+          throw new AggregateError(
+            [operationError, ...independentSnapshotErrors],
+            'material-gc-fence-operation-and-snapshot-validation-failed',
+          )
+        }
+        if (operationFailed) throw operationError
+        const snapshotErrors = snapshotFailures.map(entry => entry.error)
+        if (snapshotErrors.length === 1) throw snapshotErrors[0]
+        if (snapshotErrors.length > 1) {
+          throw new AggregateError(snapshotErrors, 'material-gc-fence-snapshot-validation-failed')
+        }
+        return result
+      }),
+    )
   }
 
   async enumerateArtifactRoots(value) {
@@ -2288,7 +3018,9 @@ export class ProjectPersistenceCoordinator {
     if (typeof this.#backend.putReceiptIntent !== 'function') {
       throw validationFailure('storage-backend-receipt-intent-seam-is-required')
     }
-    return this.#enqueue(scopeKey(intent), () => this.#backend.putReceiptIntent(intent))
+    return this.#enqueue(scopeKey(intent), () =>
+      this.#withProjectMaterialLock(intent.projectId, 'shared', () => this.#backend.putReceiptIntent(intent)),
+    )
   }
 
   async readReceiptLineage(value) {
@@ -2630,10 +3362,7 @@ export class ProjectPersistenceCoordinator {
     )
   }
 
-  async #readWorkingDraftNow(scope) {
-    const stored = await this.#backend.get('workingDrafts', [scope.projectId, scope.branchId])
-    if (stored === undefined) return null
-
+  async #normalizeStoredWorkingDraft(stored, scope) {
     try {
       if (!Number.isSafeInteger(stored.draftGeneration) || stored.draftGeneration < 1) {
         throw validationFailure('stored-working-draft-generation-is-invalid')
@@ -2656,6 +3385,11 @@ export class ProjectPersistenceCoordinator {
       throw asIntegrityMismatch(scope, 'stored-working-draft-hash-does-not-match')
     }
     return structuredClone(stored)
+  }
+
+  async #readWorkingDraftNow(scope) {
+    const stored = await this.#backend.get('workingDrafts', [scope.projectId, scope.branchId])
+    return stored === undefined ? null : this.#normalizeStoredWorkingDraft(stored, scope)
   }
 
   async readWorkingDraft(value) {

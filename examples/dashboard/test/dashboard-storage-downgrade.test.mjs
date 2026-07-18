@@ -103,9 +103,18 @@ const setIndexedDbMarker = (storage, draft) =>
   })
 
 test('node runtimes use the deterministic local lock instead of navigator.locks', async () => {
-  const ownLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks')
+  const ownNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  if (globalThis.navigator === undefined) {
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {},
+    })
+  }
+
+  const runtimeNavigator = globalThis.navigator
+  const ownLocks = Object.getOwnPropertyDescriptor(runtimeNavigator, 'locks')
   let platformRequests = 0
-  Object.defineProperty(globalThis.navigator, 'locks', {
+  Object.defineProperty(runtimeNavigator, 'locks', {
     configurable: true,
     value: {
       request() {
@@ -123,8 +132,11 @@ test('node runtimes use the deterministic local lock instead of navigator.locks'
     assert.equal(result, 'local-lock-completed')
     assert.equal(platformRequests, 0)
   } finally {
-    if (ownLocks) Object.defineProperty(globalThis.navigator, 'locks', ownLocks)
-    else Reflect.deleteProperty(globalThis.navigator, 'locks')
+    if (ownLocks) Object.defineProperty(runtimeNavigator, 'locks', ownLocks)
+    else Reflect.deleteProperty(runtimeNavigator, 'locks')
+
+    if (ownNavigator) Object.defineProperty(globalThis, 'navigator', ownNavigator)
+    else Reflect.deleteProperty(globalThis, 'navigator')
   }
 })
 
@@ -354,7 +366,7 @@ test('origin lock prevents a second coordinator from committing after downgrade 
       error.code === 'read-only-compatibility' && error.reason === 'legacy-local-storage-is-canonical-for-project',
   )
   await Promise.resolve()
-  assert.equal(lockManager.requests.length, 3)
+  assert.equal(lockManager.requests.length, 4)
   assert.equal((await backend.get('workingDrafts', ['project-1', 'main'])).draftGeneration, 1)
 
   releaseDigest()

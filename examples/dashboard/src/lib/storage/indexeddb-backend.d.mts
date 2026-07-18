@@ -6,6 +6,7 @@ export declare class IndexedDbDashboardStorageBackend implements DashboardStorag
   constructor(options?: Readonly<{ indexedDB?: IDBFactory; crypto?: Pick<Crypto, 'subtle'> }>)
   get: DashboardStorageBackend['get']
   getAll: DashboardStorageBackend['getAll']
+  readMaterialGcStoreSnapshot: DashboardStorageBackend['readMaterialGcStoreSnapshot']
   commit: DashboardStorageBackend['commit']
   putMigrationState: DashboardStorageBackend['putMigrationState']
   readAgentPersistence: DashboardStorageBackend['readAgentPersistence']

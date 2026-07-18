@@ -1,3 +1,4 @@
+import type { ArtifactMaterialIdentityV1 } from './artifact-contracts.mjs'
 import type { JsonObject } from './canonical-json.mjs'
 import type { CanonicalActiveDocumentV1, CanonicalWorkingDraftV1 } from './contracts.mjs'
 
@@ -80,6 +81,7 @@ export interface DashboardArtifactRootV1 extends DashboardArtifactIdentityV1 {
   readonly branchId: string
   readonly ownerType: string
   readonly ownerId: string
+  readonly materialRefs: readonly ArtifactMaterialIdentityV1[]
 }
 
 export interface DashboardProjectVersionCreateV1 {

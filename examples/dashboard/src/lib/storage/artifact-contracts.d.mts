@@ -23,6 +23,12 @@ export interface LocalMaterialArtifactRef extends ArtifactSourceRevision {
 
 export type ArtifactRef = OnlineArtifactRef | LocalMaterialArtifactRef
 
+export interface ArtifactMaterialIdentityV1 {
+  readonly materialId: string
+  readonly materialVersion: string
+  readonly buildIntegrity: `sha256:${string}`
+}
+
 export interface ArtifactRecordV1 extends ArtifactSourceRevision {
   readonly schemaVersion: 1
   readonly projectId: string
@@ -70,6 +76,9 @@ export interface ArtifactRootRecordV1 extends ArtifactReadRequestV1 {
   readonly branchId: string
   readonly ownerType: string
   readonly ownerId: string
+  readonly materialRefs?: readonly ArtifactMaterialIdentityV1[]
+  readonly callId?: string
+  readonly draftGeneration?: number
 }
 
 export interface ArtifactIdentityV1 {
@@ -86,6 +95,7 @@ export interface ArtifactRootFenceV1 extends ArtifactIdentityV1 {
   readonly branchId: string
   readonly ownerType: string
   readonly ownerId: string
+  readonly materialRefs: readonly ArtifactMaterialIdentityV1[]
 }
 
 export interface ArtifactSweepRequestV1 {
@@ -155,6 +165,10 @@ export declare const verifyArtifactRecordIntegrity: (
 export declare const validateArtifactReadRequest: (value: unknown) => ArtifactReadRequestV1
 export declare const validateArtifactRootRecord: (value: unknown) => ArtifactRootRecordV1
 export declare const validateArtifactRootReadRequest: (value: unknown) => ArtifactRootRecordV1
+export declare const normalizeArtifactMaterialRefs: (
+  value: unknown,
+  label?: string,
+) => readonly ArtifactMaterialIdentityV1[]
 export declare const normalizeArtifactIdentityFence: (value: unknown, label?: string) => readonly ArtifactIdentityV1[]
 export declare const normalizeArtifactGenerationFence: (
   value: unknown,

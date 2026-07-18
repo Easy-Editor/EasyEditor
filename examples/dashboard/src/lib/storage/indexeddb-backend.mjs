@@ -25,6 +25,7 @@ import {
   normalizeArtifactRootRecord,
   normalizeStoredArtifactIdentity,
 } from './lifecycle.mjs'
+import { DASHBOARD_MATERIAL_GC_STORE_NAMES, createMaterialGcStoreSnapshot } from './material-gc.mjs'
 import {
   DASHBOARD_STORAGE_DATABASE_NAME,
   DASHBOARD_STORAGE_DATABASE_VERSION,
@@ -297,6 +298,31 @@ export class IndexedDbDashboardStorageBackend {
         if (transaction) abortQuietly(transaction)
         await completed?.catch(() => undefined)
         throw mapIndexedDbError(error, 'read-all', { store })
+      }
+    })
+  }
+
+  async readMaterialGcStoreSnapshot(projectId) {
+    this.#assertActive()
+    return this.#track(async () => {
+      const database = await this.#database()
+      let transaction
+      let completed
+      try {
+        transaction = database.transaction(DASHBOARD_MATERIAL_GC_STORE_NAMES, 'readonly')
+        completed = transactionCompletion(transaction)
+        const results = await Promise.all(
+          DASHBOARD_MATERIAL_GC_STORE_NAMES.map(store => requestResult(transaction.objectStore(store).getAll())),
+        )
+        await completed
+        return createMaterialGcStoreSnapshot(
+          projectId,
+          Object.fromEntries(DASHBOARD_MATERIAL_GC_STORE_NAMES.map((store, index) => [store, results[index]])),
+        )
+      } catch (error) {
+        if (transaction) abortQuietly(transaction)
+        await completed?.catch(() => undefined)
+        throw mapIndexedDbError(error, 'material-gc-snapshot', { projectId })
       }
     })
   }

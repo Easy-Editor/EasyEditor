@@ -1,3 +1,4 @@
+import { normalizeArtifactMaterialRefs } from '../../../lib/storage/artifact-contracts.mjs'
 import { DASHBOARD_ARTIFACT_ROOT_OWNER_TYPES } from '../../../lib/storage/lifecycle.mjs'
 import {
   assertExactRecord,
@@ -129,7 +130,7 @@ const parseArtifactRoots = (value, field) => {
   if (!Array.isArray(value)) return failContract('must-be-an-array', collectionLabel)
   const parsed = cloneJsonValue(value, collectionLabel).map((entry, index) => {
     const label = `${collectionLabel}[${index}]`
-    assertExactRecord(entry, ['ownerType', 'ownerId', 'artifactId', 'sourceRevision'], [], label)
+    assertExactRecord(entry, ['ownerType', 'ownerId', 'artifactId', 'sourceRevision'], ['materialRefs'], label)
     const ownerType = requireNonEmptyString(ownDataValue(entry, 'ownerType', label), `${label}.ownerType`)
     if (!ARTIFACT_ROOT_OWNER_TYPES.has(ownerType)) {
       return failContract('owner-type-is-unsupported', `${label}.ownerType`)
@@ -140,6 +141,9 @@ const parseArtifactRoots = (value, field) => {
       ownerId,
       artifactId: requireNonEmptyString(ownDataValue(entry, 'artifactId', label), `${label}.artifactId`),
       sourceRevision: requireNonEmptyString(ownDataValue(entry, 'sourceRevision', label), `${label}.sourceRevision`),
+      ...(Object.hasOwn(entry, 'materialRefs')
+        ? { materialRefs: normalizeArtifactMaterialRefs(entry.materialRefs, `${label}.materialRefs`) }
+        : {}),
     }
   })
   parsed.sort((left, right) => compareCodeUnits(artifactRefKey(left), artifactRefKey(right)))

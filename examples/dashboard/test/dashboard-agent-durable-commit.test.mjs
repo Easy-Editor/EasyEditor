@@ -382,6 +382,7 @@ test('an applied durable batch atomically replaces the branch working-draft arti
       ownerId: authority.branchId,
       artifactId: 'artifact-kpi',
       sourceRevision: 'revision-7',
+      materialRefs: [],
     },
   )
 })

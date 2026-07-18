@@ -44,10 +44,19 @@ const artifactRootFields = Object.freeze([
   'schemaVersion',
   'sourceRevision',
 ])
+const artifactRootOptionalFields = Object.freeze(['callId', 'draftGeneration', 'materialRefs'])
+const materialIdentityFields = Object.freeze(['buildIntegrity', 'materialId', 'materialVersion'])
 const agentExtraFields = Object.freeze(['artifactRef', 'schemaVersion'])
 const artifactIdentityFields = Object.freeze(['artifactId', 'sourceRevision'])
 const artifactGenerationFenceFields = Object.freeze(['branchId', 'draftGeneration'])
-const artifactRootFenceFields = Object.freeze(['artifactId', 'branchId', 'ownerId', 'ownerType', 'sourceRevision'])
+const artifactRootFenceFields = Object.freeze([
+  'artifactId',
+  'branchId',
+  'materialRefs',
+  'ownerId',
+  'ownerType',
+  'sourceRevision',
+])
 const artifactSweepFields = Object.freeze([
   'artifactIdentityFence',
   'deletionCandidates',
@@ -93,6 +102,15 @@ const assertExactFields = (value, fields, label) => {
   const actual = Object.keys(value).sort()
   const expected = [...fields].sort()
   if (actual.length !== expected.length || actual.some((field, index) => field !== expected[index])) {
+    throw validationFailure(`${label}-fields-must-match-contract`)
+  }
+}
+
+const assertExactFieldsWithOptional = (value, fields, optionalFields, label) => {
+  assertPlainObject(value, label)
+  const actual = Object.keys(value)
+  const allowed = new Set([...fields, ...optionalFields])
+  if (fields.some(field => !Object.hasOwn(value, field)) || actual.some(field => !allowed.has(field))) {
     throw validationFailure(`${label}-fields-must-match-contract`)
   }
 }
@@ -437,7 +455,7 @@ export const validateArtifactReadRequest = value => {
 
 export const validateArtifactRootRecord = value => {
   canonicalJsonStringify(value)
-  assertExactFields(value, artifactRootFields, 'artifact-root-record')
+  assertExactFieldsWithOptional(value, artifactRootFields, artifactRootOptionalFields, 'artifact-root-record')
   if (value.schemaVersion !== 1) throw validationFailure('artifact-root-record-schema-version-is-unsupported')
   const ownerType = requireNonEmptyString(value.ownerType, 'artifact-root-record.ownerType')
   if (!DASHBOARD_ARTIFACT_ROOT_OWNER_TYPES.includes(ownerType)) {
@@ -451,6 +469,15 @@ export const validateArtifactRootRecord = value => {
     ownerId: requireNonEmptyString(value.ownerId, 'artifact-root-record.ownerId'),
     artifactId: requireNonEmptyString(value.artifactId, 'artifact-root-record.artifactId'),
     sourceRevision: requireNonEmptyString(value.sourceRevision, 'artifact-root-record.sourceRevision'),
+    ...(Object.hasOwn(value, 'materialRefs')
+      ? { materialRefs: normalizeArtifactMaterialRefs(value.materialRefs, 'artifact-root-record.materialRefs') }
+      : {}),
+    ...(Object.hasOwn(value, 'callId')
+      ? { callId: requireNonEmptyString(value.callId, 'artifact-root-record.callId') }
+      : {}),
+    ...(Object.hasOwn(value, 'draftGeneration')
+      ? { draftGeneration: requireTimestamp(value.draftGeneration, 'artifact-root-record.draftGeneration') }
+      : {}),
   })
 }
 
@@ -472,6 +499,22 @@ const normalizeUniqueList = (value, normalize, label) => {
   }
   return normalized
 }
+
+export const normalizeArtifactMaterialRefs = (value, label = 'artifact-material-refs') =>
+  cloneFrozenJson(
+    normalizeUniqueList(
+      value,
+      (entry, entryLabel) => {
+        assertExactFields(entry, materialIdentityFields, entryLabel)
+        return {
+          materialId: requireNonEmptyString(entry.materialId, `${entryLabel}.materialId`),
+          materialVersion: requireNonEmptyString(entry.materialVersion, `${entryLabel}.materialVersion`),
+          buildIntegrity: requireDigest(entry.buildIntegrity, `${entryLabel}.buildIntegrity`),
+        }
+      },
+      label,
+    ),
+  )
 
 export const normalizeArtifactIdentityFence = (value, label = 'artifact-identity-fence') =>
   cloneFrozenJson(
@@ -508,13 +551,14 @@ export const normalizeArtifactRootFence = (value, label = 'artifact-root-fence')
     normalizeUniqueList(
       value,
       (entry, entryLabel) => {
-        assertExactFields(entry, artifactRootFenceFields, entryLabel)
+        assertExactFieldsWithOptional(entry, artifactRootFenceFields, [], entryLabel)
         return {
           branchId: requireNonEmptyString(entry.branchId, `${entryLabel}.branchId`),
           ownerType: requireNonEmptyString(entry.ownerType, `${entryLabel}.ownerType`),
           ownerId: requireNonEmptyString(entry.ownerId, `${entryLabel}.ownerId`),
           artifactId: requireNonEmptyString(entry.artifactId, `${entryLabel}.artifactId`),
           sourceRevision: requireNonEmptyString(entry.sourceRevision, `${entryLabel}.sourceRevision`),
+          materialRefs: normalizeArtifactMaterialRefs(entry.materialRefs, `${entryLabel}.materialRefs`),
         }
       },
       label,

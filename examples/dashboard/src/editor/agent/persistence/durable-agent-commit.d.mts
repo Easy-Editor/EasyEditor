@@ -1,3 +1,4 @@
+import type { ArtifactMaterialIdentityV1 } from '../../../lib/storage/artifact-contracts.mjs'
 import type {
   CanonicalActiveDocumentV1,
   CanonicalWorkingDraftV1,
@@ -41,6 +42,7 @@ export interface DurableAgentArtifactRefInputV1 {
   readonly ownerId: string
   readonly artifactId: string
   readonly sourceRevision: string
+  readonly materialRefs?: readonly ArtifactMaterialIdentityV1[]
 }
 
 export interface DurableAgentBatchV1 {

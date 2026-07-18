@@ -9,6 +9,7 @@ import type {
   ArtifactSweepRequestV1,
 } from './artifact-contracts.mjs'
 import type { JsonObject, JsonValue } from './canonical-json.mjs'
+import type { DashboardMaterialGcStoreSnapshotV1 } from './material-gc.mjs'
 import type { DashboardStorageStoreName } from './schema.mjs'
 
 export type DashboardDraftCommitKind =
@@ -233,6 +234,7 @@ export interface DashboardCompensationRunStateCommitV1 {
 export interface DashboardStorageBackend {
   get(store: DashboardStorageStoreName, key: DashboardStorageRecordKey): Promise<JsonObject | undefined>
   getAll(store: DashboardStorageStoreName): Promise<readonly JsonObject[]>
+  readMaterialGcStoreSnapshot(projectId: string): Promise<DashboardMaterialGcStoreSnapshotV1>
   commit(batch: DurableProjectBatchV1): Promise<DurableProjectCommitResultV1>
   putMigrationState(record: MigrationStateRecordV1): Promise<MigrationStateRecordV1>
   readAgentPersistence(request: DashboardAgentPersistenceReadRequestV1): Promise<DashboardAgentPersistenceReadResultV1>

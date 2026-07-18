@@ -549,12 +549,22 @@ test('promoteLocal binds the server identity to the canonical call digest and co
   assert.deepEqual(serverRequest.artifact, harness.artifact)
 
   const batch = harness.batches.at(-1)
+  const expectedMaterialRefs = [
+    {
+      materialId: result.output.artifactRef.target.materialId,
+      materialVersion: result.output.artifactRef.target.materialVersion,
+      buildIntegrity: result.output.artifactRef.target.buildIntegrity,
+    },
+  ]
   assert.equal(batch.journal.kind, 'local-material-promotion')
   assert.equal(batch.journal.value.stage, 'committed')
   assert.equal(batch.journal.value.promotionId, serverRequest.promotionId)
   assert.equal(batch.journal.value.callDigest, serverRequest.callDigest)
   assert.equal(batch.receiptIntent.preImages.kind, 'local-material-promotion-pre-images')
   assert.equal(batch.receiptIntent.expectedPostImages.kind, 'local-material-promotion-post-images')
+  for (const artifactRoot of batch.artifactRefs) {
+    assert.deepEqual(artifactRoot.materialRefs, expectedMaterialRefs)
+  }
   assert.ok(
     batch.artifactRefs.some(
       root =>
@@ -627,6 +637,24 @@ test('server activation followed by a rolled-back Core switch leaves the online 
   assert.equal(harness.clientCalls.length, 1, 'the durable registry was activated before the Core attempt')
   assert.equal(harness.coreCalls.filter(entry => entry.method === 'switchRef').length, 1)
   assert.equal(harness.currentRef().target.kind, 'online')
+  const batch = harness.batches.at(-1)
+  assert.equal(
+    batch.artifactRefs.some(root => root.ownerType === 'promotion-rollback'),
+    false,
+  )
+  assert.equal(
+    batch.artifactRefs.some(root => root.ownerType === 'working-draft'),
+    false,
+  )
+  for (const artifactRoot of batch.artifactRefs) {
+    assert.deepEqual(artifactRoot.materialRefs, [
+      {
+        materialId: 'material-kpi',
+        materialVersion: '1.0.0',
+        buildIntegrity: `sha256:${'b'.repeat(64)}`,
+      },
+    ])
+  }
 })
 
 test('Core-applied/durable-failed promotion is APPLIED_UNDURABLE and resumePending never repeats switchRef', async () => {

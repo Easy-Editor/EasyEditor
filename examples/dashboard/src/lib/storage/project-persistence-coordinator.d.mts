@@ -56,6 +56,7 @@ import type {
   DashboardProjectVersionRestoreResultV1,
   DashboardProjectVersionRestoreV1,
 } from './lifecycle.mjs'
+import type { DashboardMaterialGcSnapshotV1 } from './material-gc.mjs'
 
 export interface ProjectPersistenceScope {
   readonly projectId: string
@@ -88,6 +89,11 @@ export interface ProjectPersistenceCompensationRunStateResultV1 {
 
 export interface ProjectPersistenceMutationProvenanceReadResultV1 extends DashboardMutationProvenanceReadRequestV1 {
   readonly records: readonly (JsonObject | null)[]
+}
+
+export interface ProjectMaterialGcFenceContextV1 {
+  readonly projectId: string
+  readSnapshot(): Promise<DashboardMaterialGcSnapshotV1>
 }
 
 export interface ProjectPersistenceMigrationCommit extends ProjectPersistenceScope {
@@ -188,6 +194,11 @@ export declare class ProjectPersistenceCoordinator {
   enumerateArtifactRoots(value: DashboardProjectListV1): Promise<DashboardArtifactRootEnumerationV1>
   planArtifactGcDryRun(value: DashboardProjectListV1): Promise<DashboardArtifactGcDryRunV1>
   sweepArtifactGc(value: DashboardArtifactGcDryRunV1): Promise<DashboardArtifactGcSweepResultV1>
+  readMaterialGcSnapshot(value: DashboardProjectListV1): Promise<DashboardMaterialGcSnapshotV1>
+  withMaterialGcFence<Result>(
+    value: DashboardProjectListV1,
+    operation: (context: ProjectMaterialGcFenceContextV1) => Result | PromiseLike<Result>,
+  ): Promise<Result>
   recordReceiptIntent(value: DashboardReceiptIntentV1): Promise<DashboardReceiptIntentV1>
   readReceiptLineage(value: DashboardReceiptLineageReadRequest): Promise<DashboardReceiptLineageResult>
   readCompensationRun(value: DashboardCompensationRunReadRequestV1): Promise<JsonObject | null>

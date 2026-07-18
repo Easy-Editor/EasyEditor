@@ -23,6 +23,7 @@ export const DASHBOARD_ARTIFACT_ROOT_OWNER_TYPES = Object.freeze([
 
 const activeDocumentFields = Object.freeze(['documentId', 'fileName', 'index'])
 const artifactIdentityFields = Object.freeze(['artifactId', 'sourceRevision'])
+const artifactMaterialIdentityFields = Object.freeze(['buildIntegrity', 'materialId', 'materialVersion'])
 const forkFields = Object.freeze(['sessionId', 'taskId', 'versionId'])
 const sessionFields = Object.freeze([
   'branchId',
@@ -109,6 +110,34 @@ const requireGeneration = (value, label) => {
     throw failure(`${label}-must-be-a-non-negative-safe-integer`)
   }
   return value
+}
+
+const normalizeArtifactMaterialRefs = (value, label) => {
+  if (!Array.isArray(value)) throw failure(`${label}-must-be-an-array`)
+  const refs = value
+    .map((entry, index) => {
+      const entryLabel = `${label}[${index}]`
+      assertExactFields(entry, artifactMaterialIdentityFields, entryLabel)
+      if (typeof entry.buildIntegrity !== 'string' || !/^sha256:[\da-f]{64}$/u.test(entry.buildIntegrity)) {
+        throw failure(`${entryLabel}.buildIntegrity-must-be-a-sha256-digest`)
+      }
+      return {
+        materialId: requireNonEmptyString(entry.materialId, `${entryLabel}.materialId`),
+        materialVersion: requireNonEmptyString(entry.materialVersion, `${entryLabel}.materialVersion`),
+        buildIntegrity: entry.buildIntegrity,
+      }
+    })
+    .sort((left, right) => {
+      const leftKey = canonicalJsonStringify(left)
+      const rightKey = canonicalJsonStringify(right)
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+    })
+  for (let index = 1; index < refs.length; index += 1) {
+    if (canonicalJsonStringify(refs[index - 1]) === canonicalJsonStringify(refs[index])) {
+      throw failure(`${label}-must-not-contain-duplicates`)
+    }
+  }
+  return refs
 }
 
 const requirePolicyVersion = value => {
@@ -318,6 +347,9 @@ export const normalizeArtifactRootRecord = value => {
     ownerId: requireNonEmptyString(value.ownerId, 'artifact-root.ownerId'),
     artifactId: requireNonEmptyString(value.artifactId, 'artifact-root.artifactId'),
     sourceRevision: requireNonEmptyString(value.sourceRevision, 'artifact-root.sourceRevision'),
+    materialRefs: Object.hasOwn(value, 'materialRefs')
+      ? normalizeArtifactMaterialRefs(value.materialRefs, 'artifact-root.materialRefs')
+      : [],
   }
 }
 

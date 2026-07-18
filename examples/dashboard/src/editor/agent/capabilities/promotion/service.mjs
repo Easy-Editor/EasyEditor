@@ -88,11 +88,20 @@ const artifactIdentityOf = artifact =>
     dependencyLockDigest: artifact.dependencyLockDigest,
   })
 
-const artifactRoot = (ownerType, ownerId, artifact) => ({
+const materialRefsOf = artifactRef => [
+  {
+    materialId: artifactRef.target.materialId,
+    materialVersion: artifactRef.target.materialVersion,
+    buildIntegrity: artifactRef.target.buildIntegrity,
+  },
+]
+
+const artifactRoot = (ownerType, ownerId, artifact, artifactRef) => ({
   ownerType,
   ownerId,
   artifactId: artifact.artifactId,
   sourceRevision: artifact.sourceRevision,
+  materialRefs: materialRefsOf(artifactRef),
 })
 
 const journalRecordId = callId => `promotion:${callId}`
@@ -238,18 +247,19 @@ const terminalCheckpoint = ({ call, promotionId, status, failureCode }) => ({
   },
 })
 
-const durableRoots = ({ call, artifact, promotionId, journal, checkpoint, applied }) => [
-  artifactRoot('durable-registry', promotionId, artifact),
-  ...(applied ? [artifactRoot('promotion-rollback', promotionId, artifact)] : []),
-  ...(applied ? [artifactRoot('working-draft', call.branchId, artifact)] : []),
-  artifactRoot('receipt-intent', call.callId, artifact),
-  artifactRoot('tool-receipt', call.callId, artifact),
+const durableRoots = ({ call, artifact, artifactRef, promotionId, journal, checkpoint, applied }) => [
+  artifactRoot('durable-registry', promotionId, artifact, artifactRef),
+  ...(applied ? [artifactRoot('promotion-rollback', promotionId, artifact, artifactRef)] : []),
+  ...(applied ? [artifactRoot('working-draft', call.branchId, artifact, artifactRef)] : []),
+  artifactRoot('receipt-intent', call.callId, artifact, artifactRef),
+  artifactRoot('tool-receipt', call.callId, artifact, artifactRef),
   artifactRoot(
     'task-journal',
     `task-journal-v1:${encodeURIComponent(call.sessionId)}:${encodeURIComponent(journal.recordId)}`,
     artifact,
+    artifactRef,
   ),
-  artifactRoot('checkpoint', checkpoint.checkpointId, artifact),
+  artifactRoot('checkpoint', checkpoint.checkpointId, artifact, artifactRef),
 ]
 
 const createService = options => {
@@ -523,6 +533,7 @@ const createService = options => {
       artifactRefs: durableRoots({
         call,
         artifact: hydrated.artifact,
+        artifactRef: hydrated.artifactRef,
         promotionId: state.promotionId,
         journal,
         checkpoint,
@@ -710,6 +721,7 @@ const createService = options => {
           artifactRefs: durableRoots({
             call,
             artifact: hydrated.artifact,
+            artifactRef,
             promotionId: state.promotionId,
             journal,
             checkpoint,

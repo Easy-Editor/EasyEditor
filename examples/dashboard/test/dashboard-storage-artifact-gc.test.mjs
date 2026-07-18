@@ -58,6 +58,12 @@ const normalizedRoot = (ownerType, ownerId, artifactId, sourceRevision) => ({
   ownerId,
   artifactId,
   sourceRevision,
+  materialRefs: [],
+})
+
+const derivedRoot = (ownerType, ownerId, artifactId, sourceRevision) => ({
+  ...root(ownerType, ownerId, artifactId, sourceRevision),
+  materialRefs: [],
 })
 
 const immutableArtifact = (artifactId, sourceRevision) => ({
@@ -187,6 +193,7 @@ test('Memory mark+sweep is deterministic, deletes only orphans, retains roots, a
       ownerId: 'call-missing',
       artifactId: 'artifact-missing',
       sourceRevision: 'revision-9',
+      materialRefs: [],
     },
     {
       branchId,
@@ -194,6 +201,7 @@ test('Memory mark+sweep is deterministic, deletes only orphans, retains roots, a
       ownerId: branchId,
       artifactId: 'artifact-live',
       sourceRevision: 'revision-1',
+      materialRefs: [],
     },
   ])
   assert.deepEqual(first.missingArtifacts, [
@@ -208,7 +216,7 @@ test('Memory mark+sweep is deterministic, deletes only orphans, retains roots, a
   assert.equal(await backend.get('artifacts', [projectId, 'artifact-orphan', 'r2']), undefined)
   assert.deepEqual(
     await backend.get('artifactRefs', [projectId, branchId, 'working-draft', branchId, 'artifact-live', 'revision-1']),
-    root('working-draft', branchId, 'artifact-live', 'revision-1'),
+    derivedRoot('working-draft', branchId, 'artifact-live', 'revision-1'),
   )
   assert.deepEqual((await coordinator.planArtifactGcDryRun(request)).deletionCandidates, [])
 })
@@ -282,7 +290,7 @@ test('empty-candidate sweep still revalidates every fence', async () => {
   assert.deepEqual(result.deletedArtifacts, [])
   assert.deepEqual(await backend.getAll('artifactRefs'), [
     root('receipt-intent', 'call-missing', 'artifact-missing', 'revision-9'),
-    root('working-draft', branchId, 'artifact-live', 'revision-1'),
+    derivedRoot('working-draft', branchId, 'artifact-live', 'revision-1'),
     root('checkpoint', 'late-root', 'artifact-live', 'revision-1'),
   ])
 })

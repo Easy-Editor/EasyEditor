@@ -26,6 +26,7 @@ import {
   normalizeArtifactRootRecord,
   normalizeStoredArtifactIdentity,
 } from './lifecycle.mjs'
+import { DASHBOARD_MATERIAL_GC_STORE_NAMES, createMaterialGcStoreSnapshot } from './material-gc.mjs'
 import { DASHBOARD_STORAGE_STORE_NAMES } from './schema.mjs'
 
 const clone = value => (value === undefined ? undefined : structuredClone(value))
@@ -156,6 +157,15 @@ export class MemoryDashboardStorageBackend {
     this.#assertActive()
     const store = requireStorageStore(storeValue)
     return [...this.#stores.get(store).values()].map(clone)
+  }
+
+  async readMaterialGcStoreSnapshot(projectId) {
+    this.#assertActive()
+    const stores = this.#stores
+    return createMaterialGcStoreSnapshot(
+      projectId,
+      Object.fromEntries(DASHBOARD_MATERIAL_GC_STORE_NAMES.map(store => [store, [...stores.get(store).values()]])),
+    )
   }
 
   async commit(value) {

@@ -90,6 +90,7 @@ test('named project versions are immutable, stable-listable, and exact retries d
       ownerId: 'city-v1',
       artifactId: 'artifact-kpi',
       sourceRevision: 'revision-7',
+      materialRefs: [],
     },
   )
 
@@ -147,6 +148,7 @@ test('an original project-version request reconciles after later draft edits wit
       ownerId: 'city-v1',
       artifactId: 'artifact-kpi',
       sourceRevision: 'revision-7',
+      materialRefs: [],
     },
   )
 })
