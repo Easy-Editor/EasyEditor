@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import type { ComponentMeta, Snippet as ISnippet } from '@easy-editor/core'
 import { observer } from 'mobx-react'
 import React from 'react'
+import { DurableMaterialPalette } from './DurableMaterialPalette'
 import { LocalMaterialDebugDialog } from './LocalMaterialDebugDialog'
 import { RemoteSnippet } from './RemoteSnippet'
 
@@ -125,6 +126,8 @@ export const ComponentSidebar = observer(() => {
       {/* 物料列表 */}
       <div className='px-4'>
         <Accordion type='single' collapsible defaultValue={debugComponents.length > 0 ? DEBUG_GROUP : undefined}>
+          <DurableMaterialPalette />
+
           {/* 调试中的物料组（如果有） */}
           {debugComponents.length > 0 && (
             <AccordionItem value={DEBUG_GROUP}>

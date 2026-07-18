@@ -56,6 +56,7 @@ export declare const createDashboardLocalMaterialPromotionRuntime: (options: {
     checkLocalGrant(request: DashboardLocalGrantCheckV1): Promise<DashboardLocalGrantDecisionV1>
   }
   readonly now?: () => number
+  readonly onPromotionApplied?: () => void | Promise<void>
   readonly isTransactionCommittedError?: (error: unknown) => boolean
   readonly isTransactionRollbackIncompleteError?: (error: unknown) => boolean
 }) => DashboardLocalMaterialPromotionRuntime

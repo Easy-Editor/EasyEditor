@@ -17,9 +17,11 @@ import {
 } from './agent/capabilities/artifact/index.mjs'
 import {
   type LocalMaterialPromotionGrantIdentity,
+  createDashboardLocalMaterialCatalogRuntime,
   createDashboardLocalMaterialPromotionCoreAdapter,
   createDashboardLocalMaterialPromotionPersistenceAdapter,
   createDashboardLocalMaterialPromotionRuntime,
+  createDashboardSameOriginLocalMaterialCatalogClient,
   createDashboardSameOriginLocalMaterialPromotionClient,
 } from './agent/capabilities/promotion/index.mjs'
 import { resolveAgentRuntimeFeatureFlags } from './agent/feature-flags.mjs'
@@ -121,6 +123,15 @@ export const dashboardPersistence = createDashboardPersistenceRuntime({
 
 export const dashboardAgentPersistence = createDashboardAgentPersistencePort(dashboardPersistence)
 
+export const dashboardLocalMaterialCatalogRuntime = createDashboardLocalMaterialCatalogRuntime({
+  enabled:
+    dashboardAgentRuntimeFeatureFlags.runtime &&
+    dashboardAgentRuntimeFeatureFlags.online &&
+    dashboardAgentRuntimeFeatureFlags.promotion,
+  client: createDashboardSameOriginLocalMaterialCatalogClient({ fetchImpl: window.fetch.bind(window) }),
+  persistence: dashboardPersistence,
+})
+
 export const captureDashboardPersistenceInput = (): DashboardPersistenceInput => {
   const currentDocument = engine.project.currentDocument
   const currentIndex = currentDocument ? engine.project.documents.indexOf(currentDocument) : -1
@@ -199,6 +210,9 @@ const createBoundDashboardAgentHost = (
           }),
           crypto: window.crypto,
           ...(grantIdentity ? { grantIdentity } : {}),
+          onPromotionApplied: async () => {
+            await dashboardLocalMaterialCatalogRuntime.refresh()
+          },
           isTransactionCommittedError: error => error instanceof TransactionCommittedError,
           isTransactionRollbackIncompleteError: error => error instanceof TransactionRollbackIncompleteError,
         })

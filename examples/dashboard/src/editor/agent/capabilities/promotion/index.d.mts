@@ -1,4 +1,6 @@
 export * from './client.mjs'
+export * from './catalog-client.mjs'
+export * from './catalog-runtime.mjs'
 export * from './contract.mjs'
 export * from './core-adapter.mjs'
 export * from './persistence-adapter.mjs'

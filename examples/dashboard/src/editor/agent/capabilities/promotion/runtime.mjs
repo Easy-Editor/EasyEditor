@@ -35,6 +35,35 @@ const requirePolicyVersion = value => {
   throw new TypeError('grantIdentity.policyVersion must be a non-empty string or non-negative safe integer')
 }
 
+const decoratePromotionService = (service, onPromotionApplied) => {
+  if (onPromotionApplied === undefined) return service
+  if (typeof onPromotionApplied !== 'function') throw new TypeError('onPromotionApplied must be a function')
+  const notifyAfterApplied = result => {
+    const applied = result?.status === 'applied' || result?.results?.some(candidate => candidate?.status === 'applied')
+    if (!applied) return
+    queueMicrotask(() => {
+      try {
+        Promise.resolve(onPromotionApplied()).catch(() => undefined)
+      } catch {
+        // Catalog refresh is a projection side effect and cannot reverse a durable promotion.
+      }
+    })
+  }
+  return Object.freeze({
+    async promoteLocal(call) {
+      const result = await service.promoteLocal(call)
+      notifyAfterApplied(result)
+      return result
+    },
+    queryReceipt: service.queryReceipt.bind(service),
+    async resumePending() {
+      const result = await service.resumePending()
+      notifyAfterApplied(result)
+      return result
+    },
+  })
+}
+
 const disabledRuntime = reason =>
   Object.freeze({
     promotionService: null,
@@ -61,7 +90,7 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
   const grantIdentity = options.grantIdentity
   const checkAvailability = requireMethod(client, 'checkAvailability', 'client')
   const checkLocalGrant = requireMethod(persistence, 'checkLocalGrant', 'persistence')
-  const promotionService = createDashboardLocalMaterialPromotionCapabilityService({
+  const rawPromotionService = createDashboardLocalMaterialPromotionCapabilityService({
     authority,
     client,
     core: options.core,
@@ -75,6 +104,7 @@ export const createDashboardLocalMaterialPromotionRuntime = options => {
       ? { isTransactionRollbackIncompleteError: options.isTransactionRollbackIncompleteError }
       : {}),
   })
+  const promotionService = decoratePromotionService(rawPromotionService, options.onPromotionApplied)
   const projectId = requireString(authority?.projectId, 'authority.projectId')
   const grantRequest = grantIdentity
     ? Object.freeze({
