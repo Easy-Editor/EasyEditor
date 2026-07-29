@@ -225,7 +225,7 @@ export class SettingTopEntry implements SettingEntry {
    * 获取子级属性值
    */
   getPropValue(propName: PropKey): any {
-    return this.first.getProp(propName.toString(), true)?.getValue()
+    return this.first.getProp(propName.toString(), false)?.getValue()
   }
 
   /**

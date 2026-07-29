@@ -61,6 +61,81 @@ test('bound transactions enforce expected mutation versions under both trust pol
   }
 })
 
+test('node title remains readable by reactive observers while a typed transaction is isolated', async t => {
+  const { engine } = await createReadyEngine(t)
+  const schema = createProjectSchema()
+  schema.componentsTree[0].title = 'before title'
+  engine.loadProject(schema, true)
+  const document = engine.project.currentDocument
+  const root = document.root
+  const observerErrors = []
+  const observedTitles = []
+  const dispose = reaction(
+    () => root.title,
+    title => {
+      observedTitles.push(title)
+    },
+    {
+      fireImmediately: true,
+      onError(error) {
+        observerErrors.push(error)
+      },
+    },
+  )
+  t.after(dispose)
+
+  const result = engine.transactions.runOnDocument(document, [
+    {
+      type: 'updateProps',
+      nodeId: root.id,
+      extras: { title: 'after title' },
+    },
+  ])
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(observerErrors, [])
+  assert.deepEqual(observedTitles, ['before title', 'after title'])
+  assert.equal(root.title, 'after title')
+})
+
+test('setting values remain readable by reactive observers while a typed transaction is isolated', async t => {
+  const { engine } = await createReadyEngine(t)
+  const schema = createProjectSchema()
+  schema.componentsTree[0].props.metric = 'before metric'
+  engine.loadProject(schema, true)
+  const document = engine.project.currentDocument
+  const root = document.root
+  const settingEntry = root.settingEntry
+  const observerErrors = []
+  const observedValues = []
+  const dispose = reaction(
+    () => settingEntry.getPropValue('metric'),
+    value => {
+      observedValues.push(value)
+    },
+    {
+      fireImmediately: true,
+      onError(error) {
+        observerErrors.push(error)
+      },
+    },
+  )
+  t.after(dispose)
+
+  const result = engine.transactions.runOnDocument(document, [
+    {
+      type: 'updateProps',
+      nodeId: root.id,
+      props: { metric: 'after metric' },
+    },
+  ])
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(observerErrors, [])
+  assert.deepEqual(observedValues, ['before metric', 'after metric'])
+  assert.equal(settingEntry.getPropValue('metric'), 'after metric')
+})
+
 test('invalid expected mutation versions reject before effects and do not strand transaction resources', async t => {
   const { core, engine } = await createReadyEngine(t)
   engine.loadProject(createProjectSchema({ id: 'invalid-expected-version' }), true)

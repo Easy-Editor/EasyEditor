@@ -84,7 +84,7 @@ export class Node<Schema extends NodeSchema = NodeSchema> {
 
   @computed
   get title() {
-    const t = this.getExtraProp('title')
+    const t = this.getExtraProp('title', false)
     if (t) {
       const v = t.getAsString()
       if (v) {
