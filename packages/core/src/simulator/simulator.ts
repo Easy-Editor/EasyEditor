@@ -31,7 +31,7 @@ import {
 import type { Project } from '../project'
 import type { ComponentInstance, DataSourceEngine, Snippet } from '../types'
 import type { Asset } from '../types/assets'
-import { type Disposable, type EventBus, type Hotkey, isDOMNodeVisible, isElementNode } from '../utils'
+import { type Disposable, type EventBus, type Hotkey, cloneDeep, isDOMNodeVisible, isElementNode } from '../utils'
 import type { SimulatorRenderer } from './simulator-renderer'
 import { Viewport } from './viewport'
 
@@ -525,7 +525,7 @@ export class Simulator {
     assertLifecycleMutationAllowed(this, 'simulator.linkSnippet')
     return this.designer.dragon.from(ref, () => ({
       type: DragObjectType.NodeData,
-      data: snippet.schema,
+      data: cloneDeep(snippet.schema),
     }))
   }
 
