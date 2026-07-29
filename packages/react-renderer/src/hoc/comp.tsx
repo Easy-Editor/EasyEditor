@@ -23,6 +23,7 @@ const patchDidCatch = (Comp: any, { baseRenderer }: ComponentHocInfo) => {
       this.state.engineRenderError = false
       return engine.createElement(engine.getFaultComponent(), {
         ...this.props,
+        schema: this.props.__schema,
         error: this.state.error,
         componentName: this.props._componentName,
       })

@@ -528,6 +528,10 @@ test('observable renderer state is reset inside a MobX action boundary', () => {
   assert.doesNotMatch(rendererSource, /\buntracked\s*\(/)
   assert.match(
     rendererSource,
+    /@action\s+rerender\s*\(\)\s*{[\s\S]*?this\._appContext\s*=\s*{\s*\.\.\.this\._appContext\s*}/,
+  )
+  assert.match(
+    rendererSource,
     /runInAction\s*\(\s*\(\)\s*=>\s*{[\s\S]*?this\._documentInstances\s*=\s*failedDocumentInstances/,
   )
 })

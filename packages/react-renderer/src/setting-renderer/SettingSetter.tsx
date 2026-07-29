@@ -19,10 +19,8 @@ const getSetterInfo = (field: SettingField) => {
   if (isSetterConfig(setter)) {
     setterType = setter.componentName
     if (setter.props) {
-      setterProps = setter.props
-      if (typeof setterProps === 'function') {
-        setterProps = setterProps(field)
-      }
+      const resolvedSetterProps = typeof setter.props === 'function' ? setter.props(field) : setter.props
+      setterProps = { ...resolvedSetterProps }
     }
     if (setter.defaultValue != null) {
       initialValue = setter.defaultValue

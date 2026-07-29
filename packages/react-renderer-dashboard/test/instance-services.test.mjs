@@ -70,3 +70,12 @@ test('the simulator renderer propagates the instance-owned expression policy exp
   assert.match(simulatorSource, /this\.host\.appHelper/)
   assert.match(rendererViewSource, /expressionEvaluator=\{container\.context\.expressionEvaluator\}/)
 })
+
+test('dashboard fault rendering remains fail-soft when no schema reaches the error boundary', () => {
+  const faultSource = readSource('../src/renderer-core/components/DashboardFaultComponent.tsx')
+  const wrapperSource = readSource('../src/renderer-core/components/DashboardWrapper.tsx')
+
+  assert.match(faultSource, /props\.schema\s*\?\?\s*props\.__schema/)
+  assert.match(faultSource, /if\s*\(!schema\)\s*return\s*<FaultComponent/)
+  assert.match(wrapperSource, /if\s*\(!node\)\s*return\s+undefined/)
+})

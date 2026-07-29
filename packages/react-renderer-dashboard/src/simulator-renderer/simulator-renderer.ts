@@ -505,6 +505,7 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
   /**
    * 刷新渲染器
    */
+  @action
   rerender() {
     this.autoRender = true
     // TODO: 不太优雅

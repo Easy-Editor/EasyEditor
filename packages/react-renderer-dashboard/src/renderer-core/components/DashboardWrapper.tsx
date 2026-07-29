@@ -59,7 +59,9 @@ export default DashboardWrapper
 /**
  * 计算节点在 dashboard 中的位置和尺寸
  */
-export const computeRect = (node: NodeSchema) => {
+export const computeRect = (node?: NodeSchema) => {
+  if (!node) return undefined
+
   if (!node.isGroup || !node.children || node.children.length === 0) {
     return node.$dashboard?.rect
   }
