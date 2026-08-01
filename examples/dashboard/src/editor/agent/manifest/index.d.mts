@@ -1,6 +1,7 @@
 import type { ComponentMetadata } from '@easy-editor/core'
 import type {
   ConfigureAnnotationOverlay,
+  ConfigureFieldAnnotation,
   JsonValue,
   JsonValueSchema,
   ProjectionPath,
@@ -77,6 +78,9 @@ export interface SafeMaterialManifest {
 
 export type ConfigureAnnotationBindings = Readonly<Record<string, Readonly<Record<string, string>>>>
 
+/** Pure-data metadata accepted at configureField.extraProps.agent. */
+export type InlineConfigureAgentAnnotation = ConfigureFieldAnnotation | Readonly<{ expose: false }>
+
 export interface CompileSafeMaterialManifestOptions {
   readonly metadata: Readonly<ComponentMetadata>
   readonly materialRegistryVersion: MaterialRegistryVersion
@@ -109,7 +113,9 @@ export declare const DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS: Readonly<{
 }>
 export declare const DASHBOARD_MATERIAL_READINESS_REQUIREMENTS: Readonly<{
   BarChart: readonly ['props.data']
+  DashboardScene: readonly ['props.spec', 'shared.rect']
   LineChart: readonly ['props.data']
+  LowAltitudeDashboard: readonly ['props.data', 'shared.rect']
   Text: readonly ['props.text']
 }>
 
@@ -129,4 +135,11 @@ export declare const createSafeMaterialManifestCache: (
   options: SafeMaterialManifestCacheOptions,
 ) => SafeMaterialManifestCache
 
-export type { ConfigureAnnotationOverlay, JsonValue, JsonValueSchema, ProjectionPath, WriteTarget }
+export type {
+  ConfigureAnnotationOverlay,
+  ConfigureFieldAnnotation,
+  JsonValue,
+  JsonValueSchema,
+  ProjectionPath,
+  WriteTarget,
+}

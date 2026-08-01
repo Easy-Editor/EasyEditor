@@ -296,6 +296,72 @@ test('compiler emits closed command DTOs for every accepted semantic operation',
   })
 })
 
+test('compiled map coordinate array schemas accept exact numeric pairs and reject invalid coordinates', () => {
+  const coordinateField = configureField('center', 'JsonSetter', {
+    agent: {
+      access: 'read-write',
+      fieldId: 'props.center',
+      readPath: ['props', 'center'],
+      unsetTargets: [{ path: ['props', 'center'] }],
+      valueSchema: {
+        type: 'array',
+        items: { type: 'number' },
+        minItems: 2,
+        maxItems: 2,
+      },
+      verifyPaths: [['props', 'center']],
+      writeTargets: [{ path: ['props', 'center'] }],
+    },
+  })
+  const mapManifest = compileSafeMaterialManifest({
+    materialRegistryVersion: REGISTRY_VERSION,
+    metadata: metadata('GeoMap', [coordinateField]),
+  })
+  const schema = createSchema()
+  schema.children.push({ componentName: 'GeoMap', id: 'map-a', props: { center: [0, 0] } })
+  const overrides = {
+    document: { id: 'document-a', mutationVersion: 11, schema },
+    manifests: [...manifests(), mapManifest],
+  }
+
+  const compiled = compile(
+    [operation('set-map-center', { type: 'set', nodeId: 'map-a', fieldId: 'props.center', value: [116.4, 39.9] })],
+    overrides,
+  )
+  assert.deepEqual(compiled.commands, [
+    {
+      type: 'updateProps',
+      documentId: 'document-a',
+      nodeId: 'map-a',
+      props: { center: [116.4, 39.9] },
+    },
+  ])
+
+  expectCompileError(
+    () =>
+      compile(
+        [operation('short-map-center', { type: 'set', nodeId: 'map-a', fieldId: 'props.center', value: [116.4] })],
+        overrides,
+      ),
+    'VALUE_CONSTRAINT',
+  )
+  expectCompileError(
+    () =>
+      compile(
+        [
+          operation('string-map-center', {
+            type: 'set',
+            nodeId: 'map-a',
+            fieldId: 'props.center',
+            value: ['116.4', 39.9],
+          }),
+        ],
+        overrides,
+      ),
+    'VALUE_CONSTRAINT',
+  )
+})
+
 test('relative positions resolve on the sequential shadow document, including earlier inserts', () => {
   const parentId = deriveInsertedScreenNodeId(CALL_ID, 'insert-parent')
   const childId = deriveInsertedScreenNodeId(CALL_ID, 'insert-child')

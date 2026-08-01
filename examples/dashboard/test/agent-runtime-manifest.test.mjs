@@ -81,6 +81,23 @@ const createMetadata = ({ componentName = 'Text', extraFields = [], includeVisib
 
 const field = (manifest, fieldId) => manifest.fields.find(item => item.fieldId === fieldId)
 
+const dataConfigField = () => ({
+  extraProps: {
+    agent: {
+      access: 'read-write',
+      fieldId: 'data.config',
+      readPath: ['props', '$data'],
+      unsetTargets: [{ path: ['props', '$data'] }],
+      valueSchema: { type: 'object' },
+      verifyPaths: [['props', '$data']],
+      writeTargets: [{ path: ['props', '$data'] }],
+    },
+  },
+  name: '$data',
+  setter: 'DataSetter',
+  title: '数据配置',
+})
+
 test('safe configure compiler emits annotated shared fields and conservative props fallback', () => {
   const metadata = createMetadata({
     extraFields: [
@@ -176,6 +193,245 @@ test('safe configure compiler emits annotated shared fields and conservative pro
   assert.doesNotMatch(serialized, /function\s|=>/)
   assert.ok(Object.isFrozen(manifest))
   assert.ok(Object.isFrozen(manifest.fields))
+})
+
+test('remote EasyEditorMaterials aliases reuse built-in shared bindings and readiness requirements', () => {
+  const manifest = compileSafeMaterialManifest({
+    materialRegistryVersion: 8,
+    metadata: createMetadata({
+      componentName: 'EasyEditorMaterialsText',
+      extraFields: [
+        dataConfigField(),
+        {
+          extraProps: { getValue: callback },
+          name: 'dataBindings',
+          setter: 'JsonSetter',
+          title: '数据绑定',
+        },
+      ],
+    }),
+  })
+
+  assert.equal(manifest.componentName, 'EasyEditorMaterialsText')
+  assert.equal(field(manifest, 'shared.title')?.access, 'read-write')
+  assert.equal(field(manifest, 'shared.rect')?.access, 'read-write')
+  assert.equal(field(manifest, 'shared.visibility')?.access, 'read-write')
+  assert.equal(field(manifest, 'props.text'), undefined)
+  assert.equal(field(manifest, 'data.config')?.access, 'read-write')
+  assert.deepEqual(field(manifest, 'dataBindings')?.readPath, ['props', 'dataBindings'])
+  assert.deepEqual(manifest.readiness, {
+    missingFieldIds: [],
+    status: 'ready',
+    unsupportedFieldIds: [],
+  })
+})
+
+test('remote data.config satisfies Text and Bar data readiness without weakening exact requirements', () => {
+  for (const componentName of ['EasyEditorMaterialsText', 'EasyEditorMaterialsBarChart']) {
+    const manifest = compileSafeMaterialManifest({
+      materialRegistryVersion: 8,
+      metadata: createMetadata({ componentName, extraFields: [dataConfigField()] }),
+    })
+    assert.deepEqual(manifest.readiness.missingFieldIds, [])
+    assert.equal(manifest.readiness.status, 'ready')
+  }
+
+  const localText = compileSafeMaterialManifest({
+    materialRegistryVersion: 8,
+    metadata: createMetadata({ componentName: 'Text', extraFields: [dataConfigField()] }),
+  })
+  assert.deepEqual(localText.readiness.missingFieldIds, ['props.text'])
+
+  const remoteDashboard = compileSafeMaterialManifest({
+    materialRegistryVersion: 8,
+    metadata: {
+      componentName: 'EasyEditorMaterialsLowAltitudeDashboard',
+      configure: { props: [dataConfigField()] },
+    },
+  })
+  assert.deepEqual(remoteDashboard.readiness.missingFieldIds, ['shared.rect'])
+})
+
+test('remote chart and media aliases receive wildcard shared bindings without component-specific tables', () => {
+  for (const componentName of ['EasyEditorMaterialsTechRadarChart', 'EasyEditorMaterialsAudio']) {
+    const manifest = compileSafeMaterialManifest({
+      materialRegistryVersion: 8,
+      metadata: createMetadata({ componentName }),
+    })
+
+    assert.equal(field(manifest, 'shared.title')?.access, 'read-write')
+    assert.equal(field(manifest, 'shared.rect')?.access, 'read-write')
+    assert.equal(field(manifest, 'shared.visibility')?.access, 'read-write')
+    assert.equal(manifest.fields.filter(item => item.access === 'unsupported').length, 0)
+  }
+})
+
+test('static advanced setters project JSON-safe schemas without serializing callbacks', () => {
+  const manifest = compileSafeMaterialManifest({
+    materialRegistryVersion: 9,
+    metadata: createMetadata({
+      componentName: 'SchemaFixture',
+      extraFields: [
+        {
+          name: 'opacity',
+          setter: { componentName: 'SliderSetter', props: { max: 1, min: 0, step: 0.05 } },
+        },
+        {
+          name: 'colors',
+          setter: {
+            componentName: 'ArraySetter',
+            props: { itemSetter: 'ColorSetter', maxItems: 8, minItems: 1 },
+          },
+        },
+        { name: 'payload', setter: 'JsonSetter' },
+        {
+          name: 'rate',
+          setter: {
+            componentName: 'SelectSetter',
+            props: {
+              options: [
+                { label: '1x', value: 1 },
+                { label: '2x', value: 2 },
+              ],
+            },
+          },
+        },
+        {
+          name: 'align',
+          setter: {
+            componentName: 'SegmentedSetter',
+            props: {
+              options: [
+                { label: '左', value: 'left' },
+                { label: '右', value: 'right' },
+              ],
+            },
+          },
+        },
+        { extraProps: { onChange: callback }, name: 'callbackOnly', setter: 'StringSetter' },
+      ],
+    }),
+  })
+
+  assert.deepEqual(field(manifest, 'props.opacity')?.valueSchema, {
+    maximum: 1,
+    minimum: 0,
+    multipleOf: 0.05,
+    type: 'number',
+  })
+  assert.deepEqual(field(manifest, 'props.colors')?.valueSchema, {
+    items: { type: 'string' },
+    maxItems: 8,
+    minItems: 1,
+    type: 'array',
+  })
+  assert.deepEqual(field(manifest, 'props.payload')?.valueSchema, {})
+  assert.deepEqual(field(manifest, 'props.rate')?.valueSchema, { enum: [1, 2] })
+  assert.deepEqual(field(manifest, 'props.align')?.valueSchema, { enum: ['left', 'right'] })
+  assert.equal(field(manifest, 'props.callbackOnly'), undefined)
+  assert.equal(field(manifest, 'unsupported:callbackOnly:binding')?.access, 'unsupported')
+  assert.ok(manifest.diagnostics.some(item => item.code === 'callback-annotation-required'))
+  assert.doesNotMatch(JSON.stringify(manifest), /function\s|=>/)
+})
+
+test('inline extraProps.agent annotations are the primary safe source for callback-backed fields', () => {
+  const manifest = compileSafeMaterialManifest({
+    annotationBindings: { Text: { action: 'shared.title' } },
+    materialRegistryVersion: 10,
+    metadata: createMetadata({
+      extraFields: [
+        {
+          extraProps: {
+            agent: {
+              access: 'read-write',
+              fieldId: 'props.action',
+              readPath: ['props', 'action'],
+              unsetTargets: [{ path: ['props', 'action'] }],
+              valueSchema: { enum: ['start', 'stop'] },
+              verifyPaths: [['props', 'action']],
+              writeTargets: [{ path: ['props', 'action'] }],
+            },
+            getValue: callback,
+            setValue: callback,
+          },
+          name: 'action',
+          setter: 'SelectSetter',
+          title: '操作',
+        },
+      ],
+    }),
+  })
+
+  assert.deepEqual(field(manifest, 'props.action'), {
+    access: 'read-write',
+    fieldId: 'props.action',
+    readPath: ['props', 'action'],
+    title: '操作',
+    unsetTargets: [{ path: ['props', 'action'] }],
+    valueSchema: { enum: ['start', 'stop'] },
+    verifyPaths: [['props', 'action']],
+    writeTargets: [{ path: ['props', 'action'] }],
+  })
+  assert.equal(manifest.fields.filter(item => item.fieldId === 'shared.title').length, 1)
+  assert.equal(
+    manifest.diagnostics.some(item => item.code === 'callback-annotation-required'),
+    false,
+  )
+  assert.doesNotMatch(JSON.stringify(manifest), /function\s|=>/)
+})
+
+test('strict extraProps.agent expose false excludes human-only callback fields without affecting readiness', () => {
+  const manifest = compileSafeMaterialManifest({
+    materialRegistryVersion: 11,
+    metadata: {
+      componentName: 'HumanOnlyFixture',
+      configure: {
+        props: [
+          {
+            extraProps: { agent: { expose: false }, onChange: callback },
+            name: 'uploadHelper',
+            setter: 'UploadSetter',
+          },
+        ],
+      },
+    },
+  })
+
+  assert.deepEqual(manifest.fields, [])
+  assert.deepEqual(manifest.diagnostics, [])
+  assert.deepEqual(manifest.readiness, {
+    missingFieldIds: [],
+    status: 'ready',
+    unsupportedFieldIds: [],
+  })
+})
+
+test('human-only exposure controls reject mixed annotations and non-false values', () => {
+  for (const agent of [
+    { access: 'read-write', expose: false, fieldId: 'props.uploadHelper' },
+    { expose: true },
+    { expose: 0 },
+  ]) {
+    const manifest = compileSafeMaterialManifest({
+      materialRegistryVersion: 11,
+      metadata: {
+        componentName: 'HumanOnlyFixture',
+        configure: {
+          props: [
+            {
+              extraProps: { agent, onChange: callback },
+              name: 'uploadHelper',
+              setter: 'UploadSetter',
+            },
+          ],
+        },
+      },
+    })
+
+    assert.equal(manifest.fields[0]?.access, 'unsupported')
+    assert.ok(manifest.diagnostics.some(item => item.code === 'invalid-annotation'))
+    assert.equal(manifest.readiness.status, 'not-ready')
+  }
 })
 
 test('advanced presentation inspection uses own descriptors and sanitizes hostile values', () => {
@@ -557,6 +813,33 @@ test('field-name bindings survive reorder and fail closed on duplicate, unnamed,
   })
   assert.ok(field(specificWins, 'image.source'))
   assert.equal(field(specificWins, 'shared.title'), undefined)
+})
+
+test('duplicate compiled field ids make manifest readiness fail closed', () => {
+  const inlineField = (name, propName) => ({
+    extraProps: {
+      agent: {
+        access: 'read-write',
+        fieldId: 'props.shared',
+        readPath: ['props', propName],
+        verifyPaths: [['props', propName]],
+        writeTargets: [{ path: ['props', propName] }],
+      },
+    },
+    name,
+    setter: 'StringSetter',
+  })
+  const manifest = compileSafeMaterialManifest({
+    materialRegistryVersion: 1,
+    metadata: {
+      componentName: 'DuplicateFieldFixture',
+      configure: { props: [inlineField('first', 'first'), inlineField('second', 'second')] },
+    },
+  })
+
+  assert.equal(manifest.fields.filter(item => item.fieldId === 'props.shared').length, 1)
+  assert.ok(manifest.diagnostics.some(item => item.code === 'duplicate-field-id'))
+  assert.equal(manifest.readiness.status, 'not-ready')
 })
 
 test('wildcard shared bindings are limited to built-ins while exact third-party overrides remain explicit', () => {

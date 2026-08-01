@@ -37,27 +37,48 @@ export const DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS = Object.freeze({
 
 export const DASHBOARD_MATERIAL_READINESS_REQUIREMENTS = Object.freeze({
   BarChart: Object.freeze(['props.data']),
+  DashboardScene: Object.freeze(['props.spec', 'shared.rect']),
   LineChart: Object.freeze(['props.data']),
+  LowAltitudeDashboard: Object.freeze(['props.data', 'shared.rect']),
   Text: Object.freeze(['props.text']),
 })
 
 const DANGEROUS_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 const CALLBACK_KEYS = Object.freeze(['getValue', 'setValue', 'condition', 'autorun', 'onChange'])
+const REMOTE_MATERIAL_COMPONENT_PREFIX = 'EasyEditorMaterials'
+const REMOTE_DATA_CAPABILITY_REQUIREMENTS = new Set(['props.data', 'props.text'])
 const DASHBOARD_SHARED_CONFIG_COMPONENTS = new Set([
   'AreaChart',
+  'Audio',
   'BarChart',
+  'Button',
+  'Carousel',
+  'DashboardScene',
+  'Filter',
+  'FlyLine',
+  'GaugeChart',
+  'GeoMap',
   'Image',
   'LineChart',
+  'LowAltitudeDashboard',
+  'NumberFlip',
   'PieChart',
+  'Progress',
   'RadarChart',
   'RadialChart',
   'Root',
+  'ScrollList',
+  'TechRadarChart',
+  'TechScatterChart',
   'Text',
+  'Video',
 ])
 const PROJECTION_ROOTS = new Set(['extra', 'node', 'props'])
 const WRITE_ROOTS = new Set(['extra', 'props'])
 const SETTER_SCHEMAS = Object.freeze({
+  ArraySetter: Object.freeze({ type: 'array' }),
   ColorSetter: Object.freeze({ type: 'string' }),
+  JsonSetter: Object.freeze({}),
   NodeIdSetter: Object.freeze({ type: 'string' }),
   NumberSetter: Object.freeze({ type: 'number' }),
   RectSetter: Object.freeze({
@@ -70,6 +91,9 @@ const SETTER_SCHEMAS = Object.freeze({
     required: Object.freeze(['x', 'y', 'width', 'height']),
     type: 'object',
   }),
+  SegmentedSetter: Object.freeze({}),
+  SelectSetter: Object.freeze({}),
+  SliderSetter: Object.freeze({ type: 'number' }),
   StringSetter: Object.freeze({ type: 'string' }),
   SwitchSetter: Object.freeze({ type: 'boolean' }),
   UploadSetter: Object.freeze({ type: 'object' }),
@@ -510,17 +534,44 @@ const getSetterInfo = field => {
   }
 }
 
+const isHumanOnlyAgentMetadata = agent => {
+  if (!isPlainRecord(agent)) return false
+  const exposeDescriptor = Reflect.getOwnPropertyDescriptor(agent, 'expose')
+  if (!exposeDescriptor) return false
+  if (!('value' in exposeDescriptor)) {
+    throw new ManifestCompileIssue('accessor-rejected', 'field.extraProps.agent.expose must be a data property')
+  }
+  if (exposeDescriptor.value !== false || exposeDescriptor.enumerable !== true) {
+    throw new ManifestCompileIssue(
+      'invalid-annotation',
+      'field.extraProps.agent.expose only accepts the boolean false value',
+    )
+  }
+  const keys = Reflect.ownKeys(agent)
+  if (keys.length !== 1 || keys[0] !== 'expose') {
+    throw new ManifestCompileIssue(
+      'invalid-annotation',
+      'field.extraProps.agent expose false cannot be mixed with annotation fields',
+    )
+  }
+  return true
+}
+
 const getExtraPropsInfo = field => {
   const extraProps = readOwnDataProperty(field, 'extraProps', 'field')
   if (extraProps === undefined) return { dynamic: false }
   if (!isPlainRecord(extraProps)) return { dynamic: true }
+  const agent = readOwnDataProperty(extraProps, 'agent', 'field.extraProps')
+  const excludeFromManifest = isHumanOnlyAgentMetadata(agent)
   for (const key of CALLBACK_KEYS) {
     if (typeof readOwnDataProperty(extraProps, key, 'field.extraProps') === 'function')
-      return { dynamic: true, extraProps }
+      return { agent, dynamic: true, excludeFromManifest, extraProps }
   }
   return {
+    agent,
     defaultValue: readOwnDataProperty(extraProps, 'defaultValue', 'field.extraProps'),
     dynamic: false,
+    excludeFromManifest,
     extraProps,
     isRequired: readOwnDataProperty(extraProps, 'isRequired', 'field.extraProps') === true,
   }
@@ -534,6 +585,13 @@ const hasDirectCallbackSemantics = field => {
 }
 
 const readConstraint = (props, key) => (props ? readOwnDataProperty(props, key, 'field.setter.props') : undefined)
+
+const normalizeArrayItemSetterName = value => {
+  if (typeof value !== 'string') return undefined
+  if (value === 'string') return 'StringSetter'
+  if (value === 'number') return 'NumberSetter'
+  return value
+}
 
 const enumValuesFromOptions = options => {
   if (!Array.isArray(options)) return undefined
@@ -570,6 +628,23 @@ const compileSetterSchema = (setterInfo, extraPropsInfo, limits, diagnostics, fi
     const maxLength = readConstraint(props, 'maxLength')
     if (Number.isSafeInteger(minLength) && minLength >= 0) schema.minLength = minLength
     if (Number.isSafeInteger(maxLength) && maxLength >= 0) schema.maxLength = maxLength
+  }
+  if (schema.type === 'array') {
+    const minItems = readConstraint(props, 'minItems')
+    const maxItems = readConstraint(props, 'maxItems')
+    if (Number.isSafeInteger(minItems) && minItems >= 0) schema.minItems = minItems
+    if (
+      Number.isSafeInteger(maxItems) &&
+      maxItems >= 0 &&
+      (!Number.isSafeInteger(minItems) || minItems < 0 || maxItems >= minItems)
+    ) {
+      schema.maxItems = maxItems
+    }
+    const itemSetterName = normalizeArrayItemSetterName(readConstraint(props, 'itemSetter'))
+    const itemSchema = itemSetterName ? SETTER_SCHEMAS[itemSetterName] : undefined
+    if (itemSchema && itemSchema.type && itemSchema.type !== 'array') {
+      schema.items = cloneJson(itemSchema, limits, `setter.${setterInfo.componentName}.items`)
+    }
   }
 
   const defaultValue = extraPropsInfo.defaultValue ?? setterInfo.defaultValue
@@ -658,17 +733,24 @@ const normalizeBindingMap = (value, label) => {
   return result
 }
 
+const normalizeDashboardComponentName = componentName => {
+  if (!componentName.startsWith(REMOTE_MATERIAL_COMPONENT_PREFIX)) return componentName
+  const localComponentName = componentName.slice(REMOTE_MATERIAL_COMPONENT_PREFIX.length)
+  return DASHBOARD_SHARED_CONFIG_COMPONENTS.has(localComponentName) ? localComponentName : componentName
+}
+
 const buildAnnotationBindings = (componentName, overrides) => {
   if (overrides !== undefined && !isPlainRecord(overrides)) {
     throw new TypeError('annotationBindings must be a plain component binding table')
   }
-  const allowWildcard = DASHBOARD_SHARED_CONFIG_COMPONENTS.has(componentName)
+  const bindingComponentName = normalizeDashboardComponentName(componentName)
+  const allowWildcard = DASHBOARD_SHARED_CONFIG_COMPONENTS.has(bindingComponentName)
   const defaultWildcard = allowWildcard
     ? normalizeBindingMap(DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS['*'], 'bindings.*')
     : {}
   const defaultSpecific = normalizeBindingMap(
-    readOwnDataProperty(DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS, componentName, 'bindings'),
-    `bindings.${componentName}`,
+    readOwnDataProperty(DASHBOARD_CONFIGURE_ANNOTATION_BINDINGS, bindingComponentName, 'bindings'),
+    `bindings.${bindingComponentName}`,
   )
   const overrideWildcard = allowWildcard
     ? normalizeBindingMap(
@@ -680,7 +762,14 @@ const buildAnnotationBindings = (componentName, overrides) => {
     overrides ? readOwnDataProperty(overrides, componentName, 'annotationBindings') : undefined,
     `annotationBindings.${componentName}`,
   )
-  return { ...defaultWildcard, ...overrideWildcard, ...defaultSpecific, ...overrideSpecific }
+  const overrideAlias =
+    bindingComponentName === componentName
+      ? {}
+      : normalizeBindingMap(
+          overrides ? readOwnDataProperty(overrides, bindingComponentName, 'annotationBindings') : undefined,
+          `annotationBindings.${bindingComponentName}`,
+        )
+  return { ...defaultWildcard, ...overrideWildcard, ...defaultSpecific, ...overrideAlias, ...overrideSpecific }
 }
 
 const resolveAnnotationKey = (field, bindings) =>
@@ -803,12 +892,22 @@ const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) =
   const seenFieldIds = new Set()
   const bindingKeyCounts = new Map()
   const bindingKeyOccurrences = new Map()
+  const excludedOrdinals = new Set()
   for (const field of fields) {
+    try {
+      if (getExtraPropsInfo(field.source).excludeFromManifest) {
+        excludedOrdinals.add(field.ordinal)
+        continue
+      }
+    } catch {
+      // The main compilation pass records the bounded diagnostic and fails closed.
+    }
     if (field.bindingKey) {
       bindingKeyCounts.set(field.bindingKey, (bindingKeyCounts.get(field.bindingKey) || 0) + 1)
     }
   }
   for (const field of fields) {
+    if (excludedOrdinals.has(field.ordinal)) continue
     let setterInfo
     let extraPropsInfo
     try {
@@ -824,6 +923,7 @@ const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) =
     const bindingKeyOccurrence = field.bindingKey ? (bindingKeyOccurrences.get(field.bindingKey) || 0) + 1 : undefined
     if (field.bindingKey) bindingKeyOccurrences.set(field.bindingKey, bindingKeyOccurrence)
     const annotationKey = resolveAnnotationKey(field, bindings)
+    let effectiveAnnotationKey = annotationKey
     let result
     try {
       if (duplicateBindingKey) {
@@ -840,6 +940,24 @@ const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) =
         result = createUnsupportedField({
           ...field,
           unsupportedFieldId: `${field.unsupportedFieldId}:${bindingKeyOccurrence}`,
+        })
+      } else if (extraPropsInfo.agent !== undefined) {
+        if (!isPlainRecord(extraPropsInfo.agent)) {
+          throw new ManifestCompileIssue('invalid-annotation', 'field.extraProps.agent must be a plain object')
+        }
+        const inlineFieldId = readOwnDataProperty(extraPropsInfo.agent, 'fieldId', 'field.extraProps.agent')
+        if (typeof inlineFieldId !== 'string' || inlineFieldId.length === 0) {
+          throw new ManifestCompileIssue(
+            'invalid-annotation',
+            'field.extraProps.agent.fieldId must be a non-empty string',
+          )
+        }
+        effectiveAnnotationKey = inlineFieldId
+        result = compileAnnotation({
+          annotation: extraPropsInfo.agent,
+          annotationKey: inlineFieldId,
+          field,
+          limits,
         })
       } else if (annotationKey) {
         const annotation = readAnnotation(annotations, annotationKey)
@@ -864,11 +982,13 @@ const compileFields = ({ annotations, bindings, diagnostics, fields, limits }) =
       }
     } catch (error) {
       addIssueDiagnostic(diagnostics, error, {
-        fieldId: annotationKey || field.fieldId,
+        fieldId: effectiveAnnotationKey || field.fieldId,
         sourcePath: field.sourcePath,
       })
       result = createUnsupportedField(
-        annotationKey ? { ...field, fieldId: annotationKey, unsupportedFieldId: annotationKey } : field,
+        effectiveAnnotationKey
+          ? { ...field, fieldId: effectiveAnnotationKey, unsupportedFieldId: effectiveAnnotationKey }
+          : field,
       )
     }
 
@@ -895,14 +1015,22 @@ const compareDiagnostics = (left, right) =>
 
 const manifestByteLength = value => new TextEncoder().encode(JSON.stringify(value)).byteLength
 
-const createReadiness = (componentName, fields) => {
+const createReadiness = (componentName, fields, diagnostics = []) => {
   const emittedFieldIds = new Set(fields.map(field => field.fieldId))
-  const requirements = readOwnDataProperty(DASHBOARD_MATERIAL_READINESS_REQUIREMENTS, componentName, 'readiness') || []
-  const missingFieldIds = requirements.filter(fieldId => !emittedFieldIds.has(fieldId))
+  const readinessComponentName = normalizeDashboardComponentName(componentName)
+  const requirements =
+    readOwnDataProperty(DASHBOARD_MATERIAL_READINESS_REQUIREMENTS, readinessComponentName, 'readiness') || []
+  const isRemoteMaterialAlias = readinessComponentName !== componentName
+  const hasRemoteDataCapability = isRemoteMaterialAlias && emittedFieldIds.has('data.config')
+  const missingFieldIds = requirements.filter(
+    fieldId =>
+      !emittedFieldIds.has(fieldId) && !(hasRemoteDataCapability && REMOTE_DATA_CAPABILITY_REQUIREMENTS.has(fieldId)),
+  )
   const unsupportedFieldIds = fields.filter(field => field.access === 'unsupported').map(field => field.fieldId)
+  const hasDuplicateFieldIds = diagnostics.some(diagnostic => diagnostic.code === 'duplicate-field-id')
   return {
     missingFieldIds,
-    status: missingFieldIds.length || unsupportedFieldIds.length ? 'not-ready' : 'ready',
+    status: missingFieldIds.length || unsupportedFieldIds.length || hasDuplicateFieldIds ? 'not-ready' : 'ready',
     unsupportedFieldIds,
   }
 }
@@ -914,7 +1042,12 @@ const createFailureManifest = (componentName, materialRegistryVersion, code, mes
     fields: [],
     materialRegistryVersion,
     readiness: {
-      missingFieldIds: readOwnDataProperty(DASHBOARD_MATERIAL_READINESS_REQUIREMENTS, componentName, 'readiness') || [],
+      missingFieldIds:
+        readOwnDataProperty(
+          DASHBOARD_MATERIAL_READINESS_REQUIREMENTS,
+          normalizeDashboardComponentName(componentName),
+          'readiness',
+        ) || [],
       status: 'not-ready',
       unsupportedFieldIds: [],
     },
@@ -961,7 +1094,7 @@ export const compileSafeMaterialManifest = ({
     diagnostics: diagnostics.sort(compareDiagnostics),
     fields,
     materialRegistryVersion: normalizedRegistryVersion,
-    readiness: createReadiness(componentName, fields),
+    readiness: createReadiness(componentName, fields, diagnostics),
     schemaVersion: SAFE_MATERIAL_MANIFEST_SCHEMA_VERSION,
     ...metadataLabels,
   }
