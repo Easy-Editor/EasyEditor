@@ -14,7 +14,12 @@ import {
   createMinimalExecutionInput,
   createMinimalPrepareInput,
 } from '../fixtures/minimal-draft.mjs'
-import { DocumentExecutorError, executeDocument, executeDocumentWorkflow } from '../src/executor.mjs'
+import {
+  DocumentExecutorError,
+  deriveMissingMaterialIds,
+  executeDocument,
+  executeDocumentWorkflow,
+} from '../src/executor.mjs'
 import {
   computeWorkspaceArtifactCompatibility,
   createBrowserArtifactManifest,
@@ -52,6 +57,37 @@ const PREPARED_RESULT_KEYS = [
   'stageId',
   'taskId',
 ]
+
+test('material gaps are derived from the candidate tree and observed Host registry', () => {
+  const candidate = {
+    componentsTree: [
+      {
+        id: 'root',
+        componentName: 'Root',
+        children: [
+          { id: 'known', componentName: 'Text', children: [] },
+          { id: 'missing-b', componentName: 'MissingB', children: [] },
+          { id: 'missing-a', componentName: 'MissingA', children: [] },
+          { id: 'missing-a-again', componentName: 'MissingA', children: [] },
+        ],
+      },
+    ],
+  }
+
+  assert.deepEqual(deriveMissingMaterialIds(candidate, [{ componentName: 'Root' }, { componentName: 'Text' }]), [
+    'MissingA',
+    'MissingB',
+  ])
+  assert.deepEqual(
+    deriveMissingMaterialIds(candidate, [
+      { componentName: 'Root' },
+      { componentName: 'Text' },
+      { componentName: 'MissingA' },
+      { componentName: 'MissingB' },
+    ]),
+    [],
+  )
+})
 
 const canonicalJson = value => {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)

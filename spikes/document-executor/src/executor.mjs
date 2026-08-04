@@ -128,6 +128,33 @@ const sha256 = value => createHash('sha256').update(value).digest('hex')
 const MAX_RENDER_VIEWPORT_EDGE = 8_192
 const MAX_RENDER_VIEWPORT_PIXELS = 33_554_432
 
+export const deriveMissingMaterialIds = (candidateProject, writableManifests) => {
+  const registered = new Set(
+    (Array.isArray(writableManifests) ? writableManifests : []).flatMap(manifest =>
+      typeof manifest?.componentName === 'string' && manifest.componentName.trim()
+        ? [manifest.componentName.trim()]
+        : [],
+    ),
+  )
+  const required = new Set()
+  const visited = new Set()
+  const visit = value => {
+    if (Array.isArray(value)) {
+      value.forEach(visit)
+      return
+    }
+    if (!value || typeof value !== 'object' || visited.has(value)) return
+    visited.add(value)
+    if (typeof value.componentName === 'string' && value.componentName.trim()) {
+      required.add(value.componentName.trim())
+    }
+    if (Array.isArray(value.children)) value.children.forEach(visit)
+    if (Array.isArray(value.componentsTree)) value.componentsTree.forEach(visit)
+  }
+  visit(candidateProject)
+  return [...required].filter(componentName => !registered.has(componentName)).sort()
+}
+
 const resolveDocumentTargetViewport = (projectSchema, documentId, label = 'project schema') => {
   const roots = requireRecord(projectSchema, label).componentsTree
   if (!Array.isArray(roots)) {
@@ -1784,7 +1811,10 @@ export const executeDocument = async (rawInput, options = {}) => {
             materialId: manifest.componentName,
             version: String(pageResult.materialManifestBinding.schemaVersion),
           })),
-          missing: [],
+          missing: deriveMissingMaterialIds(
+            pageResult.candidateProject,
+            pageResult.materialManifestBinding.writableManifests,
+          ),
         },
         request: {
           requestId: `document-executor-${prepareInput.operationId}`,
