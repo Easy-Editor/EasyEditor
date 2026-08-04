@@ -2,8 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  AGENT_MODEL_GATEWAY_API_KEY_ENV,
+  AGENT_MODEL_GATEWAY_BASE_URL_ENV,
   AGENT_MODEL_GATEWAY_CONFIG_ENV,
   AGENT_MODEL_GATEWAY_ENABLED_ENV,
+  AGENT_MODEL_GATEWAY_MODEL_ENV,
+  AGENT_MODEL_GATEWAY_PROJECT_ID_ENV,
+  AGENT_MODEL_GATEWAY_PROVIDER_ID_ENV,
+  AGENT_MODEL_GATEWAY_SESSION_COOKIE_NAME_ENV,
+  AGENT_MODEL_GATEWAY_SESSION_TOKEN_ENV,
   MODEL_GATEWAY_PATH,
   createEnvironmentModelGatewayHandler,
   createEnvironmentModelGatewayMiddleware,
@@ -33,6 +40,15 @@ const providerConfig = (overrides = {}) => ({
 const configEnv = (auth, providers = [providerConfig()], overrides = {}) => ({
   [AGENT_MODEL_GATEWAY_ENABLED_ENV]: '1',
   [AGENT_MODEL_GATEWAY_CONFIG_ENV]: JSON.stringify({ auth, providers }),
+  ...overrides,
+})
+const flatConfigEnv = (overrides = {}) => ({
+  [AGENT_MODEL_GATEWAY_ENABLED_ENV]: '1',
+  [AGENT_MODEL_GATEWAY_BASE_URL_ENV]: 'https://flat-provider.example.test/v1',
+  [AGENT_MODEL_GATEWAY_API_KEY_ENV]: secret,
+  [AGENT_MODEL_GATEWAY_MODEL_ENV]: 'model-1',
+  [AGENT_MODEL_GATEWAY_SESSION_TOKEN_ENV]: principal.token,
+  [AGENT_MODEL_GATEWAY_PROJECT_ID_ENV]: 'project-1',
   ...overrides,
 })
 const requestBody = (overrides = {}) => ({
@@ -104,6 +120,25 @@ test('environment gateway is default-off and falls through without constructing 
   )
   assert.equal(nextCalls, 1)
   assert.equal(handlerCalls, 0)
+
+  const completeFlatButDisabled = flatConfigEnv()
+  Reflect.deleteProperty(completeFlatButDisabled, AGENT_MODEL_GATEWAY_ENABLED_ENV)
+  const disabledFlatMiddleware = createEnvironmentModelGatewayMiddleware({
+    env: completeFlatButDisabled,
+    handler: {
+      async handle() {
+        handlerCalls += 1
+      },
+    },
+  })
+  assert.equal(
+    await disabledFlatMiddleware({}, {}, () => {
+      nextCalls += 1
+    }),
+    false,
+  )
+  assert.equal(nextCalls, 2)
+  assert.equal(handlerCalls, 0)
 })
 
 test('environment gateway bearer authorization binds the authenticated subject to its project', async () => {
@@ -144,6 +179,80 @@ test('environment gateway accepts only its configured server cookie session', as
   assert.equal(denied.status, 401)
   assert.equal(errorCode((await collectFrames(denied)).frames), 'UNAUTHORIZED')
   assert.equal(calls.length, 1)
+})
+
+test('flat environment config runs one OpenAI-compatible provider behind a project-bound cookie session', async () => {
+  const fetchCalls = []
+  const cookieName = 'custom-easy-editor-session'
+  const env = flatConfigEnv({
+    [AGENT_MODEL_GATEWAY_PROVIDER_ID_ENV]: 'relay-main',
+    [AGENT_MODEL_GATEWAY_SESSION_COOKIE_NAME_ENV]: cookieName,
+  })
+  const handler = createEnvironmentModelGatewayHandler({
+    env,
+    fetchImpl: async (...args) => {
+      fetchCalls.push(args)
+      return sseResponse()
+    },
+  })
+
+  const allowed = await handler.handle(
+    transportRequest(requestBody({ providerId: 'relay-main' }), {
+      cookie: `${cookieName}=${principal.token}`,
+    }),
+  )
+  assert.equal(errorCode((await collectFrames(allowed)).frames), undefined)
+  assert.equal(fetchCalls.length, 1)
+  assert.equal(fetchCalls[0][0], 'https://flat-provider.example.test/v1/chat/completions')
+  assert.equal(fetchCalls[0][1].headers.Authorization, `Bearer ${secret}`)
+  assert.equal(JSON.parse(fetchCalls[0][1].body).model, 'model-1')
+
+  const disallowedModel = await handler.handle(
+    transportRequest(requestBody({ providerId: 'relay-main', model: 'model-forbidden' }), {
+      cookie: `${cookieName}=${principal.token}`,
+    }),
+  )
+  assert.equal(disallowedModel.status, 502)
+  assert.equal(errorCode((await collectFrames(disallowedModel)).frames), 'PROVIDER_FAILED')
+  assert.equal(fetchCalls.length, 1)
+
+  const wrongProject = await handler.handle(
+    transportRequest(requestBody({ projectId: 'project-2', providerId: 'relay-main' }), {
+      cookie: `${cookieName}=${principal.token}`,
+    }),
+  )
+  assert.equal(wrongProject.status, 403)
+  assert.equal(errorCode((await collectFrames(wrongProject)).frames), 'UNAUTHORIZED')
+  assert.equal(fetchCalls.length, 1)
+})
+
+test('flat environment config defaults to the default provider and cookie names', async () => {
+  const fetchCalls = []
+  const handler = createEnvironmentModelGatewayHandler({
+    env: flatConfigEnv(),
+    fetchImpl: async (...args) => {
+      fetchCalls.push(args)
+      return sseResponse()
+    },
+  })
+  const result = await handler.handle(
+    transportRequest(requestBody({ providerId: 'default' }), {
+      cookie: `easy-editor-agent-session=${principal.token}`,
+    }),
+  )
+
+  assert.equal(errorCode((await collectFrames(result)).frames), undefined)
+  assert.equal(fetchCalls.length, 1)
+  assert.equal(fetchCalls[0][0], 'https://flat-provider.example.test/v1/chat/completions')
+
+  const unknown = await handler.handle(
+    transportRequest(requestBody({ providerId: 'other-provider' }), {
+      cookie: `easy-editor-agent-session=${principal.token}`,
+    }),
+  )
+  assert.equal(unknown.status, 502)
+  assert.equal(errorCode((await collectFrames(unknown)).frames), 'PROVIDER_UNAVAILABLE')
+  assert.equal(fetchCalls.length, 1)
 })
 
 test('external session authorization resolves every request so revocation is immediate', async () => {
@@ -242,21 +351,159 @@ test('missing and invalid enabled configuration fail closed without crashing sta
   }
 })
 
-test('environment secrets and provider failure details never enter public objects, frames, or logs', async () => {
-  const logs = []
-  const handler = createEnvironmentModelGatewayHandler({
-    env: configEnv({ mode: 'bearer', principals: [principal] }),
-    logger: { warn: value => logs.push(value) },
-    fetchImpl: async () => {
-      throw new Error(`${secret} ${prompt}`)
+test('partial flat provider or session configuration fails closed', async () => {
+  const providerKeys = [
+    AGENT_MODEL_GATEWAY_BASE_URL_ENV,
+    AGENT_MODEL_GATEWAY_API_KEY_ENV,
+    AGENT_MODEL_GATEWAY_MODEL_ENV,
+  ]
+  for (const missing of providerKeys) {
+    for (const empty of [false, true]) {
+      const env = flatConfigEnv()
+      if (empty) env[missing] = ''
+      else Reflect.deleteProperty(env, missing)
+      const handler = createEnvironmentModelGatewayHandler({
+        env,
+        authorizePrincipal: async () => ({ tenantId: 'tenant-1', userId: 'user-1' }),
+      })
+      const result = await handler.handle(transportRequest(requestBody({ providerId: 'default' })))
+      assert.equal(result.status, 502)
+      assert.equal(errorCode((await collectFrames(result)).frames), 'PROVIDER_UNAVAILABLE')
+    }
+  }
+
+  for (const missing of [AGENT_MODEL_GATEWAY_SESSION_TOKEN_ENV, AGENT_MODEL_GATEWAY_PROJECT_ID_ENV]) {
+    for (const empty of [false, true]) {
+      const env = flatConfigEnv()
+      if (empty) env[missing] = ''
+      else Reflect.deleteProperty(env, missing)
+      const handler = createEnvironmentModelGatewayHandler({
+        env,
+        providerTransport: completedTransport(),
+      })
+      const result = await handler.handle(
+        transportRequest(requestBody({ providerId: 'default' }), {
+          cookie: `easy-editor-agent-session=${principal.token}`,
+        }),
+      )
+      assert.equal(result.status, 401)
+      assert.equal(errorCode((await collectFrames(result)).frames), 'UNAUTHORIZED')
+    }
+  }
+})
+
+test('invalid flat identifiers and cookie settings fail closed', async () => {
+  for (const overrides of [
+    { [AGENT_MODEL_GATEWAY_MODEL_ENV]: '../model' },
+    { [AGENT_MODEL_GATEWAY_PROVIDER_ID_ENV]: '../provider' },
+  ]) {
+    const handler = createEnvironmentModelGatewayHandler({
+      env: flatConfigEnv(overrides),
+      authorizePrincipal: async () => ({ tenantId: 'tenant-1', userId: 'user-1' }),
+    })
+    const result = await handler.handle(transportRequest(requestBody({ providerId: 'default' })))
+    assert.equal(result.status, 502)
+    assert.equal(errorCode((await collectFrames(result)).frames), 'PROVIDER_UNAVAILABLE')
+  }
+
+  for (const overrides of [
+    { [AGENT_MODEL_GATEWAY_PROJECT_ID_ENV]: '../project' },
+    { [AGENT_MODEL_GATEWAY_SESSION_COOKIE_NAME_ENV]: 'invalid;cookie' },
+  ]) {
+    const handler = createEnvironmentModelGatewayHandler({
+      env: flatConfigEnv(overrides),
+      providerTransport: completedTransport(),
+    })
+    const result = await handler.handle(
+      transportRequest(requestBody({ providerId: 'default' }), {
+        cookie: `easy-editor-agent-session=${principal.token}`,
+      }),
+    )
+    assert.equal(result.status, 401)
+    assert.equal(errorCode((await collectFrames(result)).frames), 'UNAUTHORIZED')
+  }
+})
+
+test('JSON configuration is authoritative and invalid JSON never falls back to flat secrets', async () => {
+  const jsonFetchCalls = []
+  const jsonEnv = configEnv(
+    { mode: 'bearer', principals: [principal] },
+    [providerConfig()],
+    flatConfigEnv({
+      [AGENT_MODEL_GATEWAY_API_KEY_ENV]: 'ignored-flat-secret',
+      [AGENT_MODEL_GATEWAY_MODEL_ENV]: '../ignored-flat-model',
+      [AGENT_MODEL_GATEWAY_PROVIDER_ID_ENV]: '../ignored-flat-provider',
+      [AGENT_MODEL_GATEWAY_SESSION_COOKIE_NAME_ENV]: 'ignored;flat-cookie',
+    }),
+  )
+  const jsonHandler = createEnvironmentModelGatewayHandler({
+    env: jsonEnv,
+    fetchImpl: async (...args) => {
+      jsonFetchCalls.push(args)
+      return sseResponse()
     },
   })
-  assert.doesNotMatch(JSON.stringify(handler), new RegExp(secret))
-  assert.deepEqual(Object.keys(handler).sort(), ['handle', 'path'])
+  const jsonResult = await jsonHandler.handle(
+    transportRequest(undefined, { authorization: `Bearer ${principal.token}` }),
+  )
+  assert.equal(errorCode((await collectFrames(jsonResult)).frames), undefined)
+  assert.equal(jsonFetchCalls.length, 1)
+  assert.equal(jsonFetchCalls[0][0], 'https://provider-one.example.test/v1/chat/completions')
+  assert.equal(jsonFetchCalls[0][1].headers.Authorization, `Bearer ${secret}`)
+  assert.equal(JSON.parse(jsonFetchCalls[0][1].body).model, 'model-1')
 
-  const result = await handler.handle(transportRequest(undefined, { authorization: `Bearer ${principal.token}` }))
-  const { frames, serialized } = await collectFrames(result)
-  assert.equal(errorCode(frames), 'PROVIDER_UNAVAILABLE')
-  assert.doesNotMatch(serialized, new RegExp(`${secret}|${prompt}`))
-  assert.doesNotMatch(JSON.stringify(logs), new RegExp(`${secret}|${prompt}`))
+  for (const invalidJson of [
+    '',
+    '{not-json',
+    JSON.stringify({ auth: { mode: 'bearer', principals: [principal] }, providers: [] }),
+  ]) {
+    let fetchCalls = 0
+    const invalidHandler = createEnvironmentModelGatewayHandler({
+      env: {
+        ...flatConfigEnv(),
+        [AGENT_MODEL_GATEWAY_CONFIG_ENV]: invalidJson,
+      },
+      authorizePrincipal: async () => ({ tenantId: 'tenant-1', userId: 'user-1' }),
+      fetchImpl: async () => {
+        fetchCalls += 1
+        return sseResponse()
+      },
+    })
+    const invalidResult = await invalidHandler.handle(transportRequest(requestBody({ providerId: 'default' })))
+    assert.equal(invalidResult.status, 502)
+    assert.equal(errorCode((await collectFrames(invalidResult)).frames), 'PROVIDER_UNAVAILABLE')
+    assert.equal(fetchCalls, 0)
+  }
+})
+
+test('environment secrets and provider failure details never enter public objects, frames, or logs', async () => {
+  for (const { env, headers, providerId } of [
+    {
+      env: configEnv({ mode: 'bearer', principals: [principal] }),
+      headers: { authorization: `Bearer ${principal.token}` },
+      providerId: 'provider-1',
+    },
+    {
+      env: flatConfigEnv(),
+      headers: { cookie: `easy-editor-agent-session=${principal.token}` },
+      providerId: 'default',
+    },
+  ]) {
+    const logs = []
+    const handler = createEnvironmentModelGatewayHandler({
+      env,
+      logger: { warn: value => logs.push(value) },
+      fetchImpl: async () => {
+        throw new Error(`${secret} ${prompt}`)
+      },
+    })
+    assert.doesNotMatch(JSON.stringify(handler), new RegExp(secret))
+    assert.deepEqual(Object.keys(handler).sort(), ['handle', 'path'])
+
+    const result = await handler.handle(transportRequest(requestBody({ providerId }), headers))
+    const { frames, serialized } = await collectFrames(result)
+    assert.equal(errorCode(frames), 'PROVIDER_UNAVAILABLE')
+    assert.doesNotMatch(serialized, new RegExp(`${secret}|${prompt}|${principal.token}`))
+    assert.doesNotMatch(JSON.stringify(logs), new RegExp(`${secret}|${prompt}|${principal.token}`))
+  }
 })

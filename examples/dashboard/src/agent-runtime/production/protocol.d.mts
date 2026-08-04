@@ -28,6 +28,7 @@ export interface ProductionAgentWorkerStartMessage {
 }
 
 export declare const PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION: 1
+export declare const DEFAULT_PRODUCTION_AGENT_PROVIDER_ID: 'default'
 export declare const DEFAULT_PRODUCTION_AGENT_MODEL_PATH: '/api/agent/model/stream'
 export declare const PRODUCTION_AGENT_MODEL_ENV: Readonly<{
   providerId: 'VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID'

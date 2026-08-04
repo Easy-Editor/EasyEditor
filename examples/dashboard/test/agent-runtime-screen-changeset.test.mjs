@@ -133,6 +133,11 @@ const expectCompileError = (fn, code, pathPattern, reasonPattern) => {
 
 const operation = (opId, value) => ({ opId, ...value })
 
+const countJsonNodes = value => {
+  if (value === null || typeof value !== 'object') return 1
+  return 1 + Object.values(value).reduce((total, child) => total + countJsonNodes(child), 0)
+}
+
 const replaceTextManifest = mutate => {
   const all = manifests()
   const index = all.findIndex(manifest => manifest.componentName === 'Text')
@@ -395,6 +400,11 @@ test('relative positions resolve on the sequential shadow document, including ea
     { opId: 'insert-child', nodeId: childId },
   ])
   assert.equal(compiled.commands[0].at, 3, 'omitted insert position means last')
+  assert.equal(
+    Object.hasOwn(compiled.commands[0].node, 'children'),
+    false,
+    'a later child insert must not mutate the earlier parent command payload',
+  )
   assert.equal(compiled.commands[1].parentId, parentId)
   assert.equal(compiled.commands[1].at, 0)
   assert.equal(compiled.commands[2].nodeId, childId)
@@ -905,6 +915,54 @@ test('registry fences, semantic fingerprints, input budgets, and canonical outpu
     'BUDGET_EXCEEDED',
   )
   assert.ok(DEFAULT_SCREEN_CHANGESET_LIMITS.maxInputBytes > 0)
+})
+
+test('derived ChangeSet output can retain complete fingerprints beyond the untrusted input node budget', () => {
+  const broadManifests = [
+    ...manifests(),
+    ...Array.from({ length: 50 }, (_, materialIndex) =>
+      compileSafeMaterialManifest({
+        materialRegistryVersion: REGISTRY_VERSION,
+        metadata: metadata(
+          `BroadMaterial${materialIndex}`,
+          Array.from({ length: 32 }, (_, fieldIndex) =>
+            configureField(`field${fieldIndex}`, {
+              componentName: 'StringSetter',
+              props: { maxLength: 80 },
+            }),
+          ),
+          false,
+        ),
+      }),
+    ),
+  ]
+
+  const compiled = compile([operation('broad-output', { type: 'remove', nodeId: 'text-a' })], {
+    manifests: broadManifests,
+  })
+  const outputNodeCount = countJsonNodes(compiled)
+
+  assert.equal(DEFAULT_SCREEN_CHANGESET_LIMITS.maxJsonNodes, 50_000)
+  assert.ok(
+    outputNodeCount > DEFAULT_SCREEN_CHANGESET_LIMITS.maxJsonNodes,
+    `expected derived output above the input node budget, received ${outputNodeCount}`,
+  )
+  assert.ok(outputNodeCount <= 200_000)
+  const outputBytes = new TextEncoder().encode(JSON.stringify(compiled)).byteLength
+  assert.equal(DEFAULT_SCREEN_CHANGESET_LIMITS.maxInputBytes, 1_048_576)
+  assert.equal(DEFAULT_SCREEN_CHANGESET_LIMITS.maxOutputBytes, 4_194_304)
+  assert.ok(outputBytes > DEFAULT_SCREEN_CHANGESET_LIMITS.maxInputBytes)
+  assert.ok(outputBytes < DEFAULT_SCREEN_CHANGESET_LIMITS.maxOutputBytes)
+  expectCompileError(
+    () =>
+      compile([operation('broad-output-limited', { type: 'remove', nodeId: 'text-a' })], {
+        manifests: broadManifests,
+        options: { limits: { maxOutputBytes: outputBytes - 1 } },
+      }),
+    'BUDGET_EXCEEDED',
+    /compiledChangeSet/,
+    /compiled-change-set-output-is-too-large/,
+  )
 })
 
 test('compiled Core commands execute and public field inverses recompile to restore the raw schema', async t => {

@@ -5,6 +5,7 @@ const PROVIDER_EVENT_LIMIT = 256
 const OUTPUT_BYTE_LIMIT = 1024 * 1024
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
+export const MODEL_GATEWAY_DEFAULT_TIMEOUT_MS = 165_000
 
 class GatewayFailure extends Error {
   constructor(code, status, message, retryable = false) {
@@ -169,7 +170,7 @@ export const createModelGatewayHandler = ({
   authorizePrincipal,
   providerTransport,
   maxConcurrent = 4,
-  timeoutMs = 60_000,
+  timeoutMs = MODEL_GATEWAY_DEFAULT_TIMEOUT_MS,
   logger,
 } = {}) => {
   if (typeof authorizePrincipal !== 'function' || typeof providerTransport?.stream !== 'function') {

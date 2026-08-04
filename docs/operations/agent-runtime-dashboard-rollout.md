@@ -15,7 +15,7 @@ This runbook covers the production Gateway and the independently staged Dashboar
 | Layer | Browser build-time control | Server runtime control | Default-off rollback |
 |---|---|---|---|
 | Agent UI and Worker | `VITE_DASHBOARD_AGENT_RUNTIME` | none | Rebuild/redeploy with the browser flag off. The normal editor remains available. |
-| Model Gateway | provider id/model/path only: `VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID`, `VITE_DASHBOARD_AGENT_MODEL`, `VITE_DASHBOARD_AGENT_MODEL_PATH` | `EASY_EDITOR_AGENT_GATEWAY_ENABLED` plus `EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON` | Disable/revoke server access, then remove the browser runtime flag and safe routing metadata. |
+| Model Gateway | provider id/model/path only: `VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID`, `VITE_DASHBOARD_AGENT_MODEL`, `VITE_DASHBOARD_AGENT_MODEL_PATH` | `EASY_EDITOR_AGENT_GATEWAY_ENABLED` plus either the single-provider `EASY_EDITOR_AGENT_BASE_URL`/`API_KEY`/`MODEL` variables or the advanced `EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON` | Disable/revoke server access, then remove the browser runtime flag and safe routing metadata. |
 | Safe data path | `VITE_DASHBOARD_AGENT_DATA` | `EASY_EDITOR_DATA_PROXY_ENABLED` | Materialize and verify the legacy compatibility copy before transferring storage authority; then disable the browser surface and finally the server route. |
 | Online components | `VITE_DASHBOARD_AGENT_ONLINE` | `EASY_EDITOR_ONLINE_COMPONENT_DEPENDENCY_ENABLED` | Disable the browser surface first. Preserve immutable artifacts and activation/quarantine markers, then disable dependency resolution. |
 | Local promotion | `VITE_DASHBOARD_AGENT_PROMOTION` | `EASY_EDITOR_MATERIAL_PROMOTION_ENABLED`, `EASY_EDITOR_MATERIAL_GC_ENABLED` | Disable browser promotion, server promotion, and garbage collection. Preserve catalog and artifact evidence. |
@@ -24,11 +24,13 @@ Do not couple these controls into one switch. Stage data, online components, and
 
 ## Secrets and session authorization
 
-`EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON` is server-only configuration. Inject it from the deployment secret manager into the server process. Its provider `apiKey`, bearer principals, and session data must never appear in:
+`EASY_EDITOR_AGENT_API_KEY` and `EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON` are server-only configuration. Inject them from the deployment secret manager into the server process. Provider API keys, bearer principals, and session data must never appear in:
 
 - a `VITE_*` variable or browser bundle;
 - source control, build arguments, client logs, browser storage, or IndexedDB;
 - request/response diagnostics, Playwright artifacts, screenshots, or traces.
+
+For a loopback-only single-provider smoke, `examples/dashboard/.env.example` documents the flat shorthand and its project-bound local session. The Vite development Gateway injects that session server-side only for loopback Gateway requests, so the token never enters browser JavaScript or cookie storage. The JSON configuration remains authoritative whenever it is present, including when it is invalid; the Gateway never falls back from malformed JSON to flat secrets. The production server never performs the Vite-only injection, and production or multi-provider deployments must keep using the reviewed JSON/external-session contract with an HttpOnly cookie.
 
 The browser may receive only provider identity, model identity, and a same-origin Gateway path. Prefer an authoritative HttpOnly session integration for production. An IndexedDB local grant is a Dashboard UX decision only; it is never evidence of server authorization.
 

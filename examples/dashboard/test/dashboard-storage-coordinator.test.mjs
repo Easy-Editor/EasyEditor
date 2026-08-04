@@ -41,6 +41,19 @@ test('coordinator builds, hashes, commits, and verifies the complete canonical w
 test('exact ordinary attribution preserves unrelated Agent provenance while missing evidence invalidates globally', async () => {
   const backend = new MemoryDashboardStorageBackend()
   const coordinator = new ProjectPersistenceCoordinator({ backend })
+  const provenanceProjectSchema = {
+    ...request().projectSchema,
+    componentsTree: [
+      {
+        componentName: 'Root',
+        id: 'root',
+        children: [
+          { componentName: 'Text', id: 'title-1' },
+          { componentName: 'Chart', id: 'chart-1' },
+        ],
+      },
+    ],
+  }
   const touchedSlotKey = 'project-1/main/title-1/props/text'
   const unrelatedSlotKey = 'project-1/main/chart-1/props/data'
   const agentProvenance = slotKey => ({
@@ -58,6 +71,7 @@ test('exact ordinary attribution preserves unrelated Agent provenance while miss
     request({
       batchId: 'agent-save-1',
       commitKind: 'agent-batch',
+      projectSchema: provenanceProjectSchema,
       operations: [touchedAgentProvenance, unrelatedAgentProvenance].map(value => ({
         type: 'put',
         store: 'mutationProvenance',
@@ -78,6 +92,7 @@ test('exact ordinary attribution preserves unrelated Agent provenance while miss
     request({
       batchId: 'unchanged-manual-save-2',
       expectedDraftGeneration: 1,
+      projectSchema: provenanceProjectSchema,
       updatedAt: 43,
     }),
   )
@@ -96,7 +111,7 @@ test('exact ordinary attribution preserves unrelated Agent provenance while miss
       batchId: 'changed-autosave-3',
       expectedDraftGeneration: 2,
       commitKind: 'autosave',
-      projectSchema: { ...request().projectSchema, changed: true },
+      projectSchema: { ...provenanceProjectSchema, changed: true },
       updatedAt: 44,
       operations: [{ type: 'put', store: 'mutationProvenance', value: humanProvenance }],
     }),
@@ -111,7 +126,7 @@ test('exact ordinary attribution preserves unrelated Agent provenance while miss
     request({
       batchId: 'changed-save-without-attribution-4',
       expectedDraftGeneration: 3,
-      projectSchema: { ...request().projectSchema, changedAgain: true },
+      projectSchema: { ...provenanceProjectSchema, changedAgain: true },
       updatedAt: 45,
     }),
   )
@@ -121,7 +136,7 @@ test('exact ordinary attribution preserves unrelated Agent provenance while miss
     token: 'unknown',
   })
 
-  const migratedSchema = { ...request().projectSchema, importedFromLegacy: true }
+  const migratedSchema = { ...provenanceProjectSchema, importedFromLegacy: true }
   const migrated = await coordinator.commitMigration({
     projectId: 'project-1',
     branchId: 'main',
@@ -158,6 +173,63 @@ test('callers cannot inject the coordinator-controlled provenance invalidation o
       error.reason === 'project-persistence-provenance-invalidation-is-coordinator-controlled',
   )
   assert.equal(await backend.get('workingDrafts', ['project-1', 'main']), undefined)
+})
+
+test('coordinator prunes field provenance for deleted nodes while preserving structural deletion provenance', async () => {
+  const backend = new MemoryDashboardStorageBackend()
+  const coordinator = new ProjectPersistenceCoordinator({ backend })
+  const fieldSlotKey = 'project-1/main/legacy-scene/props/spec'
+  const structuralSlotKey = 'project-1/main/node/legacy-scene/existence'
+  const record = (slotKey, draftGeneration, token) => ({
+    schemaVersion: 1,
+    projectId: 'project-1',
+    branchId: 'main',
+    slotKey,
+    draftGeneration,
+    token,
+  })
+  const initialSchema = {
+    componentsTree: [
+      {
+        componentName: 'Root',
+        id: 'root',
+        children: [{ componentName: 'DashboardScene', id: 'legacy-scene', props: { spec: { widgets: [] } } }],
+      },
+    ],
+  }
+  await coordinator.commit(
+    request({
+      batchId: 'seed-legacy-provenance',
+      commitKind: 'agent-batch',
+      projectSchema: initialSchema,
+      operations: [fieldSlotKey, structuralSlotKey].map(slotKey => ({
+        type: 'put',
+        store: 'mutationProvenance',
+        value: record(slotKey, 1, 'agent:seed'),
+      })),
+    }),
+  )
+
+  await coordinator.commit(
+    request({
+      batchId: 'delete-legacy-scene',
+      expectedDraftGeneration: 1,
+      commitKind: 'autosave',
+      projectSchema: { componentsTree: [{ componentName: 'Root', id: 'root' }] },
+      updatedAt: 43,
+      operations: [fieldSlotKey, structuralSlotKey].map(slotKey => ({
+        type: 'put',
+        store: 'mutationProvenance',
+        value: record(slotKey, 2, 'external'),
+      })),
+    }),
+  )
+
+  assert.equal(await backend.get('mutationProvenance', ['project-1', 'main', fieldSlotKey]), undefined)
+  assert.deepEqual(
+    await backend.get('mutationProvenance', ['project-1', 'main', structuralSlotKey]),
+    record(structuralSlotKey, 2, 'external'),
+  )
 })
 
 test('trusted ABA evidence can force coordinator-owned provenance invalidation for an unchanged hash', async () => {

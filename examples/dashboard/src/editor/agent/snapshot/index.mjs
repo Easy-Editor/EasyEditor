@@ -3,6 +3,37 @@ import { readCanonicalNodeArtifactRef } from '../../../lib/storage/artifact-cont
 const OMIT = Symbol('omit')
 const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 const DASHBOARD_RECT_KEYS = Object.freeze(['height', 'width', 'x', 'y'])
+const SENSITIVE_WRITABLE_TOKENS = new Set([
+  'apikey',
+  'auth',
+  'authorization',
+  'bearer',
+  'cookie',
+  'cookies',
+  'credential',
+  'credentials',
+  'header',
+  'headers',
+  'password',
+  'privatekey',
+  'secret',
+  'token',
+])
+const SENSITIVE_WRITABLE_KEY_PAIRS = new Set(['access:key', 'api:key', 'private:key', 'service:key', 'signing:key'])
+const WRITABLE_PROJECTION_WARNING = Object.freeze({
+  manifestsUnavailable: 'writable-manifests-unavailable',
+  nodeValuesUnavailable: 'writable-node-values-unavailable',
+})
+const WRITABLE_VALUE_LIMITS = Object.freeze({
+  maxArrayLength: 512,
+  maxDepth: 16,
+  maxFieldsPerNode: 64,
+  maxNodes: 4_096,
+  maxNodeValues: 2_048,
+  maxStringLength: 16_384,
+  maxTotalCharacters: 96 * 1_024,
+  maxValueCharacters: 48 * 1_024,
+})
 
 export const compareCodeUnits = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 
@@ -54,6 +85,99 @@ const isPlainRecord = value => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
+}
+
+const isSensitiveWritableKey = key => {
+  if (typeof key !== 'string' || key.length === 0) return false
+  const tokens = key
+    .replaceAll(/([a-z\d])([A-Z])/gu, '$1 $2')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map(token => token.toLocaleLowerCase('en-US'))
+  if (tokens.some(token => SENSITIVE_WRITABLE_TOKENS.has(token))) return true
+  return tokens.some(
+    (token, index) => index + 1 < tokens.length && SENSITIVE_WRITABLE_KEY_PAIRS.has(`${token}:${tokens[index + 1]}`),
+  )
+}
+
+const isSafeWritableValue = (value, state, depth = 0) => {
+  if (value === null || typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string') return value.length <= WRITABLE_VALUE_LIMITS.maxStringLength
+  if (typeof value !== 'object' || depth > WRITABLE_VALUE_LIMITS.maxDepth || state.visited.has(value)) return false
+  if (++state.nodes > WRITABLE_VALUE_LIMITS.maxNodes) return false
+
+  state.visited.add(value)
+  try {
+    if (Array.isArray(value)) {
+      const length = readOwnDataValue(value, 'length', 0)
+      if (!Number.isSafeInteger(length) || length < 0 || length > WRITABLE_VALUE_LIMITS.maxArrayLength) return false
+      return arrayDataEntries(value).every(([, item]) => isSafeWritableValue(item, state, depth + 1))
+    }
+    if (!isPlainRecord(value)) return false
+    return ownEnumerableDataEntries(value).every(
+      ([key, item]) =>
+        !PROTOTYPE_KEYS.has(key) && !isSensitiveWritableKey(key) && isSafeWritableValue(item, state, depth + 1),
+    )
+  } finally {
+    state.visited.delete(value)
+  }
+}
+
+const projectWritableNodeValues = value => {
+  if (!isPlainRecord(value)) return {}
+  const projected = Object.create(null)
+  let projectedNodeCount = 0
+  let totalCharacters = 0
+
+  for (const [nodeId, rawValues] of ownEnumerableDataEntries(value).sort(([left], [right]) =>
+    compareCodeUnits(left, right),
+  )) {
+    if (
+      projectedNodeCount >= WRITABLE_VALUE_LIMITS.maxNodeValues ||
+      !nodeId ||
+      PROTOTYPE_KEYS.has(nodeId) ||
+      !isPlainRecord(rawValues)
+    ) {
+      continue
+    }
+    const nodeValues = Object.create(null)
+    let fieldCount = 0
+    for (const [fieldId, rawValue] of ownEnumerableDataEntries(rawValues).sort(([left], [right]) =>
+      compareCodeUnits(left, right),
+    )) {
+      if (
+        fieldCount >= WRITABLE_VALUE_LIMITS.maxFieldsPerNode ||
+        !fieldId.startsWith('props.') ||
+        PROTOTYPE_KEYS.has(fieldId) ||
+        isSensitiveWritableKey(fieldId) ||
+        !isSafeWritableValue(rawValue, { nodes: 0, visited: new WeakSet() })
+      ) {
+        continue
+      }
+      const sanitized = sanitizeJsonValue(rawValue, {
+        maxArrayLength: WRITABLE_VALUE_LIMITS.maxArrayLength,
+        maxDepth: WRITABLE_VALUE_LIMITS.maxDepth,
+        maxNodes: WRITABLE_VALUE_LIMITS.maxNodes,
+        maxStringLength: WRITABLE_VALUE_LIMITS.maxStringLength,
+      })
+      const serialized = JSON.stringify(sanitized)
+      if (
+        serialized.length > WRITABLE_VALUE_LIMITS.maxValueCharacters ||
+        totalCharacters + serialized.length > WRITABLE_VALUE_LIMITS.maxTotalCharacters
+      ) {
+        continue
+      }
+      nodeValues[fieldId] = sanitized
+      totalCharacters += serialized.length
+      fieldCount += 1
+    }
+    if (Object.keys(nodeValues).length > 0) {
+      projected[nodeId] = nodeValues
+      projectedNodeCount += 1
+    }
+  }
+  return projected
 }
 
 const sanitizeValue = (value, state, depth) => {
@@ -352,66 +476,143 @@ const structureFingerprint = projection =>
     ),
   })
 
-const materialSummaries = registry => {
+const projectMaterials = registry => {
   const entries = readOwnDataValue(registry, 'entries')
   const resolveEntry = readOwnDataValue(registry, 'resolveEntry')
   const values =
     entries instanceof Map
       ? [...Map.prototype.values.call(entries)]
       : arrayDataEntries(entries).map(([, value]) => value)
-  return values
-    .map(material =>
-      summarizeMaterial(
-        typeof resolveEntry === 'function' ? resolveMaterialMetadata(resolveEntry, material) : material,
-      ),
-    )
-    .filter(summary => summary !== null)
-    .sort((left, right) => compareCodeUnits(left.componentName, right.componentName))
+  const materialRegistryVersion = normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(registry, 'version'), -1)
+  const summaries = []
+  for (const material of values) {
+    const metadata = typeof resolveEntry === 'function' ? resolveMaterialMetadata(resolveEntry, material) : material
+    const summary = summarizeMaterial(metadata)
+    if (summary) summaries.push(summary)
+  }
+  summaries.sort((left, right) => compareCodeUnits(left.componentName, right.componentName))
+  return {
+    registryVersion: materialRegistryVersion,
+    summaries,
+  }
 }
 
-export const createCoreProjectionProvider = adapter => ({
-  id: 'dashboard.core',
-  readFence() {
-    const document = callOwnMethod(adapter, 'readDocument', null)
-    const materials = callOwnMethod(adapter, 'readMaterials', null)
-    const adapterGeneration = normalizePositiveSafeIntegerScalar(
-      callOwnMethod(adapter, 'readAdapterGeneration', null),
-      0,
-    )
-    return {
-      adapterGeneration,
-      documentId: normalizeNonEmptyStringScalar(readOwnDataValue(document, 'id'), 'none'),
-      documentMutationVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(document, 'mutationVersion'), -1),
-      materialRegistryVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(materials, 'version'), -1),
+const projectWritableManifests = value => {
+  const manifests = []
+  for (const [, rawManifest] of arrayDataEntries(value)) {
+    const componentName = readOwnDataValue(rawManifest, 'componentName')
+    if (typeof componentName !== 'string' || componentName.length === 0 || PROTOTYPE_KEYS.has(componentName)) continue
+    const fields = []
+    for (const [, rawField] of arrayDataEntries(readOwnDataValue(rawManifest, 'fields'))) {
+      const fieldId = readOwnDataValue(rawField, 'fieldId')
+      const access = readOwnDataValue(rawField, 'access')
+      if (typeof fieldId !== 'string' || fieldId.length === 0 || PROTOTYPE_KEYS.has(fieldId)) continue
+      if (access !== 'read-write') continue
+      if (isSensitiveWritableKey(fieldId)) continue
+      const rawValueSchema = readOwnDataValue(rawField, 'valueSchema', {})
+      if (!isSafeWritableValue(rawValueSchema, { nodes: 0, visited: new WeakSet() })) continue
+      const valueSchema = sanitizeJsonValue(rawValueSchema, {
+        maxArrayLength: 256,
+        maxDepth: 16,
+        maxNodes: 2_048,
+        maxStringLength: 1_024,
+      })
+      fields.push({
+        access,
+        fieldId,
+        ...(isPlainRecord(valueSchema) ? { valueSchema } : {}),
+      })
     }
-  },
-  getVersion() {
-    return hashStableValue(this.readFence())
-  },
-  capture() {
-    const document = callOwnMethod(adapter, 'readDocument', null)
-    const materials = callOwnMethod(adapter, 'readMaterials', null)
-    const schema = readOwnDataValue(document, 'schema')
-    const nodes = document ? flattenDocument(schema) : {}
-    return sanitizeJsonValue({
-      document: document
-        ? {
-            id: normalizeNonEmptyStringScalar(readOwnDataValue(document, 'id'), 'none'),
-            mutationVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(document, 'mutationVersion'), -1),
-            rootNodeId: typeof readOwnDataValue(schema, 'id') === 'string' ? readOwnDataValue(schema, 'id') : null,
-          }
-        : null,
-      nodes,
-      materials: {
-        registryVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(materials, 'version'), -1),
-        summaries: materialSummaries(materials),
-      },
-    })
-  },
-  isDeltaCompatible(base, next) {
-    return structureFingerprint(base) === structureFingerprint(next)
-  },
-})
+    fields.sort((left, right) => compareCodeUnits(left.fieldId, right.fieldId))
+    if (fields.length > 0) manifests.push({ componentName, fields })
+  }
+  manifests.sort((left, right) => compareCodeUnits(left.componentName, right.componentName))
+  return manifests
+}
+
+export const createCoreProjectionProvider = adapter => {
+  const readWritableManifests = async () => {
+    try {
+      return {
+        value: projectWritableManifests(await callOwnMethod(adapter, 'readWritableMaterialManifests', [])),
+      }
+    } catch {
+      return {
+        unavailable: WRITABLE_PROJECTION_WARNING.manifestsUnavailable,
+        value: [],
+      }
+    }
+  }
+  const readWritableNodeValues = async () => {
+    try {
+      return {
+        value: projectWritableNodeValues(await callOwnMethod(adapter, 'readWritableNodeValues', {})),
+      }
+    } catch {
+      return {
+        unavailable: WRITABLE_PROJECTION_WARNING.nodeValuesUnavailable,
+        value: {},
+      }
+    }
+  }
+
+  return {
+    id: 'dashboard.core',
+    readFence() {
+      const document = callOwnMethod(adapter, 'readDocument', null)
+      const materials = callOwnMethod(adapter, 'readMaterials', null)
+      const adapterGeneration = normalizePositiveSafeIntegerScalar(
+        callOwnMethod(adapter, 'readAdapterGeneration', null),
+        0,
+      )
+      return {
+        adapterGeneration,
+        documentId: normalizeNonEmptyStringScalar(readOwnDataValue(document, 'id'), 'none'),
+        documentMutationVersion: normalizeNonNegativeSafeIntegerScalar(
+          readOwnDataValue(document, 'mutationVersion'),
+          -1,
+        ),
+        materialRegistryVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(materials, 'version'), -1),
+      }
+    },
+    getVersion() {
+      return hashStableValue(this.readFence())
+    },
+    async capture() {
+      const document = callOwnMethod(adapter, 'readDocument', null)
+      const materials = callOwnMethod(adapter, 'readMaterials', null)
+      const schema = readOwnDataValue(document, 'schema')
+      const nodes = document ? flattenDocument(schema) : {}
+      const materialProjection = projectMaterials(materials)
+      const writableManifestsResult = await readWritableManifests()
+      const writableNodeValuesResult = await readWritableNodeValues()
+      const projectionWarnings = [writableManifestsResult.unavailable, writableNodeValuesResult.unavailable].filter(
+        warning => typeof warning === 'string',
+      )
+      for (const [nodeId, values] of ownEnumerableDataEntries(writableNodeValuesResult.value)) {
+        if (Object.hasOwn(nodes, nodeId)) nodes[nodeId].writableValues = values
+      }
+      return sanitizeJsonValue({
+        document: document
+          ? {
+              id: normalizeNonEmptyStringScalar(readOwnDataValue(document, 'id'), 'none'),
+              mutationVersion: normalizeNonNegativeSafeIntegerScalar(readOwnDataValue(document, 'mutationVersion'), -1),
+              rootNodeId: typeof readOwnDataValue(schema, 'id') === 'string' ? readOwnDataValue(schema, 'id') : null,
+            }
+          : null,
+        nodes,
+        materials: {
+          ...materialProjection,
+          ...(writableManifestsResult.value.length > 0 ? { writableManifests: writableManifestsResult.value } : {}),
+        },
+        ...(projectionWarnings.length > 0 ? { projectionWarnings } : {}),
+      })
+    },
+    isDeltaCompatible(base, next) {
+      return structureFingerprint(base) === structureFingerprint(next)
+    },
+  }
+}
 
 export class SnapshotProviderRegistry {
   #records = new Map()

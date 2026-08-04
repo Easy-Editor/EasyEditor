@@ -35,6 +35,7 @@ const CORE_PROVIDER_ID = 'dashboard.core'
 const OMIT = Symbol('omit')
 const AUTHORITY_FIELDS = Object.freeze(['branchId', 'projectId', 'sessionId', 'taskId'])
 const SAFE_ACTIVE_TARGET_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u
+const SENSITIVE_WRITABLE_FIELD_PATH = /api.?key|authorization|credential|password|private.?key|secret|token/iu
 
 const isObjectLike = value => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
@@ -712,7 +713,146 @@ const describeMaterial = async (snapshot, args, cache) => {
   }
 }
 
-const createCoreAdapter = (engine, adapterGeneration) => ({
+const readWritableMaterialManifests = async (engine, cache) => {
+  const materialRegistryVersion = engine.materials.version
+  const entries = engine.materials.getComponentMetasMap()
+  const componentNames = [...Map.prototype.keys.call(entries)]
+    .filter(componentName => typeof componentName === 'string' && componentName.length > 0)
+    .sort(compareCodeUnits)
+  const manifests = await Promise.all(
+    componentNames.map(componentName => cache.get(componentName, materialRegistryVersion)),
+  )
+  if (!Object.is(engine.materials.version, materialRegistryVersion)) return []
+  return manifests.flatMap(manifest => {
+    if (readOwnDataValue(readOwnDataValue(manifest, 'readiness'), 'status') !== 'ready') return []
+    const componentName = readOwnDataValue(manifest, 'componentName')
+    const fields = readOwnDataValue(manifest, 'fields')
+    if (typeof componentName !== 'string' || !componentName || !Array.isArray(fields)) return []
+    const writableFields = fields
+      .filter(field => readOwnDataValue(field, 'access') === 'read-write')
+      .map(field => ({
+        fieldId: readOwnDataValue(field, 'fieldId'),
+        access: 'read-write',
+        ...(readOwnDataValue(field, 'valueSchema', undefined) === undefined
+          ? {}
+          : { valueSchema: readOwnDataValue(field, 'valueSchema') }),
+      }))
+    return writableFields.length > 0 ? [{ componentName, fields: writableFields }] : []
+  })
+}
+
+const readOwnDataPath = (value, path) => {
+  let current = value
+  for (const segment of path) {
+    current = readOwnDataValue(current, segment)
+    if (current === OMIT) return OMIT
+  }
+  return current
+}
+
+const collectRawDocumentNodes = root => {
+  const nodes = []
+  const visit = node => {
+    if (!isPlainRecord(node)) return
+    nodes.push(node)
+    const children = readOwnDataValue(node, 'children', [])
+    if (!Array.isArray(children)) return
+    const length = readOwnDataValue(children, 'length', 0)
+    if (!Number.isSafeInteger(length) || length < 0) return
+    for (let index = 0; index < length; index += 1) {
+      const child = readOwnDataValue(children, String(index))
+      if (child !== OMIT) visit(child)
+    }
+  }
+  visit(root)
+  return nodes
+}
+
+const resolveSafeWritablePropsPath = field => {
+  if (readOwnDataValue(field, 'access') !== 'read-write') return null
+  const fieldId = readOwnDataValue(field, 'fieldId')
+  const readPath = readOwnDataValue(field, 'readPath')
+  if (
+    typeof fieldId !== 'string' ||
+    !fieldId.startsWith('props.') ||
+    SENSITIVE_WRITABLE_FIELD_PATH.test(fieldId) ||
+    !Array.isArray(readPath) ||
+    readOwnDataValue(readPath, 'length', 0) < 2 ||
+    readOwnDataValue(readPath, '0') !== 'props'
+  ) {
+    return null
+  }
+  const path = []
+  for (let index = 1; index < readOwnDataValue(readPath, 'length', 0); index += 1) {
+    const segment = readOwnDataValue(readPath, String(index))
+    if (
+      typeof segment !== 'string' ||
+      segment.length === 0 ||
+      SENSITIVE_WRITABLE_FIELD_PATH.test(segment) ||
+      segment === '__proto__' ||
+      segment === 'constructor' ||
+      segment === 'prototype'
+    ) {
+      return null
+    }
+    path.push(segment)
+  }
+  return { fieldId, path }
+}
+
+const readWritableNodeValues = async (engine, cache) => {
+  const document = engine.project.currentDocument
+  if (!document) return {}
+  const materialRegistryVersion = engine.materials.version
+  const documentMutationVersion = document.mutationVersion
+  const rawNodes = collectRawDocumentNodes(document.exportRaw())
+  const componentNames = [
+    ...new Set(
+      rawNodes.flatMap(node => {
+        const componentName = readOwnDataValue(node, 'componentName')
+        return typeof componentName === 'string' && componentName ? [componentName] : []
+      }),
+    ),
+  ].sort(compareCodeUnits)
+  const manifests = await Promise.all(
+    componentNames.map(componentName => cache.get(componentName, materialRegistryVersion)),
+  )
+  if (
+    !Object.is(engine.materials.version, materialRegistryVersion) ||
+    engine.project.currentDocument !== document ||
+    !Object.is(document.mutationVersion, documentMutationVersion)
+  ) {
+    return {}
+  }
+  const manifestsByComponent = new Map(
+    manifests.flatMap(manifest => {
+      if (readOwnDataValue(readOwnDataValue(manifest, 'readiness'), 'status') !== 'ready') return []
+      const componentName = readOwnDataValue(manifest, 'componentName')
+      return typeof componentName === 'string' && componentName ? [[componentName, manifest]] : []
+    }),
+  )
+  const valuesByNode = Object.create(null)
+  for (const node of rawNodes) {
+    const nodeId = readOwnDataValue(node, 'id')
+    const componentName = readOwnDataValue(node, 'componentName')
+    if (typeof nodeId !== 'string' || !nodeId || typeof componentName !== 'string') continue
+    const manifest = manifestsByComponent.get(componentName)
+    const fields = readOwnDataValue(manifest, 'fields', [])
+    const props = readOwnDataValue(node, 'props')
+    if (!Array.isArray(fields) || !isPlainRecord(props)) continue
+    const nodeValues = Object.create(null)
+    for (const field of fields) {
+      const resolved = resolveSafeWritablePropsPath(field)
+      if (!resolved) continue
+      const currentValue = readOwnDataPath(props, resolved.path)
+      if (currentValue !== OMIT && currentValue !== undefined) nodeValues[resolved.fieldId] = currentValue
+    }
+    if (Object.keys(nodeValues).length > 0) valuesByNode[nodeId] = nodeValues
+  }
+  return valuesByNode
+}
+
+const createCoreAdapter = (engine, adapterGeneration, manifestCache) => ({
   readAdapterGeneration: () => adapterGeneration,
   readDocument: () => {
     const document = engine.project.currentDocument
@@ -729,6 +869,8 @@ const createCoreAdapter = (engine, adapterGeneration) => ({
     entries: engine.materials.getComponentMetasMap(),
     resolveEntry: entry => entry.getMetadata(),
   }),
+  readWritableMaterialManifests: () => readWritableMaterialManifests(engine, manifestCache),
+  readWritableNodeValues: () => readWritableNodeValues(engine, manifestCache),
 })
 
 export class DashboardAgentHost {
@@ -876,10 +1018,6 @@ export class DashboardAgentHost {
       : Promise.resolve(null)
     this.#engine = engine
     this.#persistence = persistence
-    const coreProvider = createCoreProjectionProvider(createCoreAdapter(engine, adapterGeneration))
-    const registry = new SnapshotProviderRegistry()
-    this.#unregisterCoreProvider = registry.register(coreProvider)
-    this.#snapshotService = createDashboardSnapshotService({ registry, coreProvider })
     this.#manifestCache = createSafeMaterialManifestCache({
       readMaterialRegistryVersion: () => engine.materials.version,
       loadMetadata: componentName => {
@@ -888,6 +1026,10 @@ export class DashboardAgentHost {
         return entry.meta.getMetadata()
       },
     })
+    const coreProvider = createCoreProjectionProvider(createCoreAdapter(engine, adapterGeneration, this.#manifestCache))
+    const registry = new SnapshotProviderRegistry()
+    this.#unregisterCoreProvider = registry.register(coreProvider)
+    this.#snapshotService = createDashboardSnapshotService({ registry, coreProvider })
     this.#screenApplyChangeSet = createDashboardScreenApplyChangeSetHandler({
       authority: this.#authority,
       activityLease: this.#activityLease,

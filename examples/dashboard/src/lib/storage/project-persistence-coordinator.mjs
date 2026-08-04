@@ -778,6 +778,37 @@ const jsonEqual = (left, right) => canonicalJsonStringify(left) === canonicalJso
 
 const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 
+const escapeProvenanceSegment = value => String(value).replaceAll('~', '~0').replaceAll('/', '~1')
+
+const canonicalProjectNodeIds = projectSchema => {
+  const ids = new Set()
+  const visit = node => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return
+    if (typeof node.id === 'string' && node.id.length > 0) ids.add(escapeProvenanceSegment(node.id))
+    if (Array.isArray(node.children)) node.children.forEach(visit)
+  }
+  if (Array.isArray(projectSchema?.componentsTree)) projectSchema.componentsTree.forEach(visit)
+  return ids
+}
+
+const isOrphanedFieldProvenance = (record, request, currentNodeIds) => {
+  if (
+    record?.projectId !== request.projectId ||
+    record?.branchId !== request.branchId ||
+    typeof record.slotKey !== 'string'
+  ) {
+    return false
+  }
+  const scopePrefix = `${escapeProvenanceSegment(request.projectId)}/${escapeProvenanceSegment(request.branchId)}/`
+  if (!record.slotKey.startsWith(scopePrefix)) return false
+  const remainder = record.slotKey.slice(scopePrefix.length)
+  const separator = remainder.indexOf('/')
+  if (separator <= 0) return false
+  const nodeId = remainder.slice(0, separator)
+  const root = remainder.slice(separator + 1).split('/', 1)[0]
+  return (root === 'props' || root === 'extras') && !currentNodeIds.has(nodeId)
+}
+
 const compareArtifactIdentity = (left, right) =>
   compareText(`${left.artifactId}\u0000${left.sourceRevision}`, `${right.artifactId}\u0000${right.sourceRevision}`)
 
@@ -1496,8 +1527,10 @@ export class ProjectPersistenceCoordinator {
     // Legacy coordinator-only adapters predate artifact storage. Production
     // backends expose getAll, while those adapters have no prior roots to
     // reconcile and can safely begin from an empty set.
-    const storedArtifactRoots =
-      typeof this.#backend.getAll === 'function' ? await this.#backend.getAll('artifactRefs') : []
+    const [storedArtifactRoots, storedProvenance] =
+      typeof this.#backend.getAll === 'function'
+        ? await Promise.all([this.#backend.getAll('artifactRefs'), this.#backend.getAll('mutationProvenance')])
+        : [[], []]
     const storedWorkingDraftRoots = storedArtifactRoots
       .filter(
         root =>
@@ -1539,9 +1572,29 @@ export class ProjectPersistenceCoordinator {
         })
         .map(value => ({ type: 'put', store: 'artifactRefs', value })),
     ]
+    const currentNodeIds = canonicalProjectNodeIds(request.projectSchema)
+    const pruneOrphanedFieldProvenance =
+      (request.commitKind === 'autosave' || request.commitKind === 'manual-save') &&
+      hasExactMutationAttribution(request.operations)
     const requestedOperations = request.operations.filter(
-      operation => !isCallerSuppliedWorkingDraftRootOperation(operation),
+      operation =>
+        !isCallerSuppliedWorkingDraftRootOperation(operation) &&
+        !(
+          pruneOrphanedFieldProvenance &&
+          operation.type === 'put' &&
+          operation.store === 'mutationProvenance' &&
+          isOrphanedFieldProvenance(operation.value, request, currentNodeIds)
+        ),
     )
+    const orphanedFieldProvenanceOperations = pruneOrphanedFieldProvenance
+      ? storedProvenance
+          .filter(record => isOrphanedFieldProvenance(record, request, currentNodeIds))
+          .map(record => ({
+            type: 'delete',
+            store: 'mutationProvenance',
+            key: [request.projectId, request.branchId, record.slotKey],
+          }))
+      : []
     const forceProvenanceInvalidation = request.forceProvenanceInvalidation === true
     const invalidateProvenance =
       forceProvenanceInvalidation ||
@@ -1554,10 +1607,11 @@ export class ProjectPersistenceCoordinator {
             store: 'mutationProvenance',
             ...(forceProvenanceInvalidation ? { force: true } : {}),
           },
+          ...orphanedFieldProvenanceOperations,
           ...requestedOperations,
           ...workingDraftRootOperations,
         ]
-      : [...requestedOperations, ...workingDraftRootOperations]
+      : [...orphanedFieldProvenanceOperations, ...requestedOperations, ...workingDraftRootOperations]
     const result = await this.#backend.commit({
       schemaVersion: 1,
       batchId: request.batchId,

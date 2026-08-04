@@ -32,6 +32,10 @@ const CORE_PATH_UNSUPPORTED = /[.\s[\]]/u
 const CORE_MAX_PROPERTY_PATH_LENGTH = 256
 const CORE_MAX_UNSET_PATHS = 100
 const CORE_MAX_UNSET_TOTAL_LENGTH = 8192
+// The compiled DTO intentionally repeats complete manifest fingerprints across
+// its verification inputs. Keep the untrusted compile-input node budget at
+// 50,000, while allowing the trusted derived output to carry those copies.
+const COMPILED_OUTPUT_MAX_JSON_NODES = 200_000
 const RESERVED_NODE_EXTRA_KEYS = new Set(['children', 'componentName', 'id', 'props'])
 const RESERVED_ARTIFACT_BINDING_EXTRA_PATHS = Object.freeze([
   Object.freeze(['$agent']),
@@ -1107,7 +1111,7 @@ const compileInsert = (context, operation, operationIndex) => {
     documentId: context.documentId,
     parentId: parent.id,
     at,
-    node: node.schema,
+    node: cloneJsonValue(node.schema, `${path}.command.node`, context.limits),
   })
   context.expectedPostImages.push(getNodeImage(node.id, operationIndex, true, node.schema))
   context.expectedPostImages.push(getPlacement(context.graph, node.id, operationIndex))
@@ -1373,6 +1377,10 @@ const finalizeOutput = context => {
     affectedStructuralSlots,
     affectedSlotKeys,
   }
+  const outputLimits = {
+    ...context.limits,
+    maxJsonNodes: Math.max(context.limits.maxJsonNodes, COMPILED_OUTPUT_MAX_JSON_NODES),
+  }
   const output = cloneJsonValue(
     {
       schemaVersion: SCREEN_CHANGESET_SCHEMA_VERSION,
@@ -1395,7 +1403,7 @@ const finalizeOutput = context => {
       fingerprintInputs: { preparedHash, transactionFingerprint },
     },
     'compiledChangeSet',
-    context.limits,
+    outputLimits,
   )
   const outputBytes = new TextEncoder().encode(JSON.stringify(output)).byteLength
   if (outputBytes > context.limits.maxOutputBytes) {

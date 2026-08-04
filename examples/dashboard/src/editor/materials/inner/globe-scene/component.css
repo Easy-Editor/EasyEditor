@@ -1,0 +1,282 @@
+.globe-scene {
+  --globe-atmosphere: #6bdcff;
+  --globe-background: #020814;
+  --globe-galaxy-opacity: 0.72;
+  --globe-land: #173f69;
+  --globe-ocean: #04162c;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 1px;
+  min-height: 1px;
+  overflow: hidden;
+  isolation: isolate;
+  contain: layout paint;
+  container-type: size;
+  background: var(--globe-background);
+}
+
+.globe-scene-galaxy {
+  position: absolute;
+  z-index: 0;
+  inset: -4%;
+  width: 108%;
+  height: 108%;
+  object-fit: cover;
+  opacity: var(--globe-galaxy-opacity, 0.72);
+  filter: saturate(1.16) contrast(1.12) brightness(0.88);
+  transform: scale(1.035);
+}
+
+.globe-scene-background-shade {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 49%, transparent 0 32%, rgb(0 3 12 / 9%) 51%, rgb(0 3 12 / 66%) 100%),
+    linear-gradient(90deg, rgb(0 5 16 / 54%), transparent 20% 80%, rgb(0 5 16 / 54%));
+}
+
+.globe-scene-scan-ring {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  width: min(89cqmin, 920px);
+  height: min(89cqmin, 920px);
+  aspect-ratio: 1;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--globe-atmosphere) 24%, transparent);
+  border-right-color: transparent;
+  border-left-color: transparent;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: globe-scene-scan 18s linear infinite;
+}
+
+.globe-scene-scan-ring.is-inner {
+  width: min(78cqmin, 790px);
+  height: min(78cqmin, 790px);
+  border-style: dashed;
+  opacity: 0.54;
+  animation-direction: reverse;
+  animation-duration: 24s;
+}
+
+.globe-scene-orbit {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  width: min(86cqmin, 860px);
+  height: min(86cqmin, 860px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%) scale(var(--globe-scale, 1));
+  transform-origin: center;
+}
+
+.globe-scene-orbit.has-intro {
+  animation-name: globe-scene-intro;
+  animation-duration: var(--globe-intro-duration, 2700ms);
+  animation-timing-function: cubic-bezier(0.16, 0.82, 0.2, 1);
+  animation-fill-mode: both;
+}
+
+.globe-scene-halo {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+.globe-scene-halo.is-wide {
+  inset: 1%;
+  border: 28px solid color-mix(in srgb, var(--globe-atmosphere) 38%, transparent);
+  opacity: 0.62;
+  filter: blur(22px);
+}
+
+.globe-scene-halo.is-sharp {
+  inset: 3%;
+  border: 3px solid color-mix(in srgb, var(--globe-atmosphere) 92%, #fff);
+  box-shadow: inset 0 0 18px color-mix(in srgb, var(--globe-atmosphere) 80%, transparent), 0 0 12px #fff, 0 0 34px
+    color-mix(in srgb, var(--globe-atmosphere) 82%, transparent);
+}
+
+.globe-scene-canvas,
+.globe-scene-texture-fallback,
+.globe-scene-lighting,
+.globe-scene-markers {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.globe-scene-canvas {
+  z-index: 2;
+  display: block;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  filter: drop-shadow(0 0 24px color-mix(in srgb, var(--globe-atmosphere) 42%, transparent));
+}
+
+.globe-scene-canvas.is-ready {
+  opacity: 1;
+}
+
+.globe-scene-texture-fallback {
+  z-index: 1;
+  inset: 3%;
+  width: 94%;
+  height: 94%;
+  overflow: hidden;
+  border-radius: 50%;
+  opacity: 1;
+  background: var(--globe-ocean);
+  transition: opacity 180ms ease;
+}
+
+.globe-scene-texture-fallback.is-hidden {
+  opacity: 0;
+}
+
+.globe-scene-texture-track {
+  width: 600%;
+  height: 100%;
+  display: flex;
+  will-change: transform;
+}
+
+.globe-scene-texture-track img {
+  display: block;
+  flex: 0 0 33.333333%;
+  width: 33.333333%;
+  height: 100%;
+  object-fit: fill;
+}
+
+.globe-scene-geo-fallback {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.globe-scene-lighting {
+  z-index: 3;
+  inset: 3%;
+  width: 94%;
+  height: 94%;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle at 33% 27%, rgb(255 255 255 / 20%), transparent 23%),
+    radial-gradient(circle at 30% 27%, transparent 0 37%, rgb(0 5 17 / 10%) 56%, rgb(0 2 10 / 76%) 100%);
+  box-shadow: inset -24px -18px 58px rgb(0 0 8 / 72%);
+}
+
+.globe-scene-markers {
+  z-index: 4;
+  pointer-events: none;
+}
+
+.globe-scene-marker {
+  --globe-marker-color: var(--globe-atmosphere);
+  position: absolute;
+  display: block;
+  width: 1px;
+  height: 1px;
+  color: var(--globe-marker-color);
+}
+
+.globe-scene-marker i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.globe-scene-marker-wave {
+  width: 26px;
+  height: 26px;
+  border: 2px solid currentColor;
+  opacity: 0;
+  animation: globe-scene-marker-pulse 2.4s ease-out infinite;
+}
+
+.globe-scene-marker-core {
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.globe-scene-marker b {
+  position: absolute;
+  top: -24px;
+  left: 10px;
+  color: currentColor;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: .05em;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px #000, 0 0 8px #000;
+}
+
+@keyframes globe-scene-scan {
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@keyframes globe-scene-intro {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(var(--globe-intro-start-scale, 0.18));
+    filter: blur(8px);
+  }
+  28% {
+    opacity: 0.72;
+  }
+  72% {
+    transform: translate(-50%, -50%) scale(var(--globe-intro-overshoot-scale, 1.08));
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(var(--globe-scale, 1));
+    filter: blur(0);
+  }
+}
+
+@keyframes globe-scene-marker-pulse {
+  0% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+  72%,
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .globe-scene *,
+  .globe-scene *::before,
+  .globe-scene *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .globe-scene-orbit.has-intro {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(var(--globe-scale, 1));
+    filter: none;
+  }
+}

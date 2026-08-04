@@ -208,23 +208,44 @@ export class SimulatorRendererContainer implements ISimulatorRenderer {
     const documentInstanceMap = new Map<string, DocumentInstance>()
     this.disposeFunctions.push(
       this.host.autorun(() => {
+        const staleDocumentInstances: DocumentInstance[] = []
         runInAction(() => {
-          this._documentInstances = this.host.project.documents.map(doc => {
-            let inst = documentInstanceMap.get(doc.id)
-            if (!inst) {
-              inst = new DocumentInstance(this, doc)
-              documentInstanceMap.set(doc.id, inst)
+          const nextDocumentInstanceMap = new Map<string, DocumentInstance>()
+          this._documentInstances = this.host.project.documents.map(document => {
+            const cachedInstance = documentInstanceMap.get(document.id)
+            if (cachedInstance?.document === document) {
+              nextDocumentInstanceMap.set(document.id, cachedInstance)
+              return cachedInstance
             }
-            return inst
+
+            if (cachedInstance) {
+              staleDocumentInstances.push(cachedInstance)
+            }
+            const nextInstance = new DocumentInstance(this, document)
+            nextDocumentInstanceMap.set(document.id, nextInstance)
+            return nextInstance
           })
+
+          for (const [documentId, documentInstance] of documentInstanceMap) {
+            if (!nextDocumentInstanceMap.has(documentId)) {
+              staleDocumentInstances.push(documentInstance)
+            }
+          }
+
+          documentInstanceMap.clear()
+          for (const [documentId, documentInstance] of nextDocumentInstanceMap) {
+            documentInstanceMap.set(documentId, documentInstance)
+          }
         })
+
+        staleDocumentInstances.forEach(documentInstance => documentInstance.dispose())
 
         const path = this.host.project.currentDocument
           ? documentInstanceMap.get(this.host.project.currentDocument.id)!.path
           : '/'
 
         if (this.history.location.pathname !== path) {
-          this.history.push(path, { replace: true })
+          this.history.replace(path)
         }
       }),
     )

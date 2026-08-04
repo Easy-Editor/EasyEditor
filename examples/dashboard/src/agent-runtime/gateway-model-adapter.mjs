@@ -1,26 +1,26 @@
+import { DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES } from './dashboard-model-protocol.mjs'
+
 export const DEFAULT_GATEWAY_MODEL_PATH = '/api/agent/model/stream'
-export const GATEWAY_MODEL_TOKEN_BUDGET = 4_096
-const DEFAULT_DEADLINE_MS = 60_000
+export const GATEWAY_MODEL_TOKEN_BUDGET = 8_192
+export const GATEWAY_MODEL_DEFAULT_DEADLINE_MS = 180_000
 const DEFAULT_MAX_RESPONSE_BYTES = 1_100_000
 const DEFAULT_MAX_RESPONSE_LINES = 258
 const DEFAULT_MAX_EVENTS = 256
 const DEFAULT_MAX_OUTPUT_BYTES = 262_144
 const MAX_REQUEST_BYTES = 196_608
+const MAX_GATEWAY_BODY_BYTES = 262_144
 const MESSAGE_CHUNK_LENGTH = 8_000
-const MAX_MESSAGE_CHUNKS = 31
+const MAX_GATEWAY_MESSAGES = 32
+const MAX_MESSAGE_CHUNKS = MAX_GATEWAY_MESSAGES - DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES.length
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SAME_ORIGIN_PATH = /^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,255}$/u
 const encoder = new TextEncoder()
-const SYSTEM_MESSAGE = [
-  'Return only one JSON array of EasyEditor ModelEvent objects.',
-  'Do not use Markdown or prose outside the JSON array.',
-  'The following user messages are consecutive chunks of one exact ModelTurnRequest JSON document.',
-].join(' ')
 const ERROR_MESSAGES = Object.freeze({
   'gateway-aborted': 'The model gateway request was aborted',
   'gateway-deadline': 'The model gateway request exceeded its deadline',
   'gateway-http': 'The model gateway rejected the request',
   'gateway-rate-limited': 'The model gateway is busy',
+  'gateway-unauthorized': 'The model gateway session or project authorization is invalid',
   'gateway-unavailable': 'The model gateway is unavailable',
   'invalid-config': 'The model gateway configuration is invalid',
   'invalid-correlation': 'The model gateway response correlation is invalid',
@@ -49,19 +49,32 @@ const resolveOptions = options => {
   if (!ID.test(options.providerId) || !ID.test(options.model)) fail('invalid-config')
   const path = options.path ?? DEFAULT_GATEWAY_MODEL_PATH
   if (!SAME_ORIGIN_PATH.test(path) || path.includes('?') || path.includes('#')) fail('invalid-config')
-  const fetchImpl = options.fetch ?? globalThis.fetch
+  const fetchImpl = options.fetch ?? globalThis.fetch?.bind(globalThis)
   if (typeof fetchImpl !== 'function') fail('invalid-config')
   return Object.freeze({
     providerId: options.providerId,
     model: options.model,
     path,
     fetch: fetchImpl,
-    deadlineMs: positiveInteger(options.deadlineMs, DEFAULT_DEADLINE_MS),
+    deadlineMs: positiveInteger(options.deadlineMs, GATEWAY_MODEL_DEFAULT_DEADLINE_MS),
     maxResponseBytes: positiveInteger(options.maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES),
     maxResponseLines: positiveInteger(options.maxResponseLines, DEFAULT_MAX_RESPONSE_LINES),
     maxEvents: positiveInteger(options.maxEvents, DEFAULT_MAX_EVENTS),
     maxOutputBytes: positiveInteger(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
   })
+}
+const gatewayTarget = path => {
+  const href = globalThis.location?.href
+  if (typeof href !== 'string' || href.length === 0) return path
+  try {
+    const base = new URL(href)
+    const target = new URL(path, base)
+    if (target.origin !== base.origin) fail('invalid-config')
+    return target.href
+  } catch (error) {
+    if (error instanceof GatewayModelAdapterError) throw error
+    fail('invalid-config')
+  }
 }
 const chunksOf = value => {
   const chunks = []
@@ -97,11 +110,22 @@ const gatewayBody = (request, options) => {
     model: options.model,
     phase: request.phase,
     messages: [
-      { role: 'system', content: SYSTEM_MESSAGE },
+      ...DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES.map(content => ({ role: 'system', content })),
       ...chunksOf(serialized).map(content => ({ role: 'user', content })),
     ],
     maxOutputTokens: GATEWAY_MODEL_TOKEN_BUDGET,
   }
+}
+const serializedGatewayBody = (request, options) => {
+  let serialized
+  try {
+    serialized = JSON.stringify(gatewayBody(request, options))
+  } catch (error) {
+    if (error instanceof GatewayModelAdapterError) throw error
+    fail('request-budget-exceeded')
+  }
+  if (encoder.encode(serialized).byteLength > MAX_GATEWAY_BODY_BYTES) fail('request-budget-exceeded')
+  return serialized
 }
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const exactKeys = (value, required, optional = []) => {
@@ -252,6 +276,7 @@ const createDeadline = (source, timeoutMs) => {
   }
 }
 const statusFailure = status => {
+  if (status === 401 || status === 403) return fail('gateway-unauthorized')
   if (status === 429) return fail('gateway-rate-limited')
   if (status >= 500) return fail('gateway-unavailable')
   return fail('gateway-http')
@@ -262,18 +287,19 @@ export class GatewayModelAdapter {
     this.#options = resolveOptions(options)
   }
   async *run(request, signal) {
+    const requestBody = serializedGatewayBody(request, this.#options)
     const deadline = createDeadline(signal, this.#options.deadlineMs)
     let reader
     let streamComplete = false
     try {
       const response = await waitWithSignal(
-        this.#options.fetch(this.#options.path, {
+        this.#options.fetch(gatewayTarget(this.#options.path), {
           method: 'POST',
           headers: {
             accept: 'application/x-ndjson',
             'content-type': 'application/json',
           },
-          body: JSON.stringify(gatewayBody(request, this.#options)),
+          body: requestBody,
           credentials: 'same-origin',
           cache: 'no-store',
           redirect: 'error',
@@ -285,9 +311,9 @@ export class GatewayModelAdapter {
       if (!/^application\/x-ndjson(?:\s*;|$)/iu.test(response.headers.get('content-type') ?? '')) {
         fail('invalid-gateway-stream')
       }
-      const body = response.body
-      if (!body) fail('invalid-gateway-stream')
-      reader = body.getReader()
+      const responseBody = response.body
+      if (!responseBody) fail('invalid-gateway-stream')
+      reader = responseBody.getReader()
       const correlation = {
         sessionId: request.sessionId,
         taskId: request.taskId,

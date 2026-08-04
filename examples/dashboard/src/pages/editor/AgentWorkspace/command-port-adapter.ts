@@ -144,8 +144,8 @@ export class AgentWorkspaceGrantConfirmationRequiredError extends Error {
   readonly reason: Exclude<AgentWorkspaceLocalGrantDecisionReason, 'granted'>
 
   constructor(scope: AgentWorkspaceGrantScope, reason: Exclude<AgentWorkspaceLocalGrantDecisionReason, 'granted'>) {
-    const detail = reason === 'revoked' ? '授权已撤销' : reason === 'missing' ? '尚未授权' : '授权环境已变化'
-    super(`${detail}，请先在“授权”页确认“修改当前项目（${scope}）”授权。`)
+    const detail = reason === 'revoked' ? 'Agent 对当前项目的访问已关闭' : 'Agent 无法获得当前项目的访问权限'
+    super(`${detail}，请在更多设置中重新启用后再试。`)
     this.name = 'AgentWorkspaceGrantConfirmationRequiredError'
     this.scope = scope
     this.reason = reason
@@ -308,6 +308,13 @@ const requireNonEmpty = (value: string, label: string): string => {
 
 const bindingKey = (binding: AgentWorkspaceBinding): string =>
   `${binding.projectId}\u0000${binding.branchId}\u0000${binding.sessionId ?? ''}`
+
+const isTaskScopedRuntimeFailure = (runtime: AgentWorkspaceRuntimeSnapshot): boolean => {
+  if (runtime.status !== 'failed') return false
+  const task = runtime.activeTask
+  if (!task || task.phase !== 'FAILED' || !task.failure || !runtime.failure) return false
+  return task.failure.code === runtime.failure.code && task.failure.message === runtime.failure.message
+}
 
 const sameRuntimeBinding = (
   expected: AgentWorkspaceBinding,
@@ -996,7 +1003,7 @@ class DefaultAgentWorkspaceCommandPortAdapter implements AgentWorkspaceCommandPo
     if (!sameRuntimeBinding(this.#binding, runtime.binding)) {
       return Object.freeze({ state: 'unavailable', reason: 'Agent Runtime 已绑定到其他项目分支。' })
     }
-    if (runtime.status !== 'ready') {
+    if (runtime.status !== 'ready' && !isTaskScopedRuntimeFailure(runtime)) {
       const reasonByStatus: Record<Exclude<AgentWorkspaceRuntimeStatus, 'ready'>, string> = {
         initializing: 'Agent Runtime 正在初始化。',
         recovering: 'Agent Runtime 正在恢复。',
@@ -1232,9 +1239,16 @@ class DefaultAgentWorkspaceCommandPortAdapter implements AgentWorkspaceCommandPo
 
   async #requireLocalGrant(scope: AgentWorkspaceGrantScope, lifecycle = this.#requireLifecycleReady()): Promise<void> {
     const checkedScope = this.#requireGrantScope(scope)
-    const decision = await lifecycle.checkLocalGrant({ binding: this.#effectiveBinding(), scope: checkedScope })
+    const request = Object.freeze({ binding: this.#effectiveBinding(), scope: checkedScope })
+    let decision = await lifecycle.checkLocalGrant(request)
     if (decision.granted) return
     if (decision.reason === 'granted') throw new Error('本地授权检查返回了矛盾的授权结果。')
+    if (decision.reason !== 'revoked') {
+      await lifecycle.requestGrant(request)
+      decision = await lifecycle.checkLocalGrant(request)
+      if (decision.granted) return
+      if (decision.reason === 'granted') throw new Error('本地授权检查返回了矛盾的授权结果。')
+    }
     throw new AgentWorkspaceGrantConfirmationRequiredError(checkedScope, decision.reason)
   }
 

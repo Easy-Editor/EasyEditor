@@ -1,6 +1,7 @@
 import { parseWorkerTelemetryControlEvent } from '../worker-telemetry-control.mjs'
 
 export const PRODUCTION_AGENT_WORKER_PROTOCOL_VERSION = 1
+export const DEFAULT_PRODUCTION_AGENT_PROVIDER_ID = 'default'
 
 export const PRODUCTION_AGENT_MODEL_ENV = Object.freeze({
   providerId: 'VITE_DASHBOARD_AGENT_MODEL_PROVIDER_ID',
@@ -63,7 +64,7 @@ export const cloneProductionAgentModelConfig = value => {
 export const readProductionAgentModelConfig = (source = {}) => {
   if (!isRecord(source)) fail('invalid-config', 'Production Agent model configuration is invalid')
   return cloneProductionAgentModelConfig({
-    providerId: source[PRODUCTION_AGENT_MODEL_ENV.providerId],
+    providerId: source[PRODUCTION_AGENT_MODEL_ENV.providerId] ?? DEFAULT_PRODUCTION_AGENT_PROVIDER_ID,
     model: source[PRODUCTION_AGENT_MODEL_ENV.model],
     path: source[PRODUCTION_AGENT_MODEL_ENV.path] ?? DEFAULT_PRODUCTION_AGENT_MODEL_PATH,
   })

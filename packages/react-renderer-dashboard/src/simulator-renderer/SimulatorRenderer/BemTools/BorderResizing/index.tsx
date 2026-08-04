@@ -16,7 +16,7 @@ export const BorderResizing: React.FC<BorderResizingProps> = observer(({ host })
   const dragging = host.designer.dragon.dragging
   const nodes = selection.getNodes().filter((node: Node) => !node.isRoot)
 
-  if (nodes.length === 0 || dragging) {
+  if (nodes.length === 0 || dragging || nodes.some(node => node.isLocked)) {
     return null
   }
 

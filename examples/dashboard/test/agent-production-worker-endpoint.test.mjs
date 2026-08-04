@@ -4,8 +4,10 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { MessageChannel } from 'node:worker_threads'
 
+import { GATEWAY_MODEL_TOKEN_BUDGET } from '../src/agent-runtime/gateway-model-adapter.mjs'
 import { createProductionAgentWorkerEndpointForPlatform } from '../src/agent-runtime/production/endpoint.mjs'
 import {
+  DEFAULT_PRODUCTION_AGENT_PROVIDER_ID,
   PRODUCTION_AGENT_MODEL_ENV,
   ProductionAgentWorkerError,
   createProductionAgentGrantAuthority,
@@ -289,7 +291,7 @@ test('the production Worker runtime functionally requires telemetry and the actu
     generation: 9,
     postControl: control => controls.push(control),
   })
-  assert.equal(capturedOptions.modelTokenBudget, 4_096)
+  assert.equal(capturedOptions.modelTokenBudget, GATEWAY_MODEL_TOKEN_BUDGET)
   assert.equal(typeof capturedOptions.telemetry.emit, 'function')
   capturedOptions.telemetry.emit(telemetryEvent())
   assert.deepEqual(controls, [{ schemaVersion: 1, kind: 'telemetry', generation: 9, event: telemetryEvent() }])
@@ -341,6 +343,11 @@ test('browser config reads only providerId/model/path and rejects secret-bearing
     providerId: 'provider-1',
     providerFingerprint: 'same-origin:["/api/agent/model/stream","provider-1","model-1"]',
     providerLabel: 'provider-1 / model-1',
+  })
+  assert.deepEqual(readProductionAgentModelConfig({ [PRODUCTION_AGENT_MODEL_ENV.model]: 'model-1' }), {
+    providerId: DEFAULT_PRODUCTION_AGENT_PROVIDER_ID,
+    model: 'model-1',
+    path: '/api/agent/model/stream',
   })
   assert.notEqual(
     createProductionAgentGrantAuthority({ ...config, path: '/a:b', providerId: 'c' }).providerFingerprint,

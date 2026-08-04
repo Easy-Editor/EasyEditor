@@ -25,20 +25,60 @@
   z-index: 1;
   border-style: dashed;
   border-color: var(--color-brand, #197aff);
-  background: var(--color-canvas-detecting-background, rgba(25, 122, 255, 0.06));
-  transition: background-color 0.15s ease;
+  background: transparent;
 }
 
 .lc-borders-selecting {
   z-index: 2;
-  border-width: 1.5px;
+  border-width: 1px;
+  border-style: solid;
   border-color: var(--color-brand, #197aff);
-  box-shadow: 0 0 0 1px rgba(25, 122, 255, 0.1);
 
   &.dragging {
     border-style: dashed;
     background: rgba(25, 122, 255, 0.04);
   }
+}
+
+.lc-borders-selecting.multi-select {
+  border-style: dashed;
+  border-color: var(--color-canvas-guide, #06b6d4);
+  background: transparent;
+}
+
+.lc-borders-detecting.locked {
+  border-style: dashed;
+  border-color: var(--color-canvas-locked, #f59e0b);
+}
+
+.lc-borders-selecting.locked {
+  border-style: dashed;
+  border-color: var(--color-canvas-locked, #f59e0b);
+  background: rgba(245, 158, 11, 0.04);
+}
+
+.lc-borders.locked::before {
+  content: "";
+  position: absolute;
+  top: -14px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--color-canvas-locked, #f59e0b);
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+}
+
+.lc-borders.locked::after {
+  content: "";
+  position: absolute;
+  top: -9px;
+  right: 1px;
+  width: 11px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-canvas-locked, #f59e0b);
+  background: var(--color-canvas-locked-surface, #fffbeb);
 }
 
 /* 缩放边框容器 */
@@ -58,19 +98,17 @@
 .lc-resize-corner {
   display: inline-block;
   position: absolute;
-  width: 8px;
-  height: 8px;
-  border: 1.5px solid var(--color-brand, #197aff);
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-brand, #197aff);
   background: #fff;
-  border-radius: 50%;
-  box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.12);
+  border-radius: 0;
   pointer-events: auto;
   z-index: 4;
-  transition: border-width 0.1s ease, box-shadow 0.1s ease;
 
   &:hover {
-    border-width: 2px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    background: var(--color-brand, #197aff);
   }
 }
 
@@ -86,16 +124,14 @@
   &:after {
     content: "";
     display: block;
-    border: 1.5px solid var(--color-brand, #197aff);
+    box-sizing: border-box;
+    border: 1px solid var(--color-brand, #197aff);
     background: #fff;
-    border-radius: 6px;
-    box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.12);
-    transition: border-width 0.1s ease, box-shadow 0.1s ease;
+    border-radius: 0;
   }
 
   &:hover:after {
-    border-width: 2px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    background: var(--color-brand, #197aff);
   }
 
   &.e,
@@ -103,9 +139,8 @@
     cursor: ew-resize;
 
     &:after {
-      width: 5px;
-      min-height: 20px;
-      max-height: 50%;
+      width: 4px;
+      height: 14px;
     }
   }
 
@@ -114,9 +149,8 @@
     cursor: ns-resize;
 
     &:after {
-      min-width: 20px;
-      max-width: 50%;
-      height: 5px;
+      width: 14px;
+      height: 4px;
     }
   }
 }
@@ -125,9 +159,8 @@
 .lc-guideline {
   position: absolute;
   z-index: 999;
-  background-color: var(--color-guideline, #ff3366);
+  background-color: var(--color-canvas-guide, #06b6d4);
   pointer-events: none;
-  box-shadow: 0 0 4px var(--color-guideline, #ff3366);
 
   &.vertical {
     left: 0;
@@ -153,23 +186,20 @@
   /* 垂直距离线段 */
   &.vertical {
     width: 1px;
-    background: var(--color-guideline, #ff3366);
-    box-shadow: 0 0 3px rgba(255, 51, 102, 0.4);
+    background: var(--color-canvas-guide, #06b6d4);
   }
 
   /* 水平距离线段 */
   &.horizontal {
     height: 1px;
-    background: var(--color-guideline, #ff3366);
-    box-shadow: 0 0 3px rgba(255, 51, 102, 0.4);
+    background: var(--color-canvas-guide, #06b6d4);
   }
 }
 
 /* 距离线段端点标记 - T型端点 */
 .lc-distance-cap {
   position: absolute;
-  background: var(--color-guideline, #ff3366);
-  box-shadow: 0 0 2px rgba(255, 51, 102, 0.5);
+  background: var(--color-canvas-guide, #06b6d4);
 
   .lc-distance-segment.vertical & {
     width: 7px;
@@ -209,11 +239,11 @@
   font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Mono", "Droid Sans Mono", monospace;
   letter-spacing: 0.02em;
   color: #fff;
-  background: var(--color-guideline, #ff3366);
-  border-radius: 3px;
+  background: var(--color-canvas-guide, #06b6d4);
+  border-radius: 2px;
   white-space: nowrap;
   z-index: 1002;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+  box-shadow: 0 1px 2px rgba(8, 47, 73, 0.18);
 
   /* 微妙的出现动画 */
   animation: distanceLabelAppear 0.15s ease-out;
@@ -268,7 +298,7 @@
 .lc-user-guideline::before {
   content: "";
   position: absolute;
-  background: var(--color-user-guideline, #00d4aa);
+  background: var(--color-canvas-user-guide, #f59e0b);
 }
 
 .lc-user-guideline.horizontal {
@@ -292,8 +322,7 @@
 }
 
 .lc-user-guideline:hover::before {
-  background-color: var(--color-user-guideline-hover, #00ffcc);
-  box-shadow: 0 0 6px var(--color-user-guideline, #00d4aa);
+  background-color: var(--color-canvas-user-guide-hover, #fbbf24);
 }
 
 /* 辅助线点击扩展区域 */
@@ -320,7 +349,7 @@
 /* 辅助线位置标签 */
 .lc-user-guideline-label {
   position: absolute;
-  background: var(--color-user-guideline, #00d4aa);
+  background: var(--color-canvas-user-guide, #f59e0b);
   color: #fff;
   font-size: 10px;
   font-weight: 600;
@@ -350,7 +379,7 @@
   left: 0;
   z-index: 1000;
   pointer-events: none;
-  border: 1px dashed var(--color-brand, #197aff);
-  background: rgba(25, 122, 255, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.72);
+  background: rgba(37, 99, 235, 0.06);
   will-change: transform, width, height;
 }

@@ -5,8 +5,17 @@ export * from './vite-adapter.mjs'
 export const MODEL_GATEWAY_PATH: '/api/agent/model/stream'
 export const MODEL_GATEWAY_SCHEMA_VERSION: 1
 export const MODEL_GATEWAY_MAX_BODY_BYTES: number
+export const MODEL_GATEWAY_DEFAULT_TIMEOUT_MS: 165000
+export const OPENAI_PROVIDER_DEFAULT_TIMEOUT_MS: 150000
 export const AGENT_MODEL_GATEWAY_ENABLED_ENV: 'EASY_EDITOR_AGENT_GATEWAY_ENABLED'
 export const AGENT_MODEL_GATEWAY_CONFIG_ENV: 'EASY_EDITOR_AGENT_GATEWAY_CONFIG_JSON'
+export const AGENT_MODEL_GATEWAY_BASE_URL_ENV: 'EASY_EDITOR_AGENT_BASE_URL'
+export const AGENT_MODEL_GATEWAY_API_KEY_ENV: 'EASY_EDITOR_AGENT_API_KEY'
+export const AGENT_MODEL_GATEWAY_MODEL_ENV: 'EASY_EDITOR_AGENT_MODEL'
+export const AGENT_MODEL_GATEWAY_PROVIDER_ID_ENV: 'EASY_EDITOR_AGENT_PROVIDER_ID'
+export const AGENT_MODEL_GATEWAY_SESSION_COOKIE_NAME_ENV: 'EASY_EDITOR_AGENT_SESSION_COOKIE_NAME'
+export const AGENT_MODEL_GATEWAY_SESSION_TOKEN_ENV: 'EASY_EDITOR_AGENT_SESSION_TOKEN'
+export const AGENT_MODEL_GATEWAY_PROJECT_ID_ENV: 'EASY_EDITOR_AGENT_PROJECT_ID'
 
 export interface ModelGatewayPrincipal {
   readonly tenantId: string
@@ -117,6 +126,7 @@ export function createNodeModelGatewayMiddleware(
   options: ModelGatewayMiddlewareOptions & { handler: ModelGatewayHandler },
 ): ModelGatewayMiddleware
 export function createEnvironmentModelGatewayMiddleware(options?: ModelGatewayMiddlewareOptions): ModelGatewayMiddleware
+export function createEnvironmentModelGatewayVitePlugin(options?: ModelGatewayMiddlewareOptions): import('vite').Plugin
 
 export function createOpenAICompatibleProviderTransport(
   options: Readonly<{

@@ -5,13 +5,14 @@ interface BorderSelectingInstanceProps {
   observed: OffsetObserver
   highlight?: boolean
   dragging?: boolean
+  isLocked?: boolean
 }
 
 /**
  * 选中边框实例组件
  */
 export const BorderSelectingInstance: React.FC<BorderSelectingInstanceProps> = observer(
-  ({ observed, highlight, dragging }) => {
+  ({ observed, highlight, dragging, isLocked }) => {
     if (!observed.hasOffset) {
       return null
     }
@@ -26,6 +27,9 @@ export const BorderSelectingInstance: React.FC<BorderSelectingInstanceProps> = o
     let classname = 'lc-borders lc-borders-selecting'
     if (dragging) {
       classname += ' dragging'
+    }
+    if (isLocked) {
+      classname += ' locked'
     }
 
     return <div className={classname} style={style} />

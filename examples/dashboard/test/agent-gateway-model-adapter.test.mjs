@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES } from '../src/agent-runtime/dashboard-model-protocol.mjs'
 import {
   DEFAULT_GATEWAY_MODEL_PATH,
   GATEWAY_MODEL_TOKEN_BUDGET,
@@ -67,6 +68,12 @@ const collect = async (adapter, signal = new AbortController().signal) => {
   return events
 }
 
+const collectRequest = async (adapter, modelRequest, signal = new AbortController().signal) => {
+  const events = []
+  for await (const event of adapter.run(modelRequest, signal)) events.push(event)
+  return events
+}
+
 const completedFrames = output => [
   frame('started'),
   frame('delta', { delta: output }),
@@ -82,6 +89,7 @@ const adapterFor = (fetch, overrides = {}) =>
   })
 
 test('maps the exact ModelTurnRequest into the same-origin Gateway DTO and parses fragmented NDJSON', async () => {
+  assert.equal(GATEWAY_MODEL_TOKEN_BUDGET, 8_192)
   const expected = [{ schemaVersion: 1, kind: 'complete', summary: '完成世界大屏' }]
   const bytes = encoder.encode(ndjson(completedFrames(JSON.stringify(expected))))
   const calls = []
@@ -104,6 +112,8 @@ test('maps the exact ModelTurnRequest into the same-origin Gateway DTO and parse
 
   const body = JSON.parse(init.body)
   assert.equal(body.maxOutputTokens, GATEWAY_MODEL_TOKEN_BUDGET)
+  assert.ok(body.messages.length <= 32)
+  assert.ok(body.messages.every(message => message.content.length <= 16_384))
   assert.deepEqual(Object.keys(body).sort(), [
     'branchId',
     'maxOutputTokens',
@@ -141,15 +151,55 @@ test('maps the exact ModelTurnRequest into the same-origin Gateway DTO and parse
       phase: request.phase,
     },
   )
-  assert.equal(body.messages[0].role, 'system')
+  assert.deepEqual(
+    body.messages.slice(0, DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES.length),
+    DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES.map(content => ({ role: 'system', content })),
+  )
   assert.equal(
     body.messages
-      .slice(1)
+      .slice(DASHBOARD_AGENT_MODEL_SYSTEM_MESSAGES.length)
       .map(message => message.content)
       .join(''),
     JSON.stringify(request),
   )
   assert.doesNotMatch(init.body, /apiKey|authorization|secret/iu)
+})
+
+test('resolves the validated Gateway path against a module Worker location before fetch', async t => {
+  const priorLocation = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: new URL('http://localhost:5173/src/agent-runtime/production/worker.mjs'),
+  })
+  t.after(() => {
+    if (priorLocation) Object.defineProperty(globalThis, 'location', priorLocation)
+    else Reflect.deleteProperty(globalThis, 'location')
+  })
+  let target
+  const adapter = adapterFor(async input => {
+    target = input
+    return responseFromChunks([ndjson(completedFrames(JSON.stringify([{ schemaVersion: 1, kind: 'complete' }])))])
+  })
+
+  await collect(adapter)
+
+  assert.equal(target, 'http://localhost:5173/api/agent/model/stream')
+})
+
+test('binds the default browser fetch to its WorkerGlobalScope receiver', async t => {
+  const priorFetch = globalThis.fetch
+  globalThis.fetch = function () {
+    assert.equal(this, globalThis)
+    return Promise.resolve(
+      responseFromChunks([ndjson(completedFrames(JSON.stringify([{ schemaVersion: 1, kind: 'complete' }])))]),
+    )
+  }
+  t.after(() => {
+    globalThis.fetch = priorFetch
+  })
+  const adapter = new GatewayModelAdapter({ providerId: 'provider-1', model: 'model-1' })
+
+  assert.deepEqual(await collect(adapter), [{ schemaVersion: 1, kind: 'complete' }])
 })
 
 test('fails closed for malformed, mis-correlated, or non-terminal Gateway streams', async t => {
@@ -195,6 +245,8 @@ test('fails closed for malformed, mis-correlated, or non-terminal Gateway stream
 test('maps HTTP and remote error failures to fixed non-reflective errors', async t => {
   const secret = 'provider-secret-response-body'
   const cases = [
+    [401, 'gateway-unauthorized'],
+    [403, 'gateway-unauthorized'],
     [429, 'gateway-rate-limited'],
     [503, 'gateway-unavailable'],
   ]
@@ -315,4 +367,20 @@ test('configuration rejects cross-origin paths and secret-bearing option shapes 
       error => error instanceof GatewayModelAdapterError && error.code === 'invalid-config',
     )
   }
+})
+
+test('rejects an escaped final Gateway body that exceeds the server request budget before fetch', async () => {
+  let fetchCalls = 0
+  const adapter = adapterFor(async () => {
+    fetchCalls += 1
+    return responseFromChunks([])
+  })
+  const quoteHeavyRequest = structuredClone(request)
+  quoteHeavyRequest.snapshot.projection = { source: '"\\'.repeat(43_000) }
+
+  await assert.rejects(
+    collectRequest(adapter, quoteHeavyRequest),
+    error => error instanceof GatewayModelAdapterError && error.code === 'request-budget-exceeded',
+  )
+  assert.equal(fetchCalls, 0)
 })

@@ -574,6 +574,190 @@ test('Core material summaries use the explicit resolver seam without touching pr
   assert.doesNotMatch(serialized, /prototype getter|credential|authorization|secret|password/)
 })
 
+test('Core material projection exposes compact safe writable field manifests to the model', async () => {
+  const { adapter, service } = createHarness()
+  adapter.readWritableMaterialManifests = async () => [
+    {
+      componentName: 'Text',
+      fields: [
+        {
+          access: 'read-write',
+          fieldId: 'shared.rect',
+          valueSchema: {
+            properties: {
+              height: { minimum: 0, type: 'number' },
+              width: { minimum: 0, type: 'number' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+            },
+            required: ['x', 'y', 'width', 'height'],
+            type: 'object',
+          },
+        },
+        {
+          access: 'read-write',
+          fieldId: 'props.text',
+          valueSchema: { type: 'string' },
+        },
+        ...[
+          'props.apiKey',
+          'props.secret',
+          'props.token',
+          'props.password',
+          'props.credential',
+          'props.auth',
+          'props.cookie',
+          'props.headers',
+          'props.X-Service-Key',
+        ].map(fieldId => ({
+          access: 'read-write',
+          fieldId,
+          valueSchema: { type: 'string' },
+        })),
+        {
+          access: 'read-write',
+          fieldId: 'props.xKey',
+          valueSchema: { type: 'string' },
+        },
+        {
+          access: 'read-write',
+          fieldId: 'props.transport',
+          valueSchema: {
+            properties: {
+              headers: {
+                additionalProperties: { type: 'string' },
+                type: 'object',
+              },
+            },
+            type: 'object',
+          },
+        },
+        {
+          access: 'read-only',
+          fieldId: 'props.secret',
+          valueSchema: { type: 'string' },
+        },
+      ],
+      configure: 'must-not-cross',
+    },
+  ]
+
+  const full = await service.observe({ mode: 'full' })
+  const materials = full.projection['dashboard.core'].materials
+
+  assert.deepEqual(JSON.parse(JSON.stringify(materials.writableManifests)), [
+    {
+      componentName: 'Text',
+      fields: [
+        {
+          access: 'read-write',
+          fieldId: 'props.text',
+          valueSchema: { type: 'string' },
+        },
+        {
+          access: 'read-write',
+          fieldId: 'props.xKey',
+          valueSchema: { type: 'string' },
+        },
+        {
+          access: 'read-write',
+          fieldId: 'shared.rect',
+          valueSchema: {
+            properties: {
+              height: { minimum: 0, type: 'number' },
+              width: { minimum: 0, type: 'number' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+            },
+            required: ['x', 'y', 'width', 'height'],
+            type: 'object',
+          },
+        },
+      ],
+    },
+  ])
+  assert.doesNotMatch(JSON.stringify(materials.writableManifests), /configure|callback|credential|authorization/u)
+})
+
+test('Core node projection exposes only bounded safe current writable values supplied by the Host adapter', async () => {
+  const { adapter, service } = createHarness()
+  adapter.readWritableNodeValues = async () => ({
+    'node-001': {
+      'props.data': {
+        kpis: [{ label: '今日飞行', value: 128, unit: '架次' }],
+        taskMix: [{ label: '巡检', value: 42, unit: '项' }],
+      },
+      'props.heading': '低空飞行运营监控大屏',
+      'props.transport': {
+        headers: {
+          Authorization: 'bearer-nested-must-not-cross',
+          'X-Service-Key': 'service-key-must-not-cross',
+        },
+        url: 'https://safe.example.test',
+      },
+      'props.requestMetadata': {
+        metadata: {
+          Authorization: 'bearer-without-headers-must-not-cross',
+        },
+      },
+      'props.serviceMetadata': {
+        metadata: {
+          'X-Service-Key': 'service-key-without-headers-must-not-cross',
+        },
+      },
+      'props.xKey': 'normal-domain-key',
+      'props.secret': 'must-not-cross',
+      'shared.rect': { x: 0, y: 0, width: 1920, height: 1080 },
+    },
+    'node-002': {
+      'props.data': { authorization: 'bearer-must-not-cross', rows: [{ value: 1 }] },
+    },
+    'unknown-node': {
+      'props.text': 'must-not-attach-to-an-unknown-node',
+    },
+  })
+
+  const full = await service.observe({ mode: 'full' })
+  const core = full.projection['dashboard.core']
+
+  assert.deepEqual(JSON.parse(JSON.stringify(core.nodes['node-001'].writableValues)), {
+    'props.data': {
+      kpis: [{ label: '今日飞行', unit: '架次', value: 128 }],
+      taskMix: [{ label: '巡检', unit: '项', value: 42 }],
+    },
+    'props.heading': '低空飞行运营监控大屏',
+    'props.xKey': 'normal-domain-key',
+  })
+  assert.equal(Object.hasOwn(core.nodes['node-002'], 'writableValues'), false)
+  assert.equal(Object.hasOwn(core.nodes, 'unknown-node'), false)
+  assert.doesNotMatch(
+    JSON.stringify(full),
+    /must-not-cross|must-not-attach-to-an-unknown-node|authorization|headers|X-Service-Key|shared\.rect/u,
+  )
+})
+
+test('Core projection reports optional writable-source failures without exposing thrown error text', async () => {
+  const { adapter, service } = createHarness()
+  adapter.readWritableMaterialManifests = async () => {
+    throw new Error('credential manifest failure must-not-cross')
+  }
+  adapter.readWritableNodeValues = async () => {
+    throw new Error('authorization value failure must-not-cross')
+  }
+
+  const full = await service.observe({ mode: 'full' })
+  const core = full.projection['dashboard.core']
+  const serialized = JSON.stringify(full)
+
+  assert.deepEqual(core.projectionWarnings, ['writable-manifests-unavailable', 'writable-node-values-unavailable'])
+  assert.equal(Object.hasOwn(core.materials, 'writableManifests'), false)
+  assert.equal(
+    Object.values(core.nodes).some(node => Object.hasOwn(node, 'writableValues')),
+    false,
+  )
+  assert.doesNotMatch(serialized, /credential manifest failure|authorization value failure|must-not-cross/u)
+})
+
 test('Core material summaries ignore a getter-only resolveEntry seam and keep plain metadata fallback', async () => {
   let resolveEntryGetterInvocations = 0
   const { service, state } = createHarness()

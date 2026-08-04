@@ -1,0 +1,44 @@
+{
+  "name": "@easy-editor/dashboard-agent-host",
+  "version": "0.0.0",
+  "description": "Browser-side Dashboard Agent Host adapter and compatibility contract",
+  "type": "module",
+  "main": "src/index.mjs",
+  "types": "src/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "import": "./src/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.20.8"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "module": "dist/index.js",
+    "types": "dist/index.d.mts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "build": "npm-run-all -nl build:*",
+    "build:clean": "rimraf dist/",
+    "build:js": "rollup -c",
+    "build:types": "mkdir -p dist && cp src/index.d.mts dist/index.d.mts",
+    "types": "tsc --noEmit --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext src/index.d.mts",
+    "test": "pnpm build && node --test test/*.test.mjs"
+  }
+}

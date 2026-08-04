@@ -89,6 +89,60 @@ test('OpenAI provider posts the server-owned request and parses fragmented SSE i
   assert.doesNotMatch(JSON.stringify(transport), new RegExp(secret))
 })
 
+test('OpenAI provider ignores relay metadata frames with empty choices before completion', async () => {
+  const sse = [
+    `data: ${JSON.stringify({
+      id: 'chatcmpl-metadata',
+      object: 'chat.completion.chunk',
+      choices: [],
+      latency_checkpoint: { name: 'upstream-ready' },
+    })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: '[]' }, finish_reason: null }] })}\n\n`,
+    `data: ${JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 7, completion_tokens: 1, total_tokens: 8 },
+    })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ].join('')
+  const transport = createOpenAICompatibleProviderTransport({
+    baseUrl: 'https://gateway.example.test/v1',
+    apiKey: secret,
+    fetchImpl: async () => response(bytesInSlices(sse)),
+  })
+
+  assert.deepEqual(await collect(await stream(transport)), [
+    { kind: 'delta', delta: '[]' },
+    { kind: 'completed', finishReason: 'stop' },
+  ])
+})
+
+test('OpenAI provider coalesces token-sized relay deltas before the Gateway event budget', async () => {
+  const fragment = '低'
+  const fragments = Array.from(
+    { length: 300 },
+    () =>
+      `data: ${JSON.stringify({
+        choices: [{ delta: { content: fragment }, finish_reason: null }],
+      })}\n\n`,
+  )
+  const sse = [
+    ...fragments,
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ].join('')
+  const transport = createOpenAICompatibleProviderTransport({
+    baseUrl: 'https://gateway.example.test/v1',
+    apiKey: secret,
+    fetchImpl: async () => response(bytesInSlices(sse)),
+  })
+
+  assert.deepEqual(await collect(await stream(transport)), [
+    { kind: 'delta', delta: fragment.repeat(fragments.length) },
+    { kind: 'completed', finishReason: 'stop' },
+  ])
+})
+
 test('OpenAI provider falls back to the configured model without exposing configuration', async () => {
   let providerBody
   const transport = createOpenAICompatibleProviderTransport({

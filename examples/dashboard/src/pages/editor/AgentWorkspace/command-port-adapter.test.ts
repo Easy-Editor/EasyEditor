@@ -124,6 +124,7 @@ class FakePersistence implements AgentWorkspacePersistenceLifecycle {
   projection: AgentWorkspacePersistenceProjection
   releaseCount = 0
   grantDecision: AgentWorkspaceLocalGrantDecision = { granted: true, reason: 'granted' }
+  grantOnRequest = false
   readonly grantChecks: Parameters<AgentWorkspacePersistenceLifecycle['checkLocalGrant']>[0][] = []
   readWorkspaceProjectionImpl: (binding: AgentWorkspaceBinding) => Promise<AgentWorkspacePersistenceProjection> =
     async () => this.projection
@@ -169,6 +170,9 @@ class FakePersistence implements AgentWorkspacePersistenceLifecycle {
 
   async requestGrant(input: Parameters<AgentWorkspacePersistenceLifecycle['requestGrant']>[0]): Promise<void> {
     this.calls.push(['request-grant', input])
+    if (this.grantOnRequest && this.grantDecision.reason !== 'revoked') {
+      this.grantDecision = { granted: true, reason: 'granted' }
+    }
   }
 
   async revokeGrant(input: Parameters<AgentWorkspacePersistenceLifecycle['revokeGrant']>[0]): Promise<void> {
@@ -560,7 +564,40 @@ test('maps lineage-aware Runtime commands and lifecycle commands without exposin
   ])
 })
 
-test('fails write-capable commands with a typed confirmation requirement before Runtime or lifecycle effects', async () => {
+test('silently authorizes a missing or changed local grant once and continues the original submit', async t => {
+  for (const reason of [
+    'missing',
+    'provider-changed',
+    'provider-fingerprint-changed',
+    'policy-version-changed',
+  ] as const) {
+    await t.test(reason, async () => {
+      const runtime = new FakeRuntime(runtimeSnapshot())
+      const persistence = new FakePersistence(persistenceSnapshot(), emptyProjection())
+      persistence.grantDecision = { granted: false, reason }
+      persistence.grantOnRequest = true
+      const port = createAgentWorkspaceCommandPortAdapter({ enabled: true, binding, runtime, persistence })
+      await port.ready()
+
+      await port.submitIntent({ intent: '直接搭建大屏', mode: 'initial' })
+
+      assert.deepEqual(runtime.calls, [
+        ['submit', { text: '直接搭建大屏', metadata: { agentWorkspaceIntentMode: 'initial' } }],
+      ])
+      const effectiveBinding = { ...binding, sessionId: 'session-1' }
+      assert.deepEqual(persistence.grantChecks, [
+        { binding: effectiveBinding, scope: 'project.write' },
+        { binding: effectiveBinding, scope: 'project.write' },
+      ])
+      assert.deepEqual(
+        persistence.calls.filter(call => Array.isArray(call) && call[0] === 'request-grant'),
+        [['request-grant', { binding: effectiveBinding, scope: 'project.write' }]],
+      )
+    })
+  }
+})
+
+test('keeps an explicit revoke authoritative before Runtime or lifecycle effects', async () => {
   const completed = runtimeTask()
   const runtime = new FakeRuntime(runtimeSnapshot({ activeTask: completed, tasks: [completed] }))
   const persistence = new FakePersistence(persistenceSnapshot(), {
@@ -993,4 +1030,57 @@ test('models disabled, unavailable, binding mismatch, refresh failure and dispos
   runtime.emit(runtimeSnapshot({ revision: 99, tasks: [runtimeTask()] }))
   assert.deepEqual(port.getSnapshot().tasks, [])
   await assert.rejects(port.compensateTask('task-1'), /已释放/)
+})
+
+test('keeps the composer available after a task-scoped model failure while lifecycle failures stay unavailable', async () => {
+  const taskFailure = {
+    code: 'worker-task-failed',
+    message: 'The model gateway request exceeded its deadline',
+    retryable: false,
+  }
+  const failedTask = runtimeTask({ phase: 'FAILED', compensationEligible: false, failure: taskFailure })
+  const runtime = new FakeRuntime(
+    runtimeSnapshot({
+      status: 'failed',
+      activeTask: failedTask,
+      tasks: [failedTask],
+      failure: taskFailure,
+    }),
+  )
+  const workspace = createAgentWorkspaceCommandPortAdapter({
+    enabled: true,
+    binding,
+    runtime,
+    persistence: new FakePersistence(persistenceSnapshot(), emptyProjection()),
+  })
+
+  await workspace.ready()
+  assert.deepEqual(workspace.getSnapshot().availability, { state: 'ready' })
+  await workspace.submitIntent({ intent: '重新生成低空大屏', mode: 'follow-up' })
+  assert.deepEqual(runtime.calls.at(-1), [
+    'submit',
+    {
+      text: '重新生成低空大屏',
+      metadata: { agentWorkspaceIntentMode: 'follow-up' },
+    },
+  ])
+
+  const lifecycleFailure = {
+    code: 'worker-initialization-failed',
+    message: 'Worker transport is unavailable',
+    retryable: true,
+  }
+  runtime.emit(
+    runtimeSnapshot({
+      status: 'failed',
+      activeTask: failedTask,
+      tasks: [failedTask],
+      failure: lifecycleFailure,
+    }),
+  )
+  assert.deepEqual(workspace.getSnapshot().availability, {
+    state: 'unavailable',
+    reason: 'Agent Runtime 启动失败。',
+    detail: lifecycleFailure.message,
+  })
 })

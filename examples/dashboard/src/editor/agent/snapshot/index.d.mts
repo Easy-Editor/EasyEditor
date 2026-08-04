@@ -41,10 +41,27 @@ export interface CoreProjectionMaterials {
   readonly resolveEntry?: (entry: unknown) => Readonly<ComponentMetadata>
 }
 
+export interface CoreProjectionWritableMaterialField {
+  readonly fieldId: string
+  readonly access: 'read-write'
+  readonly valueSchema?: JsonObject
+}
+
+export interface CoreProjectionWritableMaterialManifest {
+  readonly componentName: string
+  readonly fields: readonly CoreProjectionWritableMaterialField[]
+}
+
+export type CoreProjectionWritableNodeValues = Readonly<Record<string, Readonly<Record<string, unknown>>>>
+
 export interface CoreProjectionAdapter {
   readAdapterGeneration(): number
   readDocument(): CoreProjectionDocument | null
   readMaterials(): CoreProjectionMaterials
+  readWritableMaterialManifests?():
+    | readonly CoreProjectionWritableMaterialManifest[]
+    | Promise<readonly CoreProjectionWritableMaterialManifest[]>
+  readWritableNodeValues?(): CoreProjectionWritableNodeValues | Promise<CoreProjectionWritableNodeValues>
 }
 
 export interface SnapshotProvider {

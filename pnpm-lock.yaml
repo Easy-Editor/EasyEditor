@@ -343,6 +343,8 @@ importers:
         specifier: ^4.28.1
         version: 4.57.1
 
+  packages/dashboard-agent-host: {}
+
   packages/easypack:
     dependencies:
       '@babel/core':

@@ -3,6 +3,7 @@ import type { RendererAppHelper, RendererProps } from '@easy-editor/renderer-cor
 import { observer } from 'mobx-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Renderer from '../index'
+import { type PureDashboardPageChangeHandler, navigatePureDashboardPage } from './navigation'
 
 export interface PureDashboardRendererProps extends Omit<RendererProps, 'schema' | 'appHelper'> {
   /** 项目 Schema */
@@ -22,6 +23,9 @@ export interface PureDashboardRendererProps extends Omit<RendererProps, 'schema'
   /** 页面切换前的回调，可用于加载远程物料 */
   onBeforeNavigate?: (pageSchema: RootSchema, componentsMap?: ComponentsMap) => Promise<void>
 
+  /** 页面切换完成后的通知，可用于同步主题、视口和外层页面状态 */
+  onPageChange?: PureDashboardPageChangeHandler
+
   /** 加载中显示的内容 */
   loadingContent?: React.ReactNode
 
@@ -39,6 +43,7 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
     viewport = { width: 1920, height: 1080 },
     appHelper,
     onBeforeNavigate,
+    onPageChange,
     loadingContent,
     notFoundContent,
     ...rendererProps
@@ -49,6 +54,8 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
     // 使用 ref 存储回调，避免依赖变化导致死循环
     const onBeforeNavigateRef = useRef(onBeforeNavigate)
     onBeforeNavigateRef.current = onBeforeNavigate
+    const onPageChangeRef = useRef(onPageChange)
+    onPageChangeRef.current = onPageChange
 
     const navigate = useCallback(
       async (path?: string) => {
@@ -60,24 +67,18 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
           return
         }
 
-        // 查找目标页面
-        let pageSchema: RootSchema | undefined
-        if (path) {
-          pageSchema = projectSchema.componentsTree.find(item => item.fileName === path)
-        } else {
-          pageSchema = projectSchema.componentsTree[0]
-        }
+        const pageSchema = await navigatePureDashboardPage({
+          projectSchema,
+          path,
+          onBeforeNavigate: onBeforeNavigateRef.current,
+          onPageChange: onPageChangeRef.current,
+        })
 
         if (!pageSchema) {
           console.warn('[PreviewRenderer] pageSchema not found:', path)
           setSchema(null)
           setLoading(false)
           return
-        }
-
-        // 调用 onBeforeNavigate 回调（用于加载远程物料等）
-        if (onBeforeNavigateRef.current) {
-          await onBeforeNavigateRef.current(pageSchema, projectSchema.componentsMap)
         }
 
         setSchema(pageSchema)

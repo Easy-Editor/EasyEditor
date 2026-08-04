@@ -4,4 +4,11 @@ import type { ModelGatewayMiddleware } from './index.mjs'
 
 export const MODEL_GATEWAY_VITE_PLUGIN_NAME: 'easy-editor-agent-model-gateway'
 
-export function createModelGatewayVitePlugin(middleware: ModelGatewayMiddleware): Plugin
+export interface ModelGatewayVitePluginOptions {
+  readonly localSession?: Readonly<{ cookieName: string; token: string }>
+}
+
+export function createModelGatewayVitePlugin(
+  middleware: ModelGatewayMiddleware,
+  options?: ModelGatewayVitePluginOptions,
+): Plugin

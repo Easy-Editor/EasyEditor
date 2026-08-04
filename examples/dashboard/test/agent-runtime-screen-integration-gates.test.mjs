@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks'
 import test from 'node:test'
 
 import { createHumanActivityLease } from '../src/editor/agent/activity/index.mjs'
+import { deriveInsertedScreenNodeId } from '../src/editor/agent/capabilities/screen/index.mjs'
 import { createDashboardAgentHost } from '../src/editor/agent/host/index.mjs'
 
 const coreInstanceUrl = new URL('../../../packages/core/dist/instance.js', import.meta.url)
@@ -38,6 +39,8 @@ const registerMaterials = engine => {
   const configure = { props: [{ name: 'title', title: 'Title', setter: 'StringSetter' }] }
   engine.materials.createComponentMeta({ componentName: 'ScreenRoot', title: 'Root', configure })
   engine.materials.createComponentMeta({ componentName: 'ScreenItem', title: 'Item', configure })
+  engine.materials.createComponentMeta({ componentName: 'ScreenContainer', title: 'Container', configure })
+  engine.materials.createComponentMeta({ componentName: 'ScreenText', title: 'Text', configure })
 }
 
 const createPersistence = ({ afterIntent } = {}) => {
@@ -85,6 +88,38 @@ const createCall = expectedRevision => ({
     ],
   },
 })
+
+const createNestedInsertCall = expectedRevision => {
+  const callId = 'screen-write-nested-insert'
+  const containerId = deriveInsertedScreenNodeId(callId, 'insert-container')
+  return {
+    schemaVersion: 1,
+    ...authority,
+    stepId: 'step-nested-insert',
+    callId,
+    capability: 'screen.applyChangeSet',
+    expectedRevision,
+    arguments: {
+      schemaVersion: 1,
+      documentId: 'page-1',
+      operations: [
+        {
+          opId: 'insert-container',
+          type: 'insert',
+          parentId: 'root-1',
+          componentName: 'ScreenContainer',
+        },
+        {
+          opId: 'insert-child',
+          type: 'insert',
+          parentId: containerId,
+          componentName: 'ScreenText',
+          fields: { 'props.title': 'Nested child' },
+        },
+      ],
+    },
+  }
+}
 
 const createHostHarness = async (t, { activityLease, afterIntent } = {}) => {
   const { TransactionCommittedError, TransactionRollbackIncompleteError, createEngine } = await import(
@@ -199,6 +234,26 @@ test('continuous pointer lease blocks Core and release permits exactly one Agent
   assert.equal(result.status, 'applied')
   assert.equal(harness.coreCommitAttempts, 1)
   assert.equal(harness.engine.project.currentDocument.root.getPropValue('title'), 'agent-title')
+})
+
+test('one semantic ChangeSet can insert a container and then a child into that new container', async t => {
+  const harness = await createHostHarness(t)
+  const observed = await harness.host.observe({ schemaVersion: 1, ...authority, mode: 'full' })
+  const call = createNestedInsertCall(observed.revision)
+  const containerId = deriveInsertedScreenNodeId(call.callId, 'insert-container')
+  const childId = deriveInsertedScreenNodeId(call.callId, 'insert-child')
+
+  const result = await harness.host.invoke(call, { schemaVersion: 1 })
+
+  assert.equal(result.status, 'applied')
+  assert.equal(harness.coreCommitAttempts, 1)
+  const container = harness.engine.project.currentDocument.getNode(containerId)
+  assert.ok(container)
+  assert.deepEqual(
+    container.childrenNodes.map(node => node.id),
+    [childId],
+  )
+  assert.equal(harness.engine.project.currentDocument.getNode(childId)?.getPropValue('title'), 'Nested child')
 })
 
 test('fixed 200-node real Core atomic commit runner keeps warmed P95 below 50ms', async t => {

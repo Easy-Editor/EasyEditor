@@ -238,7 +238,7 @@ test('an active task is safely superseded by a refinement intent', async ({ page
   await expect(workspace.getByText(/已安全替代/)).toBeVisible()
 })
 
-test('project writes require confirmation, reuse the exact grant after reload, and fail immediately after revoke', async ({
+test('project writes silently authorize once, reuse the exact grant after reload, and fail immediately after revoke', async ({
   page,
 }) => {
   await installScript(page, completedTaskSteps('authorized'))
@@ -246,25 +246,15 @@ test('project writes require confirmation, reuse the exact grant after reload, a
   const initial = await waitForWorkspaceRuntime(page)
   const workspace = await openWorkspace(page)
 
-  await submitIntent(page, '首次授权前不可写入', '开始搭建')
-  await expect(workspace.getByRole('alert')).toContainText(/尚未授权.*project\.write/)
-  expect((await readProbe(page))?.snapshot.remote.tasks).toEqual([])
-
-  await workspace.getByRole('tab', { name: '授权' }).click()
-
-  const projectGrantRow = workspace.getByRole('listitem').filter({ hasText: '修改当前项目' })
-  await expect(projectGrantRow.getByRole('button', { name: '授权' })).toBeVisible()
-  await projectGrantRow.getByRole('button', { name: '授权' }).click()
+  await submitIntent(page, '首次提交自动授权并完成写入', '开始搭建')
+  const firstTask = await waitForTask(page, tasks => tasks.find(task => task.phase === 'COMPLETED'))
   await expect
     .poll(
       async () =>
         (await readProbe(page))?.snapshot.remote.grants.find(grant => grant.scope === 'project.write')?.status ?? null,
     )
     .toBe('granted')
-  await expect(projectGrantRow.getByRole('button', { name: '撤销' })).toBeVisible()
-  await workspace.getByRole('tab', { name: '任务' }).click()
-  await submitIntent(page, '授权后完成首次写入', '开始搭建')
-  const firstTask = await waitForTask(page, tasks => tasks.find(task => task.phase === 'COMPLETED'))
+  await expect(workspace.getByRole('alert')).toHaveCount(0)
 
   await page.reload()
   const recovered = await waitForWorkspaceRuntime(page)
@@ -291,7 +281,7 @@ test('project writes require confirmation, reuse the exact grant after reload, a
   await expect(recoveredRow.getByRole('button', { name: '授权' })).toBeVisible()
   await recoveredWorkspace.getByRole('tab', { name: '任务' }).click()
   await submitIntent(page, '撤销后不可继续写入', '继续搭建')
-  await expect(recoveredWorkspace.getByRole('alert')).toContainText(/授权已撤销.*project\.write/)
+  await expect(recoveredWorkspace.getByRole('alert')).toContainText(/Agent 对当前项目的访问已关闭.*更多设置/)
   expect((await readProbe(page))?.snapshot.remote.tasks.map(task => task.taskId)).toEqual([
     firstTask.taskId,
     reusedTask.taskId,

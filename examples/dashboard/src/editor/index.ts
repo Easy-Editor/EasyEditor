@@ -1,3 +1,4 @@
+import { registerBundledExecutorMaterials } from '@/editor/agent/executor-materials'
 import {
   CURRENT_PROJECT_SCHEMA_VERSION,
   type ComponentsMap,
@@ -369,7 +370,7 @@ const registerMissingLocalSetters = (): void => {
 }
 
 const loadRemoteMaterialsFromComponentsMap = async (componentsMap?: ComponentsMap) => {
-  if (!componentsMap?.length) return
+  if (import.meta.env.VITE_E2E === '1' || !componentsMap?.length) return
 
   const remoteMaterials: Array<{ package: string; version?: string; globalName: string }> = []
   const seenPackages = new Set<string>()
@@ -565,6 +566,7 @@ const bootstrapDashboardEditor = async () => {
     ])
     engine.designer.addPropsReducer(dashboardDataSourceRenderReducer, dashboardDataSourceRenderStage)
     engine.materials.buildComponentMetasMap(Object.values(componentMetaMap))
+    registerBundledExecutorMaterials(engine)
 
     await engine.init({
       appHelper: {

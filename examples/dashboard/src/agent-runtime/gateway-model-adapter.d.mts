@@ -1,7 +1,8 @@
 import type { ModelAdapter, ModelEvent, ModelTurnRequest } from '@easy-editor/agent-runtime/worker'
 
 export declare const DEFAULT_GATEWAY_MODEL_PATH: '/api/agent/model/stream'
-export declare const GATEWAY_MODEL_TOKEN_BUDGET: 4096
+export declare const GATEWAY_MODEL_TOKEN_BUDGET: 8192
+export declare const GATEWAY_MODEL_DEFAULT_DEADLINE_MS: 180000
 
 export interface GatewayModelAdapterOptions {
   readonly providerId: string
@@ -20,6 +21,7 @@ export type GatewayModelAdapterErrorCode =
   | 'gateway-deadline'
   | 'gateway-http'
   | 'gateway-rate-limited'
+  | 'gateway-unauthorized'
   | 'gateway-unavailable'
   | 'invalid-config'
   | 'invalid-correlation'

@@ -9,7 +9,7 @@ export const DEFAULT_SCREEN_CHANGESET_LIMITS = Object.freeze({
   maxJsonNodes: 50_000,
   maxManifests: 512,
   maxOperations: 100,
-  maxOutputBytes: 1_048_576,
+  maxOutputBytes: 4_194_304,
   maxPathSegmentLength: 128,
   maxPathSegments: 16,
   maxStringLength: 262_144,

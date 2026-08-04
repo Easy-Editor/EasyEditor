@@ -2,7 +2,7 @@ import { DESIGNER_EVENT } from '@easy-editor/core/instance'
 import { observer } from 'mobx-react'
 import type React from 'react'
 import { Component, type ReactInstance, createElement } from 'react'
-import { unstable_HistoryRouter as HistoryRouter, Route, Routes } from 'react-router-dom'
+import { unstable_HistoryRouter as HistoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import LowCodeRenderer from '../renderer-core'
 import type { DocumentInstance } from './document-instance'
 import type { SimulatorRendererContainer } from './simulator-renderer'
@@ -63,18 +63,36 @@ const Layout: React.FC<
 
 const RouteList: React.FC<{
   simulatorRenderer: SimulatorRendererContainer
-}> = observer(props => {
-  const { simulatorRenderer } = props
+}> = props => {
   return (
     <Routes>
-      {simulatorRenderer.documentInstances.map(inst => (
-        <Route
-          key={inst.path}
-          path={inst.path}
-          element={<Renderer documentInstance={inst} simulatorRenderer={simulatorRenderer} />}
-        />
-      ))}
+      <Route path='*' element={<DocumentRoute simulatorRenderer={props.simulatorRenderer} />} />
     </Routes>
+  )
+}
+
+const DocumentRoute: React.FC<{
+  simulatorRenderer: SimulatorRendererContainer
+}> = observer(props => {
+  const { simulatorRenderer } = props
+  const { pathname } = useLocation()
+  const { documentInstances, host } = simulatorRenderer
+  const currentDocumentId = host.currentDocument?.id
+  const documentInstance =
+    documentInstances.find(instance => instance.path === pathname) ??
+    documentInstances.find(instance => instance.document.id === currentDocumentId) ??
+    documentInstances[0]
+
+  if (!documentInstance) {
+    return null
+  }
+
+  return (
+    <Renderer
+      key={documentInstance.document.id}
+      documentInstance={documentInstance}
+      simulatorRenderer={simulatorRenderer}
+    />
   )
 })
 

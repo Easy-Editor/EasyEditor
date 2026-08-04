@@ -1,0 +1,49 @@
+@keyframes easy-dashboard-div-enter-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: var(--div-enter-final-opacity, 1);
+  }
+}
+
+@keyframes easy-dashboard-div-enter-slide-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-36px, 0, 0);
+  }
+  to {
+    opacity: var(--div-enter-final-opacity, 1);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes easy-dashboard-div-enter-slide-right {
+  from {
+    opacity: 0;
+    transform: translate3d(36px, 0, 0);
+  }
+  to {
+    opacity: var(--div-enter-final-opacity, 1);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes easy-dashboard-div-enter-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+  to {
+    opacity: var(--div-enter-final-opacity, 1);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-div-enter-animation]:not([data-div-enter-animation="none"]) {
+    opacity: var(--div-enter-final-opacity, 1) !important;
+    transform: none !important;
+    animation: none !important;
+  }
+}

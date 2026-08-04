@@ -60,9 +60,12 @@ export const BorderSelectingForBox: React.FC<BorderSelectingForBoxProps> = obser
     }
   }, [nodes])
 
-  let classname = 'lc-borders lc-borders-selecting'
+  let classname = 'lc-borders lc-borders-selecting multi-select'
   if (dragging) {
     classname += ' dragging'
+  }
+  if (nodes.some(node => node.isLocked)) {
+    classname += ' locked'
   }
 
   return <div ref={containerRef} className={classname} />

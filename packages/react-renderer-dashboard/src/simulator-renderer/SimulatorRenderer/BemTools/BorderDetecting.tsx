@@ -21,8 +21,10 @@ const BorderDetectingInstance: React.FC<BorderDetectingInstanceProps> = memo(({ 
     transform: `translate(${rect.left}px, ${rect.top}px)`,
   }
 
+  const classname = `lc-borders lc-borders-detecting${isLocked ? ' locked' : ''}`
+
   return (
-    <div className='lc-borders lc-borders-detecting' style={style}>
+    <div className={classname} style={style}>
       {/* <Title title={title} className='lc-borders-title' />
       {isLocked ? <Title title={intl('locked')} className='lc-borders-status' /> : null} */}
     </div>
@@ -64,10 +66,17 @@ export const BorderDetecting: React.FC<BorderDetectingProps> = observer(({ host 
         title={current.title}
         scale={host.viewport.scale}
         rect={lockedNode.getDashboardRect()}
-        isLocked={lockedNode.id !== current.id}
+        isLocked={current.isLocked || lockedNode.id !== current.id}
       />
     )
   }
 
-  return <BorderDetectingInstance title={current.title} scale={host.viewport.scale} rect={current.getDashboardRect()} />
+  return (
+    <BorderDetectingInstance
+      title={current.title}
+      scale={host.viewport.scale}
+      rect={current.getDashboardRect()}
+      isLocked={current.isLocked}
+    />
+  )
 })

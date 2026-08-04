@@ -1,0 +1,15 @@
+{
+  "name": "@easy-editor/document-executor-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "biome check src harness test fixtures vite.config.mts",
+    "build": "pnpm build:dependencies && pnpm build:browser",
+    "build:dependencies": "pnpm --dir ../../packages/agent-runtime build:js && pnpm --dir ../../packages/core build:js && pnpm --dir ../../packages/react-renderer-dashboard build:js && pnpm --dir ../../packages/dashboard-agent-host build",
+    "build:browser": "VITE_DASHBOARD_AGENT_RUNTIME=1 VITE_DASHBOARD_AGENT_DATA=0 VITE_DASHBOARD_AGENT_ONLINE=0 VITE_DASHBOARD_AGENT_PROMOTION=0 VITE_E2E=1 pnpm --dir ../../examples/dashboard exec vite build --config ../../spikes/document-executor/vite.config.mts",
+    "pretest": "pnpm build",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node src/cli.mjs"
+  }
+}

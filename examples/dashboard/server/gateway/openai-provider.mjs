@@ -1,6 +1,8 @@
 const SSE_LINE_BYTE_LIMIT = 64 * 1024
 const SSE_TOTAL_BYTE_LIMIT = 1024 * 1024
+const DELTA_FLUSH_BYTE_LIMIT = 8 * 1024
 const encoder = new TextEncoder()
+export const OPENAI_PROVIDER_DEFAULT_TIMEOUT_MS = 150_000
 
 class ProviderFailure extends Error {
   constructor(code, status, message, retryable = false) {
@@ -91,6 +93,10 @@ const parseDataFrame = value => {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Array.isArray(payload.choices)) {
     throw failure.invalid()
   }
+  if (payload.choices.length === 0) {
+    usageOf(payload.usage)
+    return []
+  }
   if (payload.choices.length !== 1) throw failure.invalid()
   const choice = payload.choices[0]
   if (!choice || typeof choice !== 'object' || Array.isArray(choice)) throw failure.invalid()
@@ -115,6 +121,25 @@ const parseSse = (body, deadline, source) => {
     let totalBytes = 0
     let completed = false
     let done = false
+    let pendingDelta = ''
+    let pendingDeltaBytes = 0
+    const flushPendingDelta = () => {
+      if (pendingDeltaBytes === 0) return []
+      const event = { kind: 'delta', delta: pendingDelta }
+      pendingDelta = ''
+      pendingDeltaBytes = 0
+      return [event]
+    }
+    const coalesceEvent = event => {
+      if (event.kind === 'delta') {
+        if (event.delta.length === 0) return []
+        pendingDelta += event.delta
+        pendingDeltaBytes += encoder.encode(event.delta).byteLength
+        return pendingDeltaBytes >= DELTA_FLUSH_BYTE_LIMIT ? flushPendingDelta() : []
+      }
+      completed = true
+      return [...flushPendingDelta(), event]
+    }
     const parseLine = line => {
       const normalized = line.endsWith('\r') ? line.slice(0, -1) : line
       if (encoder.encode(normalized).byteLength > SSE_LINE_BYTE_LIMIT) throw failure.invalid()
@@ -146,8 +171,7 @@ const parseSse = (body, deadline, source) => {
           const line = pending.slice(0, newline)
           pending = pending.slice(newline + 1)
           for (const event of parseLine(line)) {
-            if (event.kind === 'completed') completed = true
-            yield event
+            for (const buffered of coalesceEvent(event)) yield buffered
           }
           newline = pending.indexOf('\n')
         }
@@ -160,8 +184,7 @@ const parseSse = (body, deadline, source) => {
       }
       if (pending.length > 0) {
         for (const event of parseLine(pending)) {
-          if (event.kind === 'completed') completed = true
-          yield event
+          for (const buffered of coalesceEvent(event)) yield buffered
         }
       }
       if (!done) throw failure.disconnected()
@@ -196,7 +219,7 @@ export const createOpenAICompatibleProviderTransport = ({
   baseUrl,
   apiKey,
   defaultModel,
-  timeoutMs = 60_000,
+  timeoutMs = OPENAI_PROVIDER_DEFAULT_TIMEOUT_MS,
 } = {}) => {
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required')
   if (typeof apiKey !== 'string' || apiKey.length === 0) throw new TypeError('apiKey is required')

@@ -1037,10 +1037,19 @@ test('actual MessageChannel observation owns full and delta DTOs without host le
 
   assert.equal(full.schemaVersion, 1)
   assert.equal(typeof full.cursor, 'string')
-  assert.deepEqual(Object.keys(core.materials).sort(), ['registryVersion', 'summaries'])
+  assert.deepEqual(Object.keys(core.materials).sort(), ['registryVersion', 'summaries', 'writableManifests'])
   assert.deepEqual(
     core.materials.summaries.map(summary => summary.componentName),
     ['Image', 'Root'],
+  )
+  assert.deepEqual(
+    core.materials.writableManifests.map(manifest => manifest.componentName),
+    ['Image', 'Root'],
+  )
+  assert.ok(
+    core.materials.writableManifests
+      .find(manifest => manifest.componentName === 'Image')
+      .fields.some(field => field.fieldId === 'shared.rect'),
   )
   assert.doesNotMatch(
     serialized,
@@ -1080,6 +1089,25 @@ test('actual MessageChannel observation owns full and delta DTOs without host le
   assert.deepEqual(resync.providerGenerations, ownedProviderGenerations)
   assert.notStrictEqual(resync.providerGenerations, ownedProviderGenerations)
   assert.equal(resync.projection['dashboard.core'].nodes['image-1'].extra.$dashboard.rect.x, 88)
+})
+
+test('Host projects current values for manifest-approved writable props without exposing unrelated props', async t => {
+  const { rpc } = await createHarness(t, { includeDataNodes: true })
+  const full = await rpc.call('observe', observeRequest())
+  const nodes = full.projection['dashboard.core'].nodes
+  const serialized = JSON.stringify(full)
+
+  assert.deepEqual(JSON.parse(JSON.stringify(nodes['text-1'].writableValues)), {
+    'props.text': 'Fallback',
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(nodes['bar-1'].writableValues)), {
+    'props.data': [],
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(nodes['line-1'].writableValues)), {
+    'props.data': [],
+  })
+  assert.equal(Object.hasOwn(nodes['image-1'], 'writableValues'), false)
+  assert.doesNotMatch(serialized, /credential-must-not-cross|api-key-must-not-cross|source-must-not-cross/u)
 })
 
 test('Host records safe snapshot, call-boundary, and receipt recovery telemetry from real seams', async t => {

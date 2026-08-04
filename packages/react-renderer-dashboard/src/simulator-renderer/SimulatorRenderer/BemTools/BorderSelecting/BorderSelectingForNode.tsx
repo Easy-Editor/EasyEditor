@@ -30,7 +30,9 @@ export const BorderSelectingForNode: React.FC<BorderSelectingForNodeProps> = obs
           return null
         }
 
-        return <BorderSelectingInstance key={observed.id} dragging={dragging} observed={observed} />
+        return (
+          <BorderSelectingInstance key={observed.id} dragging={dragging} observed={observed} isLocked={node.isLocked} />
+        )
       })}
     </>
   )

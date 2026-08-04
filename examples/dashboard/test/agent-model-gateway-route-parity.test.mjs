@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { request as createHttpRequest, createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { loadConfigFromFile } from 'vite'
 
 import {
   MODEL_GATEWAY_PATH,
@@ -18,6 +21,74 @@ const decoder = new TextDecoder()
 const secret = 'route-parity-secret-never-reflect'
 const prompt = 'private-route-parity-prompt'
 const enabledEnv = { EASY_EDITOR_AGENT_GATEWAY_ENABLED: '1' }
+
+test('Vite injects a flat local session only into loopback model Gateway requests', () => {
+  const sessionToken = 'loopback-session-token'
+  const seenCookies = []
+  let registeredMiddleware
+  const plugin = createModelGatewayVitePlugin(
+    (request, _response, next) => {
+      seenCookies.push(request.headers.cookie)
+      next?.()
+      return Promise.resolve(false)
+    },
+    { localSession: { cookieName: 'easy-editor-agent-session', token: sessionToken } },
+  )
+  plugin.configureServer({
+    middlewares: {
+      use(value) {
+        registeredMiddleware = value
+      },
+    },
+  })
+  assert.equal(typeof registeredMiddleware, 'function')
+
+  const request = (url, remoteAddress, cookie) => ({
+    method: 'POST',
+    url,
+    headers: { host: 'localhost:5173', origin: 'http://localhost:5173', ...(cookie ? { cookie } : {}) },
+    socket: { remoteAddress },
+  })
+  registeredMiddleware(request(MODEL_GATEWAY_PATH, '127.0.0.1'), {}, () => undefined)
+  registeredMiddleware(request('/not-the-gateway', '127.0.0.1'), {}, () => undefined)
+  registeredMiddleware(request(MODEL_GATEWAY_PATH, '192.0.2.10'), {}, () => undefined)
+  registeredMiddleware(
+    request(MODEL_GATEWAY_PATH, '::1', 'easy-editor-agent-session=explicit-browser-session'),
+    {},
+    () => undefined,
+  )
+  registeredMiddleware(request(MODEL_GATEWAY_PATH, '127.0.0.1', 'easy-editor-agent-sessionX'), {}, () => undefined)
+
+  assert.deepEqual(seenCookies, [
+    `easy-editor-agent-session=${sessionToken}`,
+    undefined,
+    undefined,
+    'easy-editor-agent-session=explicit-browser-session',
+    `easy-editor-agent-sessionX; easy-editor-agent-session=${sessionToken}`,
+  ])
+})
+
+test('Vite config loads Dashboard env files while process values remain authoritative', async t => {
+  const mode = `agent-gateway-config-test-${process.pid}-${randomUUID()}`
+  const configPath = fileURLToPath(new URL('../vite.config.mts', import.meta.url))
+  const envPath = fileURLToPath(new URL(`../.env.${mode}.local`, import.meta.url))
+  const previousViteE2E = process.env.VITE_E2E
+  t.after(async () => {
+    if (previousViteE2E === undefined) Reflect.deleteProperty(process.env, 'VITE_E2E')
+    else process.env.VITE_E2E = previousViteE2E
+    await rm(envPath, { force: true })
+  })
+
+  Reflect.deleteProperty(process.env, 'VITE_E2E')
+  await writeFile(envPath, 'VITE_E2E=1\nEASY_EDITOR_AGENT_API_KEY=file-only-secret\n')
+  const fromFile = await loadConfigFromFile({ command: 'serve', mode }, configPath)
+  assert.equal(fromFile?.config.define?.__EASY_EDITOR_AGENT_RUNTIME_E2E__, 'true')
+  assert.doesNotMatch(JSON.stringify(fromFile?.config.define), /file-only-secret/u)
+
+  process.env.VITE_E2E = '0'
+  const fromProcess = await loadConfigFromFile({ command: 'serve', mode }, configPath)
+  assert.equal(fromProcess?.config.define?.__EASY_EDITOR_AGENT_RUNTIME_E2E__, 'false')
+})
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const close = server => new Promise((resolve, reject) => server.close(error => (error ? reject(error) : resolve())))

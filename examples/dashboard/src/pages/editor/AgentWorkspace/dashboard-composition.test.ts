@@ -679,7 +679,7 @@ test('fails closed on the restored binding when loading the switched canonical d
   await composition.dispose()
 })
 
-test('checks exact project.write authority before Runtime effects, reuses confirmation, and denies immediately after revoke', async () => {
+test('silently authorizes exact project.write access, reuses it, and keeps an explicit revoke authoritative', async () => {
   const events: string[] = []
   const persistence = new FakePersistence(events)
   const createComposition = (authority: DashboardAgentWorkspaceGrantAuthority = grantAuthority) =>
@@ -693,49 +693,40 @@ test('checks exact project.write authority before Runtime effects, reuses confir
 
   const initial = await createComposition()
   initial.controller.setIntentDraft('搭建客户运营大屏')
-  assert.equal(await initial.controller.submitIntent(), false)
-  assert.match(initial.getSnapshot().actionError ?? '', /尚未授权.*project\.write/)
-  assert.equal(events.includes('runtime-submit:main'), false)
-  assert.deepEqual(persistence.grantChecks.at(-1), {
-    schemaVersion: 1,
-    userId: 'user-1',
-    projectId: 'project-1',
-    scope: 'project.write',
-    policyVersion: 'policy-v1',
-    providerId: 'gateway-main',
-    providerFingerprint: 'fingerprint-a',
-  })
-
-  assert.equal(await initial.controller.requestGrant('project.write'), true)
-  const generationAfterGrant = persistence.currentDraft.draftGeneration
-  assert.equal(await initial.controller.requestGrant('project.write'), true)
-  assert.equal(persistence.currentDraft.draftGeneration, generationAfterGrant, 'identical confirmation must be reused')
-  initial.controller.setIntentDraft('搭建客户运营大屏')
   assert.equal(await initial.controller.submitIntent(), true)
   assert.equal(events.filter(event => event === 'runtime-submit:main').length, 1)
+  assert.equal(initial.getSnapshot().actionError, undefined)
+  assert.deepEqual(persistence.grants.at(-1), grantedProjectWrite({ grantedAt: 50, updatedAt: 50 }))
+  const generationAfterAutomaticGrant = persistence.currentDraft.draftGeneration
   await initial.dispose()
 
   const reloaded = await createComposition()
   reloaded.controller.setIntentDraft('继续完善客户运营大屏')
   assert.equal(await reloaded.controller.submitIntent(), true)
   assert.equal(events.filter(event => event === 'runtime-submit:main').length, 2)
+  assert.equal(
+    persistence.currentDraft.draftGeneration,
+    generationAfterAutomaticGrant,
+    'the exact project grant must be reused without another persistence mutation',
+  )
   assert.equal(await reloaded.controller.revokeGrant('project.write'), true)
   reloaded.controller.setIntentDraft('撤销后不得继续写入')
   assert.equal(await reloaded.controller.submitIntent(), false)
-  assert.match(reloaded.getSnapshot().actionError ?? '', /授权已撤销.*project\.write/)
+  assert.match(reloaded.getSnapshot().actionError ?? '', /访问已关闭/)
   assert.equal(events.filter(event => event === 'runtime-submit:main').length, 2)
   await reloaded.dispose()
 
+  let expectedRuntimeSubmits = 2
   for (const authority of [
     { ...grantAuthority, providerId: 'gateway-secondary' },
     { ...grantAuthority, providerFingerprint: 'fingerprint-b' },
     { ...grantAuthority, policyVersion: 'policy-v2' },
   ]) {
     const changed = await createComposition(authority)
-    changed.controller.setIntentDraft('授权环境变化后不得复用')
-    assert.equal(await changed.controller.submitIntent(), false)
-    assert.match(changed.getSnapshot().actionError ?? '', /授权环境已变化|授权已撤销/)
-    assert.equal(events.filter(event => event === 'runtime-submit:main').length, 2)
+    changed.controller.setIntentDraft('授权环境变化后继续搭建')
+    assert.equal(await changed.controller.submitIntent(), true)
+    expectedRuntimeSubmits += 1
+    assert.equal(events.filter(event => event === 'runtime-submit:main').length, expectedRuntimeSubmits)
     assert.deepEqual(persistence.grantChecks.at(-1), {
       schemaVersion: 1,
       userId: authority.userId,
@@ -745,6 +736,10 @@ test('checks exact project.write authority before Runtime effects, reuses confir
       providerId: authority.providerId,
       providerFingerprint: authority.providerFingerprint,
     })
+    assert.equal(persistence.grants.at(-1)?.status, 'granted')
+    assert.equal(persistence.grants.at(-1)?.providerId, authority.providerId)
+    assert.equal(persistence.grants.at(-1)?.providerFingerprint, authority.providerFingerprint)
+    assert.equal(String(persistence.grants.at(-1)?.policyVersion), String(authority.policyVersion))
     await changed.dispose()
   }
 })
