@@ -325,6 +325,23 @@ test('five fresh browser/context runs produce strict full-envelope candidates', 
     assert.equal(result.evidence.consoleErrors.length, 0)
     assert.equal(result.evidence.render.rendererReady, true)
     assert.match(result.evidence.render.screenshotSha256, /^[a-f0-9]{64}$/u)
+    assert.deepEqual(result.evidence.render.viewport, { width: 1920, height: 1080 })
+    assert.equal(result.evidence.render.layout.status, 'passed')
+    assert.equal(result.evidence.render.layout.viewportMatchesTarget, true)
+    assert.deepEqual(result.evidence.render.layout.browserViewport, { width: 1920, height: 1080 })
+    assert.deepEqual(result.evidence.render.layout.simulatorViewport, {
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1080,
+    })
+    assert.equal(result.evidence.render.layout.componentElementCount, 1)
+    assert.equal(result.evidence.render.layout.visibleElementCount, 1)
+    assert.equal(result.evidence.render.layout.hiddenElementCount, 0)
+    assert.equal(result.evidence.render.layout.zeroAreaElementCount, 0)
+    assert.equal(result.evidence.render.layout.overflowingElementCount, 0)
+    assert.equal(result.evidence.render.layout.clippedElementCount, 0)
+    assert.deepEqual(result.evidence.render.layout.documentOverflow, { horizontal: false, vertical: false })
 
     const candidate = result.candidateProject.schema
     assert.equal(candidate.formatVersion, 1)
@@ -407,6 +424,55 @@ test('five fresh browser/context runs produce strict full-envelope candidates', 
     assert.doesNotMatch(serializedResult, /postgres(?:ql)?:\/\//iu)
   }
   assert.equal(browserSessionIds.size, 5)
+})
+
+test(
+  'render evidence uses the project target viewport and reports deterministic overflow',
+  { timeout: 60_000 },
+  async () => {
+    const suffix = 'target-viewport-overflow'
+    const input = await createMinimalExecutionInput({ suffix })
+    const root = input.prepareInput.baseProject.schema.editorSchema.componentsTree[0]
+    root.$dashboard.rect.width = 1600
+    root.$dashboard.rect.height = 900
+    input.prepareInput.invocation.arguments.operations = [
+      {
+        opId: 'overflow-title',
+        type: 'set',
+        nodeId: `document-executor-title-${suffix}`,
+        fieldId: 'shared.rect',
+        value: { x: 1500, y: 80, width: 720, height: 80 },
+      },
+    ]
+    const serialized = canonicalJson(input.prepareInput.baseProject.schema)
+    input.prepareInput.baseProject.bytes = Buffer.byteLength(serialized, 'utf8')
+    input.prepareInput.baseProject.sha256 = sha256(serialized)
+
+    const result = await executeDocument(input, { dashboardUrl: DASHBOARD_URL })
+
+    assert.deepEqual(result.evidence.render.viewport, { width: 1600, height: 900 })
+    assert.deepEqual(result.evidence.render.layout.targetViewport, { width: 1600, height: 900 })
+    assert.deepEqual(result.evidence.render.layout.browserViewport, { width: 1600, height: 900 })
+    assert.equal(result.evidence.render.layout.viewportMatchesTarget, true)
+    assert.equal(result.evidence.render.layout.status, 'failed')
+    assert.equal(result.evidence.render.layout.visibleElementCount, 1)
+    assert.equal(result.evidence.render.layout.overflowingElementCount, 1)
+    assert.equal(result.evidence.render.layout.clippedElementCount, 1)
+  },
+)
+
+test('render viewport is bounded before Chromium launches', async () => {
+  const input = await createMinimalExecutionInput({ suffix: 'render-budget' })
+  const root = input.prepareInput.baseProject.schema.editorSchema.componentsTree[0]
+  root.$dashboard.rect.width = 16_384
+  const serialized = canonicalJson(input.prepareInput.baseProject.schema)
+  input.prepareInput.baseProject.bytes = Buffer.byteLength(serialized, 'utf8')
+  input.prepareInput.baseProject.sha256 = sha256(serialized)
+
+  await assert.rejects(
+    executeDocument(input, { dashboardUrl: DASHBOARD_URL }),
+    error => error instanceof DocumentExecutorError && error.code === 'INVALID_RENDER_VIEWPORT',
+  )
 })
 
 test(

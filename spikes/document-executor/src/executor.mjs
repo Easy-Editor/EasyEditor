@@ -125,6 +125,45 @@ const canonicalJson = value => {
 
 const sha256 = value => createHash('sha256').update(value).digest('hex')
 
+const MAX_RENDER_VIEWPORT_EDGE = 8_192
+const MAX_RENDER_VIEWPORT_PIXELS = 33_554_432
+
+const resolveDocumentTargetViewport = (projectSchema, documentId, label = 'project schema') => {
+  const roots = requireRecord(projectSchema, label).componentsTree
+  if (!Array.isArray(roots)) {
+    throw new DocumentExecutorError('INVALID_RENDER_VIEWPORT', `${label}.componentsTree must be an array`)
+  }
+  const matches = roots.filter(root => root?.docId === documentId || root?.id === documentId)
+  if (matches.length !== 1) {
+    throw new DocumentExecutorError(
+      'INVALID_RENDER_VIEWPORT',
+      `${label} must contain exactly one active document for render evidence`,
+    )
+  }
+  const rect = matches[0]?.$dashboard?.rect
+  const width = rect?.width
+  const height = rect?.height
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    width > MAX_RENDER_VIEWPORT_EDGE ||
+    height > MAX_RENDER_VIEWPORT_EDGE ||
+    width * height > MAX_RENDER_VIEWPORT_PIXELS
+  ) {
+    throw new DocumentExecutorError(
+      'INVALID_RENDER_VIEWPORT',
+      `${label} active root must declare a positive integer $dashboard.rect within the executor render budget`,
+      {
+        maximumEdge: MAX_RENDER_VIEWPORT_EDGE,
+        maximumPixels: MAX_RENDER_VIEWPORT_PIXELS,
+      },
+    )
+  }
+  return Object.freeze({ width, height })
+}
+
 const documentDescriptor = schema => {
   const serialized = canonicalJson(schema)
   return {
@@ -306,15 +345,113 @@ const normalizeInput = (input, { authoritySecrets = [] } = {}) => {
       projectSchema: structuredClone(editorSchema),
     },
     storedProject: structuredClone(storedProject),
+    targetViewport: resolveDocumentTargetViewport(editorSchema, documentId, 'base project editorSchema'),
     changeSet: semanticChangeSet,
     seams: input.seams === undefined ? {} : structuredClone(requireRecord(input.seams, 'input.seams')),
   }
 }
 
-const waitForRender = async page => {
+const configureRenderViewport = async (page, targetViewport) => {
+  await page.setViewportSize(targetViewport)
+  await page.evaluate(viewport => {
+    const bridge = globalThis.__EASY_EDITOR_DOCUMENT_EXECUTOR_BRIDGE__
+    const simulator = bridge?.engine?.project?.simulator
+    if (!simulator) throw new Error('Document Executor Harness simulator is unavailable')
+    simulator.set('deviceStyle', { viewport })
+    simulator.viewport.scale = 1
+  }, targetViewport)
+}
+
+const measureLayoutQuality = async (page, targetViewport) =>
+  page.evaluate(target => {
+    const round = value => Math.round(value * 1_000) / 1_000
+    const viewportElement = document.querySelector('.lc-simulator-canvas-viewport')
+    const frameElement = document.querySelector('.lc-simulator-content-frame')
+    if (!(viewportElement instanceof HTMLElement) || !(frameElement instanceof HTMLElement)) {
+      throw new Error('Document Executor Harness render viewport is unavailable')
+    }
+    const viewportRect = viewportElement.getBoundingClientRect()
+    const frameRect = frameElement.getBoundingClientRect()
+    const viewportMatchesTarget =
+      window.innerWidth === target.width &&
+      window.innerHeight === target.height &&
+      Math.abs(viewportRect.width - target.width) < 0.5 &&
+      Math.abs(viewportRect.height - target.height) < 0.5 &&
+      Math.abs(frameRect.width - target.width) < 0.5 &&
+      Math.abs(frameRect.height - target.height) < 0.5
+    let visibleElementCount = 0
+    let hiddenElementCount = 0
+    let zeroAreaElementCount = 0
+    let overflowingElementCount = 0
+    let clippedElementCount = 0
+    const elements = [...document.querySelectorAll('.lc-component-container')]
+    for (const element of elements) {
+      if (!(element instanceof HTMLElement)) continue
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      const zeroArea = rect.width <= 0 || rect.height <= 0
+      const styledHidden =
+        style.display === 'none' || style.visibility === 'hidden' || Number.parseFloat(style.opacity || '1') <= 0
+      const intersectionWidth = Math.max(
+        0,
+        Math.min(rect.right, viewportRect.right) - Math.max(rect.left, viewportRect.left),
+      )
+      const intersectionHeight = Math.max(
+        0,
+        Math.min(rect.bottom, viewportRect.bottom) - Math.max(rect.top, viewportRect.top),
+      )
+      const intersectionArea = intersectionWidth * intersectionHeight
+      const area = Math.max(0, rect.width) * Math.max(0, rect.height)
+      const outsideViewport =
+        rect.left < viewportRect.left - 0.5 ||
+        rect.top < viewportRect.top - 0.5 ||
+        rect.right > viewportRect.right + 0.5 ||
+        rect.bottom > viewportRect.bottom + 0.5
+      const clipped = area > 0 && intersectionArea + 0.5 < area
+      if (zeroArea) zeroAreaElementCount += 1
+      if (outsideViewport) overflowingElementCount += 1
+      if (clipped) clippedElementCount += 1
+      if (!zeroArea && !styledHidden && intersectionArea > 0) visibleElementCount += 1
+      else hiddenElementCount += 1
+    }
+    const documentOverflow = {
+      horizontal: document.documentElement.scrollWidth > window.innerWidth,
+      vertical: document.documentElement.scrollHeight > window.innerHeight,
+    }
+    const passed =
+      viewportMatchesTarget &&
+      hiddenElementCount === 0 &&
+      zeroAreaElementCount === 0 &&
+      overflowingElementCount === 0 &&
+      clippedElementCount === 0 &&
+      !documentOverflow.horizontal &&
+      !documentOverflow.vertical
+    return {
+      status: passed ? 'passed' : 'failed',
+      targetViewport: target,
+      browserViewport: { width: window.innerWidth, height: window.innerHeight },
+      simulatorViewport: {
+        x: round(viewportRect.x),
+        y: round(viewportRect.y),
+        width: round(viewportRect.width),
+        height: round(viewportRect.height),
+      },
+      viewportMatchesTarget,
+      componentElementCount: elements.length,
+      visibleElementCount,
+      hiddenElementCount,
+      zeroAreaElementCount,
+      overflowingElementCount,
+      clippedElementCount,
+      documentOverflow,
+    }
+  }, targetViewport)
+
+const waitForRender = async (page, targetViewport) => {
   const frameElement = page.locator('.lc-simulator-content-frame')
   await frameElement.waitFor({ state: 'attached', timeout: 30_000 })
   await page.waitForTimeout(50)
+  const layout = await measureLayoutQuality(page, targetViewport)
   const screenshot = await page.screenshot({ animations: 'disabled', fullPage: false })
   const frames = page.frames()
   const visibleText = (
@@ -335,6 +472,7 @@ const waitForRender = async page => {
     screenshotSha256: createHash('sha256').update(screenshot).digest('hex'),
     simulatorFrameCount: await frameElement.count(),
     visibleText,
+    layout,
   }
 }
 
@@ -1423,7 +1561,7 @@ export const executeDocument = async (rawInput, options = {}) => {
     }
     context = await browser.newContext({
       serviceWorkers: 'block',
-      viewport: { width: 1440, height: 900 },
+      viewport: input.targetViewport,
     })
     const primaryCookiesBefore = await context.cookies()
     page = await context.newPage()
@@ -1469,11 +1607,17 @@ export const executeDocument = async (rawInput, options = {}) => {
         },
       )
     }
-    const renderEvidence = await waitForRender(page)
+    const candidateViewport = resolveDocumentTargetViewport(
+      pageResult.candidateProject,
+      input.draft.activeDocument.documentId,
+      'candidate project',
+    )
+    await configureRenderViewport(page, candidateViewport)
+    const renderEvidence = await waitForRender(page, candidateViewport)
     const primaryCookiesAfter = await context.cookies()
     verificationContext = await browser.newContext({
       serviceWorkers: 'block',
-      viewport: { width: 1440, height: 900 },
+      viewport: candidateViewport,
     })
     const verificationCookiesBefore = await verificationContext.cookies()
     const verificationPage = await verificationContext.newPage()
@@ -1624,9 +1768,10 @@ export const executeDocument = async (rawInput, options = {}) => {
         render: {
           status: requestFailures.length ? 'rendered_with_errors' : 'rendered',
           rendererReady: true,
-          viewport: { width: 1440, height: 900 },
+          viewport: renderEvidence.layout.targetViewport,
           durationMs: Math.max(0, performance.now() - startedAt),
           screenshotSha256: renderEvidence.screenshotSha256,
+          layout: renderEvidence.layout,
           resourceErrors: [...blockedApiRequests, ...blockedNetworkRequests].map(request => ({
             resourceUrlSha256: sha256(request.url),
             kind: 'blocked',

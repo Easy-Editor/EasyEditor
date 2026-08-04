@@ -38,7 +38,7 @@ if (!root) throw new Error('Document Executor Harness root is missing')
 
 await editorReady
 createRoot(root).render(
-  <section data-document-executor-harness='ready' style={{ width: '1440px', height: '900px', overflow: 'hidden' }}>
+  <section className='document-executor-harness' data-document-executor-harness='ready'>
     <Renderer />
   </section>,
 )

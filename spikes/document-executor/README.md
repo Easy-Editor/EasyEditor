@@ -107,6 +107,15 @@ manifest, as well as executable `blob:` or `data:` resources. Development
 paths such as `/src`, `/@fs`, `/@vite`, `@react-refresh`, and
 `node_modules/.vite` are forbidden.
 
+Render evidence uses the active document root `$dashboard.rect` as the browser
+and simulator viewport instead of a fixed executor size. The viewport is
+bounded before Chromium starts (8192 pixels per edge and 33,554,432 total
+pixels). Evidence includes deterministic pass/fail counters for viewport
+agreement, visible and zero-area component containers, viewport overflow,
+clipping, and document-level scroll overflow. These metrics are evidence for
+the caller's repair loop; a poor layout does not bypass or weaken the existing
+artifact, origin, storage, and credential isolation checks.
+
 The spike pretest rebuilds all four JavaScript artifact trees so local
 source/dev verification cannot silently hash stale `dist` output. Production
 must not derive provenance from a mutable workspace; deployment should inject
