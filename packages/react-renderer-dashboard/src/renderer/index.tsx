@@ -36,7 +36,9 @@ const DashboardRenderer: React.FC<DashboardRendererProps> = props => {
       const { width, height } = entries[0].contentRect
       const ww = width / viewportWidth
       const wh = height / viewportHeight
-      viewportRef.current!.style.transform = `scale(${Math.min(ww, wh)})  translate(-50%, -50%)`
+      const viewportElement = viewportRef.current
+      if (!viewportElement) return
+      viewportElement.style.transform = `scale(${Math.min(ww, wh)})  translate(-50%, -50%)`
     },
   })
 
