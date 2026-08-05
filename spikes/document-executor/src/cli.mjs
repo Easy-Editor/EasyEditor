@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 import process from 'node:process'
 
 import { DocumentExecutorError, executeDocumentFromJson } from './executor.mjs'
@@ -21,6 +22,7 @@ const SAFE_FAILURE_MESSAGES = Object.freeze({
   INVALID_TRANSPORT: 'Executor transport validation failed',
   MATERIAL_MANIFEST_MISMATCH: 'Material manifest verification failed',
   OPERATION_ORIGIN_FORBIDDEN: 'Operation input cannot select the Dashboard origin',
+  SCREENSHOT_ARTIFACT_WRITE_FAILED: 'Screenshot artifact could not be written',
   TRANSPORT_FAILED: 'Executor transport failed',
   UNEXPECTED_BROWSER_ERROR: 'Document Executor Harness emitted a browser error',
   FORBIDDEN_BROWSER_RESOURCE_REQUEST: 'Document Executor Harness requested a forbidden resource',
@@ -43,7 +45,30 @@ const readInput = async () => {
 }
 
 try {
-  const result = await executeDocumentFromJson(await readInput())
+  const screenshotArtifactPath = process.env.EASY_EDITOR_DOCUMENT_EXECUTOR_SCREENSHOT_PATH
+  if (screenshotArtifactPath && !isAbsolute(screenshotArtifactPath)) {
+    throw new DocumentExecutorError(
+      'SCREENSHOT_ARTIFACT_WRITE_FAILED',
+      'Screenshot artifact path must be absolute',
+    )
+  }
+  const result = await executeDocumentFromJson(await readInput(), {
+    ...(screenshotArtifactPath
+      ? {
+          onScreenshotArtifact: async artifact => {
+            try {
+              await writeFile(screenshotArtifactPath, artifact.bytes, { flag: 'wx', mode: 0o600 })
+            } catch (error) {
+              throw new DocumentExecutorError(
+                'SCREENSHOT_ARTIFACT_WRITE_FAILED',
+                'Screenshot artifact could not be written',
+                { cause: error instanceof Error ? error.message : String(error) },
+              )
+            }
+          },
+        }
+      : {}),
+  })
   process.stdout.write(`${JSON.stringify(result)}\n`)
 } catch (error) {
   if (process.env.EASY_EDITOR_DOCUMENT_EXECUTOR_DEBUG === '1') {

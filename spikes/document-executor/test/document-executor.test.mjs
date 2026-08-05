@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -460,6 +460,53 @@ test('five fresh browser/context runs produce strict full-envelope candidates', 
     assert.doesNotMatch(serializedResult, /postgres(?:ql)?:\/\//iu)
   }
   assert.equal(browserSessionIds.size, 5)
+})
+
+test('operator callback receives the exact PNG evidence bytes without extending the prepared envelope', async () => {
+  const input = await createMinimalExecutionInput({ suffix: 'screenshot-artifact' })
+  let artifact
+  const result = await executeDocument(input, {
+    dashboardUrl: DASHBOARD_URL,
+    onScreenshotArtifact: value => {
+      artifact = value
+    },
+  })
+
+  assert.ok(artifact)
+  assert.equal(artifact.contentType, 'image/png')
+  assert.deepEqual([...artifact.bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  assert.equal(createHash('sha256').update(artifact.bytes).digest('hex'), result.evidence.render.screenshotSha256)
+  assert.deepEqual(Object.keys(result).sort(), [...PREPARED_RESULT_KEYS].sort())
+})
+
+test('CLI writes screenshot bytes only to the operator-provided private artifact path', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'document-executor-screenshot-'))
+  const screenshotPath = join(directory, 'render.png')
+  try {
+    const input = await createMinimalExecutionInput({ suffix: 'cli-screenshot-artifact' })
+    const cli = spawn(process.execPath, ['src/cli.mjs'], {
+      cwd: new URL('..', import.meta.url),
+      env: {
+        ...process.env,
+        EASY_EDITOR_DOCUMENT_EXECUTOR_DASHBOARD_URL: DASHBOARD_URL,
+        EASY_EDITOR_DOCUMENT_EXECUTOR_SCREENSHOT_PATH: screenshotPath,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    cli.stdout.on('data', chunk => {
+      stdout += chunk.toString()
+    })
+    cli.stdin.end(JSON.stringify(input))
+    const [exitCode] = await once(cli, 'exit')
+    assert.equal(exitCode, 0)
+    const result = JSON.parse(stdout)
+    const screenshot = await readFile(screenshotPath)
+    assert.equal(createHash('sha256').update(screenshot).digest('hex'), result.evidence.render.screenshotSha256)
+    assert.equal(Object.hasOwn(result, 'screenshot'), false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test(

@@ -495,6 +495,7 @@ const waitForRender = async (page, targetViewport) => {
     .trim()
     .slice(0, 2_000)
   return {
+    screenshot,
     screenshotBytes: screenshot.byteLength,
     screenshotSha256: createHash('sha256').update(screenshot).digest('hex'),
     simulatorFrameCount: await frameElement.count(),
@@ -1756,6 +1757,13 @@ export const executeDocument = async (rawInput, options = {}) => {
       ...structuredClone(input.storedProject),
       editorSchema: pageResult.candidateProject,
     })
+    if (typeof options.onScreenshotArtifact === 'function') {
+      await options.onScreenshotArtifact({
+        bytes: renderEvidence.screenshot,
+        contentType: 'image/png',
+        sha256: renderEvidence.screenshotSha256,
+      })
+    }
     const prepareInput = input.prepareInput
     const rssAfter = process.memoryUsage().rss
     const completedAt = new Date()
