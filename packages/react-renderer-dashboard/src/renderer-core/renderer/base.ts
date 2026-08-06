@@ -82,7 +82,17 @@ export const dashboardBaseRendererFactory = (rendererAdapter: RendererAdapter = 
           return superCreateVirtualDom(originalSchema, originalScope, parentInfo, idx)
         }
 
-        const { __appHelper: appHelper, __components: components = {} } = this.props || {}
+        const {
+          __appHelper: appHelper,
+          __components: components = {},
+          __container: container,
+          __host: host,
+          device,
+          documentId,
+          getNode,
+          getSchemaChangedSymbol,
+          setSchemaChangedSymbol,
+        } = this.props || {}
         const { engine } = this.context || {}
         const ComponentRenderer = components.ComponentRenderer
 
@@ -98,6 +108,13 @@ export const dashboardBaseRendererFactory = (rendererAdapter: RendererAdapter = 
             __components: components,
             __designMode: engine.props?.designMode,
             __ctx: originalScope,
+            __container: container,
+            __host: host,
+            device,
+            documentId,
+            getNode,
+            getSchemaChangedSymbol,
+            setSchemaChangedSymbol,
           })
         }
 

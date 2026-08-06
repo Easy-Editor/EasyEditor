@@ -50,6 +50,9 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
   }) => {
     const [schema, setSchema] = useState<RootSchema | null>(null)
     const [loading, setLoading] = useState(true)
+    const rendererPropsRef = useRef(rendererProps)
+    rendererPropsRef.current = rendererProps
+    const [activeRendererProps, setActiveRendererProps] = useState(rendererProps)
 
     // 使用 ref 存储回调，避免依赖变化导致死循环
     const onBeforeNavigateRef = useRef(onBeforeNavigate)
@@ -82,6 +85,7 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
         }
 
         setSchema(pageSchema)
+        setActiveRendererProps(rendererPropsRef.current)
         setLoading(false)
       },
       [projectSchema],
@@ -91,7 +95,7 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
       navigate(initialPage)
     }, [navigate, initialPage])
 
-    if (loading) {
+    if (loading && !schema) {
       return (
         loadingContent ?? (
           <div
@@ -117,7 +121,7 @@ const PureDashboardRenderer: React.FC<PureDashboardRendererProps> = observer(
 
     return (
       <Renderer
-        {...rendererProps}
+        {...activeRendererProps}
         schema={schema}
         viewport={viewport}
         appHelper={{
